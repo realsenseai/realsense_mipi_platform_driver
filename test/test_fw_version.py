@@ -1,11 +1,6 @@
 import subprocess
 import pytest
 
-[pytest]
-markers = [
-        "d457: realsesne D457 camera",
-        ]
-
 @pytest.mark.d457
 @pytest.mark.parametrize("device", {'0'})
 def test_fw_version(device):
