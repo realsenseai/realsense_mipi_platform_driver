@@ -1,0 +1,44 @@
+From d8e057a16a3a10300633ee9fad32131ee3189cc1 Mon Sep 17 00:00:00 2001
+From: Dmitry Perchanov <dmitry.perchanov@intel.com>
+Date: Sun, 31 Mar 2024 15:05:18 +0200
+Subject: [PATCH] vi: channel: verify s/g callbacks
+
+Signed-off-by: Dmitry Perchanov <dmitry.perchanov@intel.com>
+---
+ drivers/media/platform/tegra/camera/vi/channel.c | 13 ++++++++++---
+ 1 file changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
+index 5801984aa..8498ff034 100644
+--- a/drivers/media/platform/tegra/camera/vi/channel.c
++++ b/drivers/media/platform/tegra/camera/vi/channel.c
+@@ -2261,9 +2261,11 @@ __tegra_channel_get_parm(struct tegra_channel *chan,
+ 	struct v4l2_subdev_frame_interval interval;
+ 
+ 	/* dmipx: fixing G_PARM EINVAL error */
+-//	ret = v4l2_subdev_call(sd, video, g_frame_interval, &interval);
+-	ret = sd->ops->video->g_frame_interval(sd, &interval);
+-
++	ret = v4l2_subdev_call(sd, video, g_frame_interval, &interval);
++	if (ret) {
++		if (sd && sd->ops->video && sd->ops->video->g_frame_interval)
++			ret = sd->ops->video->g_frame_interval(sd, &interval);
++	}
+ 	a->parm.capture.timeperframe.numerator = interval.interval.numerator;
+ 	a->parm.capture.timeperframe.denominator = interval.interval.denominator;
+ 
+@@ -2293,6 +2295,11 @@ __tegra_channel_set_parm(struct tegra_channel *chan,
+ 	interval.interval.denominator = a->parm.capture.timeperframe.denominator;
+ 
+ 	ret = v4l2_subdev_call(sd, video, s_frame_interval, &interval);
++	if (ret) {
++		if (sd && sd->ops->video && sd->ops->video->s_frame_interval)
++			ret = sd->ops->video->s_frame_interval(sd, &interval);
++	}
++
+ 	if (ret == -ENOIOCTLCMD)
+ 			return -ENOTTY;
+ 
+-- 
+2.34.1
+
