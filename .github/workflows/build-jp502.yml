@@ -1,4 +1,4 @@
-name: C/C++ CI
+name: Build JP 5.0.2
 
 on:
   push:
