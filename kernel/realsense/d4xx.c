@@ -5639,4 +5639,8 @@ MODULE_AUTHOR("Guennadi Liakhovetski <guennadi.liakhovetski@intel.com>,\n\
 				Shikun Ding <shikun.ding@intel.com>");
 MODULE_AUTHOR("Dmitry Perchanov <dmitry.perchanov@intel.com>");
 MODULE_LICENSE("GPL v2");
+<<<<<<< HEAD
 MODULE_VERSION("1.0.1.21");
+=======
+MODULE_VERSION("1.0.1.22");
+>>>>>>> f6feb11 (d4xx: bump to version 1.0.1.22)
