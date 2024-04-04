@@ -77,7 +77,6 @@ k:hardware/nvidia/platform/t23x/prometheus/kernel-dts:nv-tegra.nvidia.com/device
 k:hardware/nvidia/soc/t23x:nv-tegra.nvidia.com/device/hardware/nvidia/soc/t23x.git:
 k:hardware/nvidia/soc/tegra:nv-tegra.nvidia.com/device/hardware/nvidia/soc/tegra.git:
 k:tegra/kernel-src/nv-kernel-display-driver:nv-tegra.nvidia.com/tegra/kernel-src/nv-kernel-display-driver.git:
-o:3rdparty/dtc:nv-tegra.nvidia.com/3rdparty/dtc.git:
 o:3rdparty/libnl/3.5.0:nv-tegra.nvidia.com/3rdparty/libnl/3.5.0.git:
 o:tegra/argus-cam-libav/argus_cam_libavencoder:nv-tegra.nvidia.com/tegra/argus-cam-libav/argus_cam_libavencoder.git:
 o:tegra/cuda-src/nvsample_cudaprocess:nv-tegra.nvidia.com/tegra/cuda-src/nvsample_cudaprocess.git:
