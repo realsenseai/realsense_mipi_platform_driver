@@ -7,13 +7,19 @@ KERNEL_DEF_CONFIG ?= defconfig
 MAKEFILE_DIR := $(abspath $(shell dirname $(lastword $(MAKEFILE_LIST))))
 kernel_source_dir := $(MAKEFILE_DIR)/$(KERNEL_SRC_DIR)
 
-kernel_image := ${kernel_source_dir}/arch/arm64/boot/Image
+ifdef KERNEL_OUTPUT
+O_OPT := O=$(KERNEL_OUTPUT)
+$(mkdir -p $(KERNEL_OUTPUT))
+kernel_image := $(KERNEL_OUTPUT)/arch/arm64/boot/Image
+else
+kernel_image := $(kernel_source_dir)/arch/arm64/boot/Image
+endif
 
 NPROC ?= $(shell nproc)
 
 # LOCALVERSION : -tegra or -rt-tegra
 version = $(shell grep -q "CONFIG_PREEMPT_RT=y" \
-    ${kernel_source_dir}/arch/arm64/configs/defconfig && echo "-rt-tegra" || echo "-tegra")
+    ${kernel_source_dir}/arch/arm64/configs/${KERNEL_DEF_CONFIG} && echo "-rt-tegra" || echo "-tegra")
 
 .PHONY : kernel install clean help
 
@@ -23,25 +29,25 @@ kernel:
 	@echo   "================================================================================"
 	$(MAKE) \
 		ARCH=arm64 \
-		-C $(kernel_source_dir) \
+		-C $(kernel_source_dir) $(O_OPT) \
 		LOCALVERSION=$(version) \
 		$(KERNEL_DEF_CONFIG)
 
 	$(MAKE) -j $(NPROC) \
 		ARCH=arm64 \
-		-C $(kernel_source_dir) \
+		-C $(kernel_source_dir) $(O_OPT) \
 		LOCALVERSION=$(version) \
 		--output-sync=target Image
 
 	$(MAKE) -j $(NPROC) \
 		ARCH=arm64 \
-		-C $(kernel_source_dir) \
+		-C $(kernel_source_dir) $(O_OPT) \
 		LOCALVERSION=$(version) \
 		--output-sync=target dtbs
 
 	$(MAKE) -j $(NPROC) \
 		ARCH=arm64 \
-		-C $(kernel_source_dir) \
+		-C $(kernel_source_dir) $(O_OPT) \
 		LOCALVERSION=$(version) \
 		--output-sync=target modules
 
@@ -63,7 +69,7 @@ install:
 	install $(kernel_image) $(INSTALL_MOD_PATH)/boot/
 	$(MAKE) \
 		ARCH=arm64 \
-		-C $(kernel_source_dir) \
+		-C $(kernel_source_dir) $(O_OPT) \
 		LOCALVERSION=$(version) \
 		INSTALL_MOD_PATH=$(INSTALL_MOD_PATH) \
 		modules_install
@@ -78,7 +84,7 @@ clean:
 	@echo   "================================================================================"
 	$(MAKE) \
 		ARCH=arm64 \
-		-C $(kernel_source_dir) \
+		-C $(kernel_source_dir) $(O_OPT) \
 		mrproper
 	@echo   "================================================================================"
 	@echo   "Kernel and in-tree modules installed successfully."

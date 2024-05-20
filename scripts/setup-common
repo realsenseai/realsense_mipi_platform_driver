@@ -12,7 +12,7 @@ if [[ $JETPACK_VERSION == "6.2" ]]; then
     L4T_VERSION="jetson_36.3.4"
     KERNEL_DIR="kernel/kernel-jammy-src"
 elif [[ $JETPACK_VERSION == "6.0" ]]; then
-    L4T_VERSION="jetson_36.2"
+    L4T_VERSION="jetson_36.3"
     KERNEL_DIR="kernel/kernel-jammy-src"
 elif [[ $JETPACK_VERSION == "5.1.2" ]]; then
     L4T_VERSION="jetson_35.4.1"
