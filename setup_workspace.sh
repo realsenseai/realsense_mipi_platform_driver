@@ -13,8 +13,7 @@ function DisplayNvidiaLicense {
     
     echo -e "\nPlease notice: This script will download the kernel source (from nv-tegra, NVIDIA's public git repository) which is subject to the following license:\n\nhttps://developer.nvidia.com/embedded/l4t/r35_release_v1.0/release/tegra_software_license_agreement-tegra-linux.txt\n"
 
-    # license="$(curl -L -s https://developer.nvidia.com/embedded/l4t/r35_release_v1.0/release/tegra_software_license_agreement-tegra-linux.txt)\n\n"
-    license="$(curl -L -s https://developer.download.nvidia.com/embedded/L4T/r35_Release_v4.1/release/Tegra_Software_License_Agreement-Tegra-Linux.txt)\n\n"
+    license="$(curl -L -s https://developer.download.nvidia.com/embedded/L4T/r36_Release_v3.0/release/Tegra_Software_License_Agreement-Tegra-Linux.txt)\n\n"
 
     ## display the page ##
     echo -e "${license}"
@@ -43,7 +42,7 @@ if [[ ! -d "$DEVDIR/l4t-gcc/$JETPACK_VERSION/bin/" ]]; then
     mkdir -p $DEVDIR/l4t-gcc/$JETPACK_VERSION
     cd $DEVDIR/l4t-gcc/$JETPACK_VERSION
     if [[ "$JETPACK_VERSION" == "6.0" ]]; then
-        wget https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v2.0/toolchain/aarch64--glibc--stable-2022.08-1.tar.bz2 -O aarch64--glibc--stable-final.tar.bz2
+        wget https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v3.0/toolchain/aarch64--glibc--stable-2022.08-1.tar.bz2 -O aarch64--glibc--stable-final.tar.bz2
         tar xf aarch64--glibc--stable-final.tar.bz2 --strip-components 1
     elif [[ "$JETPACK_VERSION" == "5.1.2" ]]; then
         wget https://developer.nvidia.com/embedded/jetson-linux/bootlin-toolchain-gcc-93 -O aarch64--glibc--stable-final.tar.gz
