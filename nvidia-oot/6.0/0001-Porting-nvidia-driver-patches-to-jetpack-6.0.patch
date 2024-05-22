@@ -1,4 +1,4 @@
-From 36f8ab39ac378b8d6ebe2df346e0d1d514bc1d2f Mon Sep 17 00:00:00 2001
+From 1ce2b2e647c63724bfd1434f963eabbe4aa83941 Mon Sep 17 00:00:00 2001
 From: Dmitry Perchanov <dmitry.perchanov@intel.com>
 Date: Mon, 20 May 2024 18:08:02 +0300
 Subject: [PATCH] Porting nvidia driver patches to jetpack 6.0
@@ -14,14 +14,12 @@ Signed-off-by: Dmitry Perchanov <dmitry.perchanov@intel.com>
  .../platform/tegra/camera/vi/mc_common.c      |  27 ++
  .../media/platform/tegra/camera/vi/vi5_fops.c |  36 ++
  .../platform/tegra/camera/vi/vi5_formats.h    |  30 +-
- .../ethernet/nvidia/nvethernet/nvethernetrm   |   1 +
  include/media/gmsl-link.h                     |   3 +
  include/media/max9295.h                       |   4 +
  include/media/max9296.h                       |   8 +
  include/media/mc_common.h                     |  22 +
  include/media/tegra_camera_core.h             |   8 +
- 15 files changed, 903 insertions(+), 11 deletions(-)
- create mode 120000 drivers/net/ethernet/nvidia/nvethernet/nvethernetrm
+ 14 files changed, 902 insertions(+), 11 deletions(-)
 
 diff --git a/drivers/media/i2c/Makefile b/drivers/media/i2c/Makefile
 index 7c5913c6..396b9bc3 100644
@@ -1098,14 +1096,6 @@ index 1d0c1133..1d375de5 100644
  };
  
  #endif
-diff --git a/drivers/net/ethernet/nvidia/nvethernet/nvethernetrm b/drivers/net/ethernet/nvidia/nvethernet/nvethernetrm
-new file mode 120000
-index 00000000..8f37fb94
---- /dev/null
-+++ b/drivers/net/ethernet/nvidia/nvethernet/nvethernetrm
-@@ -0,0 +1 @@
-+../../../../../../nvethernetrm
-\ No newline at end of file
 diff --git a/include/media/gmsl-link.h b/include/media/gmsl-link.h
 index ad902d0a..7dce2356 100644
 --- a/include/media/gmsl-link.h
