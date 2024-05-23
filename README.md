@@ -148,9 +148,9 @@ Debian packages will be generated in `images` folder.
 Following steps required:
 
 1.	Copy entire directory `images/6.0/rootfs/lib/modules/5.15.136-tegra/updates` from host to `/lib/modules/5.15.136-tegra/` on Orin
-2.	Copy `tegra234-camera-d4xx-overlay.dtbo` from host to `/boot/tegra234-camera-d4xx-overlay.dtbo` on Orin
-3.  Copy `tegra234-p3737-0000+p3701-0000-nv.dtb` from host to `/boot/d4xx/` on Orin
-4.  Copy `Image` from host to `/boot/d4xx/` on Orin
+2.	Copy entire directory `images/6.0/rootfs/lib/modules/5.15.136-tegra/extra` from host to `/lib/modules/5.15.136-tegra/` on Orin
+3.	Copy `tegra234-camera-d4xx-overlay.dtbo` from host to `/boot/tegra234-camera-d4xx-overlay.dtbo` on Orin
+4.  Copy `tegra234-p3737-0000+p3701-0000-nv.dtb` from host to `/boot/dtb/` on Orin
 5.	Run  $ `sudo /opt/nvidia/jetson-io/jetson-io.py`
     1.	Configure Jetson AGX CSI Connector
     2.	Configure for compatible hardware
@@ -161,8 +161,8 @@ Following steps required:
     ```
     LABEL JetsonIO
         MENU LABEL Custom Header Config: <CSI Jetson RealSense Camera D457>
-        LINUX /boot/d4xx/Image
-        FDT /boot/d4xx/tegra234-p3737-0000+p3701-0000-nv.dtb
+        LINUX /boot/Image
+        FDT /boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb
         OVERLAYS /boot/tegra234-camera-d4xx-overlay.dtbo
     ```
 7.	Reboot
@@ -170,12 +170,12 @@ Following steps required:
 Copy them to the right places:
 
 ```
-# Kernel Image, devicetree with SENSOR_HID support for RealSense USB cameras with IMU
+# Configuration files
 scp -r images/6.0/rootfs/boot nvidia@10.0.0.116:~/
+# RealSense support for NVidia Tegra
 scp -r images/6.0/rootfs/lib/modules/5.15.136-tegra/updates nvidia@10.0.0.116:~/
-# RealSense metadata patched kernel modules
-scp -r images/6.0/rootfs/lib/modules/5.15.136-tegra/kernel/drivers/media/v4l2-core/videodev.ko nvidia@10.0.0.116:~/
-scp -r images/6.0/rootfs/lib/modules/5.15.136-tegra/kernel/drivers/media/usb/uvc/uvcvideo.ko nvidia@10.0.0.116:~/
+# RealSense metadata patched kernel modules and IMU HID support
+scp -r images/6.0/rootfs/lib/modules/5.15.136-tegra/extra nvidia@10.0.0.116:~/
 ```
 
 on target:
@@ -185,13 +185,11 @@ sudo cp ~/boot/tegra234-camera-d4xx-overlay.dtbo /boot/
 # backup:
 sudo tar -cjf /lib/modules/$(uname -r)/modules_$(uname -r).tar.bz2 /lib/modules/$(uname -r)
 sudo cp -r ~/updates /lib/modules/$(uname -r)/
+sudo cp -r ~/extra /lib/modules/$(uname -r)/
 # enable RealSense extra formats and metadata:
 sudo cp uvcvideo.ko videodev.ko /lib/modules/$(uname -r)/updates/
 # backup kernel (better to have additional boot entry in extlinux.conf)
-sudo cp /boot/Image /boot/Image.orig
-sudo mkdir -p /boot/d4xx
-sudo cp ./boot/Image /boot/d4xx/Image
-sudo cp ./boot/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/d4xx/tegra234-p3737-0000+p3701-0000-nv.dtb
+sudo cp ./boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb
 ```
 
 Enable d4xx overlay:
@@ -230,8 +228,8 @@ Verify bootloader configuration
     ..
     LABEL JetsonIO
         MENU LABEL Custom Header Config: <CSI Jetson RealSense Camera D457>
-        LINUX /boot/d4xx/Image
-        FDT /boot/d4xx/tegra234-p3737-0000+p3701-0000-nv.dtb
+        LINUX /boot/Image
+        FDT /boot/tegra234-p3737-0000+p3701-0000-nv.dtb
         OVERLAYS /boot/tegra234-camera-d4xx-overlay.dtbo
     ..
 ```

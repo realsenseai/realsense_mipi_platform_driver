@@ -30,7 +30,6 @@ fi
 export LOCALVERSION=-tegra
 export TEGRA_KERNEL_OUT=$DEVDIR/images/$JETPACK_VERSION
 mkdir -p $TEGRA_KERNEL_OUT
-export KERNEL_MODULES_OUT=$TEGRA_KERNEL_OUT/modules
 
 # Check if BUILD_NUMBER is set as it will add a postfix to the kernel name "vermagic" (normally it happens on CI who have BUILD_NUMBER defined)
 [[ -n "${BUILD_NUMBER}" ]] && echo "Warning! You have BUILD_NUMBER set to ${BUILD_NUMBER}, This will affect your vermagic"
@@ -43,7 +42,6 @@ if [[ "$JETPACK_VERSION" == "6.0" ]]; then
     export KERNEL_HEADERS=$SRCS/kernel/kernel-jammy-src
     ln -sf $TEGRA_KERNEL_OUT $SRCS/out
     make ARCH=arm64 -C kernel
-    # export KERNEL_HEADERS=$SRCS/out
     make ARCH=arm64 modules
     make ARCH=arm64 dtbs
     mkdir -p $TEGRA_KERNEL_OUT/rootfs/boot/dtb
@@ -52,6 +50,20 @@ if [[ "$JETPACK_VERSION" == "6.0" ]]; then
     export INSTALL_MOD_PATH=$TEGRA_KERNEL_OUT/rootfs/
     make ARCH=arm64 install -C kernel
     make ARCH=arm64 modules_install
+    # iio support
+    KERNELVERSION=$(cat $KERNEL_HEADERS/include/config/kernel.release)
+    KERNEL_MODULES_OUT=$INSTALL_MOD_PATH/lib/modules/${KERNELVERSION}
+    mkdir -p $KERNEL_MODULES_OUT/extra
+    cp $KERNEL_MODULES_OUT/kernel/drivers/iio/buffer/kfifo_buf.ko $KERNEL_MODULES_OUT/extra/
+    cp $KERNEL_MODULES_OUT/kernel/drivers/iio/buffer/industrialio-triggered-buffer.ko $KERNEL_MODULES_OUT/extra/
+    cp $KERNEL_MODULES_OUT/kernel/drivers/iio/common/hid-sensors/hid-sensor-iio-common.ko $KERNEL_MODULES_OUT/extra/
+    cp $KERNEL_MODULES_OUT/kernel/drivers/hid/hid-sensor-hub.ko $KERNEL_MODULES_OUT/extra/
+    cp $KERNEL_MODULES_OUT/kernel/drivers/iio/accel/hid-sensor-accel-3d.ko $KERNEL_MODULES_OUT/extra/
+    cp $KERNEL_MODULES_OUT/kernel/drivers/iio/gyro/hid-sensor-gyro-3d.ko $KERNEL_MODULES_OUT/extra/
+    cp $KERNEL_MODULES_OUT/kernel/drivers/iio/common/hid-sensors/hid-sensor-trigger.ko $KERNEL_MODULES_OUT/extra/
+    # RealSense cameras support
+    cp $KERNEL_MODULES_OUT/kernel/drivers/media/usb/uvc/uvcvideo.ko $KERNEL_MODULES_OUT/extra/
+    cp $KERNEL_MODULES_OUT/kernel/drivers/media/v4l2-core/videodev.ko $KERNEL_MODULES_OUT/extra/
 else
 #jp4/5
     cd $SRCS/$KERNEL_DIR
