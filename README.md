@@ -19,14 +19,25 @@ Please follow the [instruction](https://docs.nvidia.com/sdk-manager/install-with
 ## Build kernel, dtb and D457 driver
 
 The developers can set up the source code with NVIDIA's Jetson git repositories by using the provided setup script:
+<details>
+<summary>JP6.0 setup workspace</summary>
+
+```
+./setup_workspace.sh 6.0
+```
+
+</details>
 
 ```
 # Using setup script, recommended for developers. If JetPack version is not given, default version will be chosen.
 ./setup_workspace.sh [JetPack_version]
 ```
 
-Or download Jetson Linux source code tarball from 
-- [JetPack 6.0-DP BSP sources](https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v2.0/sources/public_sources.tbz2)
+<details>
+<summary>JetPack manual build</summary>
+
+Download Jetson Linux source code tarball from 
+- [JetPack 6.0 BSP sources](https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v3.0/sources/public_sources.tbz2)
 - [JetPack 5.1.2 BSP sources](https://developer.nvidia.com/downloads/embedded/l4t/r35_release_v4.1/sources/public_sources.tbz2) 
 - [JetPack 5.0.2 BSP sources](https://developer.nvidia.com/embedded/l4t/r35_release_v1.0/sources/public_sources.tbz2) 
 - [JetPack 4.6.1 BSP sources](https://developer.nvidia.com/embedded/l4t/r32_release_v7.1/sources/t186/public_sources.tbz2)
@@ -35,16 +46,17 @@ Or download Jetson Linux source code tarball from
 # JetPack 6.0
 mkdir -p l4t-gcc/6.0
 cd ./l4t-gcc/6.0
-wget https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v2.0/toolchain/aarch64--glibc--stable-2022.08-1.tar.bz2 -O aarch64--glibc--stable-final.tar.bz2
+wget https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v3.0/toolchain/aarch64--glibc--stable-2022.08-1.tar.bz2 -O aarch64--glibc--stable-final.tar.bz2
 tar xf aarch64--glibc--stable-final.tar.bz2 --strip-components 1
 cd ../..
-wget https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v2.0/sources/public_sources.tbz2
+wget https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v3.0/sources/public_sources.tbz2
 tar xjf public_sources.tbz2
 cd Linux_for_Tegra/source
 tar xjf kernel_src.tbz2
 tar xjf kernel_oot_modules_src.tbz2
 tar xjf nvidia_kernel_display_driver_source.tbz2
-
+```
+```
 # JetPack 5.1.2
 mkdir -p l4t-gcc/5.1.2
 cd ./l4t-gcc/5.1.2
@@ -55,7 +67,8 @@ wget https://developer.nvidia.com/downloads/embedded/l4t/r35_release_v4.1/source
 tar xjf public_sources.tbz2
 cd Linux_for_Tegra/source/public
 tar xjf kernel_src.tbz2
-
+```
+```
 # JetPack 5.0.2
 mkdir -p l4t-gcc/5.0.2
 cd ./l4t-gcc/5.0.2
@@ -66,7 +79,8 @@ wget https://developer.nvidia.com/embedded/l4t/r35_release_v1.0/sources/public_s
 tar xjf public_sources.tbz2
 cd Linux_for_Tegra/source/public
 tar xjf kernel_src.tbz2
-
+```
+```
 # JetPack 4.6.1
 mkdir -p l4t-gcc/4.6.1
 cd ./l4t-gcc/4.6.1
@@ -79,7 +93,19 @@ cd Linux_for_Tegra/source/public
 tar xjf kernel_src.tbz2
 ```
 
+</details>
+
+
 Apply D457 patches and build the kernel image, dtb and D457 driver.
+
+<details>
+<summary>JP6.0 apply patches</summary>
+
+```
+./apply_patches.sh apply 6.0
+```
+
+</details>
 
 ```
 # if using setup script
@@ -115,46 +141,57 @@ Debian packages will be generated in `images` folder.
 <summary>JP6.0 build results</summary>
 
 - kernel image (not modified): `images/6.0/rootfs/boot/Image`
+- dtb: `images/6.0/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb`
 - dtb overlay: `images/6.0/rootfs/boot/tegra234-camera-d4xx-overlay.dtbo`
-- oot modules: `images/6.0/rootfs/lib/modules/5.15.122-tegra/extra`
+- oot modules: `images/6.0/rootfs/lib/modules/5.15.136-tegra/updates`
 
 Following steps required:
 
-1.	Copy entire directory `images/6.0/rootfs/lib/modules/5.15.122-tegra/extra/` from host to `/lib/modules/5.15.122-tegra/extra/` on Orin
+1.	Copy entire directory `images/6.0/rootfs/lib/modules/5.15.136-tegra/updates` from host to `/lib/modules/5.15.136-tegra/` on Orin
 2.	Copy `tegra234-camera-d4xx-overlay.dtbo` from host to `/boot/tegra234-camera-d4xx-overlay.dtbo` on Orin
-3.	Run  $ `sudo /opt/nvidia/jetson-io/jetson-io.py`
+3.  Copy `tegra234-p3737-0000+p3701-0000-nv.dtb` from host to `/boot/d4xx/` on Orin
+4.  Copy `Image` from host to `/boot/d4xx/` on Orin
+5.	Run  $ `sudo /opt/nvidia/jetson-io/jetson-io.py`
     1.	Configure Jetson AGX CSI Connector
     2.	Configure for compatible hardware
     3.	Jetson RealSense Camera D457
     4.	$ `sudo depmod`
     5.	$ `echo "d4xx" | sudo tee /etc/modules-load.d/d4xx.conf`
-4.	Reboot
+6.  Verify bootloader configuration
+    ```
+    LABEL JetsonIO
+        MENU LABEL Custom Header Config: <CSI Jetson RealSense Camera D457>
+        LINUX /boot/d4xx/Image
+        FDT /boot/d4xx/tegra234-p3737-0000+p3701-0000-nv.dtb
+        OVERLAYS /boot/tegra234-camera-d4xx-overlay.dtbo
+    ```
+7.	Reboot
 
 Copy them to the right places:
 
 ```
-scp -r images/6.0/rootfs/boot/tegra234-camera-d4xx-overlay.dtbo nvidia@10.0.0.116:~/
-scp -r images/6.0/rootfs/lib/modules/5.15.122-tegra/extra nvidia@10.0.0.116:~/
+# Kernel Image, devicetree with SENSOR_HID support for RealSense USB cameras with IMU
+scp -r images/6.0/rootfs/boot nvidia@10.0.0.116:~/
+scp -r images/6.0/rootfs/lib/modules/5.15.136-tegra/updates nvidia@10.0.0.116:~/
 # RealSense metadata patched kernel modules
-scp -r images/6.0/rootfs/lib/modules/5.15.122-tegra/kernel/drivers/media/v4l2-core/videodev.ko nvidia@10.0.0.116:~/
-scp -r images/6.0/rootfs/lib/modules/5.15.122-tegra/kernel/drivers/media/usb/uvc/uvcvideo.ko nvidia@10.0.0.116:~/
-# Kernel Image with SENSOR_HID support for RealSense USB cameras with IMU
-scp -r images/6.0/rootfs/boot/Image nvidia@10.0.0.116:~/
+scp -r images/6.0/rootfs/lib/modules/5.15.136-tegra/kernel/drivers/media/v4l2-core/videodev.ko nvidia@10.0.0.116:~/
+scp -r images/6.0/rootfs/lib/modules/5.15.136-tegra/kernel/drivers/media/usb/uvc/uvcvideo.ko nvidia@10.0.0.116:~/
 ```
 
 on target:
 
 ```
-sudo cp ~/tegra234-camera-d4xx-overlay.dtbo /boot/
+sudo cp ~/boot/tegra234-camera-d4xx-overlay.dtbo /boot/
 # backup:
-sudo tar -cjf /lib/modules/$(uname -r)/modules_$(uname -r)_extra.tar.bz2 /lib/modules/$(uname -r)/extra
-sudo cp -r ~/extra /lib/modules/$(uname -r)/
-# enable RealSense metadata:
-sudo cp uvcvideo.ko /lib/modules/5.15.122-tegra/kernel/drivers/media/usb/uvc/uvcvideo.ko
-sudo cp videodev.ko /lib/modules/5.15.122-tegra/kernel/drivers/media/v4l2-core/videodev.ko
+sudo tar -cjf /lib/modules/$(uname -r)/modules_$(uname -r).tar.bz2 /lib/modules/$(uname -r)
+sudo cp -r ~/updates /lib/modules/$(uname -r)/
+# enable RealSense extra formats and metadata:
+sudo cp uvcvideo.ko videodev.ko /lib/modules/$(uname -r)/updates/
 # backup kernel (better to have additional boot entry in extlinux.conf)
 sudo cp /boot/Image /boot/Image.orig
-sudo cp Image /boot/Image
+sudo mkdir -p /boot/d4xx
+sudo cp ./boot/Image /boot/d4xx/Image
+sudo cp ./boot/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/d4xx/tegra234-p3737-0000+p3701-0000-nv.dtb
 ```
 
 Enable d4xx overlay:
@@ -178,10 +215,57 @@ Reboot system to reconfigure.
 ```
 Enable d4xx autoload:
 
-`echo "d4xx" | sudo tee /etc/modules-load.d/d4xx.conf`
+```
+echo "d4xx" | sudo tee /etc/modules-load.d/d4xx.conf
+```
 
-`sudo depmod`
+```
+sudo depmod
+```
 
+Verify bootloader configuration
+
+```
+    cat /boot/extlinux/extlinux.conf
+    ..
+    LABEL JetsonIO
+        MENU LABEL Custom Header Config: <CSI Jetson RealSense Camera D457>
+        LINUX /boot/d4xx/Image
+        FDT /boot/d4xx/tegra234-p3737-0000+p3701-0000-nv.dtb
+        OVERLAYS /boot/tegra234-camera-d4xx-overlay.dtbo
+    ..
+```
+
+Reboot machine.
+
+Verify driver loaded:
+
+```
+nvidia@ubuntu:~$ sudo dmesg | grep tegra-capture-vi
+[    9.357521] platform 13e00000.host1x:nvcsi@15a00000: Fixing up cyclic dependency with tegra-capture-vi
+[    9.419926] tegra-camrtc-capture-vi tegra-capture-vi: ep of_device is not enabled endpoint.
+[    9.419932] tegra-camrtc-capture-vi tegra-capture-vi: ep of_device is not enabled endpoint.
+[   10.001170] tegra-camrtc-capture-vi tegra-capture-vi: subdev DS5 mux 9-001a bound
+[   10.025295] tegra-camrtc-capture-vi tegra-capture-vi: subdev DS5 mux 12-001a bound
+[   10.040934] tegra-camrtc-capture-vi tegra-capture-vi: subdev DS5 mux 13-001a bound
+[   10.056151] tegra-camrtc-capture-vi tegra-capture-vi: subdev DS5 mux 14-001a bound
+[   10.288088] tegra-camrtc-capture-vi tegra-capture-vi: subdev 13e00000.host1x:nvcsi@15a00000- bound
+[   10.324025] tegra-camrtc-capture-vi tegra-capture-vi: subdev 13e00000.host1x:nvcsi@15a00000- bound
+[   10.324631] tegra-camrtc-capture-vi tegra-capture-vi: subdev 13e00000.host1x:nvcsi@15a00000- bound
+[   10.325056] tegra-camrtc-capture-vi tegra-capture-vi: subdev 13e00000.host1x:nvcsi@15a00000- bound
+
+nvidia@ubuntu:~$ sudo dmesg | grep d4xx
+[    9.443608] d4xx 9-001a: Probing driver for D45x
+[    9.983168] d4xx 9-001a: ds5_chrdev_init() class_create
+[    9.989521] d4xx 9-001a: D4XX Sensor: DEPTH, firmware build: 5.15.1.0
+[   10.007813] d4xx 12-001a: Probing driver for D45x
+[   10.013899] d4xx 12-001a: D4XX Sensor: RGB, firmware build: 5.15.1.0
+[   10.025787] d4xx 13-001a: Probing driver for D45x
+[   10.029095] d4xx 13-001a: D4XX Sensor: Y8, firmware build: 5.15.1.0
+[   10.041282] d4xx 14-001a: Probing driver for D45x
+[   10.044759] d4xx 14-001a: D4XX Sensor: IMU, firmware build: 5.15.1.0
+
+```
 ---
 
 </details>
