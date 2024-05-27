@@ -431,7 +431,7 @@ struct ds5_dfu_dev {
 	enum dfu_state dfu_state_flag;
 	unsigned char *dfu_msg;
 	u16 msg_write_once;
-	// unsigned char init_v4l_f;
+	// unsigned char init_v4l_f; // need refactoring
 	u32 bus_clk_rate;
 };
 
@@ -4831,8 +4831,10 @@ static ssize_t ds5_dfu_device_read(struct file *flip,
 	if (mutex_lock_interruptible(&state->lock))
 		return -ERESTARTSYS;
 	if (state->dfu_dev.dfu_state_flag == DS5_DFU_RECOVERY) {
-		ds5_write_with_check(state, 0x500c, 0x00);
-		ret = ds5_dfu_wait_for_get_dfu_status(state, dfuIDLE);
+		/* Read device info in recovery mode */
+		ret = ds5_dfu_detach(state);
+		if (ret < 0)
+			goto e_dfu_read_failed;
 		ret = ds5_dfu_get_dev_info(state, &f);
 		if (ret < 0)
 			goto e_dfu_read_failed;
@@ -4890,6 +4892,7 @@ static ssize_t ds5_dfu_device_write(struct file *flip,
 			goto dfu_write_error;
 		}
 		state->dfu_dev.dfu_state_flag = DS5_DFU_IN_PROGRESS;
+	/* find a better way to reinitialize driver from recovery to operational */
 		// state->dfu_dev.init_v4l_f = 1;
 	/* fallthrough - procceed to download */
 	__attribute__((__fallthrough__));
@@ -5058,6 +5061,8 @@ static int ds5_dfu_device_release(struct inode *inode, struct file *file)
 	state->dfu_dev.device_open_count--;
 	if (state->dfu_dev.dfu_state_flag != DS5_DFU_RECOVERY)
 		state->dfu_dev.dfu_state_flag = DS5_DFU_IDLE;
+	/* We disable this section as it has no effect when device in operational
+	   mode and has not enough effect when device in recovery mode */
 	// if (state->dfu_dev.dfu_state_flag == DS5_DFU_DONE
 	// 		&& state->dfu_dev.init_v4l_f)
 	// 	ds5_v4l_init(state->client, state);
@@ -5492,7 +5497,7 @@ static int ds5_probe(struct i2c_client *c, const struct i2c_device_id *id)
 	if (rec_state == 0x201) {
 		dev_info(&c->dev, "%s(): D4XX recovery state\n", __func__);
 		state->dfu_dev.dfu_state_flag = DS5_DFU_RECOVERY;
-		/* Override I2C drvdata */
+		/* Override I2C drvdata with state for use in remove function */
 		i2c_set_clientdata(c, state);
 		return 0;
 	}
