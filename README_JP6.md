@@ -8,6 +8,9 @@ The system shall include:
 * Jetson Orin Passive adapter board from [Leopard Imaging LI-JTX1-SUB-ADPT](https://leopardimaging.com/product/accessories/adapters-carrier-boards/for-nvidia-jetson/li-jtx1-sub-adpt/)
 * RS MIPI camera [D457](https://store.intelrealsense.com/buy-intel-realsense-depth-camera-d457.html)
 
+![orin_adapter](https://github.com/dmipx/realsense_mipi_platform_driver/assets/104717350/524e3eb6-6e6b-41cf-9562-9c0f920dd821)
+
+
 > Note: This MIPI reference driver is based on RealSense de-serialize board. For other de-serialize boards, modification might be needed. 
 
 ## Jetson AGX Orin board setup
