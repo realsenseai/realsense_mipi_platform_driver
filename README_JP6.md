@@ -1,21 +1,21 @@
 # Intel® RealSense™ camera driver for GMSL* interface
 
-# D457 MIPI on Jetson Orin JetPack 6.0 
-The RealSense MIPI platform driver enables the user to control and stream RealSense 3D MIPI cameras.
+# D457 MIPI on NVIDIA® Jetson AGX Orin™ JetPack 6.0 
+The Intel® RealSense™ MIPI platform driver enables the user to control and stream RealSense™ 3D MIPI cameras.
 The system shall include:
-* Jetson platform Supported JetPack versions are: [6.0 production release](https://developer.nvidia.com/embedded/jetpack-sdk-60)
-* RealSense [De-Serialize board](https://store.intelrealsense.com/buy-intel-realsense-des457.html)
-* Jetson Orin Passive adapter board from [Leopard Imaging LI-JTX1-SUB-ADPT](https://leopardimaging.com/product/accessories/adapters-carrier-boards/for-nvidia-jetson/li-jtx1-sub-adpt/)
+* Jetson™ platform Supported JetPack versions are: [6.0 production release](https://developer.nvidia.com/embedded/jetpack-sdk-60)
+* RealSense™ [De-Serialize board](https://store.intelrealsense.com/buy-intel-realsense-des457.html)
+* Jetson AGX Orin™ Passive adapter board from [Leopard Imaging® LI-JTX1-SUB-ADPT](https://leopardimaging.com/product/accessories/adapters-carrier-boards/for-nvidia-jetson/li-jtx1-sub-adpt/)
 * RS MIPI camera [D457](https://store.intelrealsense.com/buy-intel-realsense-depth-camera-d457.html)
 
 ![orin_adapter](https://github.com/dmipx/realsense_mipi_platform_driver/assets/104717350/524e3eb6-6e6b-41cf-9562-9c0f920dd821)
 
 
-> Note: This MIPI reference driver is based on RealSense de-serialize board. For other de-serialize boards, modification might be needed. 
+> Note: This MIPI reference driver is based on RealSense™ de-serialize board. For other de-serialize boards, modification might be needed. 
 
-## Jetson AGX Orin board setup
+## Jetson AGX Orin™ board setup
 
-Please follow the [instruction](https://docs.nvidia.com/sdk-manager/install-with-sdkm-jetson/index.html) to flash JetPack to the Jetson AGX Orin with NVIDIA SDK Manager or other methods NVIDIA provides. Make sure the board is ready to use.
+Please follow the [instruction](https://docs.nvidia.com/sdk-manager/install-with-sdkm-jetson/index.html) to flash JetPack to the NVIDIA® Jetson AGX Orin™ with NVIDIA® SDK Manager or other methods NVIDIA provides. Make sure the board is ready to use.
 
 
 
@@ -24,11 +24,11 @@ Please follow the [instruction](https://docs.nvidia.com/sdk-manager/install-with
 sudo apt-get install -y build-essential bc wget flex bison curl libssl-dev xxd
 ```
 
-## Build Nvidia kernel drivers, dtb and D457 driver
+## Build NVIDIA® kernel drivers, dtb and D457 driver
 
 1. Clone [realsense_mipi_platform_driver](https://github.com/IntelRealSense/realsense_mipi_platform_driver.git) repo.
 2. The developers can set up build environment, ARM64 compiler, kernel sources and NVIDIA's Jetson git repositories by using the setup script.
-3. Apply patches for kernel drivers, nvidia oot module and tegra devicetree.
+3. Apply patches for kernel drivers, nvidia-oot module and tegra devicetree.
 4. Build cross-compile project on host (Build PC).
 5. Apply build results to target (Jetson).
 6. Configure target.
@@ -45,10 +45,10 @@ cd realsense_mipi_platform_driver
 
 # JetPack manual build (CI deploy)
 
-[NVIDIA Jetson Linux 36.3](https://developer.nvidia.com/embedded/jetson-linux-r363)
+[NVIDIA® Jetson Linux 36.3](https://developer.nvidia.com/embedded/jetson-linux-r363)
 1. Download Jetson Linux Driver Package - [JetPack 6.0 BSP sources](https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v3.0/release/jetson_linux_r36.3.0_aarch64.tbz2)
 2. Download Toolchain ARM64 compiler - [Bootlin Toolchain gcc 11.3](https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v3.0/toolchain/aarch64--glibc--stable-2022.08-1.tar.bz2)
-3. Apply patches for kernel drivers, nvidia oot module and tegra devicetree.
+3. Apply patches for kernel drivers, nvidia-oot module and tegra devicetree.
 4. Build cross-compile project on host (Build PC).
 5. Apply build results to target (Jetson).
 6. Configure target.
@@ -133,7 +133,7 @@ Assuming Jetson has ip: `10.0.0.116`
 ```
 # Configuration files
 scp -r images/6.0/rootfs/boot nvidia@10.0.0.116:~/
-# RealSense support for NVidia Tegra
+# RealSense support for NVIDIA Tegra
 scp -r images/6.0/rootfs/lib/modules/5.15.136-tegra/updates nvidia@10.0.0.116:~/
 # RealSense metadata patched kernel modules and IMU HID support
 scp -r images/6.0/rootfs/lib/modules/5.15.136-tegra/extra nvidia@10.0.0.116:~/
