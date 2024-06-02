@@ -1,25 +1,26 @@
-# Intel® RealSense™ camera driver for GMSL* interface on Jetson AGX Xavier JetPack 4.6.1
-# D457 MIPI on Jetson AGX Xavier
-The RealSense MIPI platform driver enables the user to control and stream RealSense 3D MIPI cameras.
+# Intel® RealSense™ camera driver for GMSL* interface on NVIDIA® Jetson AGX Xavier™ JetPack 4.6.1
+
+# D457 MIPI on NVIDIA® Jetson AGX Xavier™
+The Intel® RealSense™ MIPI platform driver enables the user to control and stream RealSense 3D MIPI cameras.
 
 The system shall include:
-* Jetson platform (Currently Supported JetPack versions are: 4.6.1)
-* RealSense De-Serialize board (https://store.intelrealsense.com/buy-intel-realsense-des457.html)
+* Jetson™ platform (Currently Supported JetPack versions are: 4.6.1)
+* RealSense™ De-Serialize board (https://store.intelrealsense.com/buy-intel-realsense-des457.html)
 * RS MIPI camera (e.g. https://store.intelrealsense.com/buy-intel-realsense-depth-camera-d457.html)
 
-> Note: This MIPI reference driver is based on RealSense de-serialize board. For other de-serialize boards, modification might be needed.
+> Note: This MIPI reference driver is based on RealSense™ de-serialize board. For other de-serialize boards, modification might be needed.
 
 # Links
 
-- Jetson AGX Orin board setup - AGX Orin [JetPack 6.0](./README_JP6.md) setup guide
-- Jetson AGX Xavier board setup - AGX Xavier [JetPack 5.0.2](./README_JP5.md) setup guide
-- Jetson AGX Xavier board setup - AGX Xavier [JetPack 4.6.1](./README_JP4.md) setup guide
+- Jetson AGX Orin™ board setup - AGX Orin™ [JetPack 6.0](./README_JP6.md) setup guide
+- Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 5.0.2](./README_JP5.md) setup guide
+- Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 4.6.1](./README_JP4.md) setup guide
 - Build Tools manual page [Build Manual page](./README_tools.md)
 
 
-## Jetson AGX Xavier board setup
+## NVIDIA® Jetson AGX Xavier™ board setup
 
-Please follow the [instruction](https://docs.nvidia.com/sdk-manager/install-with-sdkm-jetson/index.html) to flash JetPack to the Jetson AGX Xavier with NVIDIA SDK Manager or other methods NVIDIA provides. Make sure the board is ready to use.
+Please follow the [instruction](https://docs.nvidia.com/sdk-manager/install-with-sdkm-jetson/index.html) to flash JetPack to the Jetson AGX Xavier™ with NVIDIA® SDK Manager or other methods NVIDIA provides. Make sure the board is ready to use.
 
 
 ## Build kernel, dtb and D457 driver
