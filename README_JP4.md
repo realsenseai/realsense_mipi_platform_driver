@@ -4,26 +4,27 @@
 The Intel® RealSense™ MIPI platform driver enables the user to control and stream RealSense 3D MIPI cameras.
 
 The system shall include:
-* Jetson™ platform (Currently Supported JetPack versions are: 4.6.1)
+* NVIDIA® Jetson™ platform (Currently Supported JetPack versions are: 4.6.1)
 * RealSense™ De-Serialize board (https://store.intelrealsense.com/buy-intel-realsense-des457.html)
 * RS MIPI camera (e.g. https://store.intelrealsense.com/buy-intel-realsense-depth-camera-d457.html)
 
 > Note: This MIPI reference driver is based on RealSense™ de-serialize board. For other de-serialize boards, modification might be needed.
 
-# Links
-
+### Links
+- Intel® RealSense™ camera driver for GMSL* interface [Front Page](./README.md)
 - Jetson AGX Orin™ board setup - AGX Orin™ [JetPack 6.0](./README_JP6.md) setup guide
-- Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 5.0.2](./README_JP5.md) setup guide
+- Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 5.x.2](./README_JP5.md) setup guide
 - Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 4.6.1](./README_JP4.md) setup guide
 - Build Tools manual page [Build Manual page](./README_tools.md)
+- Driver API manual page [Driver API page](./README_driver.md)
 
 
-## NVIDIA® Jetson AGX Xavier™ board setup
+## NVIDIA® Jetson AGX Xavier™ board setup for cross compile on x86-64
 
 Please follow the [instruction](https://docs.nvidia.com/sdk-manager/install-with-sdkm-jetson/index.html) to flash JetPack to the Jetson AGX Xavier™ with NVIDIA® SDK Manager or other methods NVIDIA provides. Make sure the board is ready to use.
 
 
-## Build kernel, dtb and D457 driver
+## Build kernel, dtb and D457 driver - cross compile x86-64
 
 <details>
 <summary>JetPack 4.6.1 manual build</summary>
@@ -93,7 +94,7 @@ Debian build:
 
 Debian packages will be generated in `images` folder.
 
-## Install kernel and D457 driver to Jetson AGX Xavier
+## Install kernel, device-tree and D457 driver to Jetson AGX Xavier
 
 1. Install the kernel and modules
 
@@ -130,5 +131,37 @@ FDT /boot/dtb/tegra194-p2888-0001-p2822-0000.dtb
 
 After rebooting Jetson, the D457 driver should work.
 
+### Verify driver
+- Driver API manual page [Driver API page](./README_driver.md)
+
+## Available directives on max9295/max9296 register setting
+
+- Dump registers
+```
+cat /sys/bus/i2c/drivers/max9295/30-0040/register_dump
+cat /sys/bus/i2c/drivers/max9296/30-0048/register_dump
+```
+
+- Dump setting version
+
+```
+cat /sys/module/max9295/parameters/max9295_setting_verison
+cat /sys/module/max9296/parameters/max9296_setting_verison
+```
+
+- Disable updating setting dynamically (updating setting manually by running script).
+  **0** means disable updating setting dynamically, while **1** means enable updating setting dynamically.
+
+```
+echo 0 | sudo tee /sys/module/max9295/parameters/max9295_dynamic_update
+echo 0 | sudo tee /sys/module/max9296/parameters/max9296_dynamic_update
+```
+
+- Refresh max9295/max9295 register values, this is used for forcely set serdes setting when necessary
+
+```
+echo 1 | sudo tee /sys/bus/i2c/drivers/max9295/30-0040/refresh_setting
+echo 1 | sudo tee /sys/bus/i2c/drivers/max9296/30-0048/refresh_setting
+```
 **NOTE**
 - It's recommended to save the original kernel image as backup boot option in `/boot/extlinux/extlinux.conf`.

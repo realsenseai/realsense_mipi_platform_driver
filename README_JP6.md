@@ -3,7 +3,7 @@
 # D457 MIPI on NVIDIA® Jetson AGX Orin™ JetPack 6.0 
 The Intel® RealSense™ MIPI platform driver enables the user to control and stream RealSense™ 3D MIPI cameras.
 The system shall include:
-* Jetson™ platform Supported JetPack versions are: [6.0 production release](https://developer.nvidia.com/embedded/jetpack-sdk-60)
+* NVIDIA® Jetson™ platform Supported JetPack versions are: [6.0 production release](https://developer.nvidia.com/embedded/jetpack-sdk-60)
 * RealSense™ [De-Serialize board](https://store.intelrealsense.com/buy-intel-realsense-des457.html)
 * Jetson AGX Orin™ Passive adapter board from [Leopard Imaging® LI-JTX1-SUB-ADPT](https://leopardimaging.com/product/accessories/adapters-carrier-boards/for-nvidia-jetson/li-jtx1-sub-adpt/)
 * RS MIPI camera [D457](https://store.intelrealsense.com/buy-intel-realsense-depth-camera-d457.html)
@@ -13,7 +13,15 @@ The system shall include:
 
 > Note: This MIPI reference driver is based on RealSense™ de-serialize board. For other de-serialize boards, modification might be needed. 
 
-## Jetson AGX Orin™ board setup
+### Links
+- Intel® RealSense™ camera driver for GMSL* interface [Front Page](./README.md)
+- NVIDIA® Jetson AGX Orin™ board setup - AGX Orin™ [JetPack 6.0](./README_JP6.md) setup guide
+- NVIDIA® Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 5.x.2](./README_JP5.md) setup guide
+- NVIDIA® Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 4.6.1](./README_JP4.md) setup guide
+- Build Tools manual page [Build Manual page](./README_tools.md)
+- Driver API manual page [Driver API page](./README_driver.md)
+
+## NVIDIA® Jetson AGX Orin™ board setup on x86-64 host for cross-compile
 
 Please follow the [instruction](https://docs.nvidia.com/sdk-manager/install-with-sdkm-jetson/index.html) to flash JetPack to the NVIDIA® Jetson AGX Orin™ with NVIDIA® SDK Manager or other methods NVIDIA provides. Make sure the board is ready to use.
 
@@ -23,8 +31,7 @@ Please follow the [instruction](https://docs.nvidia.com/sdk-manager/install-with
 ```
 sudo apt-get install -y build-essential bc wget flex bison curl libssl-dev xxd
 ```
-
-## Build NVIDIA® kernel drivers, dtb and D457 driver
+## Build NVIDIA® kernel drivers, dtb and D457 driver - cross compile x86-64
 
 1. Clone [realsense_mipi_platform_driver](https://github.com/IntelRealSense/realsense_mipi_platform_driver.git) repo.
 2. The developers can set up build environment, ARM64 compiler, kernel sources and NVIDIA's Jetson git repositories by using the setup script.
@@ -43,7 +50,7 @@ cd realsense_mipi_platform_driver
 
 
 
-# JetPack manual build (CI deploy)
+## JetPack manual build - cross compile x86-64 (CI deploy)
 
 [NVIDIA® Jetson Linux 36.3](https://developer.nvidia.com/embedded/jetson-linux-r363)
 1. Download Jetson Linux Driver Package - [JetPack 6.0 BSP sources](https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v3.0/release/jetson_linux_r36.3.0_aarch64.tbz2)
@@ -73,7 +80,7 @@ tar xjf nvidia_kernel_display_driver_source.tbz2
 ./build_all.sh 6.0 ./Linux_for_tegra/source
 ```
 
-# Archive JetPack 6.0 build results (optional) on build host
+## Archive JetPack 6.0 build results (optional) on build host
 - kernel image (not modified): `images/6.0/rootfs/boot/Image`
 - dtb: `images/6.0/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb`
 - dtb overlay: `images/6.0/rootfs/boot/tegra234-camera-d4xx-overlay.dtbo`
@@ -88,7 +95,7 @@ tar -czf ./images/6.0/nvidia-oot-modules.tar.gz -C "./images/6.0/rootfs/" ./lib/
 echo "Archiving kernel HID modules"
 tar -czf ./images/6.0/kernel-hid-modules.tar.gz -C "./images/6.0/rootfs/" ./lib/modules/5.15.136-tegra/extra
 ```
-# Backup JetPack 6.0 boot configuration and drivers (optional)
+## Backup JetPack 6.0 boot configuration and drivers (optional)
 ```
 echo "Backup boot configuration"
 sudo cp /boot/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/tegra234-p3737-0000+p3701-0000-nv-bkp.dtb
@@ -96,7 +103,7 @@ echo "backup nvidia-oot modules"
 sudo tar -czf /lib/modules/$(uname -r)/updates.tar.gz -C /lib/modules/$(uname -r)/ updates
 ```
 
-## Install kernel and D457 driver to Jetson Orin
+## Install kernel drivers, extra modules and device-tree to Jetson AGX Orin
 
 Following steps required:
 
@@ -126,7 +133,7 @@ Following steps required:
     ```
 7.	Reboot
 
-# Deploy build results on Jetson target
+## Deploy build results on Jetson target
 On build host, copy build results to the right places.
 Assuming Jetson has ip: `10.0.0.116`
 
@@ -160,7 +167,9 @@ sudo depmod
 sudo reboot
 ```
 
-# Verify driver loaded:
+### Verify driver loaded - on Jetson:
+- Driver API manual page [Driver API page](./README_driver.md)
+
 ```
 nvidia@ubuntu:~$ sudo dmesg | grep tegra-capture-vi
 [    9.357521] platform 13e00000.host1x:nvcsi@15a00000: Fixing up cyclic dependency with tegra-capture-vi

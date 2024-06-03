@@ -1,10 +1,14 @@
 # Intel® RealSense™ camera driver for GMSL* interface
 
-# D457 MIPI on Jetson AGX Xavier and Orin build scripts manual pages
+# D457 MIPI on NVIDIA® Jetson AGX Xavier™ and AGX Orin™ build scripts manual pages
 
-- Jetson AGX Xavier board setup - AGX Xavier [JetPack 5.0.2](./README.md) setup guide
-
-- Jetson AGX Orin board setup - AGX Orin [JetPack 6.0](./README_JP6.md) setup guide
+### Links
+- Intel® RealSense™ camera driver for GMSL* interface [Front Page](./README.md)
+- NVIDIA® Jetson AGX Orin™ board setup - AGX Orin™ [JetPack 6.0](./README_JP6.md) setup guide
+- NVIDIA® Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 5.x.2](./README_JP5.md) setup guide
+- NVIDIA® Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 4.6.1](./README_JP4.md) setup guide
+- Build Tools manual page [Build Manual page](./README_tools.md)
+- Driver API manual page [Driver API page](./README_driver.md)
 
 # Build dependencies
 ```

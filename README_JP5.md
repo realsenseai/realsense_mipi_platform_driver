@@ -4,25 +4,26 @@
 The Intel® RealSense™ MIPI platform driver enables the user to control and stream RealSense™ 3D MIPI cameras.
 
 The system shall include:
-* Jetson™ platform (Currently Supported JetPack versions are: 5.1.2, 5.0.2)
+* NVIDIA® Jetson™ platform (Currently Supported JetPack versions are: 5.1.2, 5.0.2)
 * RealSense™ De-Serialize board (https://store.intelrealsense.com/buy-intel-realsense-des457.html)
 * RS MIPI camera (e.g. https://store.intelrealsense.com/buy-intel-realsense-depth-camera-d457.html)
 
 > Note: This MIPI reference driver is based on RealSense™ de-serialize board. For other de-serialize boards, modification might be needed.
 
-# Links
-
+### Links
+- Intel® RealSense™ camera driver for GMSL* interface [Front Page](./README.md)
 - Jetson AGX Orin™ board setup - AGX Orin™ [JetPack 6.0](./README_JP6.md) setup guide
 - Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 5.x.2](./README_JP5.md) setup guide
 - Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 4.6.1](./README_JP4.md) setup guide
 - Build Tools manual page [Build Manual page](./README_tools.md)
+- Driver API manual page [Driver API page](./README_driver.md)
 
 
-## NVIDIA® Jetson AGX Xavier™ board setup
+## NVIDIA® Jetson AGX Xavier™ board setup for cross compile on x86-64
 
 Please follow the [instruction](https://docs.nvidia.com/sdk-manager/install-with-sdkm-jetson/index.html) to flash JetPack to the Jetson AGX Xavier™ with NVIDIA® SDK Manager or other methods NVIDIA provides. Make sure the board is ready to use.
 
-## Build kernel, dtb and D457 driver
+## Build kernel, dtb and D457 driver on host - cross compile x86-64
 
 <details>
 <summary>JetPack manual build</summary>
@@ -59,7 +60,7 @@ cd Linux_for_Tegra/source/public
 tar xjf kernel_src.tbz2
 ```
 
-# Apply D457 patches and build the kernel image, dtb and D457 driver.
+## Apply D457 patches and build the kernel image, dtb and D457 driver.
 
 ```
 # install dependencies
@@ -90,7 +91,7 @@ The developers can set up the source code with NVIDIA's Jetson git repositories 
 ./build_all.sh 5.0.2
 ```
 
-## Install kernel and D457 driver to Jetson AGX Xavier
+## Install kernel, device-tree and D457 driver to Jetson AGX Xavier
 
 1. Install the kernel and modules
 
