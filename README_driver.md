@@ -354,5 +354,6 @@ digraph board {
 
 </details>
 
+![image](https://github.com/dmipx/realsense_mipi_platform_driver/assets/104717350/dfb6ba23-b577-4a7a-8a7b-8d88391013a0)
 
 ---
