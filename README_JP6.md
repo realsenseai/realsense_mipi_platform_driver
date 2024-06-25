@@ -115,8 +115,9 @@ Following steps required:
     1.	Configure Jetson AGX CSI Connector
     2.	Configure for compatible hardware
     3.	Jetson RealSense Camera D457
-    4.	$ `sudo depmod`
-    5.	$ `echo "d4xx" | sudo tee /etc/modules-load.d/d4xx.conf`
+    4.  Enable depmod scan for "extra" modules $ `sudo sed -i 's/search updates/search extra updates/g' /etc/depmod.d/ubuntu.conf`
+    5.	$ `sudo depmod`
+    6.	$ `echo "d4xx" | sudo tee /etc/modules-load.d/d4xx.conf`
     
 6.  Verify bootloader configuration
 
@@ -160,6 +161,9 @@ sudo /opt/nvidia/jetson-io/config-by-hardware.py -n 2="Jetson RealSense Camera D
 
 # Enable d4xx autoload:
 echo "d4xx" | sudo tee /etc/modules-load.d/d4xx.conf
+# Enable depmod scan for "extra" modules
+# original file content: cat /etc/depmod.d/ubuntu.conf -- search updates ubuntu built-in
+sudo sed -i 's/search updates/search extra updates/g' /etc/depmod.d/ubuntu.conf
 # update driver cache
 sudo depmod
 
