@@ -118,21 +118,46 @@ scp ./images/5.0.2/drivers/media/v4l2-core/videobuf-vmalloc.ko nvidia@10.0.0.116
 
 Copy them to the right places on Jetson target:
 ```
-sudo cp Image /boot
-sudo cp tegra194-p2888-0001-p2822-0000.dtb /boot/dtb
-sudo cp d4xx.ko /lib/modules/$(uname -r)/kernel/drivers/media/i2c/
-sudo cp uvcvideo.ko /lib/modules/$(uname -r)/kernel/drivers/media/usb/uvc/
-sudo cp videobuf-core.ko /lib/modules/$(uname -r)/kernel/drivers/media/v4l2-core/
-sudo cp videobuf-vmalloc.ko /lib/modules/$(uname -r)/kernel/drivers/media/v4l2-core/
+sudo mkdir /boot/d457
+sudo mkdir /lib/modules/$(uname -r)/updates
+sudo cp Image /boot/d457/
+sudo cp tegra194-p2888-0001-p2822-0000.dtb /boot/d457/
+sudo cp d4xx.ko /lib/modules/$(uname -r)/updates/
+sudo cp uvcvideo.ko /lib/modules/$(uname -r)/updates/
+sudo cp videobuf-core.ko /lib/modules/$(uname -r)/updates/
+sudo cp videobuf-vmalloc.ko /lib/modules/$(uname -r)/updates/
 sudo depmod
 ```
 
 2. Edit `/boot/extlinux/extlinux.conf` primary boot option's LINUX/FDT lines to use built kernel image and dtb file:
 
     ```
-    LINUX /boot/Image-5.10.104-tegra
-    FDT /usr/lib/linux-image-5.10.104-tegra/tegra194-p2888-0001-p2822-0000.dtb
+    LINUX /boot/d457/Image
+    FDT /boot/d457/tegra194-p2888-0001-p2822-0000.dtb
     ```
+
+```
+$ cat /boot/extlinux/extlinux.conf
+TIMEOUT 30
+DEFAULT d457
+
+MENU TITLE L4T boot options
+
+LABEL primary
+      MENU LABEL primary kernel
+      LINUX /boot/Image
+      INITRD /boot/initrd
+      FDT /boot/dtb/tegra194-p2888-0001-p2822-0000.dtb
+      APPEND ${cbootargs} quiet root=/dev/mmcblk0p1 rw rootwait rootfstype=ext4 console=ttyTCU0,115200n8 console=tty0 fbcon=map:0 net.ifnames=0 rootfstype=ext4
+
+LABEL d457
+      MENU LABEL d457 kernel
+      LINUX /boot/d457/Image
+      INITRD /boot/initrd
+      FDT /boot/d457/tegra194-p2888-0001-p2822-0000.dtb
+      APPEND ${cbootargs} root=/dev/mmcblk0p1 rw rootwait rootfstype=ext4 console=ttyTCU0,115200n8 console=tty0 fbcon=map:0 net.ifnames=0 rootfstype=ext4
+```
+
 
 3. Make D457 I2C module autoload at boot time:
     ```
