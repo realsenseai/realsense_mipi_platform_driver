@@ -74,10 +74,10 @@ tar xjf kernel_src.tbz2
 tar xjf kernel_oot_modules_src.tbz2
 tar xjf nvidia_kernel_display_driver_source.tbz2
 
-./apply_patches_ext.sh ./Linux_for_tegra/source 6.0
+./apply_patches_ext.sh ./Linux_for_Tegra/source 6.0
 
 # build kernel, dtb and D457 driver
-./build_all.sh 6.0 ./Linux_for_tegra/source
+./build_all.sh 6.0 ./Linux_for_Tegra/source
 ```
 
 ## Archive JetPack 6.0 build results (optional) on build host
