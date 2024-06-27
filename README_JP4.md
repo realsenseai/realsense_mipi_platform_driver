@@ -53,12 +53,12 @@ tar xjf kernel_src.tbz2
 sudo apt install build-essential bc flex bison
 
 # apply patches
-./apply_patches_ext.sh ./Linux_for_tegra/source 4.6.1
+./apply_patches_ext.sh ./Linux_for_Tegra/source/public 4.6.1
 
 # build kernel, dtb and D457 driver
-./build_all.sh 4.6.1 ./Linux_for_tegra/source
+./build_all.sh 4.6.1 ./Linux_for_Tegra/source/public
 # Debian build
-# ./build_all_deb.sh --no-dbg-pkg 4.6.1 ./Linux_for_tegra/source
+# ./build_all_deb.sh --no-dbg-pkg 4.6.1 ./Linux_for_Tegra/source/public
 ```
 </details>
 
