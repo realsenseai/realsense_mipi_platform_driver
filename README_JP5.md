@@ -58,6 +58,7 @@ wget https://developer.nvidia.com/embedded/l4t/r35_release_v1.0/sources/public_s
 tar xjf public_sources.tbz2
 cd Linux_for_Tegra/source/public
 tar xjf kernel_src.tbz2
+cd ../../..
 ```
 
 ## Apply D457 patches and build the kernel image, dtb and D457 driver.

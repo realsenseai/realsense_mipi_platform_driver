@@ -73,6 +73,7 @@ cd Linux_for_Tegra/source
 tar xjf kernel_src.tbz2
 tar xjf kernel_oot_modules_src.tbz2
 tar xjf nvidia_kernel_display_driver_source.tbz2
+cd ../..
 
 ./apply_patches_ext.sh ./Linux_for_Tegra/source 6.0
 
