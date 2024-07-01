@@ -44,6 +44,7 @@ wget https://developer.nvidia.com/embedded/l4t/r32_release_v7.1/sources/t186/pub
 tar xjf public_sources.tbz2
 cd Linux_for_Tegra/source/public
 tar xjf kernel_src.tbz2
+cd ../../..
 ```
 
 ### Apply D457 patches and build the kernel image, dtb and D457 driver.
@@ -54,6 +55,11 @@ sudo apt install build-essential bc flex bison
 
 # apply patches
 ./apply_patches_ext.sh ./Linux_for_Tegra/source/public 4.6.1
+
+# remove BUILD_NUMBER env dependency kernel vermagic
+sed -i s/'UTS_RELEASE=\$(KERNELRELEASE)-ab\$(BUILD_NUMBER)'/'UTS_RELEASE=\$(KERNELRELEASE)'/g ./Linux_for_Tegra/source/public/kernel/kernel-4.9/Makefile
+sed -i 's/the-space :=/E =/g' ./Linux_for_Tegra/source/public/kernel/kernel-4.9/scripts/Kbuild.include
+sed -i 's/the-space += /the-space = \$E \$E/g' ./Linux_for_Tegra/source/public/kernel/kernel-4.9/scripts/Kbuild.include
 
 # build kernel, dtb and D457 driver
 ./build_all.sh 4.6.1 ./Linux_for_Tegra/source/public
