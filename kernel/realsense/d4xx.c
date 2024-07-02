@@ -2703,6 +2703,8 @@ static const struct v4l2_ctrl_config ds5_ctrl_ae_setpoint_get = {
 	.name = "ae setpoint get",
 	.type = V4L2_CTRL_TYPE_INTEGER,
 	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_READ_ONLY,
+	.min = 0,
+	.max = 4095,
 	.step = 1,
 };
 
