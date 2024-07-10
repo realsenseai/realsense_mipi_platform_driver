@@ -16,4 +16,4 @@ def test_fw_version(device, options):
         # Check if the FW version matching with 5.x.x.x
         assert fw_version == (fw_version & 0x05FFFFFF)
     else:
-        assert false
+        assert False

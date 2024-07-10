@@ -27,7 +27,7 @@ def usage():
     print( '        -r, --regex     Run all tests whose name matches the following regular expression' )
     print( '                        e.g.: --regex test_fw_version; -r test_fw_version')
         
-    sys.exit( 2 )
+    sys.exit( 0 )
 
 def command(dev_name, test=None):
     cmd =  ['pytest']
