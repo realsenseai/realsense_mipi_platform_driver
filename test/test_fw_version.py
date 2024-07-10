@@ -1,6 +1,7 @@
 import subprocess
 import pytest
 
+@pytest.mark.d457
 @pytest.mark.parametrize("device", {'-d0'})
 @pytest.mark.parametrize("options", {'-C'})
 def test_fw_version(device, options):
