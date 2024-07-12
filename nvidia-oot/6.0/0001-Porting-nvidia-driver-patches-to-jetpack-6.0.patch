@@ -1224,6 +1224,15 @@ diff --git a/include/media/tegra_camera_core.h b/include/media/tegra_camera_core
 index e6d9a2b1..38634b77 100644
 --- a/include/media/tegra_camera_core.h
 +++ b/include/media/tegra_camera_core.h
+@@ -18,7 +18,7 @@
+ /* Width alignment */
+ #define TEGRA_WIDTH_ALIGNMENT	1
+ /* Stride alignment */
+-#define TEGRA_STRIDE_ALIGNMENT	1
++#define TEGRA_STRIDE_ALIGNMENT	64
+ /* Height alignment */
+ #define TEGRA_HEIGHT_ALIGNMENT	1
+ /* Size alignment */
 @@ -32,6 +32,8 @@
  #define TEGRA_IMAGE_FORMAT_DEF	32
  
