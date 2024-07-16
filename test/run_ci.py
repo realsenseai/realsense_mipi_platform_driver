@@ -64,15 +64,33 @@ def run_test(cmd, test=None, dev_name=None, stdout=None, append =False):
                 universal_newlines=True,
                 timeout=200,
                 check=True )
-        if not result.returncode:
-                print("---Test Passed---")
     except Exception as e:
-            print("---Test Failed---")
-            print( "Error Exception:\n ",e )
-                        
+            print( "Exception occurred.")
+
     finally:
         if handle:
-            handle.close()      
+            handle.close()
+        junit_xml_parsing(f'{dev_name.upper()}_pytest.xml')
+
+
+def junit_xml_parsing(xml_file):
+    import xml.etree.ElementTree as ET
+    global logdir
+
+    if not os.path.isfile( os.path.join(logdir, f'{xml_file}' )):
+        print(f'{xml_file} not found, test resutls can\'t be generated')
+    else:
+        tree = ET.parse(os.path.join(logdir, xml_file))
+        root = tree.getroot()
+        print("===================== TEST SUMMARY ======================================")
+        for testsuite in root.findall('testsuite'):
+            total_tests = testsuite.attrib['tests']
+            failed = testsuite.attrib['failures']
+            skipped = testsuite.attrib['skipped']
+            passed = int(total_tests) - int(failed) - int(skipped)
+            print("Total tests:", total_tests, ". Passed:", passed, "Failed:", failed, "Skipped:", skipped)
+        print("=========================================================================")
+
 
 def run_tests_on_d457():     
     global logdir
