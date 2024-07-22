@@ -5421,7 +5421,6 @@ static int ds5_probe(struct i2c_client *c, const struct i2c_device_id *id)
 #endif
 	if (!state)
 		return -ENOMEM;
-	memset(state, 0, sizeof(*state));
 
 	mutex_init(&state->lock);
 
