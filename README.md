@@ -42,3 +42,34 @@ Please follow the [instruction](https://docs.nvidia.com/sdk-manager/install-with
 - Each JetPack version's kernel may be different, the user needs to change the kernel version in file names and paths accordingly, for example for JetPack 4.6.1 the version is `4.9.253-d457` or `4.9.253-tegra`, depending on the build method applied.
 - For JetPack 4.6.1, the dtb file is not included in the deb package. User needs to manually copy `images/4.6.1/arch/arm64/boot/dts/tegra194-p2888-0001-p2822-0000.dtb` file to board and edit `extlinux.conf` to point to it.
 - It's recommended to save the original kernel image as backup boot option in `/boot/extlinux/extlinux.conf`.
+
+  
+## Available directives on max9295/max9296 register setting
+
+- Dump registers
+```
+cat /sys/bus/i2c/drivers/max9295/30-0040/register_dump
+cat /sys/bus/i2c/drivers/max9296/30-0048/register_dump
+```
+
+- Dump setting version
+
+```
+cat /sys/module/max9295/parameters/max9295_setting_verison
+cat /sys/module/max9296/parameters/max9296_setting_verison
+```
+
+- Disable updating setting dynamically (updating setting manually by running script).
+  **0** means disable updating setting dynamically, while **1** means enable updating setting dynamically.
+
+```
+echo 0 | sudo tee /sys/module/max9295/parameters/max9295_dynamic_update
+echo 0 | sudo tee /sys/module/max9296/parameters/max9296_dynamic_update
+```
+
+- Refresh max9295/max9295 register values, this is used for forcely set serdes setting when necessary
+
+```
+echo 1 | sudo tee /sys/bus/i2c/drivers/max9295/30-0040/refresh_setting
+echo 1 | sudo tee /sys/bus/i2c/drivers/max9296/30-0048/refresh_setting
+```
