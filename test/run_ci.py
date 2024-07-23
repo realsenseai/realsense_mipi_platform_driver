@@ -31,7 +31,7 @@ def usage():
 
 def command(dev_name, test=None):
     cmd =  ['pytest']
-    cmd += ['-s']
+    cmd += ['-vs']
     cmd += ['-m', ''.join(dev_name)]
     if test:
         cmd += ['-k', f'{test}'] 
@@ -40,56 +40,13 @@ def command(dev_name, test=None):
     cmd += [f'--junit-xml={logdir}/{dev_name.upper()}_pytest.xml']
     return cmd
 
-def run_test(cmd, test=None, dev_name=None, stdout=None, append =False):
-    handle = None
+def run_test(cmd):
     try:
-        if test:
-            stdout = stdout + os.sep + str(dev_name.upper()) + '_' + test + '.log'
-        else:
-            stdout = stdout + os.sep + str(dev_name.upper()) + '_' + 'full.log' 
-        if stdout is None:
-            sys.stdout.flush()
-        elif stdout and stdout != subprocess.PIPE:
-            if append:
-                handle = open( stdout, "a" )
-                handle.write(
-                    "\n----------TEST-SEPARATOR----------\n\n" )
-                handle.flush()
-            else:
-                handle = open( stdout, "w" )
-
-        result = subprocess.run( cmd,
-                stdout=handle,
-                stderr=subprocess.STDOUT,
-                universal_newlines=True,
+        subprocess.run( cmd,
                 timeout=200,
                 check=True )
     except Exception as e:
-            print( "Exception occurred.")
-
-    finally:
-        if handle:
-            handle.close()
-        junit_xml_parsing(f'{dev_name.upper()}_pytest.xml')
-
-
-def junit_xml_parsing(xml_file):
-    import xml.etree.ElementTree as ET
-    global logdir
-
-    if not os.path.isfile( os.path.join(logdir, f'{xml_file}' )):
-        print(f'{xml_file} not found, test resutls can\'t be generated')
-    else:
-        tree = ET.parse(os.path.join(logdir, xml_file))
-        root = tree.getroot()
-        print("===================== TEST SUMMARY ======================================")
-        for testsuite in root.findall('testsuite'):
-            total_tests = testsuite.attrib['tests']
-            failed = testsuite.attrib['failures']
-            skipped = testsuite.attrib['skipped']
-            passed = int(total_tests) - int(failed) - int(skipped)
-            print("Total tests:", total_tests, ". Passed:", passed, "Failed:", failed, "Skipped:", skipped)
-        print("=========================================================================")
+        print( "Exception occurred.")
 
 
 def run_tests_on_d457():     
@@ -102,13 +59,11 @@ def run_tests_on_d457():
         testname = regex if regex else None
 
         cmd = command(device.lower(), testname)
-        run_test(cmd, testname, device, stdout=logdir, append =False)
+        run_test(cmd)
 
     finally:
         if running_on_ci:
             print("Log path- \"Build Artifacts\":/realsense_mipi_driver_platform/test/logs ")
-        else:
-            print("log path:", logdir)
         run_time = time.time() - start_time
         print( "server took", run_time, "seconds" )
 
