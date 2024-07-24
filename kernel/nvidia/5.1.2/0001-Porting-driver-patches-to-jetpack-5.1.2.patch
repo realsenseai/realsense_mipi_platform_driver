@@ -1205,7 +1205,7 @@ index b54833d3f..042a80e51 100644
 +			dev_err(&chan->video->dev, "vi capture release failed\n");
 +			goto done;
 +		}
-+		vi_channel_close_ex(chan->id, chan->tegra_vi_channel[vi_port]);
++		vi_channel_close_ex(chan->vi_channel_id[vi_port], chan->tegra_vi_channel[vi_port]);
 +		chan->tegra_vi_channel[vi_port] = NULL;
 +	}
 +
@@ -1243,7 +1243,7 @@ index b54833d3f..042a80e51 100644
 +
 +	/* restart vi channel */
 +	for(vi_port = 0; vi_port < chan->valid_ports; vi_port++) {
-+		chan->tegra_vi_channel[vi_port] = vi_channel_open_ex(chan->id + vi_port, false);
++		chan->tegra_vi_channel[vi_port] = vi_channel_open_ex(chan->vi_channel_id[vi_port], false);
 +		if (IS_ERR(chan->tegra_vi_channel[vi_port])) {
 +			err = PTR_ERR(chan);
 +			goto done;
