@@ -3,9 +3,15 @@
 set -e
 
 if [[ "$1" == "-h" ]]; then
-    echo "build_all.sh [JetPack_version] [JetPack_Linux_source]"
+    echo "build_all.sh [--no-dev-dbg] [JetPack_version] [JetPack_Linux_source]"
     echo "build_all.sh -h"
     exit 1
+fi
+
+DEVDBG=1
+if [[ "$1" == "--no-dev-dbg" ]]; then
+    DEVDBG=0
+    shift
 fi
 
 export DEVDIR=$(cd `dirname $0` && pwd)
@@ -69,6 +75,9 @@ else
 #jp4/5
     cd $SRCS/$KERNEL_DIR
     make ARCH=arm64 O=$TEGRA_KERNEL_OUT tegra_defconfig
+    if [[ "$DEVDBG" == "1" ]]; then
+        scripts/config --file $TEGRA_KERNEL_OUT/.config --enable DYNAMIC_DEBUG
+    fi
     make ARCH=arm64 O=$TEGRA_KERNEL_OUT -j${NPROC}
     make ARCH=arm64 O=$TEGRA_KERNEL_OUT modules_install INSTALL_MOD_PATH=$KERNEL_MODULES_OUT
 fi
