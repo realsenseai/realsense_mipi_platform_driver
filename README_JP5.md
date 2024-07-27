@@ -73,6 +73,10 @@ sudo apt install build-essential bc flex bison
 # build kernel, dtb and D457 driver
 ./build_all.sh 5.0.2 ./Linux_for_Tegra/source/public
 ```
+Note: dev_dbg() log support will be enabled by default. If not needed, run the `./build_all.sh` script with `--no-dev-dbg` option like below.
+```
+./build_all.sh --no-dev-dbg 5.0.2 ./Linux_for_Tegra/source/public
+```
 
 </details>
 
@@ -90,6 +94,10 @@ The developers can set up the source code with NVIDIA's Jetson git repositories 
 ./apply_patches.sh apply 5.0.2
 
 ./build_all.sh 5.0.2
+```
+Note: dev_dbg() log support will be enabled by default. If not needed, run the `./build_all.sh` script with `--no-dev-dbg` option like below.
+```
+./build_all.sh --no-dev-dbg 5.0.2
 ```
 
 ## Install kernel, device-tree and D457 driver to Jetson AGX Xavier

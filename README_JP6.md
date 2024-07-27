@@ -47,6 +47,10 @@ cd realsense_mipi_platform_driver
 ./apply_patches.sh apply 6.0
 ./build_all.sh 6.0
 ```
+Note: dev_dbg() log support will be enabled by default. If not needed, run the `./build_all.sh` script with `--no-dev-dbg` option like below.
+```
+./build_all.sh --no-dev-dbg 6.0
+```
 
 
 
@@ -80,9 +84,13 @@ cd ../..
 # build kernel, dtb and D457 driver
 ./build_all.sh 6.0 ./Linux_for_Tegra/source
 ```
+Note: dev_dbg() log support will be enabled by default. If not needed, run the `./build_all.sh` script with `--no-dev-dbg` option like below.
+```
+./build_all.sh --no-dev-dbg 6.0 ./Linux_for_Tegra/source
+```
 
 ## Archive JetPack 6.0 build results (optional) on build host
-- kernel image (not modified): `images/6.0/rootfs/boot/Image`
+- kernel image (not modified if `--no-dev-dbg` option is used while building): `images/6.0/rootfs/boot/Image`
 - dtb: `images/6.0/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb`
 - dtb overlay: `images/6.0/rootfs/boot/tegra234-camera-d4xx-overlay.dtbo`
 - nvidia-oot modules: `images/6.0/rootfs/lib/modules/5.15.136-tegra/updates`
@@ -112,7 +120,8 @@ Following steps required:
 2.	Copy entire directory `images/6.0/rootfs/lib/modules/5.15.136-tegra/extra` from host to `/lib/modules/5.15.136-tegra/` on Orin target
 3.	Copy `tegra234-camera-d4xx-overlay.dtbo` from host to `/boot/tegra234-camera-d4xx-overlay.dtbo` on Orin target
 4.  Copy `tegra234-p3737-0000+p3701-0000-nv.dtb` from host to `/boot/` on Orin
-5.	Run  $ `sudo /opt/nvidia/jetson-io/jetson-io.py`
+5.  Copy `Image` from host to `/boot/` on Orin
+6.	Run  $ `sudo /opt/nvidia/jetson-io/jetson-io.py`
     1.	Configure Jetson AGX CSI Connector
     2.	Configure for compatible hardware
     3.	Jetson RealSense Camera D457
@@ -120,7 +129,7 @@ Following steps required:
     5.	$ `sudo depmod`
     6.	$ `echo "d4xx" | sudo tee /etc/modules-load.d/d4xx.conf`
     
-6.  Verify bootloader configuration
+7.  Verify bootloader configuration
 
     ```
     cat /boot/extlinux/extlinux.conf
@@ -157,6 +166,7 @@ sudo cp -r ~/extra /lib/modules/$(uname -r)/
 sudo cp -r ~/updates /lib/modules/$(uname -r)/
 sudo cp ~/boot/tegra234-camera-d4xx-overlay.dtbo /boot/
 sudo cp ./boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/tegra234-p3737-0000+p3701-0000-nv.dtb
+sudo cp ./boot/Image /boot/Image
 # Enable d4xx overlay:
 sudo /opt/nvidia/jetson-io/config-by-hardware.py -n 2="Jetson RealSense Camera D457"
 
