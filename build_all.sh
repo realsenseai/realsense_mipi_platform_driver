@@ -48,7 +48,20 @@ if [[ "$JETPACK_VERSION" == "6.0" ]]; then
     cd $SRCS
     export KERNEL_HEADERS=$SRCS/kernel/kernel-jammy-src
     ln -sf $TEGRA_KERNEL_OUT $SRCS/out
-    make ARCH=arm64 -C kernel
+    if [[ "$DEVDBG" == "1" ]]; then
+        cd $KERNEL_HEADERS
+        make ARCH=arm64 defconfig
+        scripts/config --enable DYNAMIC_DEBUG
+        scripts/config --enable DYNAMIC_DEBUG_CORE
+        make ARCH=arm64 savedefconfig
+        cp defconfig ./arch/arm64/configs/custom_defconfig
+        rm defconfig .config
+        make ARCH=arm64 mrproper
+        cd $SRCS
+        make ARCH=arm64 KERNEL_DEF_CONFIG=custom_defconfig -C kernel
+    else
+        make ARCH=arm64 -C kernel
+    fi
     make ARCH=arm64 modules
     make ARCH=arm64 dtbs
     mkdir -p $TEGRA_KERNEL_OUT/rootfs/boot/dtb
