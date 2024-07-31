@@ -50,16 +50,23 @@ if [[ "$JETPACK_VERSION" == "6.0" ]]; then
     ln -sf $TEGRA_KERNEL_OUT $SRCS/out
     if [[ "$DEVDBG" == "1" ]]; then
         cd $KERNEL_HEADERS
+        # Generate .config file from default defconfig
         make ARCH=arm64 defconfig
+        # Update the CONFIG_DYNAMIC_DEBUG and CONFIG_DEBUG_CORE flags in .config file
         scripts/config --enable DYNAMIC_DEBUG
         scripts/config --enable DYNAMIC_DEBUG_CORE
+        # Convert the .config file into defconfig 
         make ARCH=arm64 savedefconfig
+        # Save the new generated file as custom_defconfig
         cp defconfig ./arch/arm64/configs/custom_defconfig
+        # Remove unwanted
         rm defconfig .config
         make ARCH=arm64 mrproper
         cd $SRCS
+        # Building the Image with custom_defconfig
         make ARCH=arm64 KERNEL_DEF_CONFIG=custom_defconfig -C kernel
     else
+        # Building the Image with default defconfig
         make ARCH=arm64 -C kernel
     fi
     make ARCH=arm64 modules
