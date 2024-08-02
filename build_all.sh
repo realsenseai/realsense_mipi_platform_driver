@@ -73,7 +73,7 @@ if [[ "$JETPACK_VERSION" == "6.0" ]]; then
     make ARCH=arm64 dtbs
     mkdir -p $TEGRA_KERNEL_OUT/rootfs/boot/dtb
     cp $SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-p3737-0000+p3701-0000-nv.dtb $TEGRA_KERNEL_OUT/rootfs/boot/dtb/
-    cp $SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-camera-d4xx-overlay.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/
+    cp $SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/
     export INSTALL_MOD_PATH=$TEGRA_KERNEL_OUT/rootfs/
     make ARCH=arm64 install -C kernel
     make ARCH=arm64 modules_install
