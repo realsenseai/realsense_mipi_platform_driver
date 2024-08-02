@@ -1,0 +1,877 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-FileCopyrightText: Copyright (c) 2018-2023, INTEL CORPORATION.  All rights reserved.
+
+/dts-v1/;
+/plugin/;
+
+#include <dt-bindings/clock/tegra234-clock.h>
+#include <dt-bindings/gpio/tegra234-gpio.h>
+#include <dt-bindings/tegra234-p3737-0000+p3701-0000.h>
+
+#define CAM0_RST_L	TEGRA234_MAIN_GPIO(H, 3)
+#define CAMERA_I2C_MUX_BUS(x) (0x1E + x)
+
+/* camera control gpio definitions */
+/ {
+    overlay-name = "Jetson RealSense Camera D457 dual";
+    jetson-header-name = "Jetson AGX CSI Connector";
+    compatible = JETSON_COMPATIBLE;
+
+	fragment@0 {
+		target-path = "/";
+		__overlay__ {
+			tegra-capture-vi {
+				num-channels = <8>;
+				ports {
+					status = "okay";
+					port@0 {
+						status = "okay";
+						d4xx_vi_in0: endpoint {
+							status = "okay";
+							vc-id = <0>;
+							port-index = <0>;
+							bus-width = <2>;
+							remote-endpoint = <&d4xx_csi_out0>;
+						};
+					};
+					port@1 {
+						status = "okay";
+						d4xx_vi_in1: endpoint {
+							status = "okay";
+							vc-id = <1>;
+							port-index = <0>;
+							bus-width = <2>;
+							remote-endpoint = <&d4xx_csi_out1>;
+						};
+					};
+					port@2 {
+						status = "okay";
+						d4xx_vi_in2: endpoint {
+							status = "okay";
+							vc-id = <2>;
+							port-index = <0>;
+							bus-width = <2>;
+							remote-endpoint = <&d4xx_csi_out2>;
+						};
+					};
+					port@3 {
+						status = "okay";
+						d4xx_vi_in3: endpoint {
+							status = "okay";
+							vc-id = <3>;
+							port-index = <0>;
+							bus-width = <2>;
+							remote-endpoint = <&d4xx_csi_out3>;
+						};
+					};
+					port@4 {
+						status = "okay";
+						d4xx_vi_in4: endpoint {
+							status = "okay";
+							vc-id = <2>;
+							port-index = <0>;
+							bus-width = <2>;
+							remote-endpoint = <&d4xx_csi_out4>;
+						};
+					};
+					port@5 {
+						status = "okay";
+						d4xx_vi_in5: endpoint {
+							status = "okay";
+							vc-id = <3>;
+							port-index = <0>;
+							bus-width = <2>;
+							remote-endpoint = <&d4xx_csi_out5>;
+						};
+					};
+					port@6 {
+						status = "okay";
+						d4xx_vi_in6: endpoint {
+							status = "okay";
+							vc-id = <0>;
+							port-index = <0>;
+							bus-width = <2>;
+							remote-endpoint = <&d4xx_csi_out6>;
+						};
+					};
+					port@7 {
+						status = "okay";
+						d4xx_vi_in7: endpoint {
+							status = "okay";
+							vc-id = <1>;
+							port-index = <0>;
+							bus-width = <2>;
+							remote-endpoint = <&d4xx_csi_out7>;
+						};
+					};
+
+				};
+			};
+			tegra-camera-platform {
+				modules {
+					status = "okay";
+					module0 {
+						status = "okay";
+						badge = "d4xx_depth";
+						position = "bottomleft";
+						orientation = "1";
+						drivernode0 {
+							status = "okay";
+							/* Declare PCL support driver (classically known as guid)  */
+							pcl_id = "v4l2_sensor";
+							/* Declare the device-tree hierarchy to driver instance */
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@3180000/tca9548@72/i2c@0/d4m@1a";
+						};
+					};
+					module1 {
+						status = "okay";
+						badge = "d4xx_rgb";
+						position = "bottomright";
+						orientation = "1";
+						drivernode0 {
+							status = "okay";
+							/* Declare PCL support driver (classically known as guid)  */
+							pcl_id = "v4l2_sensor";
+							/* Declare the device-tree hierarchy to driver instance */
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@3180000/tca9548@72/i2c@1/d4m@1a";
+						};
+					};
+					module2 {
+						status = "okay";
+						badge = "d4xx_y8";
+						position = "centerleft";
+						orientation = "1";
+						drivernode0 {
+							status = "okay";
+							/* Declare PCL support driver (classically known as guid)  */
+							pcl_id = "v4l2_sensor";
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@3180000/tca9548@72/i2c@2/d4m@1a";
+						};
+					};
+					module3 {
+						status = "okay";
+						badge = "d4xx_imu";
+						position = "centerright";
+						orientation = "1";
+						drivernode0 {
+							status = "okay";
+								/* Declare PCL support driver (classically known as guid)  */
+							pcl_id = "v4l2_sensor";
+							/* Declare the device-tree hierarchy to driver instance */
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@3180000/tca9548@72/i2c@3/d4m@1a";
+						};
+					};
+					module4 {
+						status = "okay";
+						badge = "d4xx_b_depth";
+						position = "bottomleft";
+						orientation = "1";
+						drivernode0 {
+							status = "okay";
+							/* Declare PCL support driver (classically known as guid)  */
+							pcl_id = "v4l2_sensor";
+							/* Declare the device-tree hierarchy to driver instance */
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@3180000/tca9548@72/i2c@4/d4m@1b";
+						};
+					};
+					module5 {
+						status = "okay";
+						badge = "d4xx_b_rgb";
+						position = "bottomright";
+						orientation = "1";
+						drivernode0 {
+							status = "okay";
+							/* Declare PCL support driver (classically known as guid)  */
+							pcl_id = "v4l2_sensor";
+							/* Declare the device-tree hierarchy to driver instance */
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@3180000/tca9548@72/i2c@5/d4m@1b";
+						};
+					};
+					module6 {
+						status = "okay";
+						badge = "d4xx_b_y8";
+						position = "centerleft";
+						orientation = "1";
+						drivernode0 {
+							status = "okay";
+							/* Declare PCL support driver (classically known as guid)  */
+							pcl_id = "v4l2_sensor";
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@3180000/tca9548@72/i2c@6/d4m@1b";
+						};
+					};
+					module7 {
+						status = "okay";
+						badge = "d4xx_b_imu";
+						position = "centerright";
+						orientation = "1";
+						drivernode0 {
+							status = "okay";
+								/* Declare PCL support driver (classically known as guid)  */
+							pcl_id = "v4l2_sensor";
+							/* Declare the device-tree hierarchy to driver instance */
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@3180000/tca9548@72/i2c@7/d4m@1b";
+						};
+					};
+				};
+			};
+			bus@0 {
+				host1x@13e00000 {
+					nvcsi@15a00000 {
+						num-channels = <8>;
+						channel@0 {
+							status = "okay";
+							ports {
+								status = "okay";
+								port@0 {
+									status = "okay";
+									d4xx_csi_in0: endpoint@0 {
+										status = "okay";
+										port-index = <0>;
+										bus-width = <2>;
+										remote-endpoint = <&d4m0_out>;
+									};
+								};
+								port@1 {
+									status = "okay";
+									d4xx_csi_out0: endpoint@1 {
+										status = "okay";
+										remote-endpoint = <&d4xx_vi_in0>;
+									};
+								};
+							};
+						};
+						channel@1 {
+							status = "okay";
+							ports {
+								status = "okay";
+								port@0 {
+									status = "okay";
+									d4xx_csi_in1: endpoint@2 {
+										status = "okay";
+										port-index = <0>;
+										bus-width = <2>;
+										remote-endpoint = <&d4m1_out>;
+									};
+								};
+								port@1 {
+									status = "okay";
+									d4xx_csi_out1: endpoint@3 {
+										status = "okay";
+										remote-endpoint = <&d4xx_vi_in1>;
+									};
+								};
+							};
+						};
+						channel@2 {
+							status = "okay";
+							ports {
+								status = "okay";
+								port@0 {
+									status = "okay";
+									d4xx_csi_in2: endpoint@4 {
+										status = "okay";
+										port-index = <0>;
+										bus-width = <2>;
+										remote-endpoint = <&d4m2_out>;
+									};
+								};
+								port@1 {
+									status = "okay";
+									d4xx_csi_out2: endpoint@5 {
+										status = "okay";
+										remote-endpoint = <&d4xx_vi_in2>;
+									};
+								};
+							};
+						};
+						channel@3 {
+							status = "okay";
+							ports {
+								status = "okay";
+								port@0 {
+									status = "okay";
+									d4xx_csi_in3: endpoint@6 {
+										status = "okay";
+										port-index = <0>;
+										bus-width = <2>;
+										remote-endpoint = <&d4m3_out>;
+									};
+								};
+								port@1 {
+									status = "okay";
+									d4xx_csi_out3: endpoint@7 {
+										status = "okay";
+										remote-endpoint = <&d4xx_vi_in3>;
+									};
+								};
+							};
+						};
+						channel@4 {
+							status = "okay";
+							ports {
+								status = "okay";
+								port@0 {
+									status = "okay";
+									d4xx_csi_in4: endpoint@8 {
+										status = "okay";
+										port-index = <0>;
+										bus-width = <2>;
+										remote-endpoint = <&d4m4_out>;
+									};
+								};
+								port@1 {
+									status = "okay";
+									d4xx_csi_out4: endpoint@9 {
+										status = "okay";
+										remote-endpoint = <&d4xx_vi_in4>;
+									};
+								};
+							};
+						};
+						channel@5 {
+							status = "okay";
+							ports {
+								status = "okay";
+								port@0 {
+									status = "okay";
+									d4xx_csi_in5: endpoint@10 {
+										status = "okay";
+										port-index = <0>;
+										bus-width = <2>;
+										remote-endpoint = <&d4m5_out>;
+									};
+								};
+								port@1 {
+									status = "okay";
+									d4xx_csi_out5: endpoint@11 {
+										status = "okay";
+										remote-endpoint = <&d4xx_vi_in5>;
+									};
+								};
+							};
+						};
+						channel@6 {
+							status = "okay";
+							ports {
+								status = "okay";
+								port@0 {
+									status = "okay";
+									d4xx_csi_in6: endpoint@12 {
+										status = "okay";
+										port-index = <0>;
+										bus-width = <2>;
+										remote-endpoint = <&d4m6_out>;
+									};
+								};
+								port@1 {
+									status = "okay";
+									d4xx_csi_out6: endpoint@13 {
+										status = "okay";
+										remote-endpoint = <&d4xx_vi_in6>;
+									};
+								};
+							};
+						};
+						channel@7 {
+							status = "okay";
+							ports {
+								status = "okay";
+								port@0 {
+									status = "okay";
+									d4xx_csi_in7: endpoint@14 {
+										status = "okay";
+										port-index = <0>;
+										bus-width = <2>;
+										remote-endpoint = <&d4m7_out>;
+									};
+								};
+								port@1 {
+									status = "okay";
+									d4xx_csi_out7: endpoint@15 {
+										status = "okay";
+										remote-endpoint = <&d4xx_vi_in7>;
+									};
+								};
+							};
+						};
+					};
+				};
+				i2c@3180000 {
+					clock-frequency = <100000>;
+					tca9548@72 {
+						status = "okay";
+						reg = <0x72>;
+						compatible = "nxp,pca9548";
+						#address-cells = <1>;
+						#size-cells = <0>;
+						skip_mux_detect = "yes";
+						vcc-supply = <&vdd_1v8_ls>;
+						/*vcc-pullup-supply = <&battery_reg>;*/
+						force_bus_start = <CAMERA_I2C_MUX_BUS(0)>;
+						vcc_lp = "vcc";
+						i2c@0 {
+							reg = <0>;
+							i2c-mux,deselect-on-exit;
+							#address-cells = <1>;
+							#size-cells = <0>;
+
+							dser: max9296@48 {
+								status = "okay";
+								reg = <0x48>;
+								compatible = "maxim,max9296";
+								csi-mode = "2x4";
+								max-src = <2>;
+								reset-gpios = <&gpio CAM0_RST_L GPIO_ACTIVE_HIGH>;
+							};
+
+							ser_prim: max9295_prim@40 {
+								status = "okay";
+								reg = <0x40>;
+								compatible = "maxim,max9295";
+								is-prim-ser;
+							};
+
+							ser_a: max9295_a@42 {
+								status = "okay";
+								compatible = "maxim,max9295";
+								reg = <0x42>;
+								maxim,gmsl-dser-device = <&dser>;
+							};
+
+							ser_b: max9295_b@60 {
+								status = "okay";
+								compatible = "maxim,max9295";
+								reg = <0x60>;
+								maxim,gmsl-dser-device = <&dser>;
+							};
+
+							d4m0: d4m@1a {
+								status = "okay";
+								def-addr = <0x10>;
+								reg = <0x1a>;
+								compatible = "intel,d4xx";
+								use_sensor_mode_id = "true";
+								vcc-supply = <&vdd_1v8_ls>;
+								cam-type = "Depth";
+								nvidia,gmsl-ser-device = <&ser_a>;
+								nvidia,gmsl-dser-device = <&dser>;
+								ports {
+									#address-cells = <1>;
+									#size-cells = <0>;
+
+									port@0 {
+										reg = <0>;
+										d4m0_out: endpoint {
+											vc-id = <0>;
+											port-index = <0>;
+											bus-width = <2>;
+											remote-endpoint = <&d4xx_csi_in0>;
+										};
+									};
+								};
+								mode0 {
+									pixel_t = "grey_y16";
+									num_lanes = "2";
+									csi_pixel_bit_depth = "16";
+									active_w = "1280";
+									active_h = "720";
+									tegra_sinterface = "serial_a";
+									mclk_khz = "24000";
+									pix_clk_hz = "74250000";
+									line_length = "1280"; /* 2200 */
+									embedded_metadata_height = "1";
+								};
+								gmsl-link {
+									src-csi-port = "b";
+									dst-csi-port = "a";
+									serdes-csi-link = "a";
+									csi-mode = "1x4";
+									st-vc = <0>;
+									vc-id = <0>;
+									num-lanes = <2>;
+								};
+							};
+						};
+
+						i2c@1 {
+							status = "okay";
+							reg = <1>;
+							i2c-mux,deselect-on-exit;
+							#address-cells = <1>;
+							#size-cells = <0>;
+
+							d4m1: d4m@1a {
+								status = "okay";
+								def-addr = <0x10>;
+								reg = <0x1a>;
+								compatible = "intel,d4xx";
+								use_sensor_mode_id = "true";
+								vcc-supply = <&vdd_1v8_ls>;
+								cam-type = "RGB";
+								nvidia,gmsl-ser-device = <&ser_a>;
+								nvidia,gmsl-dser-device = <&dser>;
+								ports {
+									#address-cells = <1>;
+									#size-cells = <0>;
+
+									port@0 {
+										reg = <0>;
+										d4m1_out: endpoint {
+											port-index = <1>;
+											bus-width = <2>;
+											remote-endpoint = <&d4xx_csi_in1>;
+										};
+									};
+								};
+								mode0 {
+									pixel_t = "grey_y16";
+									num_lanes = "2";
+									csi_pixel_bit_depth = "16";
+									active_w = "1920";
+									active_h = "1080";
+									tegra_sinterface = "serial_e";
+									mclk_khz = "24000";
+									pix_clk_hz = "74250000";
+									line_length = "1280"; /* 2200 */
+									embedded_metadata_height = "1";
+								};
+								gmsl-link {
+									src-csi-port = "b";
+									dst-csi-port = "a";
+									serdes-csi-link = "a";
+									csi-mode = "1x4";
+									st-vc = <0>;
+									vc-id = <1>;
+									num-lanes = <2>;
+								};
+							};
+						};
+						i2c@2 {
+							status = "okay";
+							reg = <2>;
+							i2c-mux,deselect-on-exit;
+							#address-cells = <1>;
+							#size-cells = <0>;
+
+							d4m2: d4m@1a {
+								status = "okay";
+								def-addr = <0x10>;
+								reg = <0x1a>;
+								compatible = "intel,d4xx";
+								use_sensor_mode_id = "true";
+								vcc-supply = <&vdd_1v8_ls>;
+								cam-type = "Y8";
+								nvidia,gmsl-ser-device = <&ser_a>;
+								nvidia,gmsl-dser-device = <&dser>;
+								ports {
+									#address-cells = <1>;
+									#size-cells = <0>;
+
+									port@0 {
+										reg = <0>;
+										d4m2_out: endpoint {
+											port-index = <2>;
+											bus-width = <2>;
+											remote-endpoint = <&d4xx_csi_in2>;
+										};
+									};
+								};
+								/* mode0: Y8, mode1: depth D16 */
+								mode0 {
+									pixel_t = "grey_y16";
+									num_lanes = "2";
+									csi_pixel_bit_depth = "16";
+									active_w = "1280";
+									active_h = "720";
+									tegra_sinterface = "serial_b";
+									mclk_khz = "24000";
+									pix_clk_hz = "74250000";
+									line_length = "1280"; /* 2200 */
+									embedded_metadata_height = "0";
+								};
+								gmsl-link {
+									src-csi-port = "b";
+									dst-csi-port = "a";
+									serdes-csi-link = "a";
+									csi-mode = "1x4";
+									st-vc = <0>;
+									vc-id = <2>;
+									num-lanes = <2>;
+								};
+							};
+						};
+						i2c@3 {
+							status = "okay";
+							reg = <3>;
+							i2c-mux,deselect-on-exit;
+							#address-cells = <1>;
+							#size-cells = <0>;
+
+							d4m3: d4m@1a {
+								status = "okay";
+								def-addr = <0x10>;
+								reg = <0x1a>;
+								compatible = "intel,d4xx";
+								use_sensor_mode_id = "true";
+								vcc-supply = <&vdd_1v8_ls>;
+								cam-type = "IMU";
+								nvidia,gmsl-ser-device = <&ser_a>;
+								nvidia,gmsl-dser-device = <&dser>;
+								ports {
+									#address-cells = <1>;
+									#size-cells = <0>;
+
+									port@0 {
+										reg = <0>;
+										d4m3_out: endpoint {
+											port-index = <3>;
+											bus-width = <2>;
+											remote-endpoint = <&d4xx_csi_in3>;
+										};
+									};
+								};
+								mode0 {
+									pixel_t = "grey_y16";
+									num_lanes = "2";
+									csi_pixel_bit_depth = "16";
+									active_w = "640";
+									active_h = "480";
+									tegra_sinterface = "serial_b";
+									mclk_khz = "24000";
+									pix_clk_hz = "74250000";
+									line_length = "1280"; /* 2200 */
+									embedded_metadata_height = "0";
+								};
+								gmsl-link {
+									src-csi-port = "b";
+									dst-csi-port = "a";
+									serdes-csi-link = "a";
+									csi-mode = "1x4";
+									st-vc = <0>;
+									vc-id = <3>;
+									num-lanes = <2>;
+								};
+							};
+						};
+// dual
+						i2c@4 {
+							status = "okay";
+							reg = <4>;
+							#address-cells = <0x1>;
+							i2c-mux,deselect-on-exit;
+							#size-cells = <0x0>;
+
+							d4m4: d4m@1b {
+								status = "ok";
+								def-addr = <0x10>;
+								reg = <0x1b>;
+								compatible = "intel,d4xx";
+								use_sensor_mode_id = "true";
+								vcc-supply = <&vdd_1v8_ls>;
+								cam-type = "Depth";
+								nvidia,gmsl-ser-device = <&ser_b>;
+								nvidia,gmsl-dser-device = <&dser>;
+								ports {
+									#address-cells = <1>;
+									#size-cells = <0>;
+
+									port@0 {
+										reg = <0>;
+										d4m4_out: endpoint {
+											port-index = <4>;
+											bus-width = <2>;
+											remote-endpoint = <&d4xx_csi_in4>;
+										};
+									};
+								};
+								mode0 {
+									pixel_t = "grey_y16";
+									num_lanes = "2";
+									csi_pixel_bit_depth = "16";
+									active_w = "1280";
+									active_h = "720";
+									tegra_sinterface = "serial_a";
+									mclk_khz = "24000";
+									pix_clk_hz = "74250000";
+									line_length = "1280"; /* 2200 */
+									embedded_metadata_height = "1";
+								};
+								gmsl-link {
+									src-csi-port = "b";
+									dst-csi-port = "a";
+									serdes-csi-link = "b";
+									csi-mode = "1x4";
+									st-vc = <0>;
+									vc-id = <2>;
+									num-lanes = <2>;
+								};
+							};
+						};
+
+						i2c@5 {
+							status = "okay";
+							reg = <5>;
+							#address-cells = <0x1>;
+							i2c-mux,deselect-on-exit;
+							#size-cells = <0x0>;
+
+							d4m5: d4m@1b {
+								status = "ok";
+								def-addr = <0x10>;
+								reg = <0x1b>;
+								compatible = "intel,d4xx";
+								use_sensor_mode_id = "true";
+								vcc-supply = <&vdd_1v8_ls>;
+								cam-type = "RGB";
+								nvidia,gmsl-ser-device = <&ser_b>;
+								nvidia,gmsl-dser-device = <&dser>;
+								ports {
+									#address-cells = <1>;
+									#size-cells = <0>;
+
+									port@0 {
+										reg = <0>;
+										d4m5_out: endpoint {
+											port-index = <5>;
+											bus-width = <2>;
+											remote-endpoint = <&d4xx_csi_in5>;
+										};
+									};
+								};
+								mode0 {
+									pixel_t = "grey_y16";
+									num_lanes = "2";
+									csi_pixel_bit_depth = "16";
+									active_w = "1920";
+									active_h = "1080";
+									tegra_sinterface = "serial_e";
+									mclk_khz = "24000";
+									pix_clk_hz = "74250000";
+									line_length = "1280"; /* 2200 */
+									embedded_metadata_height = "1";
+								};
+								gmsl-link {
+									src-csi-port = "b";
+									dst-csi-port = "a";
+									serdes-csi-link = "b";
+									csi-mode = "1x4";
+									st-vc = <0>;
+									vc-id = <3>;
+									num-lanes = <2>;
+								};
+							};
+						};
+
+						i2c@6 {
+							status = "okay";
+							reg = <6>;
+							#address-cells = <0x1>;
+							i2c-mux,deselect-on-exit;
+							#size-cells = <0x0>;
+
+							d4m6: d4m@1b {
+								status = "ok";
+								def-addr = <0x10>;
+								reg = <0x1b>;
+								compatible = "intel,d4xx";
+								use_sensor_mode_id = "true";
+								vcc-supply = <&vdd_1v8_ls>;
+								cam-type = "Y8";
+								nvidia,gmsl-ser-device = <&ser_b>;
+								nvidia,gmsl-dser-device = <&dser>;
+								ports {
+									#address-cells = <1>;
+									#size-cells = <0>;
+
+									port@0 {
+										reg = <0>;
+										d4m6_out: endpoint {
+											port-index = <6>;
+											bus-width = <2>;
+											remote-endpoint = <&d4xx_csi_in6>;
+										};
+									};
+								};
+								/* mode0: Y8, mode1: depth D16 */
+								mode0 {
+									pixel_t = "grey_y16";
+									num_lanes = "2";
+									csi_pixel_bit_depth = "16";
+									active_w = "1280";
+									active_h = "720";
+									tegra_sinterface = "serial_b";
+									mclk_khz = "24000";
+									pix_clk_hz = "74250000";
+									line_length = "1280"; /* 2200 */
+									embedded_metadata_height = "0";
+								};
+								gmsl-link {
+									src-csi-port = "b";
+									dst-csi-port = "a";
+									serdes-csi-link = "b";
+									csi-mode = "1x4";
+									st-vc = <0>;
+									vc-id = <0>;
+									num-lanes = <2>;
+								};
+							};
+						};
+						i2c@7 {
+							status = "okay";
+							reg = <7>;
+							#address-cells = <0x1>;
+							i2c-mux,deselect-on-exit;
+							#size-cells = <0x0>;
+
+							d4m7: d4m@1b {
+								status = "ok";
+								def-addr = <0x10>;
+								reg = <0x1b>;
+								compatible = "intel,d4xx";
+								use_sensor_mode_id = "true";
+								vcc-supply = <&vdd_1v8_ls>;
+								cam-type = "IMU";
+								nvidia,gmsl-ser-device = <&ser_b>;
+								nvidia,gmsl-dser-device = <&dser>;
+								ports {
+									#address-cells = <1>;
+									#size-cells = <0>;
+
+									port@0 {
+										reg = <0>;
+										d4m7_out: endpoint {
+											port-index = <7>;
+											bus-width = <2>;
+											remote-endpoint = <&d4xx_csi_in7>;
+										};
+									};
+								};
+								mode0 {
+									pixel_t = "grey_y16";
+									num_lanes = "2";
+									csi_pixel_bit_depth = "16";
+									active_w = "640";
+									active_h = "480";
+									tegra_sinterface = "serial_b";
+									mclk_khz = "24000";
+									pix_clk_hz = "74250000";
+									line_length = "1280"; /* 2200 */
+									embedded_metadata_height = "0";
+								};
+								gmsl-link {
+									src-csi-port = "b";
+									dst-csi-port = "a";
+									serdes-csi-link = "b";
+									csi-mode = "1x4";
+									st-vc = <0>;
+									vc-id = <1>;
+									num-lanes = <2>;
+								};
+							};
+						};
+					};
+				};
+			};
+		};
+	};
+};
