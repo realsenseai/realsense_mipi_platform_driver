@@ -1,6 +1,6 @@
 # Intel® RealSense™ camera driver for GMSL* interface
 
-# D457 MIPI on NVIDIA® Jetson AGX Orin™ JetPack 6.0 
+# D457 MIPI on NVIDIA® Jetson AGX Orin™ JetPack 6.0
 The Intel® RealSense™ MIPI platform driver enables the user to control and stream RealSense™ 3D MIPI cameras.
 The system shall include:
 * NVIDIA® Jetson™ platform Supported JetPack versions are: [6.0 production release](https://developer.nvidia.com/embedded/jetpack-sdk-60)
@@ -11,7 +11,7 @@ The system shall include:
 ![orin_adapter](https://github.com/dmipx/realsense_mipi_platform_driver/assets/104717350/524e3eb6-6e6b-41cf-9562-9c0f920dd821)
 
 
-> Note: This MIPI reference driver is based on RealSense™ de-serialize board. For other de-serialize boards, modification might be needed. 
+> Note: This MIPI reference driver is based on RealSense™ de-serialize board. For other de-serialize boards, modification might be needed.
 
 ### Links
 - Intel® RealSense™ camera driver for GMSL* interface [Front Page](./README.md)
@@ -93,6 +93,7 @@ Note: dev_dbg() log support will not be enabled by default. If needed, run the `
 - kernel image (modified if `--dev-dbg` option is used while building): `images/6.0/rootfs/boot/Image`
 - dtb: `images/6.0/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb`
 - dtb overlay: `images/6.0/rootfs/boot/tegra234-camera-d4xx-overlay.dtbo`
+- dtb dual camera overlay: `images/6.0/rootfs/boot/tegra234-camera-d4xx-overlay-dual.dtbo`
 - nvidia-oot modules: `images/6.0/rootfs/lib/modules/5.15.136-tegra/updates`
 - kernel modules: `images/6.0/rootfs/lib/modules/5.15.136-tegra/extra`
 
@@ -119,17 +120,20 @@ Following steps required:
 1.	Copy entire directory `images/6.0/rootfs/lib/modules/5.15.136-tegra/updates` from host to `/lib/modules/5.15.136-tegra/` on Orin target
 2.	Copy entire directory `images/6.0/rootfs/lib/modules/5.15.136-tegra/extra` from host to `/lib/modules/5.15.136-tegra/` on Orin target
 3.	Copy `tegra234-camera-d4xx-overlay.dtbo` from host to `/boot/tegra234-camera-d4xx-overlay.dtbo` on Orin target
-4.      Copy `tegra234-p3737-0000+p3701-0000-nv.dtb` from host to `/boot/` on Orin
-5.      Copy `Image` from host to `/boot/` on Orin (only if `--dev-dbg` option is enabled, else not needed as the kernel will be unmodified)
-6.	Run  $ `sudo /opt/nvidia/jetson-io/jetson-io.py`
+4.	For dual camera, copy `tegra234-camera-d4xx-overlay-dual.dtbo` from host to `/boot/tegra234-camera-d4xx-overlay-dual.dtbo` on Orin target
+5.  Copy `tegra234-p3737-0000+p3701-0000-nv.dtb` from host to `/boot/` on Orin
+6.  Copy `Image` from host to `/boot/` on Orin
+7.	Run  $ `sudo /opt/nvidia/jetson-io/jetson-io.py`
     1.	Configure Jetson AGX CSI Connector
     2.	Configure for compatible hardware
-    3.	Jetson RealSense Camera D457
+    3.	Choose appropriate configuration:
+        1. Jetson RealSense Camera D457
+        2. Jetson RealSense Camera D457 dual
     4.  Enable depmod scan for "extra" modules $ `sudo sed -i 's/search updates/search extra updates/g' /etc/depmod.d/ubuntu.conf`
     5.	$ `sudo depmod`
     6.	$ `echo "d4xx" | sudo tee /etc/modules-load.d/d4xx.conf`
-    
-7.  Verify bootloader configuration
+
+8.  Verify bootloader configuration
 
     ```
     cat /boot/extlinux/extlinux.conf
@@ -142,7 +146,7 @@ Following steps required:
         OVERLAYS /boot/tegra234-camera-d4xx-overlay.dtbo
     ----<CUT>----
     ```
-7.	Reboot
+9.	Reboot
 
 ## Deploy build results on Jetson target
 On build host, copy build results to the right places.
@@ -168,8 +172,11 @@ sudo cp ~/boot/tegra234-camera-d4xx-overlay.dtbo /boot/
 sudo cp ./boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/tegra234-p3737-0000+p3701-0000-nv.dtb
 # If "--dev-dbg" option is enabled, kernel will be modified. So, copy the 'Image' as well. If not enabled, no need to copy.
 sudo cp ./boot/Image /boot/Image
-# Enable d4xx overlay:
+# Enable d4xx overlay for single camera:
 sudo /opt/nvidia/jetson-io/config-by-hardware.py -n 2="Jetson RealSense Camera D457"
+
+# For dual camera setup:
+# sudo /opt/nvidia/jetson-io/config-by-hardware.py -n 3="Jetson RealSense Camera D457 dual"
 
 # Enable d4xx autoload:
 echo "d4xx" | sudo tee /etc/modules-load.d/d4xx.conf
@@ -212,4 +219,57 @@ nvidia@ubuntu:~$ sudo dmesg | grep d4xx
 [   10.044759] d4xx 14-001a: D4XX Sensor: IMU, firmware build: 5.15.1.0
 
 ```
+
+### Known issues
+- Camera not recognized
+Verify I2C MUX detected. If "probe failed" reported, replace extension board adapter (LI-JTX1-SUB-ADPT).
+```
+nvidia@ubuntu:~$ sudo dmesg | grep pca954x
+[    3.933113] pca954x 2-0072: probe failed
+```
+
+- Configuration with jetson-io tool system fail to boot with message "couldn't find root partition"
+Verfiy bootloader configuration
+`/boot/extlinux/extlinux.conf`
+Sometimes configuration tool missing APPEND parameters. Duplicate `primary` section `APPEND` line to `JetsonIO` `APPEND` section, verify it's similar.
+
+Exaple Bad:
+```
+LABEL primary
+      MENU LABEL primary kernel
+      LINUX /boot/Image
+      INITRD /boot/initrd
+      APPEND ${cbootargs} root=PARTUUID=634b7e44-aacc-4dd9-a769-3a664b83b159 rw rootwait rootfstype=ext4 mminit_loglevel=4 console=ttyTCU0,115200 console=ttyAMA0,115200 firmware_class.path=/etc/firmware fbcon=map:0 net.ifnames=0 nospectre_bhb video=efifb:off console=tty0 nv-auto-config
+
+LABEL JetsonIO
+        MENU LABEL Custom Header Config: <CSI Jetson RealSense Camera D457 dual>
+        LINUX /boot/Image
+        FDT /boot/dtb/kernel_tegra234-p3737-0000+p3701-0000-nv.dtb
+        INITRD /boot/initrd
+        APPEND ${cbootargs}
+        OVERLAYS /boot/tegra234-camera-d4xx-overlay-dual.dtbo
+```
+Exaple Good:
+```
+LABEL primary
+      MENU LABEL primary kernel
+      LINUX /boot/Image
+      INITRD /boot/initrd
+      APPEND ${cbootargs} root=PARTUUID=634b7e44-aacc-4dd9-a769-3a664b83b159 rw rootwait rootfstype=ext4 mminit_loglevel=4 console=ttyTCU0,115200 console=ttyAMA0,115200 firmware_class.path=/etc/firmware fbcon=map:0 net.ifnames=0 nospectre_bhb video=efifb:off console=tty0 nv-auto-config
+
+LABEL JetsonIO
+        MENU LABEL Custom Header Config: <CSI Jetson RealSense Camera D457 dual>
+        LINUX /boot/Image
+        FDT /boot/dtb/kernel_tegra234-p3737-0000+p3701-0000-nv.dtb
+        INITRD /boot/initrd
+        APPEND ${cbootargs} root=PARTUUID=634b7e44-aacc-4dd9-a769-3a664b83b159 rw rootwait rootfstype=ext4 mminit_loglevel=4 console=ttyTCU0,115200 console=ttyAMA0,115200 firmware_class.path=/etc/firmware fbcon=map:0 net.ifnames=0 nospectre_bhb video=efifb:off console=tty0 nv-auto-config
+        OVERLAYS /boot/tegra234-camera-d4xx-overlay-dual.dtbo
+```
+- Configuration tool jetson-io terminates without configuration menu.
+verify that `/boot/dtb` has only one dtb file
+```
+nvidia@ubuntu:~$ ls /boot/dtb/
+kernel_tegra234-p3737-0000+p3701-0000-nv.dtb
+```
+
 ---
