@@ -4967,16 +4967,20 @@ static int ds5_dfu_device_open(struct inode *inode, struct file *file)
 			state->client->adapter);
 #endif
 #endif
-	if (state->dfu_dev.device_open_count)
+	mutex_lock(&state->lock);
+	if (state->dfu_dev.device_open_count) {
+		mutex_unlock(&state->lock);
 		return -EBUSY;
+	}
 	state->dfu_dev.device_open_count++;
 	if (state->dfu_dev.dfu_state_flag != DS5_DFU_RECOVERY)
 		state->dfu_dev.dfu_state_flag = DS5_DFU_OPEN;
 	state->dfu_dev.dfu_msg = devm_kzalloc(&state->client->dev,
 			DFU_BLOCK_SIZE, GFP_KERNEL);
-	if (!state->dfu_dev.dfu_msg)
+	if (!state->dfu_dev.dfu_msg) {
+		mutex_unlock(&state->lock);
 		return -ENOMEM;
-
+	}
 	file->private_data = state;
 #ifdef CONFIG_TEGRA_CAMERA_PLATFORM
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
@@ -4984,9 +4988,10 @@ static int ds5_dfu_device_open(struct inode *inode, struct file *file)
 	while (parent && i2c_parent_is_i2c_adapter(parent))
 		parent = i2c_parent_is_i2c_adapter(state->client->adapter);
 
-	if (!parent)
+	if (!parent) {
+		mutex_unlock(&state->lock);
 		return 0;
-
+	}
 	dev_dbg(&state->client->dev, "%s(): i2c-%d bus_clk = %d, set %d\n",
 			__func__,
 			i2c_adapter_id(parent),
@@ -4997,6 +5002,7 @@ static int ds5_dfu_device_open(struct inode *inode, struct file *file)
 	i2c_set_adapter_bus_clk_rate(parent, DFU_I2C_BUS_CLK_RATE);
 #endif
 #endif
+	mutex_unlock(&state->lock);
 	return 0;
 };
 
@@ -5060,6 +5066,7 @@ static int ds5_dfu_device_release(struct inode *inode, struct file *file)
 #endif
 #endif
 	int ret = 0, retry = 10;
+	mutex_lock(&state->lock);
 	state->dfu_dev.device_open_count--;
 	if (state->dfu_dev.dfu_state_flag != DS5_DFU_RECOVERY)
 		state->dfu_dev.dfu_state_flag = DS5_DFU_IDLE;
@@ -5077,8 +5084,10 @@ static int ds5_dfu_device_release(struct inode *inode, struct file *file)
 	/* get i2c controller and restore bus clock rate */
 	while (parent && i2c_parent_is_i2c_adapter(parent))
 		parent = i2c_parent_is_i2c_adapter(state->client->adapter);
-	if (!parent)
+	if (!parent) {
+		mutex_unlock(&state->lock);
 		return 0;
+	}
 	dev_dbg(&state->client->dev, "%s(): i2c-%d bus_clk %d, restore to %d\n",
 			__func__, i2c_adapter_id(parent),
 			i2c_get_adapter_bus_clk_rate(parent),
@@ -5096,9 +5105,11 @@ static int ds5_dfu_device_release(struct inode *inode, struct file *file)
 	if (ret) {
 		dev_warn(&state->client->dev,
 			"%s(): no communication with d4xx\n", __func__);
+		mutex_unlock(&state->lock);
 		return ret;
 	}
 	ret = ds5_read(state, DS5_FW_BUILD, &state->fw_build);
+	mutex_unlock(&state->lock);
 	return ret;
 };
 
