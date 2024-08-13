@@ -3,14 +3,14 @@
 set -e
 
 if [[ "$1" == "-h" ]]; then
-    echo "build_all.sh [--no-dev-dbg] [JetPack_version] [JetPack_Linux_source]"
+    echo "build_all.sh [--dev-dbg] [JetPack_version] [JetPack_Linux_source]"
     echo "build_all.sh -h"
     exit 1
 fi
 
-DEVDBG=1
-if [[ "$1" == "--no-dev-dbg" ]]; then
-    DEVDBG=0
+DEVDBG=0
+if [[ "$1" == "--dev-dbg" ]]; then
+    DEVDBG=1
     shift
 fi
 
