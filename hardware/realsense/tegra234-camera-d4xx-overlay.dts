@@ -14,8 +14,8 @@
 /* camera control gpio definitions */
 / {
 	overlay-name = "Jetson RealSense Camera D457";
-    jetson-header-name = "Jetson AGX CSI Connector";
-    compatible = JETSON_COMPATIBLE;
+	jetson-header-name = "Jetson AGX CSI Connector";
+	compatible = JETSON_COMPATIBLE;
 
 	fragment@0 {
 		target-path = "/";
@@ -26,6 +26,7 @@
 					status = "okay";
 					port@0 {
 						status = "okay";
+						reg = <0>;
 						d4xx_vi_in0: endpoint {
 							status = "okay";
 							vc-id = <0>;
@@ -36,6 +37,7 @@
 					};
 					port@1 {
 						status = "okay";
+						reg = <1>;
 						d4xx_vi_in1: endpoint {
 							status = "okay";
 							vc-id = <1>;
@@ -46,6 +48,7 @@
 					};
 					port@2 {
 						status = "okay";
+						reg = <2>;
 						d4xx_vi_in2: endpoint {
 							status = "okay";
 							vc-id = <2>;
@@ -56,6 +59,7 @@
 					};
 					port@3 {
 						status = "okay";
+						reg = <3>;
 						d4xx_vi_in3: endpoint {
 							status = "okay";
 							vc-id = <3>;
@@ -66,72 +70,19 @@
 					};
 				};
 			};
-			tegra-camera-platform {
-				modules {
-					status = "okay";
-					module0 {
-						status = "okay";
-						badge = "d4xx_depth";
-						position = "bottomleft";
-						orientation = "1";
-						drivernode0 {
-							status = "okay";
-							/* Declare PCL support driver (classically known as guid)  */
-							pcl_id = "v4l2_sensor";
-							/* Declare the device-tree hierarchy to driver instance */
-							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@3180000/tca9548@72/i2c@0/d4m@1a";
-						};
-					};
-					module1 {
-						status = "okay";
-						badge = "d4xx_rgb";
-						position = "bottomright";
-						orientation = "1";
-						drivernode0 {
-							status = "okay";
-							/* Declare PCL support driver (classically known as guid)  */
-							pcl_id = "v4l2_sensor";
-							/* Declare the device-tree hierarchy to driver instance */
-							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@3180000/tca9548@72/i2c@1/d4m@1a";
-						};
-					};
-					module2 {
-						status = "okay";
-						badge = "d4xx_y8";
-						position = "centerleft";
-						orientation = "1";
-						drivernode0 {
-							status = "okay";
-							/* Declare PCL support driver (classically known as guid)  */
-							pcl_id = "v4l2_sensor";
-							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@3180000/tca9548@72/i2c@2/d4m@1a";
-						};
-					};
-					module3 {
-						status = "okay";
-						badge = "d4xx_imu";
-						position = "centerright";
-						orientation = "1";
-						drivernode0 {
-							status = "okay";
-								/* Declare PCL support driver (classically known as guid)  */
-							pcl_id = "v4l2_sensor";
-							/* Declare the device-tree hierarchy to driver instance */
-							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@3180000/tca9548@72/i2c@3/d4m@1a";
-						};
-					};
-				};
-			};
+
 			bus@0 {
 				host1x@13e00000 {
 					nvcsi@15a00000 {
 						num-channels = <4>;
 						channel@0 {
 							status = "okay";
+							reg = <0>;
 							ports {
 								status = "okay";
 								port@0 {
 									status = "okay";
+									reg = <0>;
 									d4xx_csi_in0: endpoint@0 {
 										status = "okay";
 										port-index = <0>;
@@ -141,6 +92,7 @@
 								};
 								port@1 {
 									status = "okay";
+									reg = <1>;
 									d4xx_csi_out0: endpoint@1 {
 										status = "okay";
 										remote-endpoint = <&d4xx_vi_in0>;
@@ -150,10 +102,12 @@
 						};
 						channel@1 {
 							status = "okay";
+							reg = <1>;
 							ports {
 								status = "okay";
 								port@0 {
 									status = "okay";
+									reg = <0>;
 									d4xx_csi_in1: endpoint@2 {
 										status = "okay";
 										port-index = <0>;
@@ -163,6 +117,7 @@
 								};
 								port@1 {
 									status = "okay";
+									reg = <1>;
 									d4xx_csi_out1: endpoint@3 {
 										status = "okay";
 										remote-endpoint = <&d4xx_vi_in1>;
@@ -172,10 +127,12 @@
 						};
 						channel@2 {
 							status = "okay";
+							reg = <2>;
 							ports {
 								status = "okay";
 								port@0 {
 									status = "okay";
+									reg = <0>;
 									d4xx_csi_in2: endpoint@4 {
 										status = "okay";
 										port-index = <0>;
@@ -185,6 +142,7 @@
 								};
 								port@1 {
 									status = "okay";
+									reg = <1>;
 									d4xx_csi_out2: endpoint@5 {
 										status = "okay";
 										remote-endpoint = <&d4xx_vi_in2>;
@@ -194,10 +152,12 @@
 						};
 						channel@3 {
 							status = "okay";
+							reg = <3>;
 							ports {
 								status = "okay";
 								port@0 {
 									status = "okay";
+									reg = <0>;
 									d4xx_csi_in3: endpoint@6 {
 										status = "okay";
 										port-index = <0>;
@@ -207,6 +167,7 @@
 								};
 								port@1 {
 									status = "okay";
+									reg = <1>;
 									d4xx_csi_out3: endpoint@7 {
 										status = "okay";
 										remote-endpoint = <&d4xx_vi_in3>;
@@ -230,6 +191,7 @@
 						force_bus_start = <CAMERA_I2C_MUX_BUS(0)>;
 						vcc_lp = "vcc";
 						i2c@0 {
+							status = "okay";
 							reg = <0>;
 							i2c-mux,deselect-on-exit;
 							#address-cells = <1>;
@@ -330,6 +292,7 @@
 									port@0 {
 										reg = <0>;
 										d4m1_out: endpoint {
+											vc-id = <1>;
 											port-index = <1>;
 											bus-width = <2>;
 											remote-endpoint = <&d4xx_csi_in1>;
@@ -383,6 +346,7 @@
 									port@0 {
 										reg = <0>;
 										d4m2_out: endpoint {
+											vc-id = <2>;
 											port-index = <2>;
 											bus-width = <2>;
 											remote-endpoint = <&d4xx_csi_in2>;
@@ -437,6 +401,7 @@
 									port@0 {
 										reg = <0>;
 										d4m3_out: endpoint {
+											vc-id = <3>;
 											port-index = <3>;
 											bus-width = <2>;
 											remote-endpoint = <&d4xx_csi_in3>;
