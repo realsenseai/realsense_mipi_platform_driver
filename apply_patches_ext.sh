@@ -60,7 +60,7 @@ fi
 cp $DEVDIR/kernel/realsense/d4xx.c $DEVDIR/$1/${D4XX_SRC_DST}/drivers/media/i2c/
 if [[ "$JETPACK_VERSION" == "6.0" ]]; then
     # jp6 overlay
-    cp $DEVDIR/hardware/realsense/tegra234-camera-d4xx-overlay.dts $DEVDIR/$1/hardware/nvidia/t23x/nv-public/overlay/
+    cp $DEVDIR/hardware/realsense/tegra234-camera-d4xx-overlay*.dts $DEVDIR/$1/hardware/nvidia/t23x/nv-public/overlay/
 else
     cp $DEVDIR/hardware/realsense/$JP5_D4XX_DTSI $DEVDIR/$1/hardware/nvidia/platform/t19x/galen/kernel-dts/common/tegra194-camera-d4xx.dtsi
 fi
