@@ -129,6 +129,11 @@ Following steps required:
         1. Jetson RealSense Camera D457
         2. Jetson RealSense Camera D457 dual
     4.  Enable depmod scan for "extra" modules $ `sudo sed -i 's/search updates/search extra updates/g' /etc/depmod.d/ubuntu.conf`
+        1. If `--dev-dbg` option is enabled, enable depmod scan for "kernel" modules as well. $ `sudo sed -i 's/search extra updates/search extra updates kernel/g' /etc/depmod.d/ubuntu.conf`
+        ```
+        $ cat /etc/depmod.d/ubuntu.conf
+        search extra updates kernel ubuntu built-in
+        ```
     5.	$ `sudo depmod`
     6.	$ `echo "d4xx" | sudo tee /etc/modules-load.d/d4xx.conf`
     
