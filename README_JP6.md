@@ -122,7 +122,9 @@ Following steps required:
 3.	Copy `tegra234-camera-d4xx-overlay.dtbo` from host to `/boot/tegra234-camera-d4xx-overlay.dtbo` on Orin target
 4.	For dual camera, copy `tegra234-camera-d4xx-overlay-dual.dtbo` from host to `/boot/tegra234-camera-d4xx-overlay-dual.dtbo` on Orin target
 5.  Copy `tegra234-p3737-0000+p3701-0000-nv.dtb` from host to `/boot/` on Orin
-6.  Copy `Image` from host to `/boot/` on Orin
+6.  Only if `--dev-dbg` option is enabled (else not needed as the kernel will be unmodified):
+    1.  Copy `Image` from host to `/boot/` on Orin
+    2.  Copy entire directory `images/6.0/rootfs/lib/modules/5.15.136-tegra/kernel` from host to `/lib/modules/5.15.136-tegra/` on Orin target
 7.	Run  $ `sudo /opt/nvidia/jetson-io/jetson-io.py`
     1.	Configure Jetson AGX CSI Connector
     2.	Configure for compatible hardware
@@ -130,6 +132,11 @@ Following steps required:
         1. Jetson RealSense Camera D457
         2. Jetson RealSense Camera D457 dual
     4.  Enable depmod scan for "extra" modules $ `sudo sed -i 's/search updates/search extra updates/g' /etc/depmod.d/ubuntu.conf`
+        1. If `--dev-dbg` option is enabled, enable depmod scan for "kernel" modules as well. $ `sudo sed -i 's/search extra updates/search extra updates kernel/g' /etc/depmod.d/ubuntu.conf`
+        ```
+        $ cat /etc/depmod.d/ubuntu.conf
+        search extra updates kernel ubuntu built-in
+        ```
     5.	$ `sudo depmod`
     6.	$ `echo "d4xx" | sudo tee /etc/modules-load.d/d4xx.conf`
 
