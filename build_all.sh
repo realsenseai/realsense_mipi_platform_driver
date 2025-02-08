@@ -38,7 +38,7 @@ export KERNEL_MODULES_OUT=$TEGRA_KERNEL_OUT/modules
 # Build jp6 out-of-tree modules
 # following: 
 # https://docs.nvidia.com/jetson/archives/r36.2/DeveloperGuide/SD/Kernel/KernelCustomization.html#building-the-jetson-linux-kernel
-if [[ "$JETPACK_VERSION" == "6.0" ]]; then
+if [[ "$JETPACK_VERSION" == "6.0" || "$JETPACK_VERSION" == "6.2"]]; then
     cd $SRCS
     export KERNEL_HEADERS=$SRCS/kernel/kernel-jammy-src
     ln -sf $TEGRA_KERNEL_OUT $SRCS/out
@@ -47,8 +47,8 @@ if [[ "$JETPACK_VERSION" == "6.0" ]]; then
     make ARCH=arm64 modules
     make ARCH=arm64 dtbs
     mkdir -p $TEGRA_KERNEL_OUT/rootfs/boot/dtb
-    cp $SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-p3737-0000+p3701-0000-nv.dtb $TEGRA_KERNEL_OUT/rootfs/boot/dtb/
-    cp $SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-camera-d4xx-overlay.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/
+    cp $SRCS/kernel-devicetree/generic-dts/dtbs/tegra234-p3737-0000+p3701-0000-nv.dtb $TEGRA_KERNEL_OUT/rootfs/boot/dtb/
+    cp $SRCS/kernel-devicetree/generic-dts/dtbs/tegra234-camera-d4xx-overlay.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/
     export INSTALL_MOD_PATH=$TEGRA_KERNEL_OUT/rootfs/
     make ARCH=arm64 install -C kernel
     make ARCH=arm64 modules_install
