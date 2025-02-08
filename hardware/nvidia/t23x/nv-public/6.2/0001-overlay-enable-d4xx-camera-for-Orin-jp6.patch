@@ -1,6 +1,6 @@
 From 91e9bb1de78dbd96dc80d47e1a7c1fd28873e8fa Mon Sep 17 00:00:00 2001
 From: Joe Rickwalder <joe@weaverobots.com>
-Date: Fri, 07 Feb 2025 05:52:20 +0200
+Date: Fri, 7 Feb 2025 05:52:20 +0200
 Subject: [PATCH] overlay: enable d4xx camera for Orin jp6
 
 Signed-off-by: --------------------

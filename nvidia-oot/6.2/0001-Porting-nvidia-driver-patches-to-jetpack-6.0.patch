@@ -1,6 +1,6 @@
 From 205fc8227e5a3a1c0b4781562d599a800a43d85e Mon Sep 17 00:00:00 2001
 From: Joe Rickwalder <joe@weaverobots.com>
-Date: Fri, 07 Feb 2025 17:27:18 +0200
+Date: Fri, 7 Feb 2025 17:27:18 +0200
 Subject: [PATCH] Porting nvidia driver patches to jetpack 6.0
 
 Signed-off-by: --------------
@@ -36,10 +36,10 @@ index 866fc75b..ab7eb8fa 100644
  obj-m += max96712.o
  obj-m += ar1335_common.o
 diff --git a/drivers/media/i2c/max9295.c b/drivers/media/i2c/max9295.c
-index b363d5f6..e7c77845 100644
+index 2f69c355..d01f7dcb 100644
 --- a/drivers/media/i2c/max9295.c
 +++ b/drivers/media/i2c/max9295.c
-@@ -465,6 +465,145 @@ static  struct regmap_config max9295_regmap_config = {
+@@ -463,6 +463,145 @@ static  struct regmap_config max9295_regmap_config = {
         .cache_type = REGCACHE_RBTREE,
  };
  
@@ -64,8 +64,7 @@ index b363d5f6..e7c77845 100644
 +       return err;
 +}
 +
-+static int __max9295_set_pipe(struct device *dev, int pipe_id, u8 data
-_type1,
++static int __max9295_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
 +                             u8 data_type2, u32 vc_id)
 +{
 +       int err = 0;
@@ -79,8 +78,7 @@ _type1,
 +       };
 +       struct reg_pair map_pipe_control[] = {
 +               /* addr, val */
-+               {MAX9295_PIPE_X_DT_ADDR, 0x5E}, // Pipe X pulls data_ty
-pe1
++               {MAX9295_PIPE_X_DT_ADDR, 0x5E}, // Pipe X pulls data_type1
 +               {0x0315, 0x52}, // Pipe X pulls data_type2
 +               {0x0309, 0x01}, // # Pipe X pulls vc_id
 +               {0x030A, 0x00},
@@ -88,16 +86,13 @@ pe1
 +               {0x0102, 0x0E}, // LIM_HEART Pipe X: Disabled
 +       };
 +
-+       if (data_type1 == GMSL_CSI_DT_RAW_8 || data_type1 == GMSL_CSI_D
-T_EMBED
-+           || data_type2 == GMSL_CSI_DT_RAW_8 || data_type2 == GMSL_CS
-I_DT_EMBED) {
++       if (data_type1 == GMSL_CSI_DT_RAW_8 || data_type1 == GMSL_CSI_DT_EMBED
++           || data_type2 == GMSL_CSI_DT_RAW_8 || data_type2 == GMSL_CSI_DT_EMBED) {
 +               map_bpp8dbl[0].val |= (1 << pipe_id);
 +       } else {
 +               map_bpp8dbl[0].val &= ~(1 << pipe_id);
 +       }
-+       err |= max9295_set_registers(dev, map_bpp8dbl, ARRAY_SIZE(map_b
-pp8dbl));
++       err |= max9295_set_registers(dev, map_bpp8dbl, ARRAY_SIZE(map_bpp8dbl));
 +
 +       if (data_type1 == GMSL_CSI_DT_RGB_888)
 +               bpp = 0x18;
@@ -169,20 +164,17 @@ pp8dbl));
 +       int err = 0;
 +
 +       if (pipe_id > (MAX9295_MAX_PIPES - 1)) {
-+               dev_info(dev, "%s, input pipe_id: %d exceed max9295 max
- pipes\n",
++               dev_info(dev, "%s, input pipe_id: %d exceed max9295 max pipes\n",
 +                        __func__, pipe_id);
 +               return -EINVAL;
 +       }
 +
-+       dev_dbg(dev, "%s pipe_id %d, data_type1 %u, data_type2 %u, vc_i
-d %u\n",
++       dev_dbg(dev, "%s pipe_id %d, data_type1 %u, data_type2 %u, vc_id %u\n",
 +               __func__, pipe_id, data_type1, data_type2, vc_id);
 +
 +       mutex_lock(&priv->lock);
 +
-+       err = __max9295_set_pipe(dev, pipe_id, data_type1, data_type2, 
-vc_id);
++       err = __max9295_set_pipe(dev, pipe_id, data_type1, data_type2, vc_id);
 +
 +       mutex_unlock(&priv->lock);
 +
@@ -190,8 +182,7 @@ vc_id);
 +}
 +EXPORT_SYMBOL(max9295_set_pipe);
 +
- #if defined(NV_I2C_DRIVER_STRUCT_PROBE_WITHOUT_I2C_DEVICE_ID_ARG) /* L
-inux 6.3 */
+ #if KERNEL_VERSION(6, 3, 0) <= LINUX_VERSION_CODE
  static int max9295_probe(struct i2c_client *client)
  #else
 diff --git a/drivers/media/i2c/max9296.c b/drivers/media/i2c/max9296.c

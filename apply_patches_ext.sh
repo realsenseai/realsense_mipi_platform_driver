@@ -48,10 +48,10 @@ apply_external_patches() {
     cat ${PWD}/$2/$JETPACK_VERSION/* | patch -p1 --directory=${PWD}/$1/$2/
 }
 
-#apply_external_patches $1 $D4XX_SRC_DST
-#if [ -d ${KERNEL_DIR}/${JETPACK_VERSION} ]; then
-#    apply_external_patches $1 $KERNEL_DIR
-#fi
+apply_external_patches $1 $D4XX_SRC_DST
+if [ -d ${KERNEL_DIR}/${JETPACK_VERSION} ]; then
+    apply_external_patches $1 $KERNEL_DIR
+fi
 if [[ "$JETPACK_VERSION" == "6.0" ]]; then
     apply_external_patches $1 hardware/nvidia/t23x/nv-public
 elif [[ "$JETPACK_VERSION" == "6.2" ]]; then
