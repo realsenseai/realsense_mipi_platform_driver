@@ -1,0 +1,25 @@
+From 91e9bb1de78dbd96dc80d47e1a7c1fd28873e8fa Mon Sep 17 00:00:00 2001
+From: Joe Rickwalder <joe@weaverobots.com>
+Date: Fri, 07 Feb 2025 05:52:20 +0200
+Subject: [PATCH] overlay: enable d4xx camera for Orin jp6
+
+Signed-off-by: --------------------
+---
+ overlay/Makefile | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/overlay/Makefile b/overlay/Makefile
+index 93728f4..69b1cac 100644
+--- a/overlay/Makefile
++++ b/overlay/Makefile
+@@ -65,6 +65,7 @@ dtbo-y += tegra234-p3767-camera-p3768-imx219-A.dtbo
+ dtbo-y += tegra234-p3767-camera-p3768-imx219-imx477.dtbo
+ dtbo-y += tegra234-p3767-camera-p3768-imx477-C.dtbo
+ dtbo-y += tegra234-p3767-camera-p3768-imx477-A.dtbo
++dtbo-y += tegra234-camera-d4xx-overlay.dtbo
+ 
+ ifneq ($(dtb-y),)
+ dtb-y := $(addprefix $(makefile-path)/,$(dtb-y))
+-- 
+2.34.1
+
