@@ -44,7 +44,7 @@ export KERNEL_MODULES_OUT=$TEGRA_KERNEL_OUT/modules
 # Build jp6 out-of-tree modules
 # following:
 # https://docs.nvidia.com/jetson/archives/r36.2/DeveloperGuide/SD/Kernel/KernelCustomization.html#building-the-jetson-linux-kernel
-if [[ "$JETPACK_VERSION" == "6.0" || "$JETPACK_VERSION" == "6.2"]]; then
+if [[ "$JETPACK_VERSION" == "6.0" || "$JETPACK_VERSION" == "6.2" ]]; then
     cd $SRCS
     export KERNEL_HEADERS=$SRCS/kernel/kernel-jammy-src
     ln -sf $TEGRA_KERNEL_OUT $SRCS/out
