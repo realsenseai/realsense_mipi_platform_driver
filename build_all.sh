@@ -24,7 +24,7 @@ if [[ -n "$2" ]]; then
     SRCS=$(realpath $2)
 fi
 
-if [[ "$JETPACK_VERSION" == "6.0" || "$JETPACK_VERSION" == "6.2"]]; then
+if [[ "$JETPACK_VERSION" == "6.0" || "$JETPACK_VERSION" == "6.2" ]]; then
     export CROSS_COMPILE=$DEVDIR/l4t-gcc/$JETPACK_VERSION/bin/aarch64-buildroot-linux-gnu-
 elif [[ "$JETPACK_VERSION" == "5.1.2" ]]; then
     export CROSS_COMPILE=$DEVDIR/l4t-gcc/$JETPACK_VERSION/bin/aarch64-buildroot-linux-gnu-

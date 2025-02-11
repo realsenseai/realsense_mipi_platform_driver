@@ -17,6 +17,7 @@ index 93728f4..69b1cac 100644
  dtbo-y += tegra234-p3767-camera-p3768-imx477-C.dtbo
  dtbo-y += tegra234-p3767-camera-p3768-imx477-A.dtbo
 +dtbo-y += tegra234-camera-d4xx-overlay.dtbo
++dtbo-y += tegra234-camera-d4xx-overlay-dual.dtbo
  
  ifneq ($(dtb-y),)
  dtb-y := $(addprefix $(makefile-path)/,$(dtb-y))
