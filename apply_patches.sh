@@ -31,7 +31,7 @@ cd "$DEVDIR"
 if [[ "$JETPACK_VERSION" == "4.6.1" ]]; then
     JP5_D4XX_DTSI="tegra194-camera-d4xx.dtsi"
 fi
-if [[ "$JETPACK_VERSION" == "6.0" ]]; then
+if [[ "$JETPACK_VERSION" == "6.0" || "$JETPACK_VERSION" == "6.2" ]]; then
     D4XX_SRC_DST=nvidia-oot
 else
     D4XX_SRC_DST=kernel/nvidia
@@ -56,15 +56,15 @@ if [ -d ${KERNEL_DIR}/${JETPACK_VERSION} ]; then
     apply_external_patches $1 $KERNEL_DIR
 fi
 
-if [[ "$JETPACK_VERSION" == "6.0" ]]; then
+if [[ "$JETPACK_VERSION" == "6.0" || "$JETPACK_VERSION" == "6.2" ]]; then
     apply_external_patches $1 hardware/nvidia/t23x/nv-public
 else
     apply_external_patches $1 hardware/nvidia/platform/t19x/galen/kernel-dts
 fi
 
 if [ $1 = 'apply' ]; then
-    cp $DEVDIR/kernel/realsense/d4xx.c $DEVDIR/sources_$JETPACK_VERSION/${D4XX_SRC_DST}/drivers/media/i2c/
-    if [[ "$JETPACK_VERSION" == "6.0" ]]; then
+    cp $DEVDIR/kernel/realsense/${JETPACK_VERSION}/d4xx.c $DEVDIR/sources_$JETPACK_VERSION/${D4XX_SRC_DST}/drivers/media/i2c/
+    if [[ "$JETPACK_VERSION" == "6.0" || "$JETPACK_VERSION" == "6.2" ]]; then
         # jp6 overlay
         cp $DEVDIR/hardware/realsense/tegra234-camera-d4xx-overlay*.dts $DEVDIR/sources_$JETPACK_VERSION/hardware/nvidia/t23x/nv-public/overlay/
     else

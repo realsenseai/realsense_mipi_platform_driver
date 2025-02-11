@@ -24,7 +24,7 @@ if [[ -n "$2" ]]; then
     SRCS=$(realpath $2)
 fi
 
-if [[ "$JETPACK_VERSION" == "6.0" ]]; then
+if [[ "$JETPACK_VERSION" == "6.0" || "$JETPACK_VERSION" == "6.2" ]]; then
     export CROSS_COMPILE=$DEVDIR/l4t-gcc/$JETPACK_VERSION/bin/aarch64-buildroot-linux-gnu-
 elif [[ "$JETPACK_VERSION" == "5.1.2" ]]; then
     export CROSS_COMPILE=$DEVDIR/l4t-gcc/$JETPACK_VERSION/bin/aarch64-buildroot-linux-gnu-
@@ -42,9 +42,9 @@ export KERNEL_MODULES_OUT=$TEGRA_KERNEL_OUT/modules
 [[ -n "${BUILD_NUMBER}" ]] && echo "Warning! You have BUILD_NUMBER set to ${BUILD_NUMBER}, This will affect your vermagic"
 
 # Build jp6 out-of-tree modules
-# following: 
+# following:
 # https://docs.nvidia.com/jetson/archives/r36.2/DeveloperGuide/SD/Kernel/KernelCustomization.html#building-the-jetson-linux-kernel
-if [[ "$JETPACK_VERSION" == "6.0" ]]; then
+if [[ "$JETPACK_VERSION" == "6.0" || "$JETPACK_VERSION" == "6.2" ]]; then
     cd $SRCS
     export KERNEL_HEADERS=$SRCS/kernel/kernel-jammy-src
     ln -sf $TEGRA_KERNEL_OUT $SRCS/out
@@ -55,7 +55,7 @@ if [[ "$JETPACK_VERSION" == "6.0" ]]; then
         # Update the CONFIG_DYNAMIC_DEBUG and CONFIG_DEBUG_CORE flags in .config file
         scripts/config --enable DYNAMIC_DEBUG
         scripts/config --enable DYNAMIC_DEBUG_CORE
-        # Convert the .config file into defconfig 
+        # Convert the .config file into defconfig
         make ARCH=arm64 savedefconfig
         # Save the new generated file as custom_defconfig
         cp defconfig ./arch/arm64/configs/custom_defconfig
@@ -72,8 +72,13 @@ if [[ "$JETPACK_VERSION" == "6.0" ]]; then
     make ARCH=arm64 modules
     make ARCH=arm64 dtbs
     mkdir -p $TEGRA_KERNEL_OUT/rootfs/boot/dtb
-    cp $SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-p3737-0000+p3701-0000-nv.dtb $TEGRA_KERNEL_OUT/rootfs/boot/dtb/
-    cp $SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/
+    if [[ "$JETPACK_VERSION" == "6.2" ]]; then
+        cp $SRCS/kernel-devicetree/generic-dts/dtbs/tegra234-p3737-0000+p3701-0000-nv.dtb $TEGRA_KERNEL_OUT/rootfs/boot/dtb/
+        cp $SRCS/kernel-devicetree/generic-dts/dtbs/tegra234-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/
+    else
+        cp $SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-p3737-0000+p3701-0000-nv.dtb $TEGRA_KERNEL_OUT/rootfs/boot/dtb/
+        cp $SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/
+    fi
     export INSTALL_MOD_PATH=$TEGRA_KERNEL_OUT/rootfs/
     make ARCH=arm64 install -C kernel
     make ARCH=arm64 modules_install
@@ -101,4 +106,3 @@ else
     make ARCH=arm64 O=$TEGRA_KERNEL_OUT -j${NPROC}
     make ARCH=arm64 O=$TEGRA_KERNEL_OUT modules_install INSTALL_MOD_PATH=$KERNEL_MODULES_OUT
 fi
-
