@@ -9,10 +9,10 @@ Signed-off-by: --------------------
  1 file changed, 1 insertion(+)
 
 diff --git a/overlay/Makefile b/overlay/Makefile
-index 93728f4..69b1cac 100644
+index c88bbe2..3f6354e 100644
 --- a/overlay/Makefile
 +++ b/overlay/Makefile
-@@ -65,6 +65,7 @@ dtbo-y += tegra234-p3767-camera-p3768-imx219-A.dtbo
+@@ -65,6 +65,8 @@ dtbo-y += tegra234-p3767-camera-p3768-imx219-A.dtbo
  dtbo-y += tegra234-p3767-camera-p3768-imx219-imx477.dtbo
  dtbo-y += tegra234-p3767-camera-p3768-imx477-C.dtbo
  dtbo-y += tegra234-p3767-camera-p3768-imx477-A.dtbo
