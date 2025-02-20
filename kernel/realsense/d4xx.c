@@ -1431,7 +1431,7 @@ static int ds5_setup_pipeline(struct ds5 *state, u8 data_type1, u8 data_type2,
 			      int pipe_id, u32 vc_id)
 {
 	int ret = 0;
-	dev_dbg(&state->client->dev,
+	dev_warn(&state->client->dev,
 			 "set pipe %d, data_type1: 0x%x, \
 			 data_type2: 0x%x, vc_id: %u\n",
 			 pipe_id, data_type1, data_type2, vc_id);
@@ -1505,8 +1505,10 @@ static int ds5_configure(struct ds5 *state)
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	data_type1 = sensor->config.format->data_type;
-	data_type2 = state->is_y8 ? 0x00 : md_fmt;
-
+	data_type2 = state->is_imu ? 0x00 : md_fmt;
+	/* do not have metadata for y12i */
+	if (state->is_y8 && data_type1 == GMSL_CSI_DT_RGB_888)
+		data_type2 = 0;
 	vc_id = state->g_ctx.dst_vc;
 
 	ret = ds5_setup_pipeline(state, data_type1, data_type2, sensor->pipe_id,
