@@ -1,0 +1,3 @@
+# Ignore the l4t-gcc folder
+l4t-gcc/
+images/
