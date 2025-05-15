@@ -90,7 +90,7 @@ Note: dev_dbg() log support will not be enabled by default. If needed, run the `
 ```
 
 ## Archive JetPack 6.0 build results (optional) on build host
-- kernel image (modified if `--dev-dbg` option is used while building): `images/6.0/rootfs/boot/Image`
+- kernel image : `images/6.0/rootfs/boot/Image`
 - dtb: `images/6.0/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb`
 - dtb overlay: `images/6.0/rootfs/boot/tegra234-camera-d4xx-overlay.dtbo`
 - dtb dual camera overlay: `images/6.0/rootfs/boot/tegra234-camera-d4xx-overlay-dual.dtbo`
@@ -109,6 +109,10 @@ tar -czf ./images/6.0/kernel-hid-modules.tar.gz -C "./images/6.0/rootfs/" ./lib/
 ```
 echo "Backup boot configuration"
 sudo cp /boot/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/tegra234-p3737-0000+p3701-0000-nv-bkp.dtb
+
+# Note: If using a production board and not a dev kit copy the relevant dtb file below
+sudo cp /boot/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/tegra234-p3737-0000+p3701-0005-nv-bkp.dtb
+
 echo "backup nvidia-oot modules"
 sudo tar -czf /lib/modules/$(uname -r)/updates.tar.gz -C /lib/modules/$(uname -r)/ updates
 ```
@@ -128,8 +132,7 @@ Following steps required:
     3.	Choose appropriate configuration:
         1. Jetson RealSense Camera D457
         2. Jetson RealSense Camera D457 dual
-    4.  Enable depmod scan for "extra" modules $ `sudo sed -i 's/search updates/search extra updates/g' /etc/depmod.d/ubuntu.conf`
-        1. If `--dev-dbg` option is enabled, enable depmod scan for "kernel" modules as well. $ `sudo sed -i 's/search extra updates/search extra updates kernel/g' /etc/depmod.d/ubuntu.conf`
+    4.  Enable depmod scan for "extra" & "kernel" modules $ `sudo sed -i 's/search updates/search extra updates kernel/g' /etc/depmod.d/ubuntu.conf`
         ```
         $ cat /etc/depmod.d/ubuntu.conf
         search extra updates kernel ubuntu built-in
@@ -137,7 +140,7 @@ Following steps required:
     5.	$ `sudo depmod`
     6.	$ `echo "d4xx" | sudo tee /etc/modules-load.d/d4xx.conf`
     
-8.  Verify bootloader configuration
+9.  Verify bootloader configuration
 
     ```
     cat /boot/extlinux/extlinux.conf
@@ -150,7 +153,7 @@ Following steps required:
         OVERLAYS /boot/tegra234-camera-d4xx-overlay.dtbo
     ----<CUT>----
     ```
-9.	Reboot
+10.	Reboot
 
 ## Deploy build results on Jetson target
 On build host, copy build results to the right places.
@@ -163,6 +166,8 @@ scp -r images/6.0/rootfs/boot nvidia@10.0.0.116:~/
 scp -r images/6.0/rootfs/lib/modules/5.15.136-tegra/updates nvidia@10.0.0.116:~/
 # RealSense metadata patched kernel modules and IMU HID support
 scp -r images/6.0/rootfs/lib/modules/5.15.136-tegra/extra nvidia@10.0.0.116:~/
+# Updated kernel modules to match the new compiled kernel image
+scp -r images/6.0/rootfs/lib/modules/5.15.136-tegra/updates nvidia@10.0.0.116:~/
 ```
 
 On Jetson target, assuming backup step was followed:
@@ -172,15 +177,21 @@ On Jetson target, assuming backup step was followed:
 sudo cp -r ~/extra /lib/modules/$(uname -r)/
 # enable RealSense MIPI support for D457 GMSL
 sudo cp -r ~/updates /lib/modules/$(uname -r)/
+sudo cp -r ~/kernel/ /lib/modules/5.15.136-tegra/
 sudo cp ~/boot/tegra234-camera-d4xx-overlay.dtbo /boot/
-sudo cp ./boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/tegra234-p3737-0000+p3701-0000-nv.dtb
-# If "--dev-dbg" option is enabled, kernel will be modified. So, copy the 'Image' as well. If not enabled, no need to copy.
+
+# (replace with tegra234-p3737-0000+p3701-0000-nv.dtb on production Orin board)
+sudo cp ~/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/tegra234-p3737-0000+p3701-0000-nv.dtb
+
 sudo cp ./boot/Image /boot/Image
 # Enable d4xx overlay for single camera:
 sudo /opt/nvidia/jetson-io/config-by-hardware.py -n 2="Jetson RealSense Camera D457"
 
 # For dual camera setup:
 # sudo /opt/nvidia/jetson-io/config-by-hardware.py -n 3="Jetson RealSense Camera D457 dual"
+
+# enable extra & kernel modules
+sudo sed -i 's/search updates/search extra updates kernel/g' /etc/depmod.d/ubuntu.conf
 
 # Enable d4xx autoload:
 echo "d4xx" | sudo tee /etc/modules-load.d/d4xx.conf
@@ -276,4 +287,17 @@ nvidia@ubuntu:~$ ls /boot/dtb/
 kernel_tegra234-p3737-0000+p3701-0000-nv.dtb
 ```
 
+- kernel does not recognize the I2C device
+```
+# Make sure which Jetson Carrier board is used:
+#   p3701-0000 → Dev kit carrier board
+#   p3701-0005 → Production carrier board or custom carrier
+# if you have the *0005* board, replace the relevant dtb file in in the instructions above
+
+Example: 
+sudo cat /proc/device-tree/compatible
+
+Output:
+nvidia,p3701-0000
+```
 ---
