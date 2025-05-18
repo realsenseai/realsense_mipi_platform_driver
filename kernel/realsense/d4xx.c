@@ -65,6 +65,7 @@
 #define DS5_FW_VERSION			0x030C
 #define DS5_FW_BUILD			0x030E
 #define DS5_DEVICE_TYPE			0x0310
+#define DS5_DEVICE_TYPE_D41X		7
 #define DS5_DEVICE_TYPE_D45X		6
 #define DS5_DEVICE_TYPE_D43X		5
 #define DS5_DEVICE_TYPE_D46X		4
@@ -671,6 +672,50 @@ static const u16 ds5_framerate_100[] = {100};
 static const u16 ds5_framerate_90[] = {90};
 static const u16 ds5_imu_framerates[] = {50, 100, 200, 400};
 
+static const struct ds5_resolution d41x_depth_sizes[] = {
+	{
+		.width = 1280,
+		.height = 720,
+		.framerates = ds5_depth_framerate_to_30,
+		.n_framerates = ARRAY_SIZE(ds5_depth_framerate_to_30),
+	}, {
+		.width =  848,
+		.height = 480,
+		.framerates = ds5_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+	}, {
+		.width =  848,
+		.height = 100,
+		.framerates = ds5_framerate_100,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_100),
+	}, {
+		.width =  640,
+		.height = 480,
+		.framerates = ds5_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+	}, {
+		.width =  640,
+		.height = 360,
+		.framerates = ds5_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+	}, {
+		.width =  480,
+		.height = 270,
+		.framerates = ds5_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+	}, {
+		.width =  424,
+		.height = 240,
+		.framerates = ds5_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+	}, {
+		.width =  256,
+		.height = 144,
+		.framerates = ds5_framerate_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_90),
+	},
+};
+
 static const struct ds5_resolution d43x_depth_sizes[] = {
 	{
 		.width = 1280,
@@ -838,6 +883,15 @@ static const struct ds5_resolution ds5_size_w10 = {
 	.n_framerates = 1,
 };
 
+static const struct ds5_resolution d41x_calibration_sizes[] = {
+	{
+		.width =  1280,
+		.height = 800,
+		.framerates = ds5_framerate_15_30,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_15_30),
+	},
+};
+
 static const struct ds5_resolution d43x_calibration_sizes[] = {
 	{
 		.width =  1280,
@@ -872,6 +926,26 @@ static const struct ds5_resolution ds5_size_imu_extended[] = {
 	.height = 1,
 	.framerates = ds5_imu_framerates,
 	.n_framerates = ARRAY_SIZE(ds5_imu_framerates),
+	},
+};
+
+static const struct ds5_format ds5_depth_formats_d41x[] = {
+	{
+		// TODO: 0x31 is replaced with 0x1e since it caused low FPS in Jetson.
+		.data_type = GMSL_CSI_DT_YUV422_8,	/* Z16 */
+		.mbus_code = MEDIA_BUS_FMT_UYVY8_1X16,
+		.n_resolutions = ARRAY_SIZE(d41x_depth_sizes),
+		.resolutions = d41x_depth_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_RAW_8,	/* Y8 */
+		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
+		.n_resolutions = ARRAY_SIZE(d41x_depth_sizes),
+		.resolutions = d41x_depth_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_RGB_888,	/* 24-bit Calibration */
+		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,	/* FIXME */
+		.n_resolutions = ARRAY_SIZE(d41x_calibration_sizes),
+		.resolutions = d41x_calibration_sizes,
 	},
 };
 
@@ -4590,6 +4664,9 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 
 	sensor = &state->depth.sensor;
 	switch (dev_type) {
+	case DS5_DEVICE_TYPE_D41X:
+		sensor->formats = ds5_depth_formats_d41x;
+		break;
 	case DS5_DEVICE_TYPE_D43X:
 	case DS5_DEVICE_TYPE_D45X:
 		sensor->formats = ds5_depth_formats_d43x;
@@ -4615,6 +4692,7 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 		sensor->formats = &ds5_onsemi_rgb_format;
 		sensor->n_formats = DS5_ONSEMI_RGB_N_FORMATS;
 		break;
+	case DS5_DEVICE_TYPE_D41X:
 	case DS5_DEVICE_TYPE_D45X:
 		sensor->formats = &ds5_rlt_rgb_format;
 		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
@@ -5440,7 +5518,7 @@ static int ds5_probe(struct i2c_client *c, const struct i2c_device_id *id)
 	mutex_init(&state->lock);
 
 	state->client = c;
-	dev_warn(&c->dev, "Probing driver for D45x\n");
+	dev_warn(&c->dev, "Probing driver for D4xx\n");
 
 	state->variant = ds5_variants + id->driver_data;
 #ifdef CONFIG_OF
