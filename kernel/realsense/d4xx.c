@@ -212,7 +212,12 @@ enum ds5_mux_pad {
 	if (max9295_write_8(state, addr, buf)) \
 		return -EINVAL; \
 	}
-#define D4XX_LINK_FREQ_750MHZ           750000000ULL
+#define D4XX_LINK_FREQ_750MHZ		750000000ULL
+#define D4XX_LINK_FREQ_720MHZ		720000000ULL
+#define D4XX_LINK_FREQ_600MHZ		600000000ULL
+#define D4XX_LINK_FREQ_576MHZ		576000000ULL
+#define D4XX_LINK_FREQ_480MHZ		480000000ULL
+#define D4XX_LINK_FREQ_450MHZ		450000000ULL
 #define D4XX_LINK_FREQ_360MHZ		360000000ULL
 #define D4XX_LINK_FREQ_300MHZ		300000000ULL
 #define D4XX_LINK_FREQ_288MHZ		288000000ULL
@@ -329,6 +334,11 @@ static const struct hwm_cmd ewb = {
 #ifdef CONFIG_VIDEO_INTEL_IPU6
 static const s64 link_freq_menu_items[] = {
 	D4XX_LINK_FREQ_750MHZ,
+	D4XX_LINK_FREQ_720MHZ,
+	D4XX_LINK_FREQ_600MHZ,
+	D4XX_LINK_FREQ_576MHZ,
+	D4XX_LINK_FREQ_480MHZ,
+	D4XX_LINK_FREQ_450MHZ,
 	D4XX_LINK_FREQ_360MHZ,
 	D4XX_LINK_FREQ_300MHZ,
 	D4XX_LINK_FREQ_288MHZ,
@@ -2263,13 +2273,21 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 	}
 		break;
 	case V4L2_CID_LINK_FREQ: {
-		if ( sensor && ctrl->p_new.p_u8)
+		if ( !sensor && ctrl->p_new.p_u8)
 		{
+		  /* MTL and RPL/ADL IPU6 CSI-DPHY do NOT share
+		   *  the same default link_freq.
+		   * V4L2_CID_LINK_FREQ DS5 mux must be R/W for udev ot set DPHY platform specific link_freq
+		   * via systemd-udevd rules.
+		   */
 		  if (*ctrl->p_new.p_u8 <= (ARRAY_SIZE(link_freq_menu_items) - 1)) {
 			struct v4l2_ctrl *link_freq = state->ctrls.link_freq;
 			dev_info(&state->client->dev,
-				"V4L2_CID_LINK_FREQ modify index to val=%d",
+				"user-modified %s index val=%d to user-val=%d",
+				 ctrl->name,
+				 (unsigned int) link_freq->val,
 				 (unsigned int) *ctrl->p_new.p_u8);
+			link_freq->val = (s32) *ctrl->p_new.p_u8;
 			ret = 0;
 		  }
 		}
@@ -2863,7 +2881,7 @@ static const struct v4l2_ctrl_config d4xx_controls_link_freq = {
 	.max = ARRAY_SIZE(link_freq_menu_items) - 1,
 	.min =  0,
 	.step  = 0,
-	.def = 2,    // default D4XX_LINK_FREQ_300MHZ
+	.def = 7,    // default D4XX_LINK_FREQ_300MHZ
 	.qmenu_int = link_freq_menu_items,
 };
 
@@ -3545,11 +3563,11 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 	ctrls->link_freq = v4l2_ctrl_new_custom(hdl, &d4xx_controls_link_freq, sensor);
 	/* MTL and RPL/ADL IPU6 CSI-DPHY do NOT share
 	 *  the same default link_freq.
-	 * V4L2_CID_LINK_FREQ must be R/W for udev ot set DPHY platform specific link_freq
-	 * at systemd boottime.
-	if (ctrls->link_freq)
-		ctrls->link_freq->flags |= V4L2_CTRL_FLAG_READ_ONLY;
+	 * V4L2_CID_LINK_FREQ DS5 mux must be R/W for udev ot set DPHY platform specific link_freq
+	 * via systemd-udevd rules.
 	*/
+	if (sensor && ctrls->link_freq )
+		ctrls->link_freq->flags |= V4L2_CTRL_FLAG_READ_ONLY;
 	if (state->aggregated) {
 		d4xx_controls_q_sub_stream.def = NR_OF_DS5_SUB_STREAMS;
 		d4xx_controls_q_sub_stream.min = NR_OF_DS5_SUB_STREAMS;
