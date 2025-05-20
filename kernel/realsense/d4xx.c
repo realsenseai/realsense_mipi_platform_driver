@@ -31,7 +31,7 @@
 #include <linux/videodev2.h>
 #include <linux/version.h>
 #ifdef CONFIG_VIDEO_INTEL_IPU6
-#include <linux/ipu-isys.h>
+#include <uapi/linux/ipu-isys.h>
 #include <media/d4xx_pdata.h>
 #endif
 #include <media/media-entity.h>
