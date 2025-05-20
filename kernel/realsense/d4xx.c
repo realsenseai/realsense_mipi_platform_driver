@@ -3166,7 +3166,7 @@ static int ds5_board_setup(struct ds5 *state)
 		}
 	}
 	if (state->aggregated)
-		suffix += 4;
+		suffix += 6;
 	dev_info(dev, "Init SerDes %c on %d@0x%x<->%d@0x%x\n",
 		suffix,
 		bus, pdata->subdev_info[0].board_info.addr, //48
@@ -3675,7 +3675,7 @@ static int ds5_sensor_init(struct i2c_client *c, struct ds5 *state,
 	 * TODO: suffix for 2 D457 connected to 1 Deser
 	 */
 	if (state->aggregated & 1)
-		suffix += 4;
+		suffix += 6;
 	snprintf(sd->name, sizeof(sd->name), "D4XX %s %c", name, suffix);
 #else
 	snprintf(sd->name, sizeof(sd->name), "D4XX %s %d-%04x",
@@ -4531,7 +4531,7 @@ static int ds5_mux_init(struct i2c_client *c, struct ds5 *state)
 		 i2c_adapter_id(c->adapter), c->addr);
 #else
 	if (state->aggregated)
-		suffix += 4;
+		suffix += 6;
 	snprintf(sd->name, sizeof(sd->name), "DS5 mux %c", suffix);
 #endif
 	sd->flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
@@ -5258,7 +5258,7 @@ static int ds5_chrdev_init(struct i2c_client *c, struct ds5 *state)
 	/* Create a device node for this device. */
 #ifndef CONFIG_OF
 	if (state->aggregated)
-		suffix += 4;
+		suffix += 6;
 	snprintf(dev_name, sizeof(dev_name), "%s-%c",
 		DS5_DRIVER_NAME_DFU, suffix);
 #else
