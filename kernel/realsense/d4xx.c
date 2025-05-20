@@ -2,7 +2,7 @@
 /*
  * ds5.c - Intel(R) RealSense(TM) D4XX camera driver
  *
- * Copyright (c) 2017-2023, INTEL CORPORATION.  All rights reserved.
+ * Copyright (c) 2017-2024, INTEL CORPORATION.  All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -5165,7 +5165,7 @@ static int ds5_chrdev_init(struct i2c_client *c, struct ds5 *state)
 		dev_dbg(&c->dev, "%s(): <Major, Minor>: <%d, %d>\n",
 				__func__, MAJOR(*dev_num), MINOR(*dev_num));
 		/* Create a class : appears at /sys/class */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 2, 0)
 		*ds5_class = class_create(THIS_MODULE, DS5_DRIVER_NAME_CLASS);
 #else
 		*ds5_class = class_create(DS5_DRIVER_NAME_CLASS);
@@ -5689,7 +5689,13 @@ static struct i2c_driver ds5_i2c_driver = {
 		.owner = THIS_MODULE,
 		.name = DS5_DRIVER_NAME
 	},
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 0)
+        .probe          = ds5_probe,
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
+	.probe_new	= ds5_probe,
+#else
 	.probe		= ds5_probe,
+#endif
 	.remove		= ds5_remove,
 	.id_table	= ds5_id,
 };
