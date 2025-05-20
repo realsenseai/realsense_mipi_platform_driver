@@ -3759,6 +3759,11 @@ static void ds5_sensor_remove(struct ds5_sensor *sensor)
 	v4l2_device_unregister_subdev(&sensor->sd);
 
 	media_entity_cleanup(&sensor->sd.entity);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+	v4l2_device_unregister_subdev(&sensor->sd);
+	if (sensor->sd.internal_ops)
+	  sensor->sd.internal_ops = NULL;
+#endif
 }
 
 static int ds5_depth_init(struct i2c_client *c, struct ds5 *state)
@@ -4408,6 +4413,21 @@ static int ds5_mux_get_frame_desc(struct v4l2_subdev *sd,
 	}
 	return 0;
 }
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+static int ds5_mux_set_power(struct v4l2_subdev *sd,
+			     int on)
+{
+	struct ds5 *state = container_of(sd, struct ds5, mux.sd.subdev);
+	struct ds5_sensor *sensor = NULL;
+
+	if (NULL == sd)
+		return -EINVAL;
+
+	dev_dbg(sd->dev, "%s(): %s is %s\n", __func__, sd->name, on ? "true" : "false" );
+
+	return 0;
+}
+#endif
 
 static const struct v4l2_subdev_pad_ops ds5_mux_pad_ops = {
 	.enum_mbus_code		= ds5_mux_enum_mbus_code,
@@ -4423,7 +4443,9 @@ static const struct v4l2_subdev_pad_ops ds5_mux_pad_ops = {
 };
 
 static const struct v4l2_subdev_core_ops ds5_mux_core_ops = {
-	//.s_power = ds5_mux_set_power,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+	.s_power = ds5_mux_set_power,
+#endif
 	.log_status = v4l2_ctrl_subdev_log_status,
 };
 
@@ -4476,6 +4498,8 @@ e_depth:
 
 static void ds5_mux_unregistered(struct v4l2_subdev *sd)
 {
+	dev_dbg(sd->dev, "%s(): %d: unregister v4l2_subdev \n",
+		__func__, __LINE__);
 	struct ds5 *state = v4l2_get_subdevdata(sd);
 	ds5_sensor_remove(&state->imu.sensor);
 	ds5_sensor_remove(&state->rgb.sensor);
@@ -4805,6 +4829,11 @@ static void ds5_mux_remove(struct ds5 *state)
 	v4l2_async_unregister_subdev(&state->mux.sd.subdev);
 	v4l2_ctrl_handler_free(state->mux.sd.subdev.ctrl_handler);
 	media_entity_cleanup(&state->mux.sd.subdev.entity);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+	v4l2_device_unregister_subdev(&state->mux.sd.subdev);
+	if (state->mux.sd.subdev.internal_ops)
+	  state->mux.sd.subdev.internal_ops = NULL;
+#endif
 }
 
 static const struct regmap_config ds5_regmap_config = {
@@ -5769,6 +5798,9 @@ static void ds5_remove(struct i2c_client *c)
 		 state->mux.sd.subdev.v4l2_dev) {
 #ifdef CONFIG_SYSFS
 		sysfs_remove_group(&c->dev.kobj, &ds5_attr_group);
+#endif
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+		ds5_mux_unregistered(&state->mux.sd.subdev);
 #endif
 		ds5_mux_remove(state);
 	}
