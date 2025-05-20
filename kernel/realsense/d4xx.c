@@ -3554,6 +3554,10 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 		d4xx_controls_q_sub_stream.def = NR_OF_DS5_SUB_STREAMS;
 		d4xx_controls_q_sub_stream.min = NR_OF_DS5_SUB_STREAMS;
 		d4xx_controls_q_sub_stream.max = NR_OF_DS5_SUB_STREAMS * 2 - 1;
+	} else {
+		d4xx_controls_q_sub_stream.def = 0;
+		d4xx_controls_q_sub_stream.min = 0;
+		d4xx_controls_q_sub_stream.max = NR_OF_DS5_SUB_STREAMS - 1;
 	}
 	ctrls->query_sub_stream = v4l2_ctrl_new_custom(hdl, &d4xx_controls_q_sub_stream, sensor);
 
@@ -3641,10 +3645,11 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 	default:
 		state->mux.sd.subdev.ctrl_handler = hdl;
 		dev_info(state->mux.sd.subdev.dev,
-			"%s():%d set ctrl_handler for MUX: %p, %s\n",
+			"%s():%d set ctrl_handler for MUX: %p, %s, substream id %d \n",
 			 __func__, __LINE__,
 			 state->mux.sd.subdev.ctrl_handler,
-			 state->mux.sd.subdev.name);
+			 state->mux.sd.subdev.name,
+			 d4xx_controls_q_sub_stream.def);
 		break;
 	}
 
@@ -5329,6 +5334,11 @@ static void ds5_substream_init(struct ds5 *state)
 		state->pad_to_substream[DS5_MUX_PAD_IR]    = 10;
 		state->pad_to_substream[DS5_MUX_PAD_IMU]   = 11;
 	}
+	dev_info(&state->client->dev, "%s() IPU6 CSI2 BE SOC video capture init : \n", __func__);
+	for (i = 0; i < ARRAY_SIZE(state->pad_to_substream); i++)
+	  if (state->pad_to_substream[i] >= 0)
+	    dev_info(&state->client->dev, "pad[%d]->substream=%d\n",
+			 i, state->pad_to_substream[i]);
 	/*
 	 * 0, vc 0, depth
 	 * 1, vc 0, meta data
