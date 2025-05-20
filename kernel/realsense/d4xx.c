@@ -1,4 +1,3 @@
-
 // SPDX-License-Identifier: GPL-2.0
 /*
  * ds5.c - Intel(R) RealSense(TM) D4XX camera driver
@@ -470,6 +469,14 @@ enum {
 struct v4l2_mbus_framefmt ds5_ffmts[NR_OF_DS5_PADS];
 #endif
 
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+struct serdes_state {
+	bool isolated;
+	int bus_nr;
+	int addr;
+};
+#endif
+
 struct ds5 {
 	struct { struct ds5_sensor sensor; } depth;
 	struct { struct ds5_sensor sensor; } ir;
@@ -500,6 +507,7 @@ struct ds5 {
 	struct device *dser_dev;
 	struct i2c_client *ser_i2c;
 	struct i2c_client *dser_i2c;
+	struct serdes_state dser_st;
 #endif
 #ifdef CONFIG_VIDEO_INTEL_IPU6
 #define NR_OF_CSI2_BE_SOC_STREAMS	16
@@ -3160,6 +3168,7 @@ static int ds5_board_setup(struct ds5 *state)
 	int err = 0;
 	int i;
 	char suffix = pdata->suffix;
+
 	static struct max9295_pdata max9295_pdata = {
 		.is_prim_ser = 1, // todo: configurable
 		.def_addr = 0x40, // todo: configurable
@@ -3182,16 +3191,27 @@ static int ds5_board_setup(struct ds5 *state)
 
 	i2c_info_des.addr = pdata->subdev_info[0].board_info.addr; //0x48, 0x4a, 0x68, 0x6a
 
+	state->dser_st.bus_nr = bus;
+	state->dser_st.addr = i2c_info_des.addr;
+
 	/* look for already registered max9296, use same context if found */
 	for (i = 0; i < MAX_DEV_NUM; i++) {
-		if (serdes_inited[i] && serdes_inited[i]->dser_i2c) {
-			dev_info(dev, "MAX9296 found device on %d@0x%x\n",
-				serdes_inited[i]->dser_i2c->adapter->nr, serdes_inited[i]->dser_i2c->addr);
-			if (bus == serdes_inited[i]->dser_i2c->adapter->nr
-				&& serdes_inited[i]->dser_i2c->addr == i2c_info_des.addr) {
+		if (serdes_inited[i]) {
+			if ( serdes_inited[i]->dser_st.isolated
+				    && bus == serdes_inited[i]->dser_st.bus_nr
+				    && serdes_inited[i]->dser_st.addr == i2c_info_des.addr ) {
+
+				dev_info(dev, "Isolate unresponsive sensor/serializer AGGREGATED on MAX9296 device 0x%x\n",
+					 i2c_info_des.addr);
+				state->aggregated = 1;
+				break;
+			} else if ( serdes_inited[i]->dser_i2c
+				    && bus == serdes_inited[i]->dser_i2c->adapter->nr
+				    && serdes_inited[i]->dser_i2c->addr == i2c_info_des.addr) {
 				dev_info(dev, "MAX9296 AGGREGATION found device on 0x%x\n", i2c_info_des.addr);
 				state->dser_i2c = serdes_inited[i]->dser_i2c;
 				state->aggregated = 1;
+				break;
 			}
 		}
 	}
@@ -3304,6 +3324,7 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 {
 	int err = 0;
 	int des_err = 0;
+	int ser_err = 0;
 	struct device *dev;
 
 	if (!state || !state->ser_dev || !state->dser_dev || !state->client)
@@ -3325,17 +3346,19 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 		goto error;
 	}
 	msleep(100);
-	err = max9295_setup_control(state->ser_dev);
 
-	/* proceed even if ser setup failed, to setup deser correctly */
-	if (err)
-		dev_err(dev, "gmsl serializer setup failed\n");
+	ser_err = max9295_setup_control(state->ser_dev);
+	/* if ser setup failed, graceful deser setup fallback */
+	if (ser_err) {
+		dev_warn(dev, "gmsl serializer invalid source\n");
+		err= -ENOTSUPP;
+	}
 
 	des_err = max9296_setup_control(state->dser_dev, &state->client->dev);
 	if (des_err) {
-		dev_err(dev, "gmsl deserializer setup failed\n");
+		dev_warn(dev, "gmsl deserializer setup failed\n");
 		/* overwrite err only if deser setup also failed */
-		err = des_err;
+		err = ( err == -ENOTSUPP) ?  err : des_err;
 	}
 
 error:
@@ -3380,7 +3403,7 @@ static int ds5_i2c_addr_setting(struct i2c_client *c, struct ds5 *state)
 			c->addr = des_addr[i];
 			dev_info(&c->dev, "Set max9296@%d-0x%x Link reset\n",
 					c_bus, c->addr);
-			ds5_write_8(state, 0x1000, 0x40); // reset link
+			ds5_write_8(state, 0x1000, 0x40); // sensor reset link
 		}
 	}
 	// restore original slave address
@@ -3394,15 +3417,26 @@ static int ds5_serdes_setup(struct ds5 *state)
 	int ret = 0;
 	struct i2c_client *c = state->client;
 #ifdef CONFIG_VIDEO_INTEL_IPU6
-	int i = 0, c_bus = 0;
+	int i = 0, c_bus = -1;
 	int c_bus_new = c->adapter->nr;
 
 	for (i = 0; i < MAX_DEV_NUM; i++) {
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+		if (serdes_inited[i] && serdes_inited[i]->dser_st.isolated) {
+			c_bus = serdes_inited[i]->dser_st.bus_nr;
+			if (c_bus == c->adapter->nr) {
+				dev_info(&c->dev, "Already configured Isolated camera for bus %d\n", c_bus);
+				c_bus_new = -1;
+				break;
+			}
+		} else if (serdes_inited[i] && serdes_inited[i]->dser_i2c) {
+#else
 		if (serdes_inited[i] && serdes_inited[i]->dser_i2c) {
+#endif
 			c_bus = serdes_inited[i]->dser_i2c->adapter->nr;
 			if (c_bus == c->adapter->nr) {
-				dev_info(&c->dev, "Already configured multiple camera for bus %d\n", c_bus);
-				c_bus_new = 0;
+				dev_info(&c->dev, "Already configured Addressable camera for bus %d\n", c_bus);
+				c_bus_new = -1;
 				break;
 			}
 		} else {
@@ -3410,7 +3444,7 @@ static int ds5_serdes_setup(struct ds5 *state)
 		}
 	}
 
-	if (c_bus_new) {
+	if (c_bus_new >= 0) {
 		dev_info(&c->dev, "Apply multiple camera i2c addr setting for bus %d\n", c_bus_new);
 		ret = ds5_i2c_addr_setting(c, state);
 		if (ret) {
@@ -3430,7 +3464,7 @@ static int ds5_serdes_setup(struct ds5 *state)
 	/* Pair sensor to serializer dev */
 	ret = max9295_sdev_pair(state->ser_dev, &state->g_ctx);
 	if (ret) {
-		dev_err(&c->dev, "gmsl ser pairing failed\n");
+		dev_err(&c->dev, "gmsl serializer pairing failed\n");
 		return ret;
 	}
 
@@ -3443,7 +3477,16 @@ static int ds5_serdes_setup(struct ds5 *state)
 
 	ret = ds5_gmsl_serdes_setup(state);
 	if (ret) {
-		dev_err(&c->dev, "%s gmsl serdes setup failed\n", __func__);
+		if (ret == -ENOTSUPP) {
+			dev_warn(&c->dev, "graceful fallback, gmsl serdes setup\n");
+			if (c_bus_new >= 0)
+				dev_info(&c->dev, "Unresponding serializer on Newly initialized bus %d\n",
+					 c_bus_new);
+			else
+				dev_info(&c->dev, "Unresponding serializer on Already initialized bus %d\n",
+					 state->dser_i2c->adapter->nr);
+		} else
+			dev_err(&c->dev, "%s gmsl serdes setup failed\n", __func__);
 		return ret;
 	}
 
@@ -5599,6 +5642,10 @@ static int ds5_probe(struct i2c_client *c)
 	mutex_init(&state->lock);
 
 	state->client = c;
+
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	state->dser_st.isolated = false;
+#endif
 	dev_warn(&c->dev, "Probing driver for D45x\n");
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 0)
 	state->variant = ds5_variants + id->driver_data;
@@ -5630,8 +5677,12 @@ static int ds5_probe(struct i2c_client *c)
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	ret = ds5_serdes_setup(state);
-	if (ret < 0)
+	if (ret < 0) {
+		if (ret == -ENOTSUPP)
+		  dev_warn(&c->dev, "max9295 communication failed : %d\n", ret);
 		goto e_regulator;
+
+	}
 #endif
 #ifdef CONFIG_VIDEO_INTEL_IPU6
 #endif //CONFIG_VIDEO_INTEL_IPU6
@@ -5723,14 +5774,54 @@ static int ds5_probe(struct i2c_client *c)
 e_chardev:
 	if (state->dfu_dev.ds5_class)
 		ds5_chrdev_remove(state);
+
 e_regulator:
 	if (state->vcc)
 		regulator_disable(state->vcc);
 #ifdef CONFIG_VIDEO_D4XX_SERDES
-	if (state->ser_i2c)
+	int i;
+	int c_bus = c->adapter->nr;
+	bool graceful_fallback = false;
+	for (i = 0; i < MAX_DEV_NUM; i++) {
+		if (serdes_inited[i]
+		    && serdes_inited[i] != state
+		    && state->dser_i2c
+		    && c_bus == serdes_inited[i]->dser_st.bus_nr
+		    && state->dser_i2c->addr == serdes_inited[i]->dser_st.addr
+		    && serdes_inited[i]->dser_st.isolated) {
+
+			dev_info(&c->dev, "Cleanup unresponsive sensor/serializer Isolated on bus %d\n",
+				 c_bus);
+			graceful_fallback = true;
+		}
+	}
+
+	if (!state->g_ctx.serdev_found)
+		dev_warn(&c->dev, "graceful fallback due to unresponsive max9295, isolated SerDes %s single-link\n",
+			 state->g_ctx.serdes_csi_link == GMSL_SERDES_CSI_LINK_A ? "GMSL A": "GMSL B");
+	else
+		dev_warn(&c->dev, "graceful fallback due to unresponsive d4xx, isolated SerDes %s single-link\n",
+			 state->g_ctx.serdes_csi_link == GMSL_SERDES_CSI_LINK_A ? "GMSL A": "GMSL B");
+
+	mutex_lock(&serdes_lock__);
+	if (state->ser_i2c) {
+		dev_info(&c->dev, "remove unresponding serializer i2c device 0x%x\n",
+			 state->ser_i2c->addr);
 		i2c_unregister_device(state->ser_i2c);
-	if (state->dser_i2c && !state->aggregated)
+	}
+	if (state->dser_i2c && !state->aggregated) {
+		dev_info(&c->dev, "remove  unresponding %s single-link deserializer i2c device 0x%x\n",
+			state->g_ctx.serdes_csi_link == GMSL_SERDES_CSI_LINK_A ? "GMSL A": "GMSL B",
+			state->dser_i2c->addr);
 		i2c_unregister_device(state->dser_i2c);
+		state->dser_st.isolated = true;
+	} else if (state->dser_i2c && graceful_fallback) {
+		dev_info(&c->dev, "remove  unresponding %s single-link deserializer i2c device 0x%x\n",
+			state->g_ctx.serdes_csi_link == GMSL_SERDES_CSI_LINK_A ? "GMSL A": "GMSL B",
+			state->dser_i2c->addr);
+		i2c_unregister_device(state->dser_i2c);
+	}
+	mutex_unlock(&serdes_lock__);
 #endif
 	return ret;
 }
@@ -5751,7 +5842,17 @@ static void ds5_remove(struct i2c_client *c)
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	int i, ret;
 	int c_bus = c->adapter->nr;
+	bool graceful_fallback = false;
 	for (i = 0; i < MAX_DEV_NUM; i++) {
+		if (serdes_inited[i] && state->dser_i2c
+		    && c_bus == serdes_inited[i]->dser_st.bus_nr
+		    && state->dser_i2c->addr == serdes_inited[i]->dser_st.addr
+		    && serdes_inited[i]->dser_st.isolated) {
+
+			dev_info(&c->dev, "Cleanup unresponsive sensor/serializer Isolated on bus %d\n",
+				 c_bus);
+			graceful_fallback = true;
+		}
 		if (serdes_inited[i] && serdes_inited[i] == state) {
 			serdes_inited[i] = NULL;
 			mutex_lock(&serdes_lock__);
@@ -5763,6 +5864,7 @@ static void ds5_remove(struct i2c_client *c)
 			if (state->dser_i2c) {
 				dev_info(&c->dev, "ignore 9296 reset control, already remove for bus %d\n", c_bus);
 			} else {
+				dev_info(&c->dev, "trigger 9296 reset control on bus %d\n", c_bus);
 				ret = max9296_reset_control(state->dser_dev,
 							    state->g_ctx.s_dev);
 				if (ret)
@@ -5777,6 +5879,7 @@ static void ds5_remove(struct i2c_client *c)
 			if (state->dser_i2c) {
 				dev_info(&c->dev, "ignore 9296 unregister sdev, already remove for bus %d\n", c_bus);
 			} else {
+				dev_info(&c->dev, "unregister 9296 sdev on bus %d\n", c_bus);
 				ret = max9296_sdev_unregister(state->dser_dev,
 							      state->g_ctx.s_dev);
 				if (ret)
@@ -5785,15 +5888,26 @@ static void ds5_remove(struct i2c_client *c)
 
 				max9296_power_off(state->dser_dev);
 			}
-
 			mutex_unlock(&serdes_lock__);
 			break;
 		}
 	}
-	if (state->ser_i2c)
+	if (state->ser_i2c && !state->dser_st.isolated) {
+		dev_info(&c->dev, "remove unresponding serializer i2c device 0x%x\n",
+			state->ser_i2c->addr);
 		i2c_unregister_device(state->ser_i2c);
-	if (state->dser_i2c && !state->aggregated)
+	}
+	if (state->dser_i2c && !state->aggregated && !state->dser_st.isolated) {
 		i2c_unregister_device(state->dser_i2c);
+		dev_info(&c->dev, "remove  unresponding %s single-link deserializer i2c device 0x%x\n",
+			state->g_ctx.serdes_csi_link == GMSL_SERDES_CSI_LINK_A ? "GMSL A": "GMSL B",
+			state->dser_i2c->addr);
+	} else if (state->dser_i2c && graceful_fallback) {
+		dev_info(&c->dev, "remove  unresponding %s single-link deserializer i2c device 0x%x\n",
+			state->g_ctx.serdes_csi_link == GMSL_SERDES_CSI_LINK_A ? "GMSL A": "GMSL B",
+			state->dser_i2c->addr);
+		i2c_unregister_device(state->dser_i2c);
+	}
 #endif
 #ifndef CONFIG_TEGRA_CAMERA_PLATFORM
 	state->is_depth = 1;
@@ -5864,7 +5978,8 @@ MODULE_AUTHOR("Guennadi Liakhovetski <guennadi.liakhovetski@intel.com>,\n\
 				Xin Zhang <xin.x.zhang@intel.com>,\n\
 				Qingwu Zhang <qingwu.zhang@intel.com>,\n\
 				Evgeni Raikhel <evgeni.raikhel@intel.com>,\n\
-				Shikun Ding <shikun.ding@intel.com>");
+				Shikun Ding <shikun.ding@intel.com>,\n\
+				Florent Pirou <florent.pirou@intel.com>");
 MODULE_AUTHOR("Dmitry Perchanov <dmitry.perchanov@intel.com>");
 MODULE_LICENSE("GPL v2");
 MODULE_VERSION("1.0.1.28");
