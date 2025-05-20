@@ -2589,7 +2589,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 
 			dev_dbg(sensor->sd.dev,
 				"%s(): V4L2_CID_IPU_QUERY_SUB_STREAM sensor->mux_pad:%d"
-				"vc:[%d] %d\n",
+				", vc:[%d] %d\n",
 				__func__, sensor->mux_pad, vc_id, substream);
 			*ctrl->p_new.p_s32 = substream;
 			state->mux.last_set = sensor;
@@ -2597,6 +2597,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 				/* we are in DS5 MUX case */
 				*ctrl->p_new.p_s32 = -1;
 		}
+
 	}
 		break;
 #endif
@@ -3574,32 +3575,47 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 	switch (sid) {
 	case DEPTH_SID:
 		state->depth.sensor.sd.ctrl_handler = hdl;
-		dev_dbg(state->depth.sensor.sd.dev,
-			"%s():%d set ctrl_handler pad:%d\n",
-			__func__, __LINE__, state->depth.sensor.mux_pad);
+		dev_info(state->depth.sensor.sd.dev,
+			"%s():%d set ctrl_handler pad:%d, %p, %s\n",
+			 __func__, __LINE__,
+			 state->depth.sensor.mux_pad,
+			 state->depth.sensor.sd.ctrl_handler,
+			 state->depth.sensor.sd.name);
 		break;
 	case RGB_SID:
 		state->rgb.sensor.sd.ctrl_handler = hdl;
-		dev_dbg(state->rgb.sensor.sd.dev,
-			"%s():%d set ctrl_handler pad:%d\n",
-			__func__, __LINE__, state->rgb.sensor.mux_pad);
+		dev_info(state->rgb.sensor.sd.dev,
+			"%s():%d set ctrl_handler pad:%d, %p, %s\n",
+			 __func__, __LINE__,
+			 state->rgb.sensor.mux_pad,
+			 state->rgb.sensor.sd.ctrl_handler,
+			 state->rgb.sensor.sd.name);
 		break;
 	case IR_SID:
 		state->ir.sensor.sd.ctrl_handler = hdl;
-		dev_dbg(state->ir.sensor.sd.dev,
-			"%s():%d set ctrl_handler pad:%d\n",
-			__func__, __LINE__, state->ir.sensor.mux_pad);
+		dev_info(state->ir.sensor.sd.dev,
+			"%s():%d set ctrl_handler pad:%d, %p, %s\n",
+			 __func__, __LINE__,
+			 state->ir.sensor.mux_pad,
+			 state->ir.sensor.sd.ctrl_handler,
+			 state->ir.sensor.sd.name);
 		break;
 	case IMU_SID:
 		state->imu.sensor.sd.ctrl_handler = hdl;
-		dev_dbg(state->imu.sensor.sd.dev,
-			"%s():%d set ctrl_handler pad:%d\n",
-			__func__, __LINE__, state->imu.sensor.mux_pad);
+		dev_info(state->imu.sensor.sd.dev,
+			"%s():%d set ctrl_handler pad:%d, %p, %s\n",
+			 __func__, __LINE__,
+			 state->imu.sensor.mux_pad,
+			 state->imu.sensor.sd.ctrl_handler,
+			 state->imu.sensor.sd.name);
 		break;
 	default:
 		state->mux.sd.subdev.ctrl_handler = hdl;
-		dev_dbg(state->mux.sd.subdev.dev,
-			"%s():%d set ctrl_handler for MUX\n", __func__, __LINE__);
+		dev_info(state->mux.sd.subdev.dev,
+			"%s():%d set ctrl_handler for MUX: %p, %s\n",
+			 __func__, __LINE__,
+			 state->mux.sd.subdev.ctrl_handler,
+			 state->mux.sd.subdev.name);
 		break;
 	}
 
@@ -3642,6 +3658,14 @@ static int ds5_sensor_init(struct i2c_client *c, struct ds5 *state,
 	pad->flags = MEDIA_PAD_FL_SOURCE;
 	entity->obj_type = MEDIA_ENTITY_TYPE_V4L2_SUBDEV;
 	entity->function = MEDIA_ENT_F_CAM_SENSOR;
+
+	dev_info(&c->dev,
+		 "%s():%d init media_entity %s, type:%x, func:%x\n",
+		 __func__, __LINE__,
+		 sd->name,
+		 entity->obj_type,
+		 entity->function);
+
 	return media_entity_pads_init(entity, 1, pad);
 }
 
@@ -4484,6 +4508,13 @@ static int ds5_mux_init(struct i2c_client *c, struct ds5 *state)
 	sd->flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
 	entity->obj_type = MEDIA_ENTITY_TYPE_V4L2_SUBDEV;
 	entity->function = MEDIA_ENT_F_CAM_SENSOR;
+
+	dev_info(&c->dev,
+		 "%s():%d init media_entity %s, type:%x, func:%x\n",
+		 __func__, __LINE__,
+		 sd->name,
+		 entity->obj_type,
+		 entity->function);
 
 	pads[0].flags = MEDIA_PAD_FL_SOURCE;
 	for (i = 1, pad = pads + 1; i < ARRAY_SIZE(state->mux.pads); i++, pad++)
