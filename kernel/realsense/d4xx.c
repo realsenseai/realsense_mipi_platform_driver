@@ -5165,7 +5165,7 @@ static int ds5_chrdev_init(struct i2c_client *c, struct ds5 *state)
 		dev_dbg(&c->dev, "%s(): <Major, Minor>: <%d, %d>\n",
 				__func__, MAJOR(*dev_num), MINOR(*dev_num));
 		/* Create a class : appears at /sys/class */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 0)
 		*ds5_class = class_create(THIS_MODULE, DS5_DRIVER_NAME_CLASS);
 #else
 		*ds5_class = class_create(DS5_DRIVER_NAME_CLASS);
@@ -5440,7 +5440,12 @@ static const struct attribute_group ds5_attr_group = {
 #define NR_DESER 4
 
 #endif //CONFIG_VIDEO_INTEL_IPU6
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 0)
 static int ds5_probe(struct i2c_client *c, const struct i2c_device_id *id)
+#else
+static int ds5_probe(struct i2c_client *c)
+#endif
 {
 	struct ds5 *state = devm_kzalloc(&c->dev, sizeof(*state), GFP_KERNEL);
 	u16 rec_state;
@@ -5455,8 +5460,11 @@ static int ds5_probe(struct i2c_client *c, const struct i2c_device_id *id)
 
 	state->client = c;
 	dev_warn(&c->dev, "Probing driver for D45x\n");
-
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 0)
 	state->variant = ds5_variants + id->driver_data;
+#else
+	state->variant = ds5_variants;
+#endif
 #ifdef CONFIG_OF
 	state->vcc = devm_regulator_get(&c->dev, "vcc");
 	if (IS_ERR(state->vcc)) {
