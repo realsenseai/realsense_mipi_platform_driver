@@ -212,6 +212,11 @@ enum ds5_mux_pad {
 	if (max9295_write_8(state, addr, buf)) \
 		return -EINVAL; \
 	}
+#define D4XX_LINK_FREQ_1250MHZ		1250000000ULL
+#define D4XX_LINK_FREQ_1125MHZ		1125000000ULL
+#define D4XX_LINK_FREQ_1000MHZ		1000000000ULL
+#define D4XX_LINK_FREQ_900MHZ		900000000ULL
+#define D4XX_LINK_FREQ_840MHZ		840000000ULL
 #define D4XX_LINK_FREQ_750MHZ		750000000ULL
 #define D4XX_LINK_FREQ_720MHZ		720000000ULL
 #define D4XX_LINK_FREQ_600MHZ		600000000ULL
@@ -333,6 +338,11 @@ static const struct hwm_cmd ewb = {
 };
 #ifdef CONFIG_VIDEO_INTEL_IPU6
 static const s64 link_freq_menu_items[] = {
+	D4XX_LINK_FREQ_1250MHZ,
+	D4XX_LINK_FREQ_1125MHZ,
+	D4XX_LINK_FREQ_1000MHZ,
+	D4XX_LINK_FREQ_900MHZ,
+	D4XX_LINK_FREQ_840MHZ,
 	D4XX_LINK_FREQ_750MHZ,
 	D4XX_LINK_FREQ_720MHZ,
 	D4XX_LINK_FREQ_600MHZ,
@@ -2883,7 +2893,7 @@ static const struct v4l2_ctrl_config d4xx_controls_link_freq = {
 	.max = ARRAY_SIZE(link_freq_menu_items) - 1,
 	.min =  0,
 	.step  = 0,
-	.def = 7,    // default D4XX_LINK_FREQ_300MHZ
+	.def = 12,    // default D4XX_LINK_FREQ_300MHZ
 	.qmenu_int = link_freq_menu_items,
 };
 
