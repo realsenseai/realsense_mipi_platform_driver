@@ -211,6 +211,7 @@ enum ds5_mux_pad {
 	if (max9295_write_8(state, addr, buf)) \
 		return -EINVAL; \
 	}
+#define D4XX_LINK_FREQ_750MHZ           750000000ULL
 #define D4XX_LINK_FREQ_360MHZ		360000000ULL
 #define D4XX_LINK_FREQ_300MHZ		300000000ULL
 #define D4XX_LINK_FREQ_288MHZ		288000000ULL
@@ -326,6 +327,7 @@ static const struct hwm_cmd ewb = {
 };
 #ifdef CONFIG_VIDEO_INTEL_IPU6
 static const s64 link_freq_menu_items[] = {
+	D4XX_LINK_FREQ_750MHZ,
 	D4XX_LINK_FREQ_360MHZ,
 	D4XX_LINK_FREQ_300MHZ,
 	D4XX_LINK_FREQ_288MHZ,
@@ -2259,6 +2261,20 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 		ret = 0;
 	}
 		break;
+	case V4L2_CID_LINK_FREQ: {
+		if ( sensor && ctrl->p_new.p_u8)
+		{
+		  if (*ctrl->p_new.p_u8 <= (ARRAY_SIZE(link_freq_menu_items) - 1)) {
+			struct v4l2_ctrl *link_freq = state->ctrls.link_freq;
+			dev_info(&state->client->dev,
+				"V4L2_CID_LINK_FREQ modify index to val=%d",
+				 (unsigned int) *ctrl->p_new.p_u8);
+			ret = 0;
+		  }
+		}
+
+	}
+	  break;
 #endif
 	}
 
@@ -2837,7 +2853,7 @@ static const struct v4l2_ctrl_config d4xx_controls_link_freq = {
 	.max = ARRAY_SIZE(link_freq_menu_items) - 1,
 	.min =  0,
 	.step  = 0,
-	.def = 1,
+	.def = 2,    // default D4XX_LINK_FREQ_300MHZ
 	.qmenu_int = link_freq_menu_items,
 };
 
@@ -3517,10 +3533,13 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 	}
 #ifdef CONFIG_VIDEO_INTEL_IPU6
 	ctrls->link_freq = v4l2_ctrl_new_custom(hdl, &d4xx_controls_link_freq, sensor);
-
+	/* MTL and RPL/ADL IPU6 CSI-DPHY do NOT share
+	 *  the same default link_freq.
+	 * V4L2_CID_LINK_FREQ must be R/W for udev ot set DPHY platform specific link_freq
+	 * at systemd boottime.
 	if (ctrls->link_freq)
 		ctrls->link_freq->flags |= V4L2_CTRL_FLAG_READ_ONLY;
-
+	*/
 	if (state->aggregated) {
 		d4xx_controls_q_sub_stream.def = NR_OF_DS5_SUB_STREAMS;
 		d4xx_controls_q_sub_stream.min = NR_OF_DS5_SUB_STREAMS;
