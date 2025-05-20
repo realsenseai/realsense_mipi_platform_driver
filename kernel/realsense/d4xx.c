@@ -1,3 +1,4 @@
+
 // SPDX-License-Identifier: GPL-2.0
 /*
  * ds5.c - Intel(R) RealSense(TM) D4XX camera driver
@@ -2582,6 +2583,15 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			u16 dataLen = 0;
 			u16 bufLen = ctrl->dims[0];
 			ret = ds5_get_hwmc(state, data,	bufLen, &dataLen);
+			/* ignore empty data calls */
+			if (!dataLen) {
+				dev_dbg(sensor->sd.dev,
+				  "%s(): DS5_CAMERA_CID_HWMC_RW empty call "
+				  " Len: %d (ret: %x)\n",
+				  __func__, dataLen, ret);
+				ret = 0;
+				break;
+			}
 			if (ret)
 				break;
 			/* This is needed for librealsense, to align there code with UVC,
