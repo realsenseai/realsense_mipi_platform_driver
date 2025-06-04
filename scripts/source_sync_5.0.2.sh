@@ -342,18 +342,11 @@ for ((i=0; i < NSOURCES; i++)); do
 	DNLOAD=$(echo "${SOURCE_INFO_PROCESSED[i]}" | cut -f 5 -d ':')
 
 	if [ $DALL -eq 1 -o "x${DNLOAD}" == "xy" ]; then
-		echo "before command"
 		DownloadAndSync "$WHAT" "${LDK_DIR}/${WHAT}" "https://${REPO}" "${TAG}" "${OPT}"
-		echo "after command"
 		tRET=$?
-		echo "after tRET , with tRet = ${tRet}"
 		let GRET=GRET+tRET
-		echo "after GRET, with GRET = ${GRET}"
 		if [ $tRET -ne 0 -a $EOE -eq 1 ]; then
-			echo "got in the if statement"
 			exit $tRET
-		else
-			echo "not in the if statement"
 		fi
 	fi
 done
