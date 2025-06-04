@@ -177,6 +177,14 @@ function DownloadAndSync {
 	local TAG="$4"
 	local OPT="$5"
 	local RET=0
+	
+	
+	
+	echo "WHAT_SOURCE = ${WHAT_SOURCE}"
+	echo "LDK_SOURCE_DIR = ${LDK_SOURCE_DIR}"
+	echo "REPO_URL = ${REPO_URL}"
+	echo "TAG = ${TAG}"
+	echo "OPT = ${OPT}"
 
 	if [ -d "${LDK_SOURCE_DIR}" ]; then
 		echo "Directory for $WHAT, ${LDK_SOURCE_DIR}, already exists!"
