@@ -60,11 +60,15 @@ fi
 cd $DEVDIR
 ./scripts/source_sync_$JETPACK_VERSION.sh -t $L4T_VERSION -d sources_$JETPACK_VERSION
 
+echo "after source_sync script"
+
 # copy Makefile for jp6
 if [[ "$JETPACK_VERSION" == "6.0" ]]; then
     cp ./nvidia-oot/Makefile ./sources_$JETPACK_VERSION/
     cp ./kernel/kernel-jammy-src/Makefile ./sources_$JETPACK_VERSION/kernel
 fi
+
+echo "after source_sync script - after cp makefile"
 
 # remove BUILD_NUMBER env dependency kernel vermagic
 if [[ "${JETPACK_VERSION}" == "4.6.1" ]]; then
@@ -72,3 +76,5 @@ if [[ "${JETPACK_VERSION}" == "4.6.1" ]]; then
     sed -i 's/the-space :=/E =/g' ./sources_$JETPACK_VERSION/kernel/kernel-4.9/scripts/Kbuild.include
     sed -i 's/the-space += /the-space = \$E \$E/g' ./sources_$JETPACK_VERSION/kernel/kernel-4.9/scripts/Kbuild.include
 fi
+
+echo "after source_sync script - end of setup_workspace script"
