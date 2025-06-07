@@ -167,7 +167,7 @@ scp -r images/6.0/rootfs/lib/modules/5.15.136-tegra/updates nvidia@10.0.0.116:~/
 # RealSense metadata patched kernel modules and IMU HID support
 scp -r images/6.0/rootfs/lib/modules/5.15.136-tegra/extra nvidia@10.0.0.116:~/
 # Updated kernel modules to match the new compiled kernel image
-scp -r images/6.0/rootfs/lib/modules/5.15.136-tegra/updates nvidia@10.0.0.116:~/
+scp -r images/6.0/rootfs/lib/modules/5.15.136-tegra/kernel nvidia@10.0.0.116:~/
 ```
 
 On Jetson target, assuming backup step was followed:
