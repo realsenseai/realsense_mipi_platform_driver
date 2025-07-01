@@ -1,31 +1,29 @@
-From 0d3461ffac77eff2fac5f5f7261e5f2937d09ebd Mon Sep 17 00:00:00 2001
-From: Dmitry Perchanov <dmitry.perchanov@intel.com>
-Date: Mon, 20 May 2024 18:11:44 +0300
-Subject: [PATCH] kernel: enable HID_SENSOR
+From a28c524638e88665f3757002703a7add3e95643b Mon Sep 17 00:00:00 2001
+From: ejgoldik <ehud.joseph.goldik@intel.com>
+Date: Sun, 8 Jun 2025 11:08:56 +0300
+Subject: [PATCH] kernel: enable HID_SENSOR without USB impact
 
-Signed-off-by: Dmitry Perchanov <dmitry.perchanov@intel.com>
+Signed-off-by: Ehud J. Goldik <ehud.joseph.goldik@intel.com>
 ---
- arch/arm64/configs/defconfig | 8 ++++++++
- 1 file changed, 8 insertions(+)
+ arch/arm64/configs/defconfig | 6 ++++++
+ 1 file changed, 6 insertions(+)
 
 diff --git a/arch/arm64/configs/defconfig b/arch/arm64/configs/defconfig
-index 57e2a364e309..0c21dc7bec59 100644
+index 57e2a364e..8fffc0a60 100644
 --- a/arch/arm64/configs/defconfig
 +++ b/arch/arm64/configs/defconfig
-@@ -862,8 +862,12 @@ CONFIG_SND_SOC_LPASS_WSA_MACRO=m
+@@ -862,8 +862,10 @@ CONFIG_SND_SOC_LPASS_WSA_MACRO=m
  CONFIG_SND_SOC_LPASS_VA_MACRO=m
  CONFIG_SND_SIMPLE_CARD=m
  CONFIG_SND_AUDIO_GRAPH_CARD=m
 +CONFIG_HID=m
  CONFIG_HIDRAW=y
-+CONFIG_HID_GENERIC=m
  CONFIG_HID_MULTITOUCH=m
 +CONFIG_HID_SENSOR_HUB=m
-+CONFIG_USB_HID=m
  CONFIG_I2C_HID_ACPI=m
  CONFIG_I2C_HID_OF=m
  CONFIG_USB=y
-@@ -1148,6 +1152,7 @@ CONFIG_EXTCON_USB_GPIO=y
+@@ -1148,6 +1150,7 @@ CONFIG_EXTCON_USB_GPIO=y
  CONFIG_EXTCON_USBC_CROS_EC=y
  CONFIG_RENESAS_RPCIF=m
  CONFIG_IIO=y
@@ -33,7 +31,7 @@ index 57e2a364e309..0c21dc7bec59 100644
  CONFIG_EXYNOS_ADC=y
  CONFIG_MAX9611=m
  CONFIG_QCOM_SPMI_VADC=m
-@@ -1155,6 +1160,9 @@ CONFIG_QCOM_SPMI_ADC5=m
+@@ -1155,6 +1158,9 @@ CONFIG_QCOM_SPMI_ADC5=m
  CONFIG_ROCKCHIP_SARADC=m
  CONFIG_IIO_CROS_EC_SENSORS_CORE=m
  CONFIG_IIO_CROS_EC_SENSORS=m
@@ -44,5 +42,5 @@ index 57e2a364e309..0c21dc7bec59 100644
  CONFIG_IIO_CROS_EC_LIGHT_PROX=m
  CONFIG_SENSORS_ISL29018=m
 -- 
-2.34.1
+2.43.0
 
