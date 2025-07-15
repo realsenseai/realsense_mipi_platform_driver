@@ -1840,6 +1840,13 @@ static int ds5_get_hwmc(struct ds5 *state, unsigned char *data,
 	if (tmp_len > cmdDataLen)
 		return -ENOBUFS;
 
+	if (tmp_len == 0) {
+		dev_err(&state->client->dev,
+			"%s(): HWMC response length is 0, ret: %d\n",
+			__func__, ret);
+		return -ENODATA;
+	}
+
 	dev_dbg(&state->client->dev,
 			"%s(): HWMC read len: %d, lrs_len: %d\n",
 			__func__, tmp_len, tmp_len - 4);
