@@ -1833,18 +1833,24 @@ static int ds5_get_hwmc(struct ds5 *state, unsigned char *data,
 	}
 
 	ret = regmap_raw_read(state->regmap, DS5_HWMC_RESP_LEN,
-			&tmp_len, sizeof(tmp_len));
+			&tmp_len, sizeof(tmp_len)); /* Read response length */
 	if (ret)
 		return -EBADMSG;
 
 	if (tmp_len > cmdDataLen)
 		return -ENOBUFS;
 
+	if (tmp_len == 0) {
+		dev_err(&state->client->dev,
+			"%s(): HWMC response length is 0\n", __func__);
+		return -ENODATA;
+	}
+
 	dev_dbg(&state->client->dev,
 			"%s(): HWMC read len: %d, lrs_len: %d\n",
 			__func__, tmp_len, tmp_len - 4);
 
-	ds5_raw_read_with_check(state, DS5_HWMC_DATA, data, tmp_len);
+	ds5_raw_read_with_check(state, DS5_HWMC_DATA, data, tmp_len); /* Read response data */
 	if (dataLen)
 		*dataLen = tmp_len;
 	return ret;
@@ -1860,8 +1866,8 @@ static int ds5_send_hwmc(struct ds5 *state,
 			__func__, cmd->header, cmd->magic_word, cmd->opcode,
 			cmdLen,	cmd->param1, cmd->param2, cmd->param3, cmd->param4);
 
-	ds5_raw_write_with_check(state, DS5_HWMC_DATA, cmd, cmdLen);
-	
+	ds5_raw_write_with_check(state, DS5_HWMC_DATA, cmd, cmdLen); /* Write command data */
+
 	ds5_write_with_check(state, DS5_HWMC_EXEC, 0x01); /* execute cmd */
 
 	return 0;
@@ -1874,7 +1880,7 @@ static int ds5_set_calibration_data(struct ds5 *state,
 	int retries = 10;
 	u16 status = 2;
 
-	ds5_raw_write_with_check(state, DS5_HWMC_DATA, cmd, length);
+	ds5_raw_write_with_check(state, DS5_HWMC_DATA, cmd, length); /* Write command data */
 
 	ds5_write_with_check(state, DS5_HWMC_EXEC, 0x01); /* execute cmd */
 	do {
@@ -2248,12 +2254,12 @@ static int ds5_get_calibration_data(struct ds5 *state, enum table_id id,
 
 	memcpy(cmd, &get_calib_data, sizeof(get_calib_data));
 	cmd->param1 = id;
-	ds5_raw_write_with_check(state, 0x4900, cmd, sizeof(struct hwm_cmd));
-	ds5_write_with_check(state, 0x490c, 0x01); /* execute cmd */
+	ds5_raw_write_with_check(state, DS5_HWMC_DATA, cmd, sizeof(struct hwm_cmd)); /* Write command data */
+	ds5_write_with_check(state, DS5_HWMC_EXEC, 0x01); /* execute cmd */
 	do {
 		if (retries != 3)
 			msleep_range(10);
-		ret = ds5_read(state, 0x4904, &status);
+		ret = ds5_read(state, DS5_HWMC_STATUS, &status);
 	} while (ret && retries-- && status != 0);
 
 	if (ret || status != 0) {
@@ -2265,11 +2271,11 @@ static int ds5_get_calibration_data(struct ds5 *state, enum table_id id,
 	}
 
 	// get table length from fw
-	ret = regmap_raw_read(state->regmap, 0x4908,
-			&table_length, sizeof(table_length));
+	ret = regmap_raw_read(state->regmap, DS5_HWMC_RESP_LEN,
+			&table_length, sizeof(table_length)); /* Read response length */
 
 	// read table
-	ds5_raw_read_with_check(state, 0x4900, cmd->Data, table_length);
+	ds5_raw_read_with_check(state, DS5_HWMC_DATA, cmd->Data, table_length); /* Read table data */
 
 	// first 4 bytes are opcode HWM, not part of calibration table
 	memcpy(table, cmd->Data + 4, length);
@@ -2286,13 +2292,13 @@ static int ds5_gvd(struct ds5 *state, unsigned char *data)
 	u8 retries = 3;
 
 	memcpy(&cmd, &gvd, sizeof(gvd));
-	ds5_raw_write_with_check(state, 0x4900, &cmd, sizeof(cmd));
-	ds5_write_with_check(state, 0x490c, 0x01); /* execute cmd */
+	ds5_raw_write_with_check(state, DS5_HWMC_DATA, &cmd, sizeof(cmd)); /* Write command data */
+	ds5_write_with_check(state, DS5_HWMC_EXEC, 0x01); /* execute cmd */
 	do {
 		if (retries != 3)
 			msleep_range(10);
 
-		ret = ds5_read(state, 0x4904, &status);
+		ret = ds5_read(state, DS5_HWMC_STATUS, &status);
 	} while (ret && retries-- && status != 0);
 
 	if (ret || status != 0) {
@@ -2302,8 +2308,8 @@ static int ds5_gvd(struct ds5 *state, unsigned char *data)
 		return status;
 	}
 
-	ret = regmap_raw_read(state->regmap, 0x4908, &length, sizeof(length));
-	ds5_raw_read_with_check(state, 0x4900, data, length);
+	ret = regmap_raw_read(state->regmap, DS5_HWMC_RESP_LEN, &length, sizeof(length)); /* Read response length */
+	ds5_raw_read_with_check(state, DS5_HWMC_DATA, data, length); /* Read response data */
 
 	return ret;
 }
@@ -2418,19 +2424,19 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		//       1. prepare and send command
 		//       2. send command
 		//       3. execute command
-		//       4. wait for ccompletion
-		ret = regmap_raw_write(state->regmap, 0x4900,
+		//       4. wait for completion
+		ret = regmap_raw_write(state->regmap, DS5_HWMC_DATA, /* Write command data */
 				log_prepare, sizeof(log_prepare));
 		if (ret < 0)
 			return ret;
 
-		ret = regmap_raw_write(state->regmap, 0x490C,
-				&execute_cmd, sizeof(execute_cmd));
+		ret = regmap_raw_write(state->regmap, DS5_HWMC_EXEC,
+				&execute_cmd, sizeof(execute_cmd)); /* execute cmd */
 		if (ret < 0)
 			return ret;
 
 		for (i = 0; i < DS5_MAX_LOG_POLL; i++) {
-			ret = regmap_raw_read(state->regmap, 0x4904,
+			ret = regmap_raw_read(state->regmap, DS5_HWMC_STATUS,
 					&data, sizeof(data));
 			dev_dbg(&state->client->dev, "%s(): log ready 0x%x\n",
 				 __func__, data);
@@ -2444,7 +2450,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 //		if (i == DS5_MAX_LOG_POLL)
 //			return -ETIMEDOUT;
 
-		ret = regmap_raw_read(state->regmap, 0x4908, &data, sizeof(data));
+		ret = regmap_raw_read(state->regmap, DS5_HWMC_RESP_LEN, &data, sizeof(data)); /* Read response length */
 		dev_dbg(&state->client->dev, "%s(): log size 0x%x\n", __func__, data);
 		if (ret < 0)
 			return ret;
@@ -2452,7 +2458,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			return 0;
 		if (data > 1024)
 			return -ENOBUFS;
-		ret = regmap_raw_read(state->regmap, 0x4900,
+		ret = regmap_raw_read(state->regmap, DS5_HWMC_DATA,
 				ctrl->p_new.p_u8, data);
 		break;
 	case DS5_CAMERA_DEPTH_CALIBRATION_TABLE_GET:
@@ -4731,9 +4737,9 @@ static int ds5_dfu_switch_to_dfu(struct ds5 *state)
 	int i = DS5_START_MAX_COUNT;
 	u16 status;
 
-	ds5_raw_write_with_check(state, 0x4900,
-			&cmd_switch_to_dfu, sizeof(cmd_switch_to_dfu));
-	ds5_write_with_check(state, 0x490c, 0x01); /* execute cmd */
+	ds5_raw_write_with_check(state, DS5_HWMC_DATA,
+			&cmd_switch_to_dfu, sizeof(cmd_switch_to_dfu)); /* Write command data */
+	ds5_write_with_check(state, DS5_HWMC_EXEC, 0x01); /* execute cmd */
 	/*Wait for DFU fw to boot*/
 	do {
 		msleep_range(DS5_START_POLL_TIME*10);
