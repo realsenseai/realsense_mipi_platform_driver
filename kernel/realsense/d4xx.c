@@ -1842,8 +1842,7 @@ static int ds5_get_hwmc(struct ds5 *state, unsigned char *data,
 
 	if (tmp_len == 0) {
 		dev_err(&state->client->dev,
-			"%s(): HWMC response length is 0, ret: %d\n",
-			__func__, ret);
+			"%s(): HWMC response length is 0\n", __func__);
 		return -ENODATA;
 	}
 
