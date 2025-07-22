@@ -444,7 +444,7 @@ index 91f8d5f8..d9be2677 100644
  	len = strscpy(cap->driver, "tegra-video", sizeof(cap->driver));
  	if (len < 0)
 @@ -2224,6 +2230,62 @@ static long tegra_channel_default_ioctl(struct file *file, void *fh,
- 	return ret;
+ 	return v4l2_g_parm_cap(chan->video, sd, a);
  }
  
 +static int
