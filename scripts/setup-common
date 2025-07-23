@@ -8,7 +8,7 @@ if [[ -z "$1" ]]; then
     JETPACK_VERSION="6.2"
 fi
 
-if [[ "$JETPACK_VERSION" =~ 6\.[0-2]$ ]]; then
+if [[ "$JETPACK_VERSION" =~ ^6\.[0-2]$ ]]; then
     KERNEL_DIR="kernel/kernel-jammy-src"
     if [[ $JETPACK_VERSION == "6.2" ]]; then
 	    L4T_VERSION="jetson_36.4.3"

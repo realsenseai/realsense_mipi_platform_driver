@@ -4,7 +4,7 @@
 set -e
 
 if [[ $# < 1 ]]; then
-    echo "apply_patches_ext.sh [--one-cam | --dual-cam] source_dir [JetPack_version]"
+    echo "apply_patches_ext.sh [--one-cam | --dual-cam] [JetPack_version]"
     exit 1
 fi
 
@@ -23,7 +23,7 @@ fi
 
 DEVDIR=$(cd `dirname $0` && pwd)
 
-. $DEVDIR/scripts/setup-common "$2"
+. $DEVDIR/scripts/setup-common "$1"
 
 cd "$DEVDIR"
 
@@ -43,7 +43,7 @@ if [ -d $1/hardware/nvidia/platform/t19x/galen-industrial-dts ]; then
 fi
 
 apply_external_patches() {
-    cat ${PWD}/$2/$JETPACK_VERSION/* | patch -p1 --directory=${PWD}/$1/$2/
+    cat ${PWD}/$2/$JETPACK_VERSION/* | patch -p1 --directory=${PWD}/sources_$1/$2
 }
 
 apply_external_patches $1 $D4XX_SRC_DST
@@ -57,10 +57,10 @@ else
 fi
 
 # For a common driver for JP4 + JP5 we override the i2c driver and ignore the previous that was created from patches
-cp $DEVDIR/kernel/realsense/d4xx.c $DEVDIR/$1/${D4XX_SRC_DST}/drivers/media/i2c/
+cp $DEVDIR/kernel/realsense/d4xx.c $DEVDIR/sources_$1/${D4XX_SRC_DST}/drivers/media/i2c/
 if [[ "$JETPACK_VERSION" == "6.x" ]]; then
     # jp6 overlay
-    cp $DEVDIR/hardware/realsense/tegra234-camera-d4xx-overlay*.dts $DEVDIR/$1/hardware/nvidia/t23x/nv-public/overlay/
+    cp $DEVDIR/hardware/realsense/tegra234-camera-d4xx-overlay*.dts $DEVDIR/sources_$1/hardware/nvidia/t23x/nv-public/overlay/
 else
-    cp $DEVDIR/hardware/realsense/$JP5_D4XX_DTSI $DEVDIR/$1/hardware/nvidia/platform/t19x/galen/kernel-dts/common/tegra194-camera-d4xx.dtsi
+    cp $DEVDIR/hardware/realsense/$JP5_D4XX_DTSI $DEVDIR/sources_$1/hardware/nvidia/platform/t19x/galen/kernel-dts/common/tegra194-camera-d4xx.dtsi
 fi
