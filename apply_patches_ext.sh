@@ -43,18 +43,19 @@ if [ -d $JETPACK_VERSION/hardware/nvidia/platform/t19x/galen-industrial-dts ]; t
 fi
 
 apply_external_patches() {
-    ls -ld ${PWD}/$2/$JETPACK_VERSION
-    ls -ld ${PWD}/sources_$JETPACK_VERSION/$2
-    ls ${PWD}/$2/$JETPACK_VERSION
-    cat ${PWD}/$2/$JETPACK_VERSION/* | patch -p1 --directory=${PWD}/sources_$JETPACK_VERSION/$2
+    ls -Ld ${PWD}/$2/$1
+    ls -Lw1 ${PWD}/$2/$1
+    cat ${PWD}/$2/$1/* | patch --quiet -p1 --directory=${PWD}/sources_$JETPACK_VERSION/$2
 }
 
 apply_external_patches $1 $D4XX_SRC_DST
-if [ -d ${KERNEL_DIR}/${JETPACK_VERSION} ]; then
+
+if [ -d sources_$JETPACK_VERSION/$KERNEL_DIR ]; then
     apply_external_patches $1 $KERNEL_DIR
 fi
+
 if [[ "$JETPACK_VERSION" == "6.x" ]]; then
-    apply_external_patches $1 hardware/nvidia/t23x/nv-public
+    apply_external_patches $JETPACK_VERSION hardware/nvidia/t23x/nv-public
 else
     apply_external_patches $1 hardware/nvidia/platform/t19x/galen/kernel-dts
 fi

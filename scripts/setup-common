@@ -18,7 +18,7 @@ if [[ "$JETPACK_VERSION" =~ ^6\.[0-2]$ ]]; then
 	    L4T_VERSION="jetson_36.3"
     fi;
     JETPACK_VERSION="6.x"
-elif [[ "$JETPACK_VERSION" =~ 5.[0-1].2" ]]; then
+elif [[ "$JETPACK_VERSION" =~ ^5.[0-1].2$ ]]; then
     KERNEL_DIR="kernel/kernel-5.10"
     if [[ $JETPACK_VERSION == "5.1.2" ]]; then
 	    L4T_VERSION="jetson_35.4.1"
