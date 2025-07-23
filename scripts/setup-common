@@ -18,12 +18,14 @@ if [[ "$JETPACK_VERSION" =~ ^6\.[0-2]$ ]]; then
 	    L4T_VERSION="jetson_36.3"
     fi;
     JETPACK_VERSION="6.x"
-elif [[ $JETPACK_VERSION == "5.1.2" ]]; then
-    L4T_VERSION="jetson_35.4.1"
+elif [[ "$JETPACK_VERSION" =~ 5.[0-1].2" ]]; then
     KERNEL_DIR="kernel/kernel-5.10"
-elif [[ $JETPACK_VERSION == "5.0.2" ]]; then
-    L4T_VERSION="jetson_35.1"
-    KERNEL_DIR="kernel/kernel-5.10"
+    if [[ $JETPACK_VERSION == "5.1.2" ]]; then
+	    L4T_VERSION="jetson_35.4.1"
+    elif [[ $JETPACK_VERSION == "5.0.2" ]]; then
+	    L4T_VERSION="jetson_35.1"
+    fi
+    JETPACK_VERSION="5.x"
 elif [[ $JETPACK_VERSION == "4.6.1" ]]; then
     L4T_VERSION="tegra-l4t-r32.7.1"
     KERNEL_DIR="kernel/kernel-4.9"

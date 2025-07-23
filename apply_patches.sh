@@ -45,28 +45,29 @@ fi
 
 apply_external_patches() {
     if [ $1 = 'apply' ]; then
-        git -C sources_$JETPACK_VERSION/$2 apply ${PWD}/$2/$JETPACK_VERSION/*
+        echo WOJTEK: git -C sources_$JETPACK_VERSION/$3 apply ${PWD}/$3/$2/*
+        git -C sources_$JETPACK_VERSION/$3 apply ${PWD}/$3/$2/*
     elif [ $1 = 'reset' ]; then
-        if [[ -n $(git -C sources_$JETPACK_VERSION/$2 diff --quiet) || -n $(git -C sources_$JETPACK_VERSION/$2 diff --cached --quiet) ]]; then
-            read -p "Repo sources_$JETPACK_VERSION/$2 has changes that will be hard reset. Continue? (y/N): " confirm
+        if [[ -n $(git -C sources_$JETPACK_VERSION/$3 diff --quiet) || -n $(git -C sources_$JETPACK_VERSION/$3 diff --cached --quiet) ]]; then
+            read -p "Repo sources_$JETPACK_VERSION/$3 has changes that will be hard reset. Continue? (y/N): " confirm
             if [[ ! "$confirm" == "y" && ! "$confirm" == "Y" ]]; then
                 exit 1
             fi
         fi
-        git -C sources_$JETPACK_VERSION/$2 reset --hard $3
+        git -C sources_$JETPACK_VERSION/$2 reset --hard $4
     fi
 }
 
-apply_external_patches $1 $D4XX_SRC_DST $L4T_VERSION
+apply_external_patches $1 $2 $D4XX_SRC_DST $L4T_VERSION
 
 if [ -d ${KERNEL_DIR}/${JETPACK_VERSION} ]; then
-    apply_external_patches $1 $KERNEL_DIR $L4T_VERSION
+    apply_external_patches $1 $2 $KERNEL_DIR $L4T_VERSION
 fi
 
 if [[ "$JETPACK_VERSION" == "6.x" ]]; then
-    apply_external_patches $1 hardware/nvidia/t23x/nv-public $L4T_VERSION
+    apply_external_patches $1 $2 hardware/nvidia/t23x/nv-public $L4T_VERSION
 else
-    apply_external_patches $1 hardware/nvidia/platform/t19x/galen/kernel-dts $L4T_VERSION
+    apply_external_patches $1 $2 hardware/nvidia/platform/t19x/galen/kernel-dts $L4T_VERSION
 fi
 
 if [ $1 = 'apply' ]; then
@@ -79,4 +80,5 @@ if [ $1 = 'apply' ]; then
     fi
 elif [ $1 = 'reset' ]; then
     [[ -f $DEVDIR/sources_$JETPACK_VERSION/${D4XX_SRC_DST}/drivers/media/i2c/d4xx.c ]] && rm $DEVDIR/sources_$JETPACK_VERSION/${D4XX_SRC_DST}/drivers/media/i2c/d4xx.c
+    [[ -f $DEVDIR/sources_$JETPACK_VERSION/hardware/nvidia/platform/t19x/galen/kernel-dts/common/tegra194-camera-d4xx.dtsi ]] && rm $DEVDIR/sources_$JETPACK_VERSION/hardware/nvidia/platform/t19x/galen/kernel-dts/common/tegra194-camera-d4xx.dtsi
 fi

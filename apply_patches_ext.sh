@@ -38,12 +38,15 @@ else
 fi
 # NVIDIA SDK Manager's JetPack 4.6.1 source_sync.sh doesn't set the right folder name, it mismatches with the direct tar
 # package source code. Correct the folder name.
-if [ -d $1/hardware/nvidia/platform/t19x/galen-industrial-dts ]; then
-    mv $1/hardware/nvidia/platform/t19x/galen-industrial-dts $1/hardware/nvidia/platform/t19x/galen-industrial
+if [ -d $JETPACK_VERSION/hardware/nvidia/platform/t19x/galen-industrial-dts ]; then
+    mv $1/hardware/nvidia/platform/t19x/galen-industrial-dts $JETPACK_VERSION/hardware/nvidia/platform/t19x/galen-industrial
 fi
 
 apply_external_patches() {
-    cat ${PWD}/$2/$JETPACK_VERSION/* | patch -p1 --directory=${PWD}/sources_$1/$2
+    ls -ld ${PWD}/$2/$JETPACK_VERSION
+    ls -ld ${PWD}/sources_$JETPACK_VERSION/$2
+    ls ${PWD}/$2/$JETPACK_VERSION
+    cat ${PWD}/$2/$JETPACK_VERSION/* | patch -p1 --directory=${PWD}/sources_$JETPACK_VERSION/$2
 }
 
 apply_external_patches $1 $D4XX_SRC_DST
@@ -57,10 +60,10 @@ else
 fi
 
 # For a common driver for JP4 + JP5 we override the i2c driver and ignore the previous that was created from patches
-cp $DEVDIR/kernel/realsense/d4xx.c $DEVDIR/sources_$1/${D4XX_SRC_DST}/drivers/media/i2c/
+cp $DEVDIR/kernel/realsense/d4xx.c $DEVDIR/sources_$JETPACK_VERSION/${D4XX_SRC_DST}/drivers/media/i2c/
 if [[ "$JETPACK_VERSION" == "6.x" ]]; then
     # jp6 overlay
-    cp $DEVDIR/hardware/realsense/tegra234-camera-d4xx-overlay*.dts $DEVDIR/sources_$1/hardware/nvidia/t23x/nv-public/overlay/
+    cp $DEVDIR/hardware/realsense/tegra234-camera-d4xx-overlay*.dts $DEVDIR/sources_$JETPACK_VERSION/hardware/nvidia/t23x/nv-public/overlay/
 else
-    cp $DEVDIR/hardware/realsense/$JP5_D4XX_DTSI $DEVDIR/sources_$1/hardware/nvidia/platform/t19x/galen/kernel-dts/common/tegra194-camera-d4xx.dtsi
+    cp $DEVDIR/hardware/realsense/$JP5_D4XX_DTSI $DEVDIR/sources_$JETPACK_VERSION/hardware/nvidia/platform/t19x/galen/kernel-dts/common/tegra194-camera-d4xx.dtsi
 fi
