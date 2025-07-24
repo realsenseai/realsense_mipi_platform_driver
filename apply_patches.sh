@@ -50,7 +50,7 @@ apply_external_patches() {
     if [ $1 = 'apply' ]; then
         ls -Ld sources_$JETPACK_VERSION/$3
         ls -Lw1 ${PWD}/$3/$2
-        git -C sources_$JETPACK_VERSION/$3 apply -vq ${PWD}/$3/$2/*
+        git -C sources_$JETPACK_VERSION/$3 apply ${PWD}/$3/$2/*
     elif [ $1 = 'reset' ]; then
         if [[ -n $(git -C sources_$JETPACK_VERSION/$3 diff --quiet) || -n $(git -C sources_$JETPACK_VERSION/$3 diff --cached --quiet) ]]; then
             read -p "Repo sources_$JETPACK_VERSION/$3 has changes that will be hard reset. Continue? (y/N): " confirm
