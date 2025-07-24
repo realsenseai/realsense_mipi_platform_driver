@@ -82,7 +82,7 @@ tar xjf kernel_oot_modules_src.tbz2
 tar xjf nvidia_kernel_display_driver_source.tbz2
 cd ../..
 
-./apply_patches_ext.sh ./Linux_for_Tegra/source 6.2
+./apply_patches_ext.sh 6.2 Linux_for_Tegra/source
 
 # build kernel, dtb and D457 driver
 ./build_all.sh 6.2 ./Linux_for_Tegra/source

@@ -47,13 +47,20 @@ if [[ $1 == reset && -d sources_$JETPACK_VERSION/hardware/nvidia/platform/t19x/g
 fi
 
 apply_external_patches() {
+    git -C sources_$JETPACK_VERSION/$3 status > /dev/null
     if [ $1 = 'apply' ]; then
-        ls -Ld sources_$JETPACK_VERSION/$3
+        if ! git -C sources_$JETPACK_VERSION/$3 diff --quiet || ! git -C sources_$JETPACK_VERSION/$3 diff --cached --quiet; then
+	    read -p "Repo sources_$JETPACK_VERSION/$3 has changes that may disturb applying patches. Continue (y/N)? " confirm
+            if [[ ! "$confirm" == "y" && ! "$confirm" == "Y" ]]; then
+                exit 1
+            fi
+        fi
+        ls -Ld ${PWD}/$3/$2
         ls -Lw1 ${PWD}/$3/$2
         git -C sources_$JETPACK_VERSION/$3 apply ${PWD}/$3/$2/*
     elif [ $1 = 'reset' ]; then
-        if [[ -n $(git -C sources_$JETPACK_VERSION/$3 diff --quiet) || -n $(git -C sources_$JETPACK_VERSION/$3 diff --cached --quiet) ]]; then
-            read -p "Repo sources_$JETPACK_VERSION/$3 has changes that will be hard reset. Continue? (y/N): " confirm
+        if ! git -C sources_$JETPACK_VERSION/$3 diff --quiet || ! git -C sources_$JETPACK_VERSION/$3 diff --cached --quiet; then
+            read -p "Repo sources_$JETPACK_VERSION/$3 has changes that will be hard reset. Continue (y/N)? " confirm
             if [[ ! "$confirm" == "y" && ! "$confirm" == "Y" ]]; then
                 exit 1
             fi

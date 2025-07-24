@@ -5,7 +5,7 @@ export L4T_VERSION="jetson_35.1"
 export KERNEL_DIR="kernel/kernel-5.10"
 
 if [[ -z "$1" ]]; then
-    JETPACK_VERSION="6.2"
+    JETPACK_VERSION="5.0.2"
 fi
 
 if [[ "$JETPACK_VERSION" =~ ^6\.[0-2]$ ]]; then
