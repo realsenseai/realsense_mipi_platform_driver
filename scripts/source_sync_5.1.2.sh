@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 # Copyright (c) 2012-2023 NVIDIA CORPORATION.  All rights reserved.
 #
@@ -194,9 +195,8 @@ function DownloadAndSync {
 		if [ $? -ne 0 ]; then
 			echo "But the directory is not a git repository -- clean it up first"
 			echo ""
-			echo ""
 			popd > /dev/null
-			return 1
+			return 2
 		fi
 		git fetch --all 2>&1 >/dev/null
 		popd > /dev/null
@@ -206,7 +206,6 @@ function DownloadAndSync {
 		git clone "$REPO_URL" -n ${LDK_SOURCE_DIR} 2>&1 >/dev/null
 		if [ $? -ne 0 ]; then
 			echo "$2 source sync failed!"
-			echo ""
 			echo ""
 			return 1
 		fi
@@ -222,17 +221,21 @@ function DownloadAndSync {
 		UpdateTags $OPT $TAG
 	fi
 
-	if [ ! -z "$TAG" ]; then
+	if [[ -n "$TAG" ]]; then
 		pushd ${LDK_SOURCE_DIR} > /dev/null
 		git tag -l 2>/dev/null | grep -q -P "^$TAG\$"
 		if [ $? -eq 0 ]; then
 			echo "Syncing up with tag $TAG..."
-			git checkout -b mybranch_$(date +%Y-%m-%d-%s) $TAG
-			echo "$2 source sync'ed to tag $TAG successfully!"
+			if git -C $LDK_SOURCE_DIR checkout -b mybranch_$(date +%Y-%m-%d-%s) $TAG; then
+				echo "$2 source sync'ed to tag $TAG successfully!"
+			else
+				echo "$2 could not sync to tag $TAG!"
+				return 3
+			fi
 		else
 			echo "Couldn't find tag $TAG"
 			echo "$2 source sync to tag $TAG failed!"
-			RET=1
+			return 4
 		fi
 		popd > /dev/null
 	fi
@@ -330,7 +333,6 @@ while getopts "$GETOPT" opt; do
 done
 shift $((OPTIND-1))
 
-GRET=0
 for ((i=0; i < NSOURCES; i++)); do
 	OPT=$(echo "${SOURCE_INFO_PROCESSED[i]}" | cut -f 1 -d ':')
 	WHAT=$(echo "${SOURCE_INFO_PROCESSED[i]}" | cut -f 2 -d ':')
@@ -339,13 +341,11 @@ for ((i=0; i < NSOURCES; i++)); do
 	DNLOAD=$(echo "${SOURCE_INFO_PROCESSED[i]}" | cut -f 5 -d ':')
 
 	if [ $DALL -eq 1 -o "x${DNLOAD}" == "xy" ]; then
-		DownloadAndSync "$WHAT" "${LDK_DIR}/${WHAT}" "https://${REPO}" "${TAG}" "${OPT}"
-		tRET=$?
-		let GRET=GRET+tRET
-		if [ $tRET -ne 0 -a $EOE -eq 1 ]; then
-			exit $tRET
+		if ! DownloadAndSync "$WHAT" "${LDK_DIR}/${WHAT}" "https://${REPO}" "${TAG}" "${OPT}"; then
+			if [[ $? == 1 ]]; then
+				echo "Trying git protocol"
+				DownloadAndSync "$WHAT" "${LDK_DIR}/${WHAT}" "git://${REPO}" "${TAG}" "${OPT}"
+			fi
 		fi
 	fi
 done
-
-exit $GRET

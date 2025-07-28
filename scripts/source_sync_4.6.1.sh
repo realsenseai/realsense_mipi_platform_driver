@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 # Copyright (c) 2012-2021 NVIDIA CORPORATION.  All rights reserved.
 #
@@ -46,7 +47,7 @@
 
 
 # verify that git is installed
-if  ! which git > /dev/null  ; then
+if ! which git > /dev/null  ; then
   echo "ERROR: git is not installed. If your linux distro is 10.04 or later,"
   echo "git can be installed by 'sudo apt-get install git-core'."
   exit 1
@@ -85,8 +86,6 @@ SOURCE_INFO+="
 u:u-boot:nv-tegra.nvidia.com/3rdparty/u-boot.git:
 "
 
-# exit on error on sync
-EOE=0
 # after processing SOURCE_INFO
 NSOURCES=0
 declare -a SOURCE_INFO_PROCESSED
@@ -104,9 +103,8 @@ function Usages {
 	echo "Use: $1 [options]"
 	echo "Available general options are,"
 	echo "     -h     :     help"
-	echo "     -e     : exit on sync error"
 	echo "     -d [DIR] : root of source is DIR"
-	echo "     -t [TAG] : Git tag that will be used to sync all the sources"
+	echo "     -t [TAG] : git tag that will be used to sync all the sources"
 	echo ""
 	echo "By default, all sources are downloaded."
 	echo "Only specified sources are downloaded, if one or more of the following options are mentioned."
@@ -228,7 +226,7 @@ function DownloadAndSync {
 }
 
 # prepare processing ....
-GETOPT=":ehd:t:"
+GETOPT=":hd:t:"
 
 OIFS="$IFS"
 IFS=$(echo -en "\n\b")
@@ -254,9 +252,6 @@ while getopts "$GETOPT" opt; do
 					LDK_DIR="$OPTARG"
 					;;
 			esac
-			;;
-		e)
-			EOE=1
 			;;
 		h)
 			Usages "$SCRIPT_NAME"
@@ -315,7 +310,6 @@ while getopts "$GETOPT" opt; do
 done
 shift $((OPTIND-1))
 
-GRET=0
 for ((i=0; i < NSOURCES; i++)); do
 	OPT=$(echo "${SOURCE_INFO_PROCESSED[i]}" | cut -f 1 -d ':')
 	WHAT=$(echo "${SOURCE_INFO_PROCESSED[i]}" | cut -f 2 -d ':')
@@ -324,13 +318,11 @@ for ((i=0; i < NSOURCES; i++)); do
 	DNLOAD=$(echo "${SOURCE_INFO_PROCESSED[i]}" | cut -f 5 -d ':')
 
 	if [ $DALL -eq 1 -o "x${DNLOAD}" == "xy" ]; then
-		DownloadAndSync "$WHAT" "${LDK_DIR}/${WHAT}" "https://${REPO}" "${TAG}" "${OPT}"
-		tRET=$?
-		let GRET=GRET+tRET
-		if [ $tRET -ne 0 -a $EOE -eq 1 ]; then
-			exit $tRET
+		if ! DownloadAndSync "$WHAT" "${LDK_DIR}/${WHAT}" "https://${REPO}" "${TAG}" "${OPT}"; then
+			if [[ $? == 1 ]]; then
+				echo "Trying git protocol"
+				DownloadAndSync "$WHAT" "${LDK_DIR}/${WHAT}" "git://${REPO}" "${TAG}" "${OPT}"
+			fi
 		fi
 	fi
 done
-
-exit $GRET

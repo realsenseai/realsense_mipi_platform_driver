@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 # Copyright (c) 2012-2022 NVIDIA CORPORATION.  All rights reserved.
 #
@@ -96,8 +97,6 @@ o:tegra/optee-src/nv-optee:nv-tegra.nvidia.com/tegra/optee-src/nv-optee.git:
 o:tegra/v4l2-src/v4l2_libs:nv-tegra.nvidia.com/tegra/v4l2-src/v4l2_libs.git:
 "
 
-# exit on error on sync
-EOE=0
 # after processing SOURCE_INFO
 NSOURCES=0
 declare -a SOURCE_INFO_PROCESSED
@@ -115,7 +114,6 @@ function Usages {
 	echo "Use: $1 [options]"
 	echo "Available general options are,"
 	echo "     -h     :     help"
-	echo "     -e     : exit on sync error"
 	echo "     -d [DIR] : root of source is DIR"
 	echo "     -t [TAG] : Git tag that will be used to sync all the sources"
 	echo ""
@@ -218,24 +216,23 @@ function DownloadAndSync {
 		UpdateTags $OPT $TAG
 	fi
 
-	if [ ! -z "$TAG" ]; then
-		pushd ${LDK_SOURCE_DIR} > /dev/null
-		git tag -l 2>/dev/null | grep -q -P "^$TAG\$"
-		if [ $? -eq 0 ]; then
+	if [[ -n "$TAG" ]]; then
+		if [ -n $(git -C $LDK_SOURCE_DIR tag -l "^$TAG\$") ]; then
 			echo "Syncing up with tag $TAG..."
-			git checkout -b mybranch_$(date +%Y-%m-%d-%s) $TAG
-			echo "$2 source sync'ed to tag $TAG successfully!"
+			if git -C $LDK_SOURCE_DIR checkout -b mybranch_$(date +%Y-%m-%d-%s) $TAG; then
+				echo "$2 source sync'ed to tag $TAG successfully!"
+			else
+				echo "$2 could not sync to tag $TAG!"
+				return 3
+			fi
 		else
 			echo "Couldn't find tag $TAG"
 			echo "$2 source sync to tag $TAG failed!"
-			RET=1
+			return 4
 		fi
-		popd > /dev/null
 	fi
 	echo ""
-	echo ""
-
-	return "$RET"
+	return 0;
 }
 
 # prepare processing ....
@@ -265,9 +262,6 @@ while getopts "$GETOPT" opt; do
 					LDK_DIR="$OPTARG"
 					;;
 			esac
-			;;
-		e)
-			EOE=1
 			;;
 		h)
 			Usages "$SCRIPT_NAME"
@@ -326,7 +320,6 @@ while getopts "$GETOPT" opt; do
 done
 shift $((OPTIND-1))
 
-GRET=0
 for ((i=0; i < NSOURCES; i++)); do
 	OPT=$(echo "${SOURCE_INFO_PROCESSED[i]}" | cut -f 1 -d ':')
 	WHAT=$(echo "${SOURCE_INFO_PROCESSED[i]}" | cut -f 2 -d ':')
@@ -335,14 +328,11 @@ for ((i=0; i < NSOURCES; i++)); do
 	DNLOAD=$(echo "${SOURCE_INFO_PROCESSED[i]}" | cut -f 5 -d ':')
 
 	if [ $DALL -eq 1 -o "x${DNLOAD}" == "xy" ]; then
-		DownloadAndSync "$WHAT" "${LDK_DIR}/${WHAT}" "https://${REPO}" "${TAG}" "${OPT}"
-		tRET=$?
-		let GRET=GRET+tRET
-		if [ $tRET -ne 0 -a $EOE -eq 1 ]; then
-			exit $tRET
+		if ! DownloadAndSync "$WHAT" "${LDK_DIR}/${WHAT}" "https://${REPO}" "${TAG}" "${OPT}"; then
+			if [[ $? == 1 ]]; then
+				echo "Trying git protocol"
+				DownloadAndSync "$WHAT" "${LDK_DIR}/${WHAT}" "git://${REPO}" "${TAG}" "${OPT}"
+			fi
 		fi
 	fi
 done
-
-exit $GRET
-

@@ -19,6 +19,7 @@ function DisplayNvidiaLicense {
     echo -e "${license}"
 
     read -t 30 -n 1 -s -r -e -p 'Press any key to continue (or wait 30 seconds..)'
+    echo
 }
 
 
