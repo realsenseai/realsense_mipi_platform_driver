@@ -188,7 +188,7 @@ function DownloadAndSync {
 		git fetch --all 2>&1 >/dev/null
 		popd > /dev/null
 	else
-		echo "Downloading default $WHAT source3..."
+		echo "Downloading default $WHAT source..."
 
 		if ! git clone "$REPO_URL" -n ${LDK_SOURCE_DIR} >/dev/null; then
 			echo "$2 source sync failed"
@@ -318,11 +318,13 @@ for ((i=0; i < NSOURCES; i++)); do
 	DNLOAD=$(echo "${SOURCE_INFO_PROCESSED[i]}" | cut -f 5 -d ':')
 
 	if [ $DALL -eq 1 -o "x${DNLOAD}" == "xy" ]; then
-		DownloadAndSync "$WHAT" "${LDK_DIR}/${WHAT}" "git://${REPO}" "${TAG}" "${OPT}"
-		tRET=$?
-		let GRET=GRET+tRET
-		if [ $tRET -ne 0 -a $EOE -eq 1 ]; then
-			exit $tRET
+		if DownloadAndSync "$WHAT" "${LDK_DIR}/${WHAT}" "git://${REPO}" "${TAG}" "${OPT}"; then
+			true
+		else
+			if [[ $? == 1 ]]; then
+				echo "Trying https protocol"
+				DownloadAndSync "$WHAT" "${LDK_DIR}/${WHAT}" "https://${REPO}" "${TAG}" "${OPT}"
+			fi
 		fi
 	fi
 done
