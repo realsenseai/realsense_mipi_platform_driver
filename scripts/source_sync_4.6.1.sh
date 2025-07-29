@@ -168,29 +168,23 @@ function DownloadAndSync {
 	local REPO_URL="$3"
 	local TAG="$4"
 	local OPT="$5"
-	local RET=0
 
 	if [ -d "${LDK_SOURCE_DIR}" ]; then
 		echo "Directory for $WHAT, ${LDK_SOURCE_DIR}, already exists!"
 		pushd "${LDK_SOURCE_DIR}" > /dev/null
-		git status 2>&1 >/dev/null
-		if [ $? -ne 0 ]; then
+		if ! git status 2>&1 >/dev/null; then
 			echo "But the directory is not a git repository -- clean it up first"
 			echo ""
-			echo ""
 			popd > /dev/null
-			return 1
+			return 2
 		fi
 		git fetch --all 2>&1 >/dev/null
 		popd > /dev/null
 	else
 		echo "Downloading default $WHAT source..."
 
-		git clone "$REPO_URL" -n ${LDK_SOURCE_DIR} 2>&1 >/dev/null
-		if [ $? -ne 0 ]; then
-			echo "$2 source sync failed!"
-			echo ""
-			echo ""
+		if ! git clone -n "$REPO_URL" ${LDK_SOURCE_DIR} 2>&1 >/dev/null; then
+			echo "$2 source sync failed"
 			return 1
 		fi
 
@@ -205,24 +199,24 @@ function DownloadAndSync {
 		UpdateTags $OPT $TAG
 	fi
 
-	if [ ! -z "$TAG" ]; then
-		pushd ${LDK_SOURCE_DIR} > /dev/null
-		git tag -l 2>/dev/null | grep -q -P "^$TAG\$"
-		if [ $? -eq 0 ]; then
+	if [[ -n "$TAG" ]]; then
+		if [ -n $(git -C $LDK_SOURCE_DIR tag -l "^$TAG\$") ]; then
 			echo "Syncing up with tag $TAG..."
-			git checkout -b mybranch_$(date +%Y-%m-%d-%s) $TAG
-			echo "$2 source sync'ed to tag $TAG successfully!"
+			if git -C $LDK_SOURCE_DIR checkout -b mybranch_$(date +%Y-%m-%d-%s) $TAG; then
+				echo "$2 source sync'ed to tag $TAG successfully!"
+			else
+				echo "$2 could not sync to tag $TAG!"
+				echo
+				return 3
+			fi
 		else
 			echo "Couldn't find tag $TAG"
 			echo "$2 source sync to tag $TAG failed!"
-			RET=1
+			echo
+			return 4
 		fi
-		popd > /dev/null
 	fi
-	echo ""
-	echo ""
-
-	return "$RET"
+	echo
 }
 
 # prepare processing ....
@@ -318,12 +312,12 @@ for ((i=0; i < NSOURCES; i++)); do
 	DNLOAD=$(echo "${SOURCE_INFO_PROCESSED[i]}" | cut -f 5 -d ':')
 
 	if [ $DALL -eq 1 -o "x${DNLOAD}" == "xy" ]; then
-		if DownloadAndSync "$WHAT" "${LDK_DIR}/${WHAT}" "git://${REPO}" "${TAG}" "${OPT}"; then
+		if DownloadAndSync "$WHAT" "${LDK_DIR}/${WHAT}" "https://${REPO}" "${TAG}" "${OPT}"; then
 			true
 		else
 			if [[ $? == 1 ]]; then
-				echo "Trying https protocol"
-				DownloadAndSync "$WHAT" "${LDK_DIR}/${WHAT}" "https://${REPO}" "${TAG}" "${OPT}"
+				echo "Trying git protocol"
+				DownloadAndSync "$WHAT" "${LDK_DIR}/${WHAT}" "git://${REPO}" "${TAG}" "${OPT}"
 			fi
 		fi
 	fi
