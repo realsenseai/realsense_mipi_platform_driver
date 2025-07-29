@@ -1,0 +1,25 @@
+name: Build JP 6.2
+
+on:
+  push:
+    branches:
+    - master
+    - dev
+  pull_request:
+    branches: ['**']
+
+permissions: read-all
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #v3
+    - name: setup workspace
+      run: yes | ./setup_workspace.sh 6.2
+    - name: apply patches
+      run: git config --global user.email "builder@example.com" && git config --global user.name "builder" && ./apply_patches.sh apply 6.2
+    - name: build
+      run: ./build_all.sh 6.2
