@@ -171,21 +171,22 @@ function DownloadAndSync {
 
 	if [ -d "${LDK_SOURCE_DIR}" ]; then
 		echo "Directory for $WHAT, ${LDK_SOURCE_DIR}, already exists!"
-		pushd "${LDK_SOURCE_DIR}" > /dev/null
-		if ! git status 2>&1 >/dev/null; then
+		if ! git -C $LDK_SOURCE_DIR status 2>&1 >/dev/null; then
 			echo "But the directory is not a git repository -- clean it up first"
 			echo ""
 			popd > /dev/null
+			return 1
+		fi
+		if ! git -C $LDK_SOURCE_DIR fetch --all 2>&1 >/dev/null; then
+			echo "$2 source sync failed"
 			return 2
 		fi
-		git fetch --all 2>&1 >/dev/null
-		popd > /dev/null
 	else
 		echo "Downloading default $WHAT source..."
 
 		if ! git clone -n "$REPO_URL" ${LDK_SOURCE_DIR} 2>&1 >/dev/null; then
 			echo "$2 source sync failed"
-			return 1
+			return 3
 		fi
 
 		echo "The default $WHAT source is downloaded in: ${LDK_SOURCE_DIR}"
@@ -207,13 +208,13 @@ function DownloadAndSync {
 			else
 				echo "$2 could not sync to tag $TAG!"
 				echo
-				return 3
+				return 4
 			fi
 		else
 			echo "Couldn't find tag $TAG"
 			echo "$2 source sync to tag $TAG failed!"
 			echo
-			return 4
+			return 5
 		fi
 	fi
 	echo
@@ -315,9 +316,11 @@ for ((i=0; i < NSOURCES; i++)); do
 		if DownloadAndSync "$WHAT" "${LDK_DIR}/${WHAT}" "https://${REPO}" "${TAG}" "${OPT}"; then
 			true
 		else
-			if [[ $? == 1 ]]; then
+			if [[ $? == 3 ]]; then
 				echo "Trying git protocol"
 				DownloadAndSync "$WHAT" "${LDK_DIR}/${WHAT}" "git://${REPO}" "${TAG}" "${OPT}"
+			else
+				exit 1
 			fi
 		fi
 	fi

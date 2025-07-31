@@ -39,7 +39,7 @@ fi
 # NVIDIA SDK Manager's JetPack 4.6.1 source_sync.sh doesn't set the right folder name, it mismatches with the direct tar
 # package source code. Correct the folder name.
 if [ -d $JETPACK_VERSION/hardware/nvidia/platform/t19x/galen-industrial-dts ]; then
-    mv $1/hardware/nvidia/platform/t19x/galen-industrial-dts $JETPACK_VERSION/hardware/nvidia/platform/t19x/galen-industrial
+    mv $JETPACK_VERSION/hardware/nvidia/platform/t19x/galen-industrial-dts $JETPACK_VERSION/hardware/nvidia/platform/t19x/galen-industrial
 fi
 
 apply_external_patches() {

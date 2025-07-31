@@ -30,8 +30,7 @@ Please follow the [instruction](https://docs.nvidia.com/sdk-manager/install-with
 # JetPack build
 
 - [JetPack 6.x](./README_JP6.md#build-environment-prerequisites)
-- [JetPack 5.1.2](./README_JP5.md#build-kernel-dtb-and-d457-driver)
-- [JetPack 5.0.2](./README_JP5.md#build-kernel-dtb-and-d457-driver)
+- [JetPack 5.x.2](./README_JP5.md#build-kernel-dtb-and-d457-driver)
 - [JetPack 4.6.1](./README_JP4.md#build-kernel-dtb-and-d457-driver)
 
 ### Verify driver after installation

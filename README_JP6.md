@@ -4,9 +4,9 @@
 The Intel® RealSense™ MIPI platform driver enables the user to control and stream RealSense™ 3D MIPI cameras.
 The system shall include:
 * NVIDIA® Jetson™ platform Supported JetPack versions are:
-    [6.2 production release](https://developer.nvidia.com/embedded/jetpack-sdk-62)
-    [6.1 production release](https://developer.nvidia.com/embedded/jetpack-sdk-61)
-    [6.0 production release](https://developer.nvidia.com/embedded/jetpack-sdk-60)
+- [6.2 production release](https://developer.nvidia.com/embedded/jetpack-sdk-62)
+- [6.1 production release](https://developer.nvidia.com/embedded/jetpack-sdk-61)
+- [6.0 production release](https://developer.nvidia.com/embedded/jetpack-sdk-60)
 * RealSense™ [De-Serialize board](https://store.intelrealsense.com/buy-intel-realsense-des457.html)
 * Jetson AGX Orin™ Passive adapter board from [Leopard Imaging® LI-JTX1-SUB-ADPT](https://leopardimaging.com/product/accessories/adapters-carrier-boards/for-nvidia-jetson/li-jtx1-sub-adpt/)
 * RS MIPI camera [D457](https://store.intelrealsense.com/buy-intel-realsense-depth-camera-d457.html)
@@ -93,6 +93,7 @@ Note: dev_dbg() log support will not be enabled by default. If needed, run the `
 ```
 
 ## Archive JetPack 6.x build results (optional) on build host
+Assuning 6.0 build the kernel version is 5.15.136-tegra. For 6.1 and 6.2 build the kernel version is 5.15.148-tegra.
 - kernel image : `images/6.x/rootfs/boot/Image`
 - dtb: `images/6.x/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb`
 - dtb overlay: `images/6.x/rootfs/boot/tegra234-camera-d4xx-overlay.dtbo`

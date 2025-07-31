@@ -12,7 +12,7 @@ The system shall include:
 
 ### Links
 - Intel® RealSense™ camera driver for GMSL* interface [Front Page](./README.md)
-- Jetson AGX Orin™ board setup - AGX Orin™ [JetPack 6.0](./README_JP6.md) setup guide
+- Jetson AGX Orin™ board setup - AGX Orin™ [JetPack 6.x](./README_JP6.md) setup guide
 - Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 5.x.2](./README_JP5.md) setup guide
 - Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 4.6.1](./README_JP4.md) setup guide
 - Build Tools manual page [Build Manual page](./README_tools.md)
@@ -54,7 +54,7 @@ cd ../../..
 sudo apt install build-essential bc flex bison
 
 # apply patches
-./apply_patches_ext.sh ./Linux_for_Tegra/source/public 4.6.1
+./apply_patches_ext.sh 4.6.1 ./Linux_for_Tegra/source/public
 
 # remove BUILD_NUMBER env dependency kernel vermagic
 sed -i s/'UTS_RELEASE=\$(KERNELRELEASE)-ab\$(BUILD_NUMBER)'/'UTS_RELEASE=\$(KERNELRELEASE)'/g ./Linux_for_Tegra/source/public/kernel/kernel-4.9/Makefile
