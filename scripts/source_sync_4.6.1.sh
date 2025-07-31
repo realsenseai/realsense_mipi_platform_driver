@@ -174,7 +174,6 @@ function DownloadAndSync {
 		if ! git -C $LDK_SOURCE_DIR status 2>&1 >/dev/null; then
 			echo "But the directory is not a git repository -- clean it up first"
 			echo ""
-			popd > /dev/null
 			return 1
 		fi
 		if ! git -C $LDK_SOURCE_DIR fetch --all 2>&1 >/dev/null; then
