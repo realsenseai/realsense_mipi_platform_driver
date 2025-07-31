@@ -4,9 +4,9 @@
 The Intel® RealSense™ MIPI platform driver enables the user to control and stream RealSense™ 3D MIPI cameras.
 The system shall include:
 * NVIDIA® Jetson™ platform Supported JetPack versions are:
-- [6.2 production release](https://developer.nvidia.com/embedded/jetpack-sdk-62)
-- [6.1 production release](https://developer.nvidia.com/embedded/jetpack-sdk-61)
-- [6.0 production release](https://developer.nvidia.com/embedded/jetpack-sdk-60)
+    - [6.2 production release](https://developer.nvidia.com/embedded/jetpack-sdk-62)
+    - [6.1 production release](https://developer.nvidia.com/embedded/jetpack-sdk-61)
+    - [6.0 production release](https://developer.nvidia.com/embedded/jetpack-sdk-60)
 * RealSense™ [De-Serialize board](https://store.intelrealsense.com/buy-intel-realsense-des457.html)
 * Jetson AGX Orin™ Passive adapter board from [Leopard Imaging® LI-JTX1-SUB-ADPT](https://leopardimaging.com/product/accessories/adapters-carrier-boards/for-nvidia-jetson/li-jtx1-sub-adpt/)
 * RS MIPI camera [D457](https://store.intelrealsense.com/buy-intel-realsense-depth-camera-d457.html)
@@ -59,8 +59,8 @@ Note: dev_dbg() log support will not be enabled by default. If needed, run the `
 
 ## JetPack manual build - cross compile x86-64 (CI deploy)
 
-[NVIDIA® Jetson Linux 36.3](https://developer.nvidia.com/embedded/jetson-linux-r363)
-1. Download Jetson Linux Driver Package - [JetPack 6.0 BSP sources](https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v3.0/release/jetson_linux_r36.3.0_aarch64.tbz2)
+[NVIDIA® JetPack 6.2: Jetson Linux 36.4.3](https://developer.nvidia.com/embedded/jetson-linux-r3643)
+1. Download Jetson Linux Driver Package - [JetPack 6.2 BSP sources](https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v4.3/release/jetson_linux_r36.4.3_aarch64.tbz2)
 2. Download Toolchain ARM64 compiler - [Bootlin Toolchain gcc 11.3](https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v3.0/toolchain/aarch64--glibc--stable-2022.08-1.tar.bz2)
 3. Apply patches for kernel drivers, nvidia-oot module and tegra devicetree.
 4. Build cross-compile project on host (Build PC).
@@ -68,13 +68,13 @@ Note: dev_dbg() log support will not be enabled by default. If needed, run the `
 6. Configure target.
 
 ```
-# JetPack 6.x
+# JetPack 6.2
 mkdir -p l4t-gcc/6.x
 cd ./l4t-gcc/6.x
 wget https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v3.0/toolchain/aarch64--glibc--stable-2022.08-1.tar.bz2 -O aarch64--glibc--stable-final.tar.bz2
 tar xf aarch64--glibc--stable-final.tar.bz2 --strip-components 1
 cd ../..
-wget https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v3.0/sources/public_sources.tbz2
+wget https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v4.3/sources/public_sources.tbz2
 tar xjf public_sources.tbz2
 cd Linux_for_Tegra/source
 tar xjf kernel_src.tbz2
@@ -93,23 +93,23 @@ Note: dev_dbg() log support will not be enabled by default. If needed, run the `
 ```
 
 ## Archive JetPack 6.x build results (optional) on build host
-Assuning 6.0 build the kernel version is 5.15.136-tegra. For 6.1 and 6.2 build the kernel version is 5.15.148-tegra.
+Assuming 6.2 (or 6.1) build the kernel version is 5.15.148-tegra. For 6.0 the kernel version is 5.15.136-tegra.
 - kernel image : `images/6.x/rootfs/boot/Image`
 - dtb: `images/6.x/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb`
 - dtb overlay: `images/6.x/rootfs/boot/tegra234-camera-d4xx-overlay.dtbo`
 - dtb dual camera overlay: `images/6.x/rootfs/boot/tegra234-camera-d4xx-overlay-dual.dtbo`
-- nvidia-oot modules: `images/6.x/rootfs/lib/modules/5.15.136-tegra/updates`
-- kernel modules: `images/6.x/rootfs/lib/modules/5.15.136-tegra/extra`
+- nvidia-oot modules: `images/6.x/rootfs/lib/modules/5.15.148-tegra/updates`
+- kernel modules: `images/6.x/rootfs/lib/modules/5.15.148-tegra/extra`
 
 ```
 echo "Archiving boot configuration build results"
 tar -czf ./images/6.x/boot-config.tar.gz -C "./images/6.x/rootfs/" ./boot
 echo "Archiving nvidia-oot modules"
-tar -czf ./images/6.x/nvidia-oot-modules.tar.gz -C "./images/6.x/rootfs/" ./lib/modules/5.15.136-tegra/updates
+tar -czf ./images/6.x/nvidia-oot-modules.tar.gz -C "./images/6.x/rootfs/" ./lib/modules/5.15.148-tegra/updates
 echo "Archiving kernel HID modules"
-tar -czf ./images/6.x/kernel-hid-modules.tar.gz -C "./images/6.x/rootfs/" ./lib/modules/5.15.136-tegra/extra
+tar -czf ./images/6.x/kernel-hid-modules.tar.gz -C "./images/6.x/rootfs/" ./lib/modules/5.15.148-tegra/extra
 ```
-## Backup JetPack 6.x boot configuration and drivers (optional)
+## Backup JetPack 6.2 boot configuration and drivers (optional)
 ```
 echo "Backup boot configuration"
 sudo cp /boot/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/tegra234-p3737-0000+p3701-0000-nv-bkp.dtb
@@ -118,20 +118,20 @@ sudo cp /boot/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/tegra234-p3737-0000+p3
 sudo cp /boot/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/tegra234-p3737-0000+p3701-0005-nv-bkp.dtb
 
 echo "backup nvidia-oot modules"
-sudo tar -czf /lib/modules/$(uname -r)/updates.tar.gz -C /lib/modules/$(uname -r)/ updates
+sudo tar -czf /lib/modules/5.15.148-tegra/updates.tar.gz -C /lib/modules/5.15.148-tegra/ updates
 ```
 
 ## Install kernel drivers, extra modules and device-tree to Jetson AGX Orin
 
 Following steps required:
 
-1.	Copy entire directory `images/6.x/rootfs/lib/modules/5.15.136-tegra/updates` from host to `/lib/modules/5.15.136-tegra/` on Orin target
-2.	Copy entire directory `images/6.x/rootfs/lib/modules/5.15.136-tegra/extra` from host to `/lib/modules/5.15.136-tegra/` on Orin target
+1.	Copy entire directory `images/6.x/rootfs/lib/modules/5.15.148-tegra/updates` from host to `/lib/modules/5.15.148-tegra/` on Orin target
+2.	Copy entire directory `images/6.x/rootfs/lib/modules/5.15.148-tegra/extra` from host to `/lib/modules/5.15.148-tegra/` on Orin target
 3.	Copy `tegra234-camera-d4xx-overlay.dtbo` from host to `/boot/tegra234-camera-d4xx-overlay.dtbo` on Orin target
 4.	For dual camera, copy `tegra234-camera-d4xx-overlay-dual.dtbo` from host to `/boot/tegra234-camera-d4xx-overlay-dual.dtbo` on Orin target
 5.  Copy `tegra234-p3737-0000+p3701-0000-nv.dtb` from host to `/boot/` on Orin
 6.  Copy `Image` from host to `/boot/` on Orin
-7.  Copy entire directory `images/6.x/rootfs/lib/modules/5.15.136-tegra/kernel` from host to `/lib/modules/5.15.136-tegra/` on Orin target
+7.  Copy entire directory `images/6.x/rootfs/lib/modules/5.15.148-tegra/kernel` from host to `/lib/modules/5.15.148-tegra/` on Orin target
 8.	Run  $ `sudo /opt/nvidia/jetson-io/jetson-io.py`
     1.	Configure Jetson AGX CSI Connector
     2.	Configure for compatible hardware
@@ -169,21 +169,21 @@ Assuming Jetson has ip: `10.0.0.116`
 # Configuration files
 scp -r images/6.x/rootfs/boot nvidia@10.0.0.116:~/
 # RealSense support for NVIDIA Tegra
-scp -r images/6.x/rootfs/lib/modules/5.15.136-tegra/updates nvidia@10.0.0.116:~/
+scp -r images/6.x/rootfs/lib/modules/5.15.148-tegra/updates nvidia@10.0.0.116:~/
 # RealSense metadata patched kernel modules and IMU HID support
-scp -r images/6.x/rootfs/lib/modules/5.15.136-tegra/extra nvidia@10.0.0.116:~/
+scp -r images/6.x/rootfs/lib/modules/5.15.148-tegra/extra nvidia@10.0.0.116:~/
 # Updated kernel modules to match the new compiled kernel image
-scp -r images/6.x/rootfs/lib/modules/5.15.136-tegra/kernel nvidia@10.0.0.116:~/
+scp -r images/6.x/rootfs/lib/modules/5.15.148-tegra/kernel nvidia@10.0.0.116:~/
 ```
 
 On Jetson target, assuming backup step was followed:
 
 ```
 # enable RealSense extra formats and metadata
-sudo cp -r ~/extra /lib/modules/$(uname -r)/
+sudo cp -r ~/extra /lib/modules/5.15.148-tegra/
 # enable RealSense MIPI support for D457 GMSL
-sudo cp -r ~/updates /lib/modules/$(uname -r)/
-sudo cp -r ~/kernel/ /lib/modules/5.15.136-tegra/
+sudo cp -r ~/updates /lib/modules/5.15.148-tegra/
+sudo cp -r ~/kernel/ /lib/modules/5.15.148-tegra/
 sudo cp ~/boot/tegra234-camera-d4xx-overlay.dtbo /boot/
 
 # (replace with tegra234-p3737-0000+p3701-0000-nv.dtb on production Orin board)
