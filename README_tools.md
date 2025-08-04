@@ -4,7 +4,7 @@
 
 ### Links
 - Intel® RealSense™ camera driver for GMSL* interface [Front Page](./README.md)
-- NVIDIA® Jetson AGX Orin™ board setup - AGX Orin™ [JetPack 6.0](./README_JP6.md) setup guide
+- NVIDIA® Jetson AGX Orin™ board setup - AGX Orin™ [JetPack 6.x](./README_JP6.md) setup guide
 - NVIDIA® Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 5.x.2](./README_JP5.md) setup guide
 - NVIDIA® Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 4.6.1](./README_JP4.md) setup guide
 - Build Tools manual page [Build Manual page](./README_tools.md)
@@ -25,9 +25,8 @@ This script prepare all necessary tools and sources to build JetPack BSP.
 
 The following directories will be created:
 - JetPack 4.6.1: `sources_4.6.1`
-- JetPack 5.0.2: `sources_5.0.2`
-- JetPack 5.1.2: `sources_5.1.2`
-- JetPack 6.0: `sources_6.0`
+- JetPack 5.x.2: `sources_5.x`
+- JetPack 6.x: `sources_6.x`
 ```
 ./setup_workspace.sh [JetPack_version]
 ```
@@ -41,7 +40,7 @@ Apply D457 patches for kernel image, dtb and D457 driver.
 ```
 ./apply_patches.sh [--one-cam | --dual-cam] apply [JetPack_version]
 ```
-Reset D457 patches for kernel image, dtb and D457 driver.
+Reset D457 patches (and any other changes) for kernel image, dtb and D457 driver.
 ```
 ./apply_patches.sh reset [JetPack_version]
 ```
@@ -58,15 +57,15 @@ When setup_workspace.sh was not used, using sources direct download method (exam
 
 Apply D457 patches for external build the kernel image, dtb and D457 driver.
 ```
-./apply_patches_ext.sh [--one-cam | --dual-cam] ./Linux_for_tegra/source/public [JetPack_version]
+./apply_patches_ext.sh [--one-cam | --dual-cam] [JetPack_version] [./Linux_for_tegra/source/public] 
 ```
 Example: for JP5.0.2, source path is ./Linux_for_tegra/source :
 ```
-./apply_patches_ext.sh ./Linux_for_tegra/source 5.0.2
+./apply_patches_ext.sh 5.0.2 ./Linux_for_tegra/source
 ```
 
 # build_all.sh
-build kernel and modules only
+Build kernel and modules only
 ```
 ./build_all.sh [JetPack_version] [JetPack_source_dir]
 ```
@@ -80,9 +79,8 @@ Example: build JetPack 5.0.2 workspace created by direct source download
 ```
 The following directories will be created:
 - JetPack 4.6.1: `images/4.6.1`
-- JetPack 5.0.2: `images/5.0.2`
-- JetPack 5.1.2: `images/5.1.2`
-- JetPack 6.0: `images/6.0`
+- JetPack 5.x.2: `images/5.x`
+- JetPack 6.x: `images/6.x`
 
 # build_all_deb.sh
 Build kernel Debian packages for JetPack 5.0.2 or 4.6.1
