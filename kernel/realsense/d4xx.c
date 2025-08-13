@@ -663,11 +663,17 @@ static const u16 ds5_framerate_30 = 30;
 static const u16 ds5_framerate_15_30[] = {15, 30};
 
 static const u16 ds5_framerate_25 = 25;
+static const u16 ds5_framerate_15_25[] = {15, 25};
 
 static const u16 ds5_depth_framerate_to_30[] = {5, 15, 30};
 static const u16 ds5_framerate_to_30[] = {5, 10, 15, 30};
 static const u16 ds5_framerate_to_60[] = {5, 15, 30, 60};
 static const u16 ds5_framerate_to_90[] = {5, 15, 30, 60, 90};
+static const u16 ds5_41x_depth_framerate_to_30[] = {6, 15, 30};
+static const u16 ds5_41x_framerate_to_30[] = {6, 15, 30};
+static const u16 ds5_41x_framerate_to_60_no_15[] = {6, 30, 60};
+static const u16 ds5_41x_framerate_to_60[] = {6, 15, 30, 60};
+static const u16 ds5_41x_framerate_to_90[] = {6, 15, 30, 60, 90};
 static const u16 ds5_framerate_100[] = {100};
 static const u16 ds5_framerate_90[] = {90};
 static const u16 ds5_imu_framerates[] = {50, 100, 200, 400};
@@ -676,13 +682,13 @@ static const struct ds5_resolution d41x_depth_sizes[] = {
 	{
 		.width = 1280,
 		.height = 720,
-		.framerates = ds5_depth_framerate_to_30,
-		.n_framerates = ARRAY_SIZE(ds5_depth_framerate_to_30),
+		.framerates = ds5_41x_depth_framerate_to_30,
+		.n_framerates = ARRAY_SIZE(ds5_41x_depth_framerate_to_30),
 	}, {
 		.width =  848,
 		.height = 480,
-		.framerates = ds5_framerate_to_90,
-		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+		.framerates = ds5_41x_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_90),
 	}, {
 		.width =  848,
 		.height = 100,
@@ -691,23 +697,23 @@ static const struct ds5_resolution d41x_depth_sizes[] = {
 	}, {
 		.width =  640,
 		.height = 480,
-		.framerates = ds5_framerate_to_90,
-		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+		.framerates = ds5_41x_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_90),
 	}, {
 		.width =  640,
 		.height = 360,
-		.framerates = ds5_framerate_to_90,
-		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+		.framerates = ds5_41x_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_90),
 	}, {
 		.width =  480,
 		.height = 270,
-		.framerates = ds5_framerate_to_90,
-		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+		.framerates = ds5_41x_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_90),
 	}, {
 		.width =  424,
 		.height = 240,
-		.framerates = ds5_framerate_to_90,
-		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+		.framerates = ds5_41x_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_90),
 	}, {
 		.width =  256,
 		.height = 144,
@@ -808,6 +814,104 @@ static const struct ds5_resolution y8_sizes[] = {
 	}
 };
 
+static const struct ds5_resolution y8_41x_sizes[] = {
+	{
+		.width = 1920,
+		.height = 1080,
+		.framerates = ds5_framerate_15_25,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_15_25),
+	}, {
+		.width = 1280,
+		.height = 720,
+		.framerates = ds5_41x_depth_framerate_to_30,
+		.n_framerates = ARRAY_SIZE(ds5_41x_depth_framerate_to_30),
+	}, {
+		.width = 960,
+		.height = 540,
+		.framerates = ds5_framerate_15_25,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_15_25),
+	}, {
+		.width =  848,
+		.height = 480,
+		.framerates = ds5_41x_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_90),
+	}, {
+		.width =  848,
+		.height = 100,
+		.framerates = ds5_framerate_100,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_100),
+	}, {
+		.width =  640,
+		.height = 480,
+		.framerates = ds5_41x_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_90),
+	}, {
+		.width =  640,
+		.height = 360,
+		.framerates = ds5_41x_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_90),
+	}, {
+		.width =  480,
+		.height = 270,
+		.framerates = ds5_41x_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_90),
+	}, {
+		.width =  424,
+		.height = 240,
+		.framerates = ds5_41x_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_90),
+	}
+};
+
+static const struct ds5_resolution ds5_41x_rgb_sizes[] = {
+	{
+		.width = 1920,
+		.height = 1080,
+		.framerates = ds5_41x_framerate_to_30,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_30),
+	}, {
+		.width = 1280,
+		.height = 720,
+		.framerates = ds5_41x_framerate_to_30,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_30),
+	}, {
+		.width = 960,
+		.height = 540,
+		.framerates = ds5_41x_framerate_to_60,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_60),
+	}, {
+		.width = 848,
+		.height = 480,
+		.framerates = ds5_41x_framerate_to_60,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_60),
+	}, {
+		.width = 640,
+		.height = 480,
+		.framerates = ds5_41x_framerate_to_60,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_60),
+	}, {
+		.width = 640,
+		.height = 360,
+		.framerates = ds5_41x_framerate_to_60,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_60),
+	}, {
+		.width = 424,
+		.height = 240,
+		.framerates = ds5_41x_framerate_to_60,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_60),
+	}, {
+		.width = 320,
+		.height = 240,
+		.framerates = ds5_41x_framerate_to_60_no_15,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_60_no_15),
+	}, {
+		.width = 320,
+		.height = 180,
+		.framerates = ds5_41x_framerate_to_60_no_15,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_60_no_15),
+	},
+};
+
 static const struct ds5_resolution ds5_rlt_rgb_sizes[] = {
 	{
 		.width = 1280,
@@ -885,10 +989,10 @@ static const struct ds5_resolution ds5_size_w10 = {
 
 static const struct ds5_resolution d41x_calibration_sizes[] = {
 	{
-		.width =  1280,
-		.height = 800,
-		.framerates = ds5_framerate_15_30,
-		.n_framerates = ARRAY_SIZE(ds5_framerate_15_30),
+		.width =  1920,
+		.height = 1080,
+		.framerates = ds5_framerate_15_25,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_15_25),
 	},
 };
 
@@ -1010,6 +1114,33 @@ static const struct ds5_format ds5_y_formats_ds5u[] = {
 		.n_resolutions = ARRAY_SIZE(d43x_calibration_sizes),
 		.resolutions = d43x_calibration_sizes,
 	},
+};
+
+static const struct ds5_format ds5_y_formats_41x[] = {
+	{
+		/* First format: default */
+		.data_type = GMSL_CSI_DT_RAW_8,	/* Y8 */
+		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
+		.n_resolutions = ARRAY_SIZE(y8_41x_sizes),
+		.resolutions = y8_41x_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_YUV422_8,	/* Y8I */
+		.mbus_code = MEDIA_BUS_FMT_VYUY8_1X16,
+		.n_resolutions = ARRAY_SIZE(y8_41x_sizes),
+		.resolutions = y8_41x_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_RGB_888,	/* 24-bit Calibration */
+		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,	/* FIXME */
+		.n_resolutions = ARRAY_SIZE(d41x_calibration_sizes),
+		.resolutions = d41x_calibration_sizes,
+	},
+};
+
+static const struct ds5_format ds5_41x_rgb_format = {
+	.data_type = GMSL_CSI_DT_YUV422_8,	/* UYVY */
+	.mbus_code = MEDIA_BUS_FMT_YUYV8_1X16,
+	.n_resolutions = ARRAY_SIZE(ds5_41x_rgb_sizes),
+	.resolutions = ds5_41x_rgb_sizes,
 };
 
 static const struct ds5_format ds5_rlt_rgb_format = {
@@ -4681,8 +4812,15 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	sensor->mux_pad = DS5_MUX_PAD_DEPTH;
 
 	sensor = &state->ir.sensor;
-	sensor->formats = state->variant->formats;
-	sensor->n_formats = state->variant->n_formats;
+	switch (dev_type) {
+	case DS5_DEVICE_TYPE_D41X:
+		sensor->formats = ds5_y_formats_41x;
+		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_41x);
+		break;
+	default:
+		sensor->formats = state->variant->formats;
+		sensor->n_formats = state->variant->n_formats;
+	}
 	sensor->mux_pad = DS5_MUX_PAD_IR;
 
 	sensor = &state->rgb.sensor;
@@ -4693,6 +4831,9 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 		sensor->n_formats = DS5_ONSEMI_RGB_N_FORMATS;
 		break;
 	case DS5_DEVICE_TYPE_D41X:
+		sensor->formats = &ds5_41x_rgb_format;
+		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
+		break;
 	case DS5_DEVICE_TYPE_D45X:
 		sensor->formats = &ds5_rlt_rgb_format;
 		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
