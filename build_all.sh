@@ -39,7 +39,7 @@ else
 fi
 
 export LOCALVERSION=-tegra
-export TEGRA_KERNEL_OUT=$DEVDIR/images/$JETPACK_VERSION
+export TEGRA_KERNEL_OUT="$DEVDIR/images/$1"
 mkdir -p $TEGRA_KERNEL_OUT
 export KERNEL_MODULES_OUT=$TEGRA_KERNEL_OUT/modules
 
