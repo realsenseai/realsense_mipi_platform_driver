@@ -47,7 +47,7 @@ sudo apt-get install -y build-essential bc wget flex bison curl libssl-dev xxd
 git clone https://github.com/IntelRealSense/realsense_mipi_platform_driver.git
 cd realsense_mipi_platform_driver
 ./setup_workspace.sh 6.2
-./apply_patches.sh apply 6.2
+./apply_patches.sh 6.2
 ./build_all.sh 6.2
 ```
 Note: dev_dbg() log support will not be enabled by default. If needed, run the `./build_all.sh` script with `--dev-dbg` option like below.
@@ -94,20 +94,20 @@ Note: dev_dbg() log support will not be enabled by default. If needed, run the `
 
 ## Archive JetPack 6.x build results (optional) on build host
 Assuming 6.2 (or 6.1) build the kernel version is 5.15.148-tegra. For 6.0 the kernel version is 5.15.136-tegra.
-- kernel image : `images/6.x/rootfs/boot/Image`
-- dtb: `images/6.x/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb`
-- dtb overlay: `images/6.x/rootfs/boot/tegra234-camera-d4xx-overlay.dtbo`
-- dtb dual camera overlay: `images/6.x/rootfs/boot/tegra234-camera-d4xx-overlay-dual.dtbo`
-- nvidia-oot modules: `images/6.x/rootfs/lib/modules/5.15.148-tegra/updates`
-- kernel modules: `images/6.x/rootfs/lib/modules/5.15.148-tegra/extra`
+- kernel image : `images/6.2/rootfs/boot/Image`
+- dtb: `images/6.2/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb`
+- dtb overlay: `images/6.2/rootfs/boot/tegra234-camera-d4xx-overlay.dtbo`
+- dtb dual camera overlay: `images/6.2/rootfs/boot/tegra234-camera-d4xx-overlay-dual.dtbo`
+- nvidia-oot modules: `images/6.2/rootfs/lib/modules/5.15.148-tegra/updates`
+- kernel modules: `images/6.2/rootfs/lib/modules/5.15.148-tegra/extra`
 
 ```
 echo "Archiving boot configuration build results"
-tar -czf ./images/6.x/boot-config.tar.gz -C "./images/6.x/rootfs/" ./boot
+tar -czf ./images/6.2/boot-config.tar.gz -C "./images/6.2/rootfs/" ./boot
 echo "Archiving nvidia-oot modules"
-tar -czf ./images/6.x/nvidia-oot-modules.tar.gz -C "./images/6.x/rootfs/" ./lib/modules/5.15.148-tegra/updates
+tar -czf ./images/6.2/nvidia-oot-modules.tar.gz -C "./images/6.2/rootfs/" ./lib/modules/5.15.148-tegra/updates
 echo "Archiving kernel HID modules"
-tar -czf ./images/6.x/kernel-hid-modules.tar.gz -C "./images/6.x/rootfs/" ./lib/modules/5.15.148-tegra/extra
+tar -czf ./images/6.2/kernel-hid-modules.tar.gz -C "./images/6.2/rootfs/" ./lib/modules/5.15.148-tegra/extra
 ```
 ## Backup JetPack 6.2 boot configuration and drivers (optional)
 ```
@@ -125,13 +125,13 @@ sudo tar -czf /lib/modules/5.15.148-tegra/updates.tar.gz -C /lib/modules/5.15.14
 
 Following steps required:
 
-1.	Copy entire directory `images/6.x/rootfs/lib/modules/5.15.148-tegra/updates` from host to `/lib/modules/5.15.148-tegra/` on Orin target
-2.	Copy entire directory `images/6.x/rootfs/lib/modules/5.15.148-tegra/extra` from host to `/lib/modules/5.15.148-tegra/` on Orin target
+1.	Copy entire directory `images/6.2/rootfs/lib/modules/5.15.148-tegra/updates` from host to `/lib/modules/5.15.148-tegra/` on Orin target
+2.	Copy entire directory `images/6.2/rootfs/lib/modules/5.15.148-tegra/extra` from host to `/lib/modules/5.15.148-tegra/` on Orin target
 3.	Copy `tegra234-camera-d4xx-overlay.dtbo` from host to `/boot/tegra234-camera-d4xx-overlay.dtbo` on Orin target
 4.	For dual camera, copy `tegra234-camera-d4xx-overlay-dual.dtbo` from host to `/boot/tegra234-camera-d4xx-overlay-dual.dtbo` on Orin target
 5.  Copy `tegra234-p3737-0000+p3701-0000-nv.dtb` from host to `/boot/` on Orin
 6.  Copy `Image` from host to `/boot/` on Orin
-7.  Copy entire directory `images/6.x/rootfs/lib/modules/5.15.148-tegra/kernel` from host to `/lib/modules/5.15.148-tegra/` on Orin target
+7.  Copy entire directory `images/6.2/rootfs/lib/modules/5.15.148-tegra/kernel` from host to `/lib/modules/5.15.148-tegra/` on Orin target
 8.	Run  $ `sudo /opt/nvidia/jetson-io/jetson-io.py`
     1.	Configure Jetson AGX CSI Connector
     2.	Configure for compatible hardware
@@ -167,13 +167,13 @@ Assuming Jetson has ip: `10.0.0.116`
 
 ```
 # Configuration files
-scp -r images/6.x/rootfs/boot nvidia@10.0.0.116:~/
+scp -r images/6.2/rootfs/boot nvidia@10.0.0.116:~/
 # RealSense support for NVIDIA Tegra
-scp -r images/6.x/rootfs/lib/modules/5.15.148-tegra/updates nvidia@10.0.0.116:~/
+scp -r images/6.2/rootfs/lib/modules/5.15.148-tegra/updates nvidia@10.0.0.116:~/
 # RealSense metadata patched kernel modules and IMU HID support
-scp -r images/6.x/rootfs/lib/modules/5.15.148-tegra/extra nvidia@10.0.0.116:~/
+scp -r images/6.2/rootfs/lib/modules/5.15.148-tegra/extra nvidia@10.0.0.116:~/
 # Updated kernel modules to match the new compiled kernel image
-scp -r images/6.x/rootfs/lib/modules/5.15.148-tegra/kernel nvidia@10.0.0.116:~/
+scp -r images/6.2/rootfs/lib/modules/5.15.148-tegra/kernel nvidia@10.0.0.116:~/
 ```
 
 On Jetson target, assuming backup step was followed:

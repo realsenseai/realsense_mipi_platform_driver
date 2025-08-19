@@ -91,7 +91,7 @@ The developers can set up the source code with NVIDIA's Jetson git repositories 
 ```
 ./setup_workspace.sh 5.1.2
 
-./apply_patches.sh apply 5.1.2
+./apply_patches.sh 5.1.2
 
 ./build_all.sh 5.1.2
 ```
