@@ -81,6 +81,6 @@ if [[ "$ACTION" = "apply" ]]; then
         # jp6 overlay
         cp hardware/realsense/tegra234-camera-d4xx-overlay*.dts "sources_$JETPACK_VERSION/hardware/nvidia/t23x/nv-public/overlay/"
     else
-        cp hardware/realsense/$JP5_D4XX_DTSI "sources_$JETPACK_VERSION/hardware/nvidia/platform/t19x/galen/kernel-dts/common/tegra194-camera-d4xx.dtsi"
+        cp "hardware/realsense/${JP5_D4XX_DTSI}" "sources_$JETPACK_VERSION/hardware/nvidia/platform/t19x/galen/kernel-dts/common/tegra194-camera-d4xx.dtsi"
     fi
 fi

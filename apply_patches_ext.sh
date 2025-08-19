@@ -32,14 +32,14 @@ if [[ "$JETPACK_VERSION" == "6.x" ]]; then
 else
     D4XX_SRC_DST=kernel/nvidia
 fi
-# NVIDIA SDK Manager's JetPack 4.6.1 source_sync.sh doesn't set the right folder name, it mismatches with the direct tar
-# package source code. Correct the folder name.
-if [ -d $JETPACK_VERSION/hardware/nvidia/platform/t19x/galen-industrial-dts ]; then
-    mv $JETPACK_VERSION/hardware/nvidia/platform/t19x/galen-industrial-dts $JETPACK_VERSION/hardware/nvidia/platform/t19x/galen-industrial
-fi
-
 TARGET=sources_$JETPACK_VERSION
 [[ -n "$2" ]] && TARGET="$2"
+
+# NVIDIA SDK Manager's JetPack 4.6.1 source_sync.sh doesn't set the right folder name, it mismatches with the direct tar
+# package source code. Correct the folder name.
+if [ -d "$TARGET/hardware/nvidia/platform/t19x/galen-industrial-dts" ]; then
+    mv $TARGET/hardware/nvidia/platform/t19x/galen-industrial-dts $JETPACK_VERSION/hardware/nvidia/platform/t19x/galen-industrial
+fi
 
 apply_external_patches() {
     ls -Ld "${PWD}/$2/$1"
