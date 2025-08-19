@@ -20,6 +20,6 @@ jobs:
     - name: setup workspace
       run: yes | ./setup_workspace.sh 6.2
     - name: apply patches
-      run: git config --global user.email "builder@example.com" && git config --global user.name "builder" && ./apply_patches.sh apply 6.2
+      run: git config --global user.email "builder@example.com" && git config --global user.name "builder" && ./apply_patches.sh 6.2
     - name: build
       run: ./build_all.sh 6.2

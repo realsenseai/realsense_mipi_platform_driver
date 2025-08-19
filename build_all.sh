@@ -2,8 +2,8 @@
 
 set -e
 
-if [[ "$1" == "-h" ]]; then
-    echo "build_all.sh [--dev-dbg] [JetPack_version] [JetPack_Linux_source]"
+if [[ $# < 1 || "$1" == "-h" ]]; then
+    echo "build_all.sh [--dev-dbg] JetPack_version [JetPack_Linux_source]"
     echo "build_all.sh -h"
     exit 1
 fi
