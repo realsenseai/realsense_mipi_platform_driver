@@ -81,7 +81,7 @@ The developers can set up the source code with NVIDIA's Jetson git repositories 
 ./setup_workspace.sh 4.6.1
 
 # apply patches
-./apply_patches.sh apply 4.6.1
+./apply_patches.sh 4.6.1
 
 # install dependencies
 sudo apt install build-essential bc flex bison

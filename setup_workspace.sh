@@ -58,20 +58,23 @@ else
             tar xf gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu.tar.xz --strip-components 1
         fi
     fi
+    echo
 fi
 
+echo "In a case you have local changes you may reset them with ./apply_patches.sh $1 reset"
+echo
 # Clone L4T kernel source repo
 cd $DEVDIR
-if [[ -f ./scripts/source_sync_$1.sh ]]; then
-	./scripts/source_sync_$1.sh -t $L4T_VERSION -d sources_$JETPACK_VERSION
-elif [[ -f ./scripts/source_sync_$JETPACK_VERSION.sh ]]; then
-	./scripts/source_sync_$JETPACK_VERSION.sh -t $L4T_VERSION -d sources_$JETPACK_VERSION
+if [[ -f "./scripts/source_sync_$1.sh" ]]; then
+	"./scripts/source_sync_$1.sh" -t "$L4T_VERSION" -d "sources_$JETPACK_VERSION"
+elif [[ -f "./scripts/source_sync_$JETPACK_VERSION.sh" ]]; then
+	"./scripts/source_sync_$JETPACK_VERSION.sh" -t "$L4T_VERSION" -d "sources_$JETPACK_VERSION"
 fi
 
 # copy Makefile for jp6
 if [[ "$JETPACK_VERSION" == "6.x" ]]; then
-    cp ./nvidia-oot/Makefile ./sources_$JETPACK_VERSION/
-    cp ./kernel/kernel-jammy-src/Makefile ./sources_$JETPACK_VERSION/kernel
+    cp ./nvidia-oot/Makefile "sources_$JETPACK_VERSION/"
+    cp ./kernel/kernel-jammy-src/Makefile "sources_$JETPACK_VERSION/kernel"
 fi
 
 # remove BUILD_NUMBER env dependency kernel vermagic
