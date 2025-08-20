@@ -15,8 +15,7 @@ JP5_D4XX_DTSI="tegra194-camera-d4xx-single.dtsi"
 if [[ "$1" == "--one-cam" ]]; then
     JP5_D4XX_DTSI="tegra194-camera-d4xx-single.dtsi"
     shift
-fi
-if [[ "$1" == "--dual-cam" ]]; then
+elif [[ "$1" == "--dual-cam" ]]; then
     JP5_D4XX_DTSI="tegra194-camera-d4xx-dual.dtsi"
     shift
 fi

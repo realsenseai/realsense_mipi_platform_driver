@@ -3,8 +3,8 @@
 # JP6.0 https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v2.0/sources/public_sources.tbz2
 set -e
 
-if [[ $# < 1 ]]; then
-    echo "apply_patches_ext.sh [--one-cam | --dual-cam] [JetPack_version] [JetPack_source]"
+if [[ $# < 1 || "$1" == "-h" ]]; then
+    echo "apply_patches_ext.sh [--one-cam | --dual-cam] JetPack_version [JetPack_source]"
     exit 1
 fi
 
@@ -32,13 +32,14 @@ if [[ "$JETPACK_VERSION" == "6.x" ]]; then
 else
     D4XX_SRC_DST=kernel/nvidia
 fi
+
 TARGET="sources_${JETPACK_VERSION}"
 [[ -n "$2" ]] && TARGET="$2"
 
 # NVIDIA SDK Manager's JetPack 4.6.1 source_sync.sh doesn't set the right folder name, it mismatches with the direct tar
 # package source code. Correct the folder name.
 if [ -d "$TARGET/hardware/nvidia/platform/t19x/galen-industrial-dts" ]; then
-    mv "$TARGET/hardware/nvidia/platform/t19x/galen-industrial-dts" "$JETPACK_VERSION/hardware/nvidia/platform/t19x/galen-industrial"
+    mv "$TARGET/hardware/nvidia/platform/t19x/galen-industrial-dts" "$TARGET/hardware/nvidia/platform/t19x/galen-industrial"
 fi
 
 apply_external_patches() {
