@@ -84,6 +84,9 @@ cd ../..
 
 ./apply_patches_ext.sh 6.2 Linux_for_Tegra/source
 
+cp ./nvidia-oot/Makefile Linux_for_Tegra/source
+cp ./kernel/kernel-jammy-src/Makefile Linux_for_Tegra/source/kernel
+
 # build kernel, dtb and D457 driver
 ./build_all.sh 6.2 ./Linux_for_Tegra/source
 ```
