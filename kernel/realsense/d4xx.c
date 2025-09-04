@@ -180,7 +180,7 @@ enum ds5_mux_pad {
 #define DFU_WAIT_RET_LEN 6
 
 #define DS5_START_POLL_TIME	10
-#define DS5_START_MAX_TIME	1000
+#define DS5_START_MAX_TIME	2000
 #define DS5_START_MAX_COUNT	(DS5_START_MAX_TIME / DS5_START_POLL_TIME)
 
 /* DFU definition section */
@@ -2039,7 +2039,7 @@ static int ds5_get_hwmc(struct ds5 *state, unsigned char *data,
 		}
 	}
 
-	ret = regmap_raw_read(state->regmap, DS5_HWMC_RESP_LEN,
+	ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN,
 			&tmp_len, sizeof(tmp_len)); /* Read response length */
 	if (ret)
 		return -EBADMSG;
@@ -2478,7 +2478,7 @@ static int ds5_get_calibration_data(struct ds5 *state, enum table_id id,
 	}
 
 	// get table length from fw
-	ret = regmap_raw_read(state->regmap, DS5_HWMC_RESP_LEN,
+	ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN,
 			&table_length, sizeof(table_length)); /* Read response length */
 
 	// read table
@@ -2515,7 +2515,7 @@ static int ds5_gvd(struct ds5 *state, unsigned char *data)
 		return status;
 	}
 
-	ret = regmap_raw_read(state->regmap, DS5_HWMC_RESP_LEN, &length, sizeof(length)); /* Read response length */
+	ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN, &length, sizeof(length)); /* Read response length */
 	ds5_raw_read_with_check(state, DS5_HWMC_DATA, data, length); /* Read response data */
 
 	return ret;
@@ -2632,18 +2632,18 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		//       2. send command
 		//       3. execute command
 		//       4. wait for completion
-		ret = regmap_raw_write(state->regmap, DS5_HWMC_DATA, /* Write command data */
+		ret = ds5_raw_write(state, DS5_HWMC_DATA, /* Write command data */
 				log_prepare, sizeof(log_prepare));
 		if (ret < 0)
 			return ret;
 
-		ret = regmap_raw_write(state->regmap, DS5_HWMC_EXEC,
+		ret = ds5_raw_write(state, DS5_HWMC_EXEC,
 				&execute_cmd, sizeof(execute_cmd)); /* execute cmd */
 		if (ret < 0)
 			return ret;
 
 		for (i = 0; i < DS5_MAX_LOG_POLL; i++) {
-			ret = regmap_raw_read(state->regmap, DS5_HWMC_STATUS,
+			ret = ds5_raw_read(state, DS5_HWMC_STATUS,
 					&data, sizeof(data));
 			dev_dbg(&state->client->dev, "%s(): log ready 0x%x\n",
 				 __func__, data);
@@ -2657,7 +2657,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 //		if (i == DS5_MAX_LOG_POLL)
 //			return -ETIMEDOUT;
 
-		ret = regmap_raw_read(state->regmap, DS5_HWMC_RESP_LEN, &data, sizeof(data)); /* Read response length */
+		ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN, &data, sizeof(data)); /* Read response length */
 		dev_dbg(&state->client->dev, "%s(): log size 0x%x\n", __func__, data);
 		if (ret < 0)
 			return ret;
@@ -2665,7 +2665,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			return 0;
 		if (data > 1024)
 			return -ENOBUFS;
-		ret = regmap_raw_read(state->regmap, DS5_HWMC_DATA,
+		ret = ds5_raw_read(state, DS5_HWMC_DATA,
 				ctrl->p_new.p_u8, data);
 		break;
 	case DS5_CAMERA_DEPTH_CALIBRATION_TABLE_GET:
@@ -5897,4 +5897,4 @@ MODULE_AUTHOR("Guennadi Liakhovetski <guennadi.liakhovetski@intel.com>,\n\
 				Shikun Ding <shikun.ding@intel.com>");
 MODULE_AUTHOR("Dmitry Perchanov <dmitry.perchanov@intel.com>");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("1.0.1.29");
+MODULE_VERSION("1.0.1.30");
