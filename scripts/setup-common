@@ -1,34 +1,37 @@
 #!/bin/bash
 
 export JETPACK_VERSION="$1"
-export L4T_VERSION="jetson_35.1"
+export REVISION="35.1"
+export L4T_VERSION=jetson_"${REVISION}"
 export KERNEL_DIR="kernel/kernel-5.10"
-
-if [[ -z "$1" ]]; then
-    JETPACK_VERSION="5.0.2"
-fi
+export LICENSE=release
 
 if [[ "$JETPACK_VERSION" =~ ^6\.[0-2]$ ]]; then
-    KERNEL_DIR="kernel/kernel-jammy-src"
     if [[ $JETPACK_VERSION == "6.2" ]]; then
-	    L4T_VERSION="jetson_36.4.3"
+	    REVISION="36.4.3"
     elif [[ $JETPACK_VERSION == "6.1" ]]; then
-	    L4T_VERSION="jetson_36.4"
+	    REVISION="36.4"
     elif [[ $JETPACK_VERSION == "6.0" ]]; then
-	    L4T_VERSION="jetson_36.3"
+	    REVISION="36.3"
     fi;
+    KERNEL_DIR="kernel/kernel-jammy-src"
     JETPACK_VERSION="6.x"
+	L4T_VERSION=jetson_"${REVISION}"
 elif [[ "$JETPACK_VERSION" =~ ^5.[0-1].2$ ]]; then
-    KERNEL_DIR="kernel/kernel-5.10"
     if [[ $JETPACK_VERSION == "5.1.2" ]]; then
-	    L4T_VERSION="jetson_35.4.1"
+	    REVISION="35.4.1"
     elif [[ $JETPACK_VERSION == "5.0.2" ]]; then
-	    L4T_VERSION="jetson_35.1"
+	    REVISION="35.1"
+		LICENSE=Release
     fi
+    KERNEL_DIR="kernel/kernel-5.10"
     JETPACK_VERSION="5.x"
+	L4T_VERSION=jetson_"${REVISION}"
 elif [[ $JETPACK_VERSION == "4.6.1" ]]; then
-    L4T_VERSION="tegra-l4t-r32.7.1"
     KERNEL_DIR="kernel/kernel-4.9"
+    REVISION="32.7.1"
+    L4T_VERSION="tegra-l4t-r${REVISION}"
+	LICENSE=T186
 else
     echo "Wrong JetPack version ($JETPACK_VERSION)! Only 6.2, 6.1, 6.0, 5.1.2, 5.0.2 and 4.6.1 supported."
     exit 1

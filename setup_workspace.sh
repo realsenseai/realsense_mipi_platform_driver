@@ -10,13 +10,20 @@ function DisplayNvidiaLicense {
       echo "curl can be installed by 'sudo apt-get install curl'."
       exit 1
     fi
-    
-    echo -e "\nPlease notice: This script will download the kernel source (from nv-tegra, NVIDIA's public git repository) which is subject to the following license:\n\nhttps://developer.nvidia.com/embedded/l4t/r35_release_v1.0/release/tegra_software_license_agreement-tegra-linux.txt\n"
 
-    license="$(curl -L -s https://developer.download.nvidia.com/embedded/L4T/r36_Release_v3.0/release/Tegra_Software_License_Agreement-Tegra-Linux.txt)\n\n"
+	local release;
+	IFS='.' read -a release <<< "$1"
+    
+    RELEASE="r${release[0]}_Release_v${release[1]}.${release[2]:-0}"
+    
+    local URL="https://developer.download.nvidia.com/embedded/L4T/${RELEASE}/$2/Tegra_Software_License_Agreement-Tegra-Linux.txt"
+
+    echo -e "\nPlease notice: This script will download the kernel source (from nv-tegra, NVIDIA's public git repository) which is subject to the following license:\n${URL}\n"
+
+	local LICENSE=$(curl -Ls ${URL})
 
     ## display the page ##
-    echo -e "${license}"
+    echo -e "${LICENSE}\n\n"
 
     read -t 30 -n 1 -s -r -e -p 'Press any key to continue (or wait 30 seconds..)'
     echo
@@ -36,7 +43,7 @@ export DEVDIR=$(cd `dirname $0` && pwd)
 echo "Setup JetPack $1 to sources_$JETPACK_VERSION"
 
 # Display NVIDIA license
-DisplayNvidiaLicense ""
+DisplayNvidiaLicense "${REVISION}" "${LICENSE}"
 
 # Install L4T gcc if not installed
 if [[ $(uname -m) == aarch64 ]]; then
