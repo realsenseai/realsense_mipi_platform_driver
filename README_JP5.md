@@ -144,7 +144,7 @@ sudo depmod
     LINUX /boot/d457/Image
     FDT /boot/d457/tegra194-p2888-0001-p2822-0000.dtb
     ```
-    > Note: for making sure we boot with the correct dts we recommend also adding a special keyword (like `realsense-dts`) to the APPEND part.
+    > Note: for making sure we boot with the correct DTS we recommend also adding a special keyword (like `realsense-dts`) to the APPEND part.
     
     > e.g
     ```APPEND ${cbootargs} realsense-dts root=/dev/mmcblk0p1 rw ...```
@@ -189,14 +189,14 @@ LABEL d457
     ```
 
 After rebooting Jetson, the D457 driver should work.
-a simple check could be :
+A simple check could be :
 ```
 lsmod | grep d4xx
 d4xx                   57344  0
 ```
 and
 ```
-ls /dev | grep video*
+ls /dev | grep '^video'
 video0
 video1
 video2
