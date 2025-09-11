@@ -144,6 +144,21 @@ sudo depmod
     LINUX /boot/d457/Image
     FDT /boot/d457/tegra194-p2888-0001-p2822-0000.dtb
     ```
+    > Note: for making sure we boot with the correct dts we recommend also adding a special keyword (like `realsense-dts`) to the APPEND part.
+    
+    > e.g
+    ```APPEND ${cbootargs} realsense-dts root=/dev/mmcblk0p1 rw ...```
+    
+    > On next boot we can run the following command and make sure the machine booted to the desired dts:
+    
+   ```
+       cat /proc/cmdline | grep realsense-dts
+       realsense-dts root=/dev/mmcblk0p1 rw rootwait
+   ```
+
+   - It is also recommended to save the original kernel image as backup boot option in `/boot/extlinux/extlinux.conf`.
+
+
 
 ```
 $ cat /boot/extlinux/extlinux.conf
@@ -174,7 +189,21 @@ LABEL d457
     ```
 
 After rebooting Jetson, the D457 driver should work.
+a simple check could be :
+```
+lsmod | grep d4xx
+d4xx                   57344  0
+```
+and
+```
+ls /dev | grep video*
+video0
+video1
+video2
+video3
+video4
+video5
+video6
 
-**NOTE**
+```
 
-- It's recommended to save the original kernel image as backup boot option in `/boot/extlinux/extlinux.conf`.
