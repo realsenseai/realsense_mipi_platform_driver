@@ -121,49 +121,27 @@ Following steps required:
 3.	For dual camera, copy `tegra234-camera-d4xx-overlay-dual.dtbo` from host to `/boot/tegra234-camera-d4xx-overlay-dual.dtbo` on Orin target
 4.	Copy `tegra234-p3737-0000+p3701-0000-nv.dtb` from host to `/boot/` on Orin
 5.	Copy `Image` from host to `/boot/` on Orin
-6.	Run  $ `sudo /opt/nvidia/jetson-io/jetson-io.py`
+6.	Enable and run depmod scan for "extra" & "kernel" modules
+7.	Update initrd
+8.	Run  $ `sudo /opt/nvidia/jetson-io/jetson-io.py`, to exit choose save & reboot:
 	1.	Configure Jetson AGX CSI Connector
 	2.	Configure for compatible hardware
 	3.	Choose appropriate configuration:
-		1. Jetson RealSense Camera D457
-		2. Jetson RealSense Camera D457 dual
-7.	Enable and run depmod scan for "extra" & "kernel" modules
-8.	Update initrd
-9.	Verify bootloader configuration
-
-    ```
-    cat /boot/extlinux/extlinux.conf
-    ----<CUT>----
-    LABEL JetsonIO
-        MENU LABEL Custom Header Config: <CSI Jetson RealSense Camera D457>
-        LINUX /boot/Image
-        FDT /boot/dtb/kernel_tegra234-p3737-0000+p3701-0000-nv.dtb
-        APPEND ${cbootargs} root=PARTUUID=bbb3b34e-......
-        OVERLAYS /boot/tegra234-camera-d4xx-overlay.dtbo
-    ----<CUT>----
-    ```
-10.	Reboot
 
 ## Deploy build results on Jetson target
 On build host, copy build results to the right places.
-Assuming user 'nvidia' on Jetson with ip: `10.0.0.116`:
+Assuming user 'nvidia' on Jetson with ip: `10.0.0.116` (if building natively on Jetson use $USER@localhost):
 
 ```
 # Configuration files
 tar czf rootfs.tar.gz -C images/6.2/rootfs boot lib
 scp rootfs.tar.gz nvidia@10.0.0.116:
 ```
-On Jetson target assuming backup step was followed:
+On Jetson target (user home folder) assuming backup step was followed:
 ```
 tar xf rootfs.tar.gz
 sudo cp -r boot /
 sudo cp -r lib/modules/* /lib/modules/
-
-# Enable d4xx overlay for single camera:
-sudo /opt/nvidia/jetson-io/config-by-hardware.py -n 2="Jetson RealSense Camera D457"
-
-# For dual camera setup:
-# sudo /opt/nvidia/jetson-io/config-by-hardware.py -n 3="Jetson RealSense Camera D457 dual"
 
 # enable extra & kernel modules
 # original file content: cat /etc/depmod.d/ubuntu.conf -- search updates ubuntu built-in
@@ -174,8 +152,9 @@ sudo depmod
 sudo update-initramfs -uk 5.15.148-tegra
 sudo rm -f /boot/initrd
 sudo ln -s /boot/initrd.img-5.15.148-tegra /boot/initrd
-# reboot machine.
-sudo reboot
+
+# Enable d4xx overlay for single camera (choose to save & reboot):
+sudo /opt/nvidia/jetson-io/jetson-io.py
 ```
 
 ### Verify driver loaded - on Jetson:
