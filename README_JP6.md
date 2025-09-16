@@ -24,7 +24,7 @@ The system shall include:
 - Build Tools manual page [Build Manual page](./README_tools.md)
 - Driver API manual page [Driver API page](./README_driver.md)
 
-## NVIDIA® Jetson AGX Orin™ board setup on x86-64 host for cross-compile
+## NVIDIA® Jetson AGX Orin™ board setup
 
 Please follow the [instruction](https://docs.nvidia.com/sdk-manager/install-with-sdkm-jetson/index.html) to flash JetPack to the NVIDIA® Jetson AGX Orin™ with NVIDIA® SDK Manager or other methods NVIDIA provides. Make sure the board is ready to use.
 
@@ -34,12 +34,12 @@ Please follow the [instruction](https://docs.nvidia.com/sdk-manager/install-with
 ```
 sudo apt-get install -y build-essential bc wget flex bison curl libssl-dev xxd tar
 ```
-## Build NVIDIA® kernel drivers, dtb and D457 driver - cross compile x86-64
+## Build NVIDIA® kernel drivers, dtb and D457 driver
 
 1. Clone [realsense_mipi_platform_driver](https://github.com/IntelRealSense/realsense_mipi_platform_driver.git) repo.
 2. The developers can set up build environment, ARM64 compiler, kernel sources and NVIDIA's Jetson git repositories by using the setup script.
 3. Apply patches for kernel drivers, nvidia-oot module and tegra devicetree.
-4. Build cross-compile project on host (Build PC).
+4. Build project
 5. Apply build results to target (Jetson).
 6. Configure target.
 
