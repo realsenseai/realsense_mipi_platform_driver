@@ -1,6 +1,6 @@
-From 4e04992b8983480df6e02054753933cf29270064 Mon Sep 17 00:00:00 2001
+From e2143770cd567d58f502077f483c8cdce4eef572 Mon Sep 17 00:00:00 2001
 From: ejgoldik <ehud.joseph.goldik@realsenseai.com>
-Date: Thu, 18 Sep 2025 13:27:00 +0300
+Date: Thu, 18 Sep 2025 15:07:20 +0300
 Subject: [PATCH] Adding stream restart upon capture timeout
 
 Ehud J. Goldik <ehud.joseph.goldik@realsenseai.com>
@@ -9,11 +9,11 @@ Ehud J. Goldik <ehud.joseph.goldik@realsenseai.com>
  1 file changed, 22 insertions(+), 1 deletion(-)
 
 diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-index afaf3d742..83b96c254 100644
+index 487ae44b..f92c9616 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
 +++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-@@ -550,6 +550,22 @@ done:
- 	return err;
+@@ -523,6 +523,22 @@ uncorr_err:
+ 	spin_unlock_irqrestore(&chan->capture_state_lock, flags);
  }
  
 +static int vi5_attempt_restart_stream(struct tegra_channel *chan)
@@ -35,7 +35,7 @@ index afaf3d742..83b96c254 100644
  static void vi5_capture_dequeue(struct tegra_channel *chan,
  	struct tegra_channel_buffer *buf)
  {
-@@ -579,8 +595,13 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
+@@ -547,8 +563,13 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
  		if (err) {
  			if (err == -ETIMEDOUT) {
  				dev_err(vi->dev,
