@@ -1,6 +1,6 @@
-From dd18e8be0085284127b347bc3f30a4ccda1de590 Mon Sep 17 00:00:00 2001
+From 6d929bd3a8e5253ff24e28afff40c4ace81ce94e Mon Sep 17 00:00:00 2001
 From: ejgoldik <ehud.joseph.goldik@realsenseai.com>
-Date: Thu, 18 Sep 2025 16:42:11 +0300
+Date: Thu, 18 Sep 2025 20:06:47 +0300
 Subject: [PATCH] Adding stream restart upon capture timeout
 
 Ehud J. Goldik <ehud.joseph.goldik@realsenseai.com>
@@ -9,11 +9,11 @@ Ehud J. Goldik <ehud.joseph.goldik@realsenseai.com>
  1 file changed, 24 insertions(+), 1 deletion(-)
 
 diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-index 6d6e1777e..67dc5179b 100644
+index b990c09f..c297def5 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
 +++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-@@ -501,6 +501,24 @@ done:
- 	return err;
+@@ -542,6 +542,24 @@ uncorr_err:
+ 	spin_unlock_irqrestore(&chan->capture_state_lock, flags);
  }
  
 +static int vi5_attempt_restart_stream(struct tegra_channel *chan)
@@ -37,21 +37,21 @@ index 6d6e1777e..67dc5179b 100644
  static void vi5_capture_dequeue(struct tegra_channel *chan,
  	struct tegra_channel_buffer *buf)
  {
-@@ -524,8 +540,13 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
- 		if (err) {
- 			if (err == -ETIMEDOUT) {
- 				dev_err(vi->dev,
--					"uncorr_err: request timed out after %d ms\n",
-+					"uncorr_err: request timed out after %d ms - attempting restart\n",
- 					CAPTURE_TIMEOUT_MS);
-+				err = vi5_attempt_restart_stream(chan);
-+				if (err != 0) {
-+					dev_err(vi->dev,
-+						"uncorr_err: Restart failed\n");
-+				}
+@@ -575,8 +593,13 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
+ 					goto rel_buf;
+ 				} else {
+ 					dev_err(vi->dev,
+-						"uncorr_err: request timed out after %d ms\n",
++						"uncorr_err: request timed out after %d ms - attempting restart\n",
+ 						timeout_ms);
++					err = vi5_attempt_restart_stream(chan);
++					if (err != 0) {
++						dev_err(vi->dev,
++							"uncorr_err: Restart failed\n");
++					}
+ 				}
  			} else {
  				dev_err(vi->dev, "uncorr_err: request err %d\n", err);
- 			}
 -- 
 2.43.0
 

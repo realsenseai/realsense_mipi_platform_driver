@@ -5,14 +5,14 @@ Subject: [PATCH] Adding stream restart upon capture timeout
 
 Ehud J. Goldik <ehud.joseph.goldik@realsenseai.com>
 ---
- .../media/platform/tegra/camera/vi/vi5_fops.c | 23 ++++++++++++++++++-
- 1 file changed, 22 insertions(+), 1 deletion(-)
+ .../media/platform/tegra/camera/vi/vi5_fops.c | 25 ++++++++++++++++++-
+ 1 file changed, 24 insertions(+), 1 deletion(-)
 
 diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
 index b990c09f..9304751f 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
 +++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-@@ -542,6 +542,22 @@ uncorr_err:
+@@ -542,6 +542,24 @@ uncorr_err:
  	spin_unlock_irqrestore(&chan->capture_state_lock, flags);
  }
  
@@ -25,8 +25,10 @@ index b990c09f..9304751f 100644
 +		if (strncmp(chan->subdev[1]->name, "DS5 mux", 7) == 0) {
 +			/* Stream OFF */
 +			err = v4l2_subdev_call(chan->subdev[1], video, s_stream, 0);
-+			/* Stream ON */
-+			err = v4l2_subdev_call(chan->subdev[1], video, s_stream, 1);
++			if (err == 0) {
++				/* Stream ON */
++				err = v4l2_subdev_call(chan->subdev[1], video, s_stream, 1);
++			}
 +		}
 +	}
 +	return err;
