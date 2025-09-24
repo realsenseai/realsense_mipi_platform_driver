@@ -12,7 +12,7 @@ The system shall include:
 
 ### Links
 - Intel® RealSense™ camera driver for GMSL* interface [Front Page](./README.md)
-- Jetson AGX Orin™ board setup - AGX Orin™ [JetPack 6.0](./README_JP6.md) setup guide
+- Jetson AGX Orin™ board setup - AGX Orin™ [JetPack 6.x](./README_JP6.md) setup guide
 - Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 5.x.2](./README_JP5.md) setup guide
 - Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 4.6.1](./README_JP4.md) setup guide
 - Build Tools manual page [Build Manual page](./README_tools.md)
@@ -31,14 +31,13 @@ Please follow the [instruction](https://docs.nvidia.com/sdk-manager/install-with
 Download Jetson Linux source code tarball from 
 - [JetPack 5.1.2 BSP sources](https://developer.nvidia.com/downloads/embedded/l4t/r35_release_v4.1/sources/public_sources.tbz2)
 - [JetPack 5.0.2 BSP sources](https://developer.nvidia.com/embedded/l4t/r35_release_v1.0/sources/public_sources.tbz2)
-
 - [JetPack 5.x.2 Toolchain](https://developer.nvidia.com/embedded/jetson-linux/bootlin-toolchain-gcc-93)
 
 
 ## JetPack 5.1.2
 ```
-mkdir -p l4t-gcc/5.1.2
-cd ./l4t-gcc/5.1.2
+mkdir -p l4t-gcc/5.x
+cd ./l4t-gcc/5.x
 wget https://developer.nvidia.com/embedded/jetson-linux/bootlin-toolchain-gcc-93 -O aarch64--glibc--stable-final.tar.gz
 tar xf aarch64--glibc--stable-final.tar.gz
 cd ../..
@@ -46,11 +45,12 @@ wget https://developer.nvidia.com/downloads/embedded/l4t/r35_release_v4.1/source
 tar xjf public_sources.tbz2
 cd Linux_for_Tegra/source/public
 tar xjf kernel_src.tbz2
+cd ../../..
 ```
 ## JetPack 5.0.2
 ```
-mkdir -p l4t-gcc/5.0.2
-cd ./l4t-gcc/5.0.2
+mkdir -p l4t-gcc/5.x
+cd ./l4t-gcc/5.x
 wget https://developer.nvidia.com/embedded/jetson-linux/bootlin-toolchain-gcc-93 -O aarch64--glibc--stable-final.tar.gz
 tar xf aarch64--glibc--stable-final.tar.gz --strip-components 1
 cd ../..
@@ -68,14 +68,14 @@ cd ../../..
 sudo apt install build-essential bc flex bison
 
 # apply patches
-./apply_patches_ext.sh ./Linux_for_Tegra/source/public 5.0.2
+./apply_patches_ext.sh 5.1.2 ./Linux_for_Tegra/source/public
 
 # build kernel, dtb and D457 driver
-./build_all.sh 5.0.2 ./Linux_for_Tegra/source/public
+./build_all.sh 5.1.2 ./Linux_for_Tegra/source/public
 ```
 Note: dev_dbg() log support will not be enabled by default. If needed, run the `./build_all.sh` script with `--dev-dbg` option like below.
 ```
-./build_all.sh --dev-dbg 5.0.2 ./Linux_for_Tegra/source/public
+./build_all.sh --dev-dbg 5.1.2 ./Linux_for_Tegra/source/public
 ```
 
 </details>
@@ -89,40 +89,40 @@ The developers can set up the source code with NVIDIA's Jetson git repositories 
 - Deploy build results on target Jetson
 
 ```
-./setup_workspace.sh 5.0.2
+./setup_workspace.sh 5.1.2
 
-./apply_patches.sh apply 5.0.2
+./apply_patches.sh 5.1.2
 
-./build_all.sh 5.0.2
+./build_all.sh 5.1.2
 ```
 Note: dev_dbg() log support will not be enabled by default. If needed, run the `./build_all.sh` script with `--dev-dbg` option like below.
 ```
-./build_all.sh --dev-dbg 5.0.2
+./build_all.sh --dev-dbg 5.1.2
 ```
 
 ## Install kernel, device-tree and D457 driver to Jetson AGX Xavier
 
-1. Install the kernel and modules
+1. Install the kernel and modules (change 5.1.2 to 5.0.2 for 5.0.2 build)
 
-Building with `build_all.sh`
+Building with `build_all.sh 5.1.2`
 
 The necessary files are:
 
-- kernel image `images/<JetPack_version>/arch/arm64/boot/Image`
-- dtb `images/5.0.2/arch/arm64/boot/dts/nvidia/tegra194-p2888-0001-p2822-0000.dtb`
-- D457 driver `images/5.0.2/drivers/media/i2c/d4xx.ko`
-- UVC Video driver `images/5.0.2/drivers/media/usb/uvc/uvcvideo.ko`
-- V4L2 Core Video driver `images/5.0.2/drivers/media/v4l2-core/videobuf-core.ko`
-- V4L2 VMalloc Video driver `images/5.0.2/drivers/media/v4l2-core/videobuf-vmalloc.ko`
+- kernel image `images/5.1.2/arch/arm64/boot/Image`
+- dtb `images/5.1.2/arch/arm64/boot/dts/nvidia/tegra194-p2888-0001-p2822-0000.dtb`
+- D457 driver `images/5.1.2/drivers/media/i2c/d4xx.ko`
+- UVC Video driver `images/5.1.2/drivers/media/usb/uvc/uvcvideo.ko`
+- V4L2 Core Video driver `images/5.1.2/drivers/media/v4l2-core/videobuf-core.ko`
+- V4L2 VMalloc Video driver `images/5.1.2/drivers/media/v4l2-core/videobuf-vmalloc.ko`
 
 Copy build results from Host to Jetson target `10.0.0.116` user `nvidia`
 ```
-scp ./images/5.0.2/arch/arm64/boot/Image nvidia@10.0.0.116:~/
-scp ./images/5.0.2/arch/arm64/boot/dts/nvidia/tegra194-p2888-0001-p2822-0000.dtb nvidia@10.0.0.116:~/
-scp ./images/5.0.2/drivers/media/i2c/d4xx.ko nvidia@10.0.0.116:~/
-scp ./images/5.0.2/drivers/media/usb/uvc/uvcvideo.ko nvidia@10.0.0.116:~/
-scp ./images/5.0.2/drivers/media/v4l2-core/videobuf-core.ko nvidia@10.0.0.116:~/
-scp ./images/5.0.2/drivers/media/v4l2-core/videobuf-vmalloc.ko nvidia@10.0.0.116:~/
+scp ./images/5.1.2/arch/arm64/boot/Image nvidia@10.0.0.116:~/
+scp ./images/5.1.2/arch/arm64/boot/dts/nvidia/tegra194-p2888-0001-p2822-0000.dtb nvidia@10.0.0.116:~/
+scp ./images/5.1.2/drivers/media/i2c/d4xx.ko nvidia@10.0.0.116:~/
+scp ./images/5.1.2/drivers/media/usb/uvc/uvcvideo.ko nvidia@10.0.0.116:~/
+scp ./images/5.1.2/drivers/media/v4l2-core/videobuf-core.ko nvidia@10.0.0.116:~/
+scp ./images/5.1.2/drivers/media/v4l2-core/videobuf-vmalloc.ko nvidia@10.0.0.116:~/
 ```
 
 Copy them to the right places on Jetson target:

@@ -65,6 +65,7 @@
 #define DS5_FW_VERSION			0x030C
 #define DS5_FW_BUILD			0x030E
 #define DS5_DEVICE_TYPE			0x0310
+#define DS5_DEVICE_TYPE_D41X		7
 #define DS5_DEVICE_TYPE_D45X		6
 #define DS5_DEVICE_TYPE_D43X		5
 #define DS5_DEVICE_TYPE_D46X		4
@@ -179,7 +180,7 @@ enum ds5_mux_pad {
 #define DFU_WAIT_RET_LEN 6
 
 #define DS5_START_POLL_TIME	10
-#define DS5_START_MAX_TIME	1000
+#define DS5_START_MAX_TIME	2000
 #define DS5_START_MAX_COUNT	(DS5_START_MAX_TIME / DS5_START_POLL_TIME)
 
 /* DFU definition section */
@@ -527,10 +528,12 @@ struct ds5_counters {
 #define ds5_from_ir_sd(sd) container_of(sd, struct ds5, ir.sd)
 #define ds5_from_rgb_sd(sd) container_of(sd, struct ds5, rgb.sd)
 #if LINUX_VERSION_CODE > KERNEL_VERSION(5, 15, 136)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 148)
 static inline void msleep_range(unsigned int delay_base)
 {
 	usleep_range(delay_base * 1000, delay_base * 1000 + 500);
 }
+#endif
 #endif
 #ifdef CONFIG_VIDEO_INTEL_IPU6
 static int ds5_write_8(struct ds5 *state, u16 reg, u8 val)
@@ -691,14 +694,64 @@ static const u16 ds5_framerate_30 = 30;
 static const u16 ds5_framerate_15_30[] = {15, 30};
 
 static const u16 ds5_framerate_25 = 25;
+static const u16 ds5_framerate_15_25[] = {15, 25};
 
 static const u16 ds5_depth_framerate_to_30[] = {5, 15, 30};
 static const u16 ds5_framerate_to_30[] = {5, 10, 15, 30};
 static const u16 ds5_framerate_to_60[] = {5, 15, 30, 60};
 static const u16 ds5_framerate_to_90[] = {5, 15, 30, 60, 90};
+static const u16 ds5_41x_depth_framerate_to_30[] = {6, 15, 30};
+static const u16 ds5_41x_framerate_to_30[] = {6, 15, 30};
+static const u16 ds5_41x_framerate_to_60_no_15[] = {6, 30, 60};
+static const u16 ds5_41x_framerate_to_60[] = {6, 15, 30, 60};
+static const u16 ds5_41x_framerate_to_90[] = {6, 15, 30, 60, 90};
 static const u16 ds5_framerate_100[] = {100};
 static const u16 ds5_framerate_90[] = {90};
 static const u16 ds5_imu_framerates[] = {50, 100, 200, 400};
+
+static const struct ds5_resolution d41x_depth_sizes[] = {
+	{
+		.width = 1280,
+		.height = 720,
+		.framerates = ds5_41x_depth_framerate_to_30,
+		.n_framerates = ARRAY_SIZE(ds5_41x_depth_framerate_to_30),
+	}, {
+		.width =  848,
+		.height = 480,
+		.framerates = ds5_41x_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_90),
+	}, {
+		.width =  848,
+		.height = 100,
+		.framerates = ds5_framerate_100,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_100),
+	}, {
+		.width =  640,
+		.height = 480,
+		.framerates = ds5_41x_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_90),
+	}, {
+		.width =  640,
+		.height = 360,
+		.framerates = ds5_41x_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_90),
+	}, {
+		.width =  480,
+		.height = 270,
+		.framerates = ds5_41x_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_90),
+	}, {
+		.width =  424,
+		.height = 240,
+		.framerates = ds5_41x_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_90),
+	}, {
+		.width =  256,
+		.height = 144,
+		.framerates = ds5_framerate_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_90),
+	},
+};
 
 static const struct ds5_resolution d43x_depth_sizes[] = {
 	{
@@ -792,6 +845,104 @@ static const struct ds5_resolution y8_sizes[] = {
 	}
 };
 
+static const struct ds5_resolution y8_41x_sizes[] = {
+	{
+		.width = 1920,
+		.height = 1080,
+		.framerates = ds5_framerate_15_25,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_15_25),
+	}, {
+		.width = 1280,
+		.height = 720,
+		.framerates = ds5_41x_depth_framerate_to_30,
+		.n_framerates = ARRAY_SIZE(ds5_41x_depth_framerate_to_30),
+	}, {
+		.width = 960,
+		.height = 540,
+		.framerates = ds5_framerate_15_25,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_15_25),
+	}, {
+		.width =  848,
+		.height = 480,
+		.framerates = ds5_41x_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_90),
+	}, {
+		.width =  848,
+		.height = 100,
+		.framerates = ds5_framerate_100,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_100),
+	}, {
+		.width =  640,
+		.height = 480,
+		.framerates = ds5_41x_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_90),
+	}, {
+		.width =  640,
+		.height = 360,
+		.framerates = ds5_41x_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_90),
+	}, {
+		.width =  480,
+		.height = 270,
+		.framerates = ds5_41x_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_90),
+	}, {
+		.width =  424,
+		.height = 240,
+		.framerates = ds5_41x_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_90),
+	}
+};
+
+static const struct ds5_resolution ds5_41x_rgb_sizes[] = {
+	{
+		.width = 1920,
+		.height = 1080,
+		.framerates = ds5_41x_framerate_to_30,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_30),
+	}, {
+		.width = 1280,
+		.height = 720,
+		.framerates = ds5_41x_framerate_to_30,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_30),
+	}, {
+		.width = 960,
+		.height = 540,
+		.framerates = ds5_41x_framerate_to_60,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_60),
+	}, {
+		.width = 848,
+		.height = 480,
+		.framerates = ds5_41x_framerate_to_60,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_60),
+	}, {
+		.width = 640,
+		.height = 480,
+		.framerates = ds5_41x_framerate_to_60,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_60),
+	}, {
+		.width = 640,
+		.height = 360,
+		.framerates = ds5_41x_framerate_to_60,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_60),
+	}, {
+		.width = 424,
+		.height = 240,
+		.framerates = ds5_41x_framerate_to_60,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_60),
+	}, {
+		.width = 320,
+		.height = 240,
+		.framerates = ds5_41x_framerate_to_60_no_15,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_60_no_15),
+	}, {
+		.width = 320,
+		.height = 180,
+		.framerates = ds5_41x_framerate_to_60_no_15,
+		.n_framerates = ARRAY_SIZE(ds5_41x_framerate_to_60_no_15),
+	},
+};
+
 static const struct ds5_resolution ds5_rlt_rgb_sizes[] = {
 	{
 		.width = 1280,
@@ -867,6 +1018,15 @@ static const struct ds5_resolution ds5_size_w10 = {
 	.n_framerates = 1,
 };
 
+static const struct ds5_resolution d41x_calibration_sizes[] = {
+	{
+		.width =  1920,
+		.height = 1080,
+		.framerates = ds5_framerate_15_25,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_15_25),
+	},
+};
+
 static const struct ds5_resolution d43x_calibration_sizes[] = {
 	{
 		.width =  1280,
@@ -901,6 +1061,26 @@ static const struct ds5_resolution ds5_size_imu_extended[] = {
 	.height = 1,
 	.framerates = ds5_imu_framerates,
 	.n_framerates = ARRAY_SIZE(ds5_imu_framerates),
+	},
+};
+
+static const struct ds5_format ds5_depth_formats_d41x[] = {
+	{
+		// TODO: 0x31 is replaced with 0x1e since it caused low FPS in Jetson.
+		.data_type = GMSL_CSI_DT_YUV422_8,	/* Z16 */
+		.mbus_code = MEDIA_BUS_FMT_UYVY8_1X16,
+		.n_resolutions = ARRAY_SIZE(d41x_depth_sizes),
+		.resolutions = d41x_depth_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_RAW_8,	/* Y8 */
+		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
+		.n_resolutions = ARRAY_SIZE(d41x_depth_sizes),
+		.resolutions = d41x_depth_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_RGB_888,	/* 24-bit Calibration */
+		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,	/* FIXME */
+		.n_resolutions = ARRAY_SIZE(d41x_calibration_sizes),
+		.resolutions = d41x_calibration_sizes,
 	},
 };
 
@@ -965,6 +1145,33 @@ static const struct ds5_format ds5_y_formats_ds5u[] = {
 		.n_resolutions = ARRAY_SIZE(d43x_calibration_sizes),
 		.resolutions = d43x_calibration_sizes,
 	},
+};
+
+static const struct ds5_format ds5_y_formats_41x[] = {
+	{
+		/* First format: default */
+		.data_type = GMSL_CSI_DT_RAW_8,	/* Y8 */
+		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
+		.n_resolutions = ARRAY_SIZE(y8_41x_sizes),
+		.resolutions = y8_41x_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_YUV422_8,	/* Y8I */
+		.mbus_code = MEDIA_BUS_FMT_VYUY8_1X16,
+		.n_resolutions = ARRAY_SIZE(y8_41x_sizes),
+		.resolutions = y8_41x_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_RGB_888,	/* 24-bit Calibration */
+		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,	/* FIXME */
+		.n_resolutions = ARRAY_SIZE(d41x_calibration_sizes),
+		.resolutions = d41x_calibration_sizes,
+	},
+};
+
+static const struct ds5_format ds5_41x_rgb_format = {
+	.data_type = GMSL_CSI_DT_YUV422_8,	/* UYVY */
+	.mbus_code = MEDIA_BUS_FMT_YUYV8_1X16,
+	.n_resolutions = ARRAY_SIZE(ds5_41x_rgb_sizes),
+	.resolutions = ds5_41x_rgb_sizes,
 };
 
 static const struct ds5_format ds5_rlt_rgb_format = {
@@ -1902,19 +2109,25 @@ static int ds5_get_hwmc(struct ds5 *state, unsigned char *data,
 		}
 	}
 
-	ret = regmap_raw_read(state->regmap, DS5_HWMC_RESP_LEN,
-			&tmp_len, sizeof(tmp_len));
+	ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN,
+			&tmp_len, sizeof(tmp_len)); /* Read response length */
 	if (ret)
 		return -EBADMSG;
 
 	if (tmp_len > cmdDataLen)
 		return -ENOBUFS;
 
+	if (tmp_len == 0) {
+		dev_err(&state->client->dev,
+			"%s(): HWMC response length is 0\n", __func__);
+		return -ENODATA;
+	}
+
 	dev_dbg(&state->client->dev,
 			"%s(): HWMC read len: %d, lrs_len: %d\n",
 			__func__, tmp_len, tmp_len - 4);
 
-	ds5_raw_read_with_check(state, DS5_HWMC_DATA, data, tmp_len);
+	ds5_raw_read_with_check(state, DS5_HWMC_DATA, data, tmp_len); /* Read response data */
 	if (dataLen)
 		*dataLen = tmp_len;
 	return ret;
@@ -1930,8 +2143,8 @@ static int ds5_send_hwmc(struct ds5 *state,
 			__func__, cmd->header, cmd->magic_word, cmd->opcode,
 			cmdLen,	cmd->param1, cmd->param2, cmd->param3, cmd->param4);
 
-	ds5_raw_write_with_check(state, DS5_HWMC_DATA, cmd, cmdLen);
-	
+	ds5_raw_write_with_check(state, DS5_HWMC_DATA, cmd, cmdLen); /* Write command data */
+
 	ds5_write_with_check(state, DS5_HWMC_EXEC, 0x01); /* execute cmd */
 
 	return 0;
@@ -1944,7 +2157,7 @@ static int ds5_set_calibration_data(struct ds5 *state,
 	int retries = 10;
 	u16 status = 2;
 
-	ds5_raw_write_with_check(state, DS5_HWMC_DATA, cmd, length);
+	ds5_raw_write_with_check(state, DS5_HWMC_DATA, cmd, length); /* Write command data */
 
 	ds5_write_with_check(state, DS5_HWMC_EXEC, 0x01); /* execute cmd */
 	do {
@@ -2340,12 +2553,12 @@ static int ds5_get_calibration_data(struct ds5 *state, enum table_id id,
 
 	memcpy(cmd, &get_calib_data, sizeof(get_calib_data));
 	cmd->param1 = id;
-	ds5_raw_write_with_check(state, 0x4900, cmd, sizeof(struct hwm_cmd));
-	ds5_write_with_check(state, 0x490c, 0x01); /* execute cmd */
+	ds5_raw_write_with_check(state, DS5_HWMC_DATA, cmd, sizeof(struct hwm_cmd)); /* Write command data */
+	ds5_write_with_check(state, DS5_HWMC_EXEC, 0x01); /* execute cmd */
 	do {
 		if (retries != 3)
 			msleep_range(10);
-		ret = ds5_read(state, 0x4904, &status);
+		ret = ds5_read(state, DS5_HWMC_STATUS, &status);
 	} while (ret && retries-- && status != 0);
 
 	if (ret || status != 0) {
@@ -2357,11 +2570,11 @@ static int ds5_get_calibration_data(struct ds5 *state, enum table_id id,
 	}
 
 	// get table length from fw
-	ret = regmap_raw_read(state->regmap, 0x4908,
-			&table_length, sizeof(table_length));
+	ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN,
+			&table_length, sizeof(table_length)); /* Read response length */
 
 	// read table
-	ds5_raw_read_with_check(state, 0x4900, cmd->Data, table_length);
+	ds5_raw_read_with_check(state, DS5_HWMC_DATA, cmd->Data, table_length); /* Read table data */
 
 	// first 4 bytes are opcode HWM, not part of calibration table
 	memcpy(table, cmd->Data + 4, length);
@@ -2378,13 +2591,13 @@ static int ds5_gvd(struct ds5 *state, unsigned char *data)
 	u8 retries = 3;
 
 	memcpy(&cmd, &gvd, sizeof(gvd));
-	ds5_raw_write_with_check(state, 0x4900, &cmd, sizeof(cmd));
-	ds5_write_with_check(state, 0x490c, 0x01); /* execute cmd */
+	ds5_raw_write_with_check(state, DS5_HWMC_DATA, &cmd, sizeof(cmd)); /* Write command data */
+	ds5_write_with_check(state, DS5_HWMC_EXEC, 0x01); /* execute cmd */
 	do {
 		if (retries != 3)
 			msleep_range(10);
 
-		ret = ds5_read(state, 0x4904, &status);
+		ret = ds5_read(state, DS5_HWMC_STATUS, &status);
 	} while (ret && retries-- && status != 0);
 
 	if (ret || status != 0) {
@@ -2394,8 +2607,8 @@ static int ds5_gvd(struct ds5 *state, unsigned char *data)
 		return status;
 	}
 
-	ret = regmap_raw_read(state->regmap, 0x4908, &length, sizeof(length));
-	ds5_raw_read_with_check(state, 0x4900, data, length);
+	ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN, &length, sizeof(length)); /* Read response length */
+	ds5_raw_read_with_check(state, DS5_HWMC_DATA, data, length); /* Read response data */
 
 	return ret;
 }
@@ -2510,19 +2723,19 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		//       1. prepare and send command
 		//       2. send command
 		//       3. execute command
-		//       4. wait for ccompletion
-		ret = regmap_raw_write(state->regmap, 0x4900,
+		//       4. wait for completion
+		ret = ds5_raw_write(state, DS5_HWMC_DATA, /* Write command data */
 				log_prepare, sizeof(log_prepare));
 		if (ret < 0)
 			return ret;
 
-		ret = regmap_raw_write(state->regmap, 0x490C,
-				&execute_cmd, sizeof(execute_cmd));
+		ret = ds5_raw_write(state, DS5_HWMC_EXEC,
+				&execute_cmd, sizeof(execute_cmd)); /* execute cmd */
 		if (ret < 0)
 			return ret;
 
 		for (i = 0; i < DS5_MAX_LOG_POLL; i++) {
-			ret = regmap_raw_read(state->regmap, 0x4904,
+			ret = ds5_raw_read(state, DS5_HWMC_STATUS,
 					&data, sizeof(data));
 			dev_dbg(&state->client->dev, "%s(): log ready 0x%x\n",
 				 __func__, data);
@@ -2536,7 +2749,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 //		if (i == DS5_MAX_LOG_POLL)
 //			return -ETIMEDOUT;
 
-		ret = regmap_raw_read(state->regmap, 0x4908, &data, sizeof(data));
+		ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN, &data, sizeof(data)); /* Read response length */
 		dev_dbg(&state->client->dev, "%s(): log size 0x%x\n", __func__, data);
 		if (ret < 0)
 			return ret;
@@ -2544,7 +2757,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			return 0;
 		if (data > 1024)
 			return -ENOBUFS;
-		ret = regmap_raw_read(state->regmap, 0x4900,
+		ret = ds5_raw_read(state, DS5_HWMC_DATA,
 				ctrl->p_new.p_u8, data);
 		break;
 	case DS5_CAMERA_DEPTH_CALIBRATION_TABLE_GET:
@@ -4770,6 +4983,9 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 
 	sensor = &state->depth.sensor;
 	switch (dev_type) {
+	case DS5_DEVICE_TYPE_D41X:
+		sensor->formats = ds5_depth_formats_d41x;
+		break;
 	case DS5_DEVICE_TYPE_D43X:
 	case DS5_DEVICE_TYPE_D45X:
 		sensor->formats = ds5_depth_formats_d43x;
@@ -4784,8 +5000,15 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	sensor->mux_pad = DS5_MUX_PAD_DEPTH;
 
 	sensor = &state->ir.sensor;
-	sensor->formats = state->variant->formats;
-	sensor->n_formats = state->variant->n_formats;
+	switch (dev_type) {
+	case DS5_DEVICE_TYPE_D41X:
+		sensor->formats = ds5_y_formats_41x;
+		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_41x);
+		break;
+	default:
+		sensor->formats = state->variant->formats;
+		sensor->n_formats = state->variant->n_formats;
+	}
 	sensor->mux_pad = DS5_MUX_PAD_IR;
 
 	sensor = &state->rgb.sensor;
@@ -4794,6 +5017,10 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	case DS5_DEVICE_TYPE_D46X:
 		sensor->formats = &ds5_onsemi_rgb_format;
 		sensor->n_formats = DS5_ONSEMI_RGB_N_FORMATS;
+		break;
+	case DS5_DEVICE_TYPE_D41X:
+		sensor->formats = &ds5_41x_rgb_format;
+		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
 		break;
 	case DS5_DEVICE_TYPE_D45X:
 		sensor->formats = &ds5_rlt_rgb_format;
@@ -4924,9 +5151,9 @@ static int ds5_dfu_switch_to_dfu(struct ds5 *state)
 	int i = DS5_START_MAX_COUNT;
 	u16 status;
 
-	ds5_raw_write_with_check(state, 0x4900,
-			&cmd_switch_to_dfu, sizeof(cmd_switch_to_dfu));
-	ds5_write_with_check(state, 0x490c, 0x01); /* execute cmd */
+	ds5_raw_write_with_check(state, DS5_HWMC_DATA,
+			&cmd_switch_to_dfu, sizeof(cmd_switch_to_dfu)); /* Write command data */
+	ds5_write_with_check(state, DS5_HWMC_EXEC, 0x01); /* execute cmd */
 	/*Wait for DFU fw to boot*/
 	do {
 		msleep_range(DS5_START_POLL_TIME*10);
@@ -5642,6 +5869,7 @@ static int ds5_probe(struct i2c_client *c)
 	mutex_init(&state->lock);
 
 	state->client = c;
+	dev_warn(&c->dev, "Probing driver for D4xx\n");
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	state->dser_st.isolated = false;
@@ -5982,4 +6210,4 @@ MODULE_AUTHOR("Guennadi Liakhovetski <guennadi.liakhovetski@intel.com>,\n\
 				Florent Pirou <florent.pirou@intel.com>");
 MODULE_AUTHOR("Dmitry Perchanov <dmitry.perchanov@intel.com>");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("1.0.1.28");
+MODULE_VERSION("1.0.1.30");

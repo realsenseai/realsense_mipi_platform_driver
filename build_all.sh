@@ -2,8 +2,8 @@
 
 set -e
 
-if [[ "$1" == "-h" ]]; then
-    echo "build_all.sh [--dev-dbg] [JetPack_version] [JetPack_Linux_source]"
+if [[ $# < 1 || "$1" == "-h" ]]; then
+    echo "build_all.sh [--dev-dbg] JetPack_version [JetPack_Linux_source]"
     echo "build_all.sh -h"
     exit 1
 fi
@@ -24,17 +24,22 @@ if [[ -n "$2" ]]; then
     SRCS=$(realpath $2)
 fi
 
-if [[ "$JETPACK_VERSION" == "6.0" ]]; then
-    export CROSS_COMPILE=$DEVDIR/l4t-gcc/$JETPACK_VERSION/bin/aarch64-buildroot-linux-gnu-
-elif [[ "$JETPACK_VERSION" == "5.1.2" ]]; then
-    export CROSS_COMPILE=$DEVDIR/l4t-gcc/$JETPACK_VERSION/bin/aarch64-buildroot-linux-gnu-
-elif [[ "$JETPACK_VERSION" == "5.0.2" ]]; then
-    export CROSS_COMPILE=$DEVDIR/l4t-gcc/$JETPACK_VERSION/bin/aarch64-buildroot-linux-gnu-
-elif [[ "$JETPACK_VERSION" == "4.6.1" ]]; then
-    export CROSS_COMPILE=$DEVDIR/l4t-gcc/$JETPACK_VERSION/bin/aarch64-linux-gnu-
+if [[ $(uname -m) == aarch64 ]]; then
+    echo
+    echo Native build
+    echo
+else
+    if [[ "$JETPACK_VERSION" == "6.x" ]]; then
+        export CROSS_COMPILE=$DEVDIR/l4t-gcc/$JETPACK_VERSION/bin/aarch64-buildroot-linux-gnu-
+    elif [[ "$JETPACK_VERSION" == "5.x" ]]; then
+        export CROSS_COMPILE=$DEVDIR/l4t-gcc/$JETPACK_VERSION/bin/aarch64-buildroot-linux-gnu-
+    elif [[ "$JETPACK_VERSION" == "4.6.1" ]]; then
+        export CROSS_COMPILE=$DEVDIR/l4t-gcc/$JETPACK_VERSION/bin/aarch64-linux-gnu-
+    fi
 fi
+
 export LOCALVERSION=-tegra
-export TEGRA_KERNEL_OUT=$DEVDIR/images/$JETPACK_VERSION
+export TEGRA_KERNEL_OUT="$DEVDIR/images/$1"
 mkdir -p $TEGRA_KERNEL_OUT
 export KERNEL_MODULES_OUT=$TEGRA_KERNEL_OUT/modules
 
@@ -44,7 +49,7 @@ export KERNEL_MODULES_OUT=$TEGRA_KERNEL_OUT/modules
 # Build jp6 out-of-tree modules
 # following: 
 # https://docs.nvidia.com/jetson/archives/r36.2/DeveloperGuide/SD/Kernel/KernelCustomization.html#building-the-jetson-linux-kernel
-if [[ "$JETPACK_VERSION" == "6.0" ]]; then
+if [[ "$JETPACK_VERSION" == "6.x" ]]; then
     cd $SRCS
     export KERNEL_HEADERS=$SRCS/kernel/kernel-jammy-src
     ln -sf $TEGRA_KERNEL_OUT $SRCS/out
