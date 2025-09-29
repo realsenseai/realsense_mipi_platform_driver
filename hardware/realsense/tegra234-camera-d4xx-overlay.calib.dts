@@ -270,7 +270,7 @@
 
 						i2c@1 {
 							status = "okay";
-							reg = <3>; 	// line 18-19 of the I2C switch
+							reg = <3>; 	// line 3 of the I2C switch
 							i2c-mux,deselect-on-exit;
 							#address-cells = <1>;
 							#size-cells = <0>;
@@ -379,7 +379,7 @@
 						};
 						i2c@3 {
 							status = "okay";
-							reg = <5>;	// line 4 of the I2C switch
+							reg = <5>;	// line 5 of the I2C switch
 							i2c-mux,deselect-on-exit;
 							#address-cells = <1>;
 							#size-cells = <0>;
