@@ -13,7 +13,7 @@
 
 /* camera control gpio definitions */
 / {
-	overlay-name = "Jetson RealSense Camera D457";
+	overlay-name = "Jetson RealSense Camera D457 Calibration";
 	jetson-header-name = "Jetson AGX CSI Connector";
 	compatible = JETSON_COMPATIBLE;
 
