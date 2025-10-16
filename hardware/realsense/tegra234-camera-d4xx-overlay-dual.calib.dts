@@ -592,7 +592,7 @@
 							#size-cells = <0x0>;
 
 							d4m4: d4m@1b {
-								status = "ok";
+								status = "okay";
 								def-addr = <0x10>;
 								reg = <0x1b>;
 								compatible = "intel,d4xx";
@@ -647,7 +647,7 @@
 							#size-cells = <0x0>;
 
 							d4m5: d4m@1b {
-								status = "ok";
+								status = "okay";
 								def-addr = <0x10>;
 								reg = <0x1b>;
 								compatible = "intel,d4xx";
@@ -702,7 +702,7 @@
 							#size-cells = <0x0>;
 
 							d4m6: d4m@1b {
-								status = "ok";
+								status = "okay";
 								def-addr = <0x10>;
 								reg = <0x1b>;
 								compatible = "intel,d4xx";
@@ -757,7 +757,7 @@
 							#size-cells = <0x0>;
 
 							d4m7: d4m@1b {
-								status = "ok";
+								status = "okay";
 								def-addr = <0x10>;
 								reg = <0x1b>;
 								compatible = "intel,d4xx";
