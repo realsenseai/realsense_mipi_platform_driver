@@ -1,0 +1,818 @@
+#include "dt-bindings/clock/tegra194-clock.h"
+
+#define CAM0_RST_L	TEGRA194_MAIN_GPIO(H, 3)
+#define CAMERA_I2C_MUX_BUS(x) (0x1E + x)
+
+
+/ {
+	tegra-capture-vi {
+		num-channels = <8>;
+
+		ports {
+			#address-cells = <0x1>;
+			#size-cells = <0x0>;
+
+			port@0 {
+				reg = <0>;
+				status = "ok";
+
+				vi_in0: endpoint {
+					status = "ok";
+					port-index = <0>;
+					bus-width = <2>;
+					vc-id = <0>;
+					remote-endpoint = <&csi_out0>;
+				};
+			};
+			port@1 {
+				reg = <1>;
+				status = "ok";
+
+				vi_in1: endpoint {
+					status = "ok";
+					vc-id = <1>;
+					port-index = <0>;
+					bus-width = <2>;
+					remote-endpoint = <&csi_out1>;
+				};
+			};
+			port@2 {
+				reg = <2>;
+				status = "ok";
+
+				vi_in2: endpoint {
+					status = "ok";
+					port-index = <0>;
+					bus-width = <2>;
+					vc-id = <2>;
+					remote-endpoint = <&csi_out2>;
+				};
+			};
+			port@3 {
+				reg = <3>;
+				status = "ok";
+
+				vi_in3: endpoint {
+					status = "ok";
+					port-index = <0>;
+					bus-width = <2>;
+					vc-id = <3>;
+					remote-endpoint = <&csi_out3>;
+				};
+			};
+			port@4 {
+				reg = <4>;
+				status = "ok";
+
+				vi_in4: endpoint {
+					status = "ok";
+					port-index = <0>;
+					bus-width = <2>;
+					vc-id = <2>;
+					remote-endpoint = <&csi_out4>;
+				};
+			};
+			port@5 {
+				reg = <5>;
+				status = "ok";
+
+				vi_in5: endpoint {
+					status = "ok";
+					port-index = <0>;
+					bus-width = <2>;
+					vc-id = <3>;
+					remote-endpoint = <&csi_out5>;
+				};
+			};
+			port@6 {
+				reg = <6>;
+				status = "ok";
+
+				vi_in6: endpoint {
+					status = "ok";
+					port-index = <0>;
+					bus-width = <2>;
+					vc-id = <0>;
+					remote-endpoint = <&csi_out6>;
+				};
+			};
+			port@7 {
+				reg = <7>;
+				status = "ok";
+
+				vi_in7: endpoint {
+					status = "ok";
+					port-index = <0>;
+					bus-width = <2>;
+					vc-id = <1>;
+					remote-endpoint = <&csi_out7>;
+				};
+			};
+		};
+	};
+
+	i2c@3180000 {
+		status = "ok";
+		clock-frequency = <100000>;
+		tca9548@72 {
+			status = "ok";
+			reg = <0x72>;
+			compatible = "nxp,pca9548";
+			#address-cells = <1>;
+			#size-cells = <0>;
+			skip_mux_detect = "yes";
+			vcc-supply = <&p2822_vdd_1v8_cvb>;
+			/*vcc-pullup-supply = <&battery_reg>;*/
+			force_bus_start = <CAMERA_I2C_MUX_BUS(0)>;
+			vcc_lp = "vcc";
+			i2c@0 {
+				reg = <0x0>;
+				#address-cells = <0x1>;
+				i2c-mux,deselect-on-exit;
+				#size-cells = <0x0>;
+
+				dser: max9296@48 {
+					status = "ok";
+					reg = <0x48>;
+					compatible = "maxim,max9296";
+					csi-mode = "2x4";
+					max-src = <2>;
+					reset-gpios = <&tegra_main_gpio CAM0_RST_L GPIO_ACTIVE_HIGH>;
+				};
+
+				ser_prim: max9295_prim@40 {
+					status = "ok";
+					reg = <0x40>;
+					compatible = "maxim,max9295";
+					is-prim-ser;
+				};
+
+				ser_a: max9295_a@42 {
+					compatible = "maxim,max9295";
+					reg = <0x42>;
+					maxim,gmsl-dser-device = <&dser>;
+				};
+
+				ser_b: max9295_b@60 {
+					compatible = "maxim,max9295";
+					reg = <0x60>;
+					maxim,gmsl-dser-device = <&dser>;
+				};
+
+				d4m0: d4m@1a {
+					status = "ok";
+					def-addr = <0x10>;
+					reg = <0x1a>;
+					compatible = "intel,d4xx";
+					vcc-supply = <&p2822_vdd_1v8_cvb>;
+					cam-type = "Depth";
+					maxim,gmsl-ser-device = <&ser_a>;
+					maxim,gmsl-dser-device = <&dser>;
+					ports {
+						#address-cells = <1>;
+						#size-cells = <0>;
+
+						port@0 {
+							reg = <0>;
+							d4m0_out: endpoint {
+								port-index = <0>;
+								bus-width = <2>;
+								remote-endpoint = <&csi_in0>;
+							};
+						};
+					};
+					mode0 {
+						pixel_t = "grey_y16";
+						num_lanes = "2";
+						csi_pixel_bit_depth = "16";
+						active_w = "1280";
+						active_h = "720";
+						tegra_sinterface = "serial_a";
+						mclk_khz = "24000";
+						pix_clk_hz = "74250000";
+						line_length = "1280"; /* 2200 */
+						embedded_metadata_height = "1";
+					};
+					gmsl-link {
+						src-csi-port = "b";
+						dst-csi-port = "a";
+						serdes-csi-link = "a";
+						csi-mode = "1x4";
+						st-vc = <0>;
+						vc-id = <0>;
+						num-lanes = <2>;
+					};
+				};
+			};
+
+			i2c@1 {
+				status = "ok";
+				reg = <0x1>;
+				#address-cells = <0x1>;
+				i2c-mux,deselect-on-exit;
+				#size-cells = <0x0>;
+
+				d4m1: d4m@1a {
+					status = "ok";
+					def-addr = <0x10>;
+					reg = <0x1a>;
+					compatible = "intel,d4xx";
+					vcc-supply = <&p2822_vdd_1v8_cvb>;
+					cam-type = "RGB";
+					maxim,gmsl-ser-device = <&ser_a>;
+					maxim,gmsl-dser-device = <&dser>;
+					ports {
+						#address-cells = <1>;
+						#size-cells = <0>;
+
+						port@0 {
+							reg = <0>;
+							d4m1_out: endpoint {
+								port-index = <1>;
+								bus-width = <2>;
+								remote-endpoint = <&csi_in1>;
+							};
+						};
+					};
+					mode0 {
+						pixel_t = "grey_y16";
+						num_lanes = "2";
+						csi_pixel_bit_depth = "16";
+						active_w = "1920";
+						active_h = "1080";
+						tegra_sinterface = "serial_e";
+						mclk_khz = "24000";
+						pix_clk_hz = "74250000";
+						line_length = "1280"; /* 2200 */
+						embedded_metadata_height = "1";
+					};
+					gmsl-link {
+						src-csi-port = "b";
+						dst-csi-port = "a";
+						serdes-csi-link = "a";
+						csi-mode = "1x4";
+						st-vc = <0>;
+						vc-id = <1>;
+						num-lanes = <2>;
+					};
+				};
+			};
+			i2c@2 {
+				reg = <0x2>;
+				#address-cells = <0x1>;
+				i2c-mux,deselect-on-exit;
+				#size-cells = <0x0>;
+
+				d4m2: d4m@1a {
+					status = "ok";
+					def-addr = <0x10>;
+					reg = <0x1a>;
+					compatible = "intel,d4xx";
+					vcc-supply = <&p2822_vdd_1v8_cvb>;
+					cam-type = "Y8";
+					maxim,gmsl-ser-device = <&ser_a>;
+					maxim,gmsl-dser-device = <&dser>;
+					ports {
+						#address-cells = <1>;
+						#size-cells = <0>;
+
+						port@0 {
+							reg = <0>;
+							d4m2_out: endpoint {
+								port-index = <2>;
+								bus-width = <2>;
+								remote-endpoint = <&csi_in2>;
+							};
+						};
+					};
+					/* mode0: Y8, mode1: depth D16 */
+					mode0 {
+						pixel_t = "grey_y16";
+						num_lanes = "2";
+						csi_pixel_bit_depth = "16";
+						active_w = "1280";
+						active_h = "720";
+						tegra_sinterface = "serial_b";
+						mclk_khz = "24000";
+						pix_clk_hz = "74250000";
+						line_length = "1280"; /* 2200 */
+						embedded_metadata_height = "0";
+					};
+					gmsl-link {
+						src-csi-port = "b";
+						dst-csi-port = "a";
+						serdes-csi-link = "a";
+						csi-mode = "1x4";
+						st-vc = <0>;
+						vc-id = <2>;
+						num-lanes = <2>;
+					};
+				};
+			};
+			i2c@3 {
+				reg = <0x3>;
+				#address-cells = <0x1>;
+				i2c-mux,deselect-on-exit;
+				#size-cells = <0x0>;
+
+				d4m3: d4m@1a {
+					status = "ok";
+					def-addr = <0x10>;
+					reg = <0x1a>;
+					compatible = "intel,d4xx";
+					vcc-supply = <&p2822_vdd_1v8_cvb>;
+					cam-type = "IMU";
+					maxim,gmsl-ser-device = <&ser_a>;
+					maxim,gmsl-dser-device = <&dser>;
+					ports {
+						#address-cells = <1>;
+						#size-cells = <0>;
+
+						port@0 {
+							reg = <0>;
+							d4m3_out: endpoint {
+								port-index = <3>;
+								bus-width = <2>;
+								remote-endpoint = <&csi_in3>;
+							};
+						};
+					};
+					mode0 {
+						pixel_t = "grey_y16";
+						num_lanes = "2";
+						csi_pixel_bit_depth = "16";
+						active_w = "640";
+						active_h = "480";
+						tegra_sinterface = "serial_b";
+						mclk_khz = "24000";
+						pix_clk_hz = "74250000";
+						line_length = "1280"; /* 2200 */
+						embedded_metadata_height = "0";
+					};
+					gmsl-link {
+						src-csi-port = "b";
+						dst-csi-port = "a";
+						serdes-csi-link = "a";
+						csi-mode = "1x4";
+						st-vc = <0>;
+						vc-id = <3>;
+						num-lanes = <2>;
+					};
+				};
+			};
+
+			i2c@4 {
+				reg = <0x4>;
+				#address-cells = <0x1>;
+				i2c-mux,deselect-on-exit;
+				#size-cells = <0x0>;
+
+				d4m4: d4m@1b {
+					status = "ok";
+					def-addr = <0x10>;
+					reg = <0x1b>;
+					compatible = "intel,d4xx";
+					vcc-supply = <&p2822_vdd_1v8_cvb>;
+					cam-type = "Depth";
+					maxim,gmsl-ser-device = <&ser_b>;
+					maxim,gmsl-dser-device = <&dser>;
+					ports {
+						#address-cells = <1>;
+						#size-cells = <0>;
+
+						port@0 {
+							reg = <0>;
+							d4m4_out: endpoint {
+								port-index = <4>;
+								bus-width = <2>;
+								remote-endpoint = <&csi_in4>;
+							};
+						};
+					};
+					mode0 {
+						pixel_t = "grey_y16";
+						num_lanes = "2";
+						csi_pixel_bit_depth = "16";
+						active_w = "1280";
+						active_h = "720";
+						tegra_sinterface = "serial_a";
+						mclk_khz = "24000";
+						pix_clk_hz = "74250000";
+						line_length = "1280"; /* 2200 */
+						embedded_metadata_height = "1";
+					};
+					gmsl-link {
+						src-csi-port = "b";
+						dst-csi-port = "a";
+						serdes-csi-link = "b";
+						csi-mode = "1x4";
+						st-vc = <0>;
+						vc-id = <2>;
+						num-lanes = <2>;
+					};
+				};
+			};
+
+			i2c@5 {
+				reg = <0x5>;
+				#address-cells = <0x1>;
+				i2c-mux,deselect-on-exit;
+				#size-cells = <0x0>;
+
+				d4m5: d4m@1b {
+					status = "ok";
+					def-addr = <0x10>;
+					reg = <0x1b>;
+					compatible = "intel,d4xx";
+					vcc-supply = <&p2822_vdd_1v8_cvb>;
+					cam-type = "RGB";
+					maxim,gmsl-ser-device = <&ser_b>;
+					maxim,gmsl-dser-device = <&dser>;
+					ports {
+						#address-cells = <1>;
+						#size-cells = <0>;
+
+						port@0 {
+							reg = <0>;
+							d4m5_out: endpoint {
+								port-index = <5>;
+								bus-width = <2>;
+								remote-endpoint = <&csi_in5>;
+							};
+						};
+					};
+					mode0 {
+						pixel_t = "grey_y16";
+						num_lanes = "2";
+						csi_pixel_bit_depth = "16";
+						active_w = "1920";
+						active_h = "1080";
+						tegra_sinterface = "serial_e";
+						mclk_khz = "24000";
+						pix_clk_hz = "74250000";
+						line_length = "1280"; /* 2200 */
+						embedded_metadata_height = "1";
+					};
+					gmsl-link {
+						src-csi-port = "b";
+						dst-csi-port = "a";
+						serdes-csi-link = "b";
+						csi-mode = "1x4";
+						st-vc = <0>;
+						vc-id = <3>;
+						num-lanes = <2>;
+					};
+				};
+			};
+
+			i2c@6 {
+				reg = <0x6>;
+				#address-cells = <0x1>;
+				i2c-mux,deselect-on-exit;
+				#size-cells = <0x0>;
+
+				d4m6: d4m@1b {
+					status = "ok";
+					def-addr = <0x10>;
+					reg = <0x1b>;
+					compatible = "intel,d4xx";
+					vcc-supply = <&p2822_vdd_1v8_cvb>;
+					cam-type = "Y8";
+					maxim,gmsl-ser-device = <&ser_b>;
+					maxim,gmsl-dser-device = <&dser>;
+					ports {
+						#address-cells = <1>;
+						#size-cells = <0>;
+
+						port@0 {
+							reg = <0>;
+							d4m6_out: endpoint {
+								port-index = <6>;
+								bus-width = <2>;
+								remote-endpoint = <&csi_in6>;
+							};
+						};
+					};
+					/* mode0: Y8, mode1: depth D16 */
+					mode0 {
+						pixel_t = "grey_y16";
+						num_lanes = "2";
+						csi_pixel_bit_depth = "16";
+						active_w = "1280";
+						active_h = "720";
+						tegra_sinterface = "serial_b";
+						mclk_khz = "24000";
+						pix_clk_hz = "74250000";
+						line_length = "1280"; /* 2200 */
+						embedded_metadata_height = "0";
+					};
+					gmsl-link {
+						src-csi-port = "b";
+						dst-csi-port = "a";
+						serdes-csi-link = "b";
+						csi-mode = "1x4";
+						st-vc = <0>;
+						vc-id = <0>;
+						num-lanes = <2>;
+					};
+				};
+			};
+			i2c@7 {
+				reg = <0x7>;
+				#address-cells = <0x1>;
+				i2c-mux,deselect-on-exit;
+				#size-cells = <0x0>;
+
+				d4m7: d4m@1b {
+					status = "ok";
+					def-addr = <0x10>;
+					reg = <0x1b>;
+					compatible = "intel,d4xx";
+					vcc-supply = <&p2822_vdd_1v8_cvb>;
+					cam-type = "IMU";
+					maxim,gmsl-ser-device = <&ser_b>;
+					maxim,gmsl-dser-device = <&dser>;
+					ports {
+						#address-cells = <1>;
+						#size-cells = <0>;
+
+						port@0 {
+							reg = <0>;
+							d4m7_out: endpoint {
+								port-index = <7>;
+								bus-width = <2>;
+								remote-endpoint = <&csi_in7>;
+							};
+						};
+					};
+					mode0 {
+						pixel_t = "grey_y16";
+						num_lanes = "2";
+						csi_pixel_bit_depth = "16";
+						active_w = "640";
+						active_h = "480";
+						tegra_sinterface = "serial_b";
+						mclk_khz = "24000";
+						pix_clk_hz = "74250000";
+						line_length = "1280"; /* 2200 */
+						embedded_metadata_height = "0";
+					};
+					gmsl-link {
+						src-csi-port = "b";
+						dst-csi-port = "a";
+						serdes-csi-link = "b";
+						csi-mode = "1x4";
+						st-vc = <0>;
+						vc-id = <1>;
+						num-lanes = <2>;
+					};
+				};
+			};
+
+		};
+	};
+
+	host1x@13e00000 {
+		nvcsi@15a00000 {
+			#address-cells = <0x1>;
+			#size-cells = <0x0>;
+
+			num-channels = <8>;
+
+			channel@0 {
+				reg = <0x0>;
+				status = "ok";
+
+				ports {
+					#address-cells = <0x1>;
+					#size-cells = <0x0>;
+
+					port@0 {
+						reg = <0>;
+						status = "ok";
+
+						csi_in0: endpoint@0 {
+							status = "ok";
+							port-index = <0>;
+							bus-width = <2>;
+							remote-endpoint = <&d4m0_out>;
+						};
+					};
+					port@1 {
+						reg = <1>;
+						status = "ok";
+						csi_out0: endpoint@1 {
+							status = "ok";
+							remote-endpoint = <&vi_in0>;
+						};
+					};
+
+				};
+			};
+			channel@1 {
+				reg = <0x1>;
+				status = "ok";
+
+				ports {
+					#address-cells = <0x1>;
+					#size-cells = <0x0>;
+
+					port@0 {
+						reg = <0>;
+						status = "ok";
+
+						csi_in1: endpoint@2 {
+							status = "ok";
+							port-index = <0>;
+							bus-width = <2>;
+							remote-endpoint = <&d4m1_out>;
+						};
+					};
+					port@1 {
+						reg = <1>;
+						status = "ok";
+						csi_out1: endpoint@3 {
+							status = "ok";
+							remote-endpoint = <&vi_in1>;
+						};
+					};
+
+				};
+			};
+			channel@2 {
+				reg = <0x2>;
+				status = "ok";
+
+				ports {
+					#address-cells = <0x1>;
+					#size-cells = <0x0>;
+
+					port@0 {
+						reg = <0>;
+						status = "ok";
+
+						csi_in2: endpoint@4 {
+							status = "ok";
+							port-index = <0>;
+							bus-width = <2>;
+							remote-endpoint = <&d4m2_out>;
+						};
+					};
+					port@1 {
+						reg = <1>;
+						status = "ok";
+						csi_out2: endpoint@5 {
+							status = "ok";
+							remote-endpoint = <&vi_in2>;
+						};
+					};
+				};
+			};
+			channel@3 {
+				reg = <0x3>;
+				status = "ok";
+
+				ports {
+					#address-cells = <0x1>;
+					#size-cells = <0x0>;
+
+					port@0 {
+						reg = <0>;
+						status = "ok";
+
+						csi_in3: endpoint@6 {
+							status = "ok";
+							port-index = <0>;
+							bus-width = <2>;
+							remote-endpoint = <&d4m3_out>;
+						};
+					};
+					port@1 {
+						reg = <1>;
+						status = "ok";
+						csi_out3: endpoint@7 {
+							status = "ok";
+							remote-endpoint = <&vi_in3>;
+						};
+					};
+				};
+			};
+			channel@4 {
+				reg = <0x4>;
+				status = "ok";
+
+				ports {
+					#address-cells = <0x1>;
+					#size-cells = <0x0>;
+
+					port@0 {
+						reg = <0>;
+						status = "ok";
+
+						csi_in4: endpoint@8 {
+							status = "ok";
+							port-index = <0>;
+							bus-width = <2>;
+							remote-endpoint = <&d4m4_out>;
+						};
+					};
+					port@1 {
+						reg = <1>;
+						status = "ok";
+						csi_out4: endpoint@9 {
+							status = "ok";
+							remote-endpoint = <&vi_in4>;
+						};
+					};
+				};
+			};
+			channel@5 {
+				reg = <0x5>;
+				status = "ok";
+
+				ports {
+					#address-cells = <0x1>;
+					#size-cells = <0x0>;
+
+					port@0 {
+						reg = <0>;
+						status = "ok";
+
+						csi_in5: endpoint@10 {
+							status = "ok";
+							port-index = <0>;
+							bus-width = <2>;
+							remote-endpoint = <&d4m5_out>;
+						};
+					};
+					port@1 {
+						reg = <1>;
+						status = "ok";
+						csi_out5: endpoint@11 {
+							status = "ok";
+							remote-endpoint = <&vi_in5>;
+						};
+					};
+				};
+			};
+			channel@6 {
+				reg = <0x6>;
+				status = "ok";
+
+				ports {
+					#address-cells = <0x1>;
+					#size-cells = <0x0>;
+
+					port@0 {
+						reg = <0>;
+						status = "ok";
+
+						csi_in6: endpoint@12 {
+							status = "ok";
+							port-index = <0>;
+							bus-width = <2>;
+							remote-endpoint = <&d4m6_out>;
+						};
+					};
+					port@1 {
+						reg = <1>;
+						status = "ok";
+						csi_out6: endpoint@13 {
+							status = "ok";
+							remote-endpoint = <&vi_in6>;
+						};
+					};
+				};
+			};
+			channel@7 {
+				reg = <0x7>;
+				status = "ok";
+
+				ports {
+					#address-cells = <0x1>;
+					#size-cells = <0x0>;
+
+					port@0 {
+						reg = <0>;
+						status = "ok";
+
+						csi_in7: endpoint@14 {
+							status = "ok";
+							port-index = <0>;
+							bus-width = <2>;
+							remote-endpoint = <&d4m7_out>;
+						};
+					};
+					port@1 {
+						reg = <1>;
+						status = "ok";
+						csi_out7: endpoint@15 {
+							status = "ok";
+							remote-endpoint = <&vi_in7>;
+						};
+					};
+				};
+			};
+		};
+	};
+};

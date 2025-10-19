@@ -137,8 +137,9 @@ sudo cp videobuf-core.ko /lib/modules/$(uname -r)/updates/
 sudo cp videobuf-vmalloc.ko /lib/modules/$(uname -r)/updates/
 sudo depmod
 ```
+2. Add a boot option to `/boot/extlinux/extlinux.conf` by duplicating the existing default option to capture all boot arguments.
 
-2. Edit `/boot/extlinux/extlinux.conf` primary boot option's LINUX/FDT lines to use built kernel image and dtb file:
+3. Edit `LINUX/FDT` lines to use built kernel image and dtb file:
 
     ```
     LINUX /boot/d457/Image
@@ -165,6 +166,13 @@ LABEL d457
       INITRD /boot/initrd
       FDT /boot/d457/tegra194-p2888-0001-p2822-0000.dtb
       APPEND ${cbootargs} root=/dev/mmcblk0p1 rw rootwait rootfstype=ext4 console=ttyTCU0,115200n8 console=tty0 fbcon=map:0 net.ifnames=0 rootfstype=ext4
+
+LABEL d457_calib
+      MENU LABEL d457_calib kernel
+      LINUX /boot/d457/Image
+      INITRD /boot/initrd
+      FDT /boot/d457/tegra194-p2888-0001-p2822-0000.calib.dtb
+      APPEND ${cbootargs} root=/dev/mmcblk0p1 rw rootwait rootfstype=ext4 console=ttyTCU0,115200n8 console=tty0 fbcon=map:0 net.ifnames=0 rootfstype=ext4
 ```
 
 
@@ -175,6 +183,56 @@ LABEL d457
 
 After rebooting Jetson, the D457 driver should work.
 
-**NOTE**
+## Notes
 
 - It's recommended to save the original kernel image as backup boot option in `/boot/extlinux/extlinux.conf`.
+- With the introduction of meta data support for depth IR starting from release r/1.0.1.27, calibration format streaming requires a separate DTB that disables meta data. If calibration is needed, it's recommended to add `d457_calib` boot option as shown below.
+
+```
+$ cat /boot/extlinux/extlinux.conf
+TIMEOUT 30
+DEFAULT d457
+
+MENU TITLE L4T boot options
+
+LABEL primary
+      MENU LABEL primary kernel
+      LINUX /boot/Image
+      INITRD /boot/initrd
+      FDT /boot/dtb/tegra194-p2888-0001-p2822-0000.dtb
+      APPEND ${cbootargs} quiet root=/dev/mmcblk0p1 rw rootwait rootfstype=ext4 console=ttyTCU0,115200n8 console=tty0 fbcon=map:0 net.ifnames=0 rootfstype=ext4
+
+LABEL d457
+      MENU LABEL d457 kernel
+      LINUX /boot/d457/Image
+      INITRD /boot/initrd
+      FDT /boot/d457/tegra194-p2888-0001-p2822-0000.dtb
+      APPEND ${cbootargs} root=/dev/mmcblk0p1 rw rootwait rootfstype=ext4 console=ttyTCU0,115200n8 console=tty0 fbcon=map:0 net.ifnames=0 rootfstype=ext4
+
+LABEL d457_calib
+      MENU LABEL d457_calib kernel
+      LINUX /boot/d457/Image
+      INITRD /boot/initrd
+      FDT /boot/d457/tegra194-p2888-0001-p2822-0000.calib.dtb
+      APPEND ${cbootargs} root=/dev/mmcblk0p1 rw rootwait rootfstype=ext4 console=ttyTCU0,115200n8 console=tty0 fbcon=map:0 net.ifnames=0 rootfstype=ext4
+```
+
+- To generate `tegra194-p2888-0001-p2822-0000.calib.dtb` on the Host build system, replace the contents of the below files:
+    `tegra194-camera-d4xx-dual.dtsi` by the contents of `tegra194-camera-d4xx-dual.calib.dtsi`
+    `tegra194-camera-d4xx-single.dtsi` by the contents of `tegra194-camera-d4xx-single.calib.dtsi`
+
+- Reset and reapply patches and rebuild driver:
+```
+./apply_patches.sh 5.1.2 reset
+
+./apply_patches.sh 5.1.2
+
+./build_all.sh 5.1.2
+```
+
+- Deploy one DTB file on the Jetson:
+- In `./images/5.1.2/arch/arm64/boot/dts/nvidia/` folder, locate and rename the follwing file:
+    - `tegra194-p2888-0001-p2822-0000.dtb` to `tegra194-p2888-0001-p2822-0000.calib.dtb`
+- Copy `tegra194-p2888-0001-p2822-0000.calib.dtb` from Host to `/boot/d457/` on the Jetson. 
+
+

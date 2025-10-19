@@ -196,11 +196,11 @@ nvidia@ubuntu:~$ sudo dmesg | grep pca954x
 ```
 
 - Configuration with jetson-io tool system fail to boot with message "couldn't find root partition"
-Verfiy bootloader configuration
+Verify bootloader configuration
 `/boot/extlinux/extlinux.conf`
 Sometimes configuration tool missing APPEND parameters. Duplicate `primary` section `APPEND` line to `JetsonIO` `APPEND` section, verify it's similar.
 
-Exaple Bad:
+Example Bad:
 ```
 LABEL primary
     MENU LABEL primary kernel
@@ -216,7 +216,7 @@ LABEL JetsonIO
     APPEND ${cbootargs}
     OVERLAYS /boot/tegra234-camera-d4xx-overlay-dual.dtbo
 ```
-Exaple Good:
+Example Good:
 ```
 LABEL primary
     MENU LABEL primary kernel
@@ -252,4 +252,52 @@ sudo cat /proc/device-tree/compatible
 Output:
 nvidia,p3701-0000
 ```
+### Notes
+- With the introduction of meta data support for depth IR starting from release r/1.0.1.27, calibration format streaming requires a separate DTB that disables meta data since the camera does not metadata in calibration mode.
+- If calibration is needed, it's recommended to add `d457_calib` boot option as shown below.
+
+```
+LABEL primary
+    MENU LABEL primary kernel
+    LINUX /boot/Image
+    INITRD /boot/initrd
+    APPEND ${cbootargs} root=PARTUUID=634b7e44-aacc-4dd9-a769-3a664b83b159 rw rootwait rootfstype=ext4 mminit_loglevel=4 console=ttyTCU0,115200 console=ttyAMA0,115200 firmware_class.path=/etc/firmware fbcon=map:0 net.ifnames=0 nospectre_bhb video=efifb:off console=tty0 nv-auto-config
+
+LABEL JetsonIO
+    MENU LABEL Custom Header Config: <CSI Jetson RealSense Camera D457 dual>
+    LINUX /boot/Image
+    FDT /boot/dtb/kernel_tegra234-p3737-0000+p3701-0000-nv.dtb
+    INITRD /boot/initrd
+    APPEND ${cbootargs} root=PARTUUID=634b7e44-aacc-4dd9-a769-3a664b83b159 rw rootwait rootfstype=ext4 mminit_loglevel=4 console=ttyTCU0,115200 console=ttyAMA0,115200 firmware_class.path=/etc/firmware fbcon=map:0 net.ifnames=0 nospectre_bhb video=efifb:off console=tty0 nv-auto-config
+    OVERLAYS /boot/tegra234-camera-d4xx-overlay-dual.dtbo
+
+LABEL JetsonIO_calib
+    MENU LABEL Custom Header Config: <CSI Jetson RealSense Camera D457 dual - Calibration>
+    LINUX /boot/Image
+    FDT /boot/dtb/kernel_tegra234-p3737-0000+p3701-0000-nv.dtb
+    INITRD /boot/initrd
+    APPEND ${cbootargs} root=PARTUUID=634b7e44-aacc-4dd9-a769-3a664b83b159 rw rootwait rootfstype=ext4 mminit_loglevel=4 console=ttyTCU0,115200 console=ttyAMA0,115200 firmware_class.path=/etc/firmware fbcon=map:0 net.ifnames=0 nospectre_bhb video=efifb:off console=tty0 nv-auto-config
+    OVERLAYS /boot/tegra234-camera-d4xx-overlay-dual.calib.dtbo
+```
+
+- To generate `tegra234-camera-d4xx-overlay.calib.dtbo` and `tegra234-camera-d4xx-overlay-dual.calib.dtbo` on the Host build system, replace the contents of the below files:
+    `tegra234-camera-d4xx-overlay.dts` by the contents of `tegra234-camera-d4xx-overlay.calib.dts`
+    
+    `tegra234-camera-d4xx-overlay-dual.dts` by the contents of `tegra234-camera-d4xx-overlay-dual.calib.dts`
+
+- Reset and reapply patches and rebuild driver:
+```
+./apply_patches.sh 6.0 reset
+
+./apply_patches.sh 6.0
+
+./build_all.sh 6.0
+```
+
+- Deploy 2 DTBO files on the Jetson:
+- In `./images/6.0/rootfs/boot/` folder, locate and rename the following DTBO files:
+    - Rename `tegra234-camera-d4xx-overlay.dtbo` to `tegra234-camera-d4xx-overlay.calib.dtbo`
+    - Rename `tegra234-camera-d4xx-overlay-dual.dtbo` to `tegra234-camera-d4xx-overlay-dual.calib.dtbo`
+- Copy the two DTBO files from the build Host to `/boot/` on the Jetson. 
+
 ---
