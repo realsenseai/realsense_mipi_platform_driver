@@ -47,13 +47,13 @@ Assuming building for 6.2. One can also build for 6.1, 6.0 just replace the last
 ```
 git clone --branch dev --single-branch https://github.com/IntelRealSense/realsense_mipi_platform_driver.git
 cd realsense_mipi_platform_driver
-./setup_workspace.sh 6.2
-./apply_patches.sh 6.2
-./build_all.sh 6.2
+./setup_workspace.sh 6.0
+./apply_patches.sh 6.0
+./build_all.sh 6.0
 ```
 Note: dev_dbg() log support will not be enabled by default. If needed, run the `./build_all.sh` script with `--dev-dbg` option like below.
 ```
-./build_all.sh --dev-dbg 6.2
+./build_all.sh --dev-dbg 6.0
 ```
 
 
@@ -116,17 +116,38 @@ sudo cp /boot/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/tegra234-p3737-0000+p3
 
 Following steps required:
 
-1.	Copy entire directory `images/6.2/rootfs/lib/modules/5.15.148-tegra` from host to `/lib/modules/` on Orin target
-2.	Copy `tegra234-camera-d4xx-overlay.dtbo` from host to `/boot/tegra234-camera-d4xx-overlay.dtbo` on Orin target
-3.	For dual camera, copy `tegra234-camera-d4xx-overlay-dual.dtbo` from host to `/boot/tegra234-camera-d4xx-overlay-dual.dtbo` on Orin target
-4.	Copy `tegra234-p3737-0000+p3701-0000-nv.dtb` from host to `/boot/` on Orin
-5.	Copy `Image` from host to `/boot/` on Orin
-6.	Enable and run depmod scan for "extra" & "kernel" modules
-7.	Update initrd
-8.	Run  $ `sudo /opt/nvidia/jetson-io/jetson-io.py`, to exit choose save & reboot:
+1. Copy build artifacts:
+```
+sudo cp ./images/6.0/rootfs/lib/modules/5.15.136-tegra/ /lib/modules/
+sudo cp images/6.0/rootfs/boot/tegra234-camera-d4xx-overlay.dtbo /boot/tegra234-camera-d4xx-overlay.dtbo
+sudo cp ./images/6.0/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/
+sudo cp ./images/6.0/rootfs/boot/Image /boot/ -rf
+```
+Optional if you copy from a remote machine use scp:
+```
+tar xf rootfs.tar.gz
+sudo cp -r boot /
+sudo cp -r lib/modules/* /lib/modules/
+```
+2.	Enable and run depmod scan for "extra" & "kernel" modules
+```
+# enable extra & kernel modules
+# original file content: cat /etc/depmod.d/ubuntu.conf -- search updates ubuntu built-in
+sudo sed -i 's/search updates/search extra updates kernel/g' /etc/depmod.d/ubuntu.conf
+# update driver cache
+sudo depmod
+```
+3.	Update initrd
+```
+sudo update-initramfs -uk 5.15.136-tegra
+sudo rm -f /boot/initrd
+sudo ln -s /boot/initrd.img-5.15.136-tegra /boot/initrd
+```
+4.	Run  $ `sudo /opt/nvidia/jetson-io/jetson-io.py`, to exit choose save & reboot:
 	1.	Configure Jetson AGX CSI Connector
 	2.	Configure for compatible hardware
 	3.	Choose appropriate configuration:
+    4.	Choose to save & reboot
 
 ## Deploy build results on Jetson target
 On build host, copy build results to the right places.
@@ -138,24 +159,7 @@ tar czf rootfs.tar.gz -C images/6.2/rootfs boot lib
 scp rootfs.tar.gz nvidia@10.0.0.116:
 ```
 On Jetson target (user home folder) assuming backup step was followed:
-```
-tar xf rootfs.tar.gz
-sudo cp -r boot /
-sudo cp -r lib/modules/* /lib/modules/
 
-# enable extra & kernel modules
-# original file content: cat /etc/depmod.d/ubuntu.conf -- search updates ubuntu built-in
-sudo sed -i 's/search updates/search extra updates kernel/g' /etc/depmod.d/ubuntu.conf
-
-# update driver cache
-sudo depmod
-sudo update-initramfs -uk 5.15.148-tegra
-sudo rm -f /boot/initrd
-sudo ln -s /boot/initrd.img-5.15.148-tegra /boot/initrd
-
-# Enable d4xx overlay for single camera (choose to save & reboot):
-sudo /opt/nvidia/jetson-io/jetson-io.py
-```
 
 ### Verify driver loaded - on Jetson:
 - Driver API manual page [Driver API page](./README_driver.md)
