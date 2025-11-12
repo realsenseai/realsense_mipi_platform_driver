@@ -676,6 +676,45 @@ static const u16 ds5_framerate_100[] = {100};
 static const u16 ds5_framerate_90[] = {90};
 static const u16 ds5_imu_framerates[] = {50, 100, 200, 400};
 
+static const struct ds5_resolution d40x_depth_sizes[] = {
+	{
+		.width = 1280,
+		.height = 720,
+		.framerates = ds5_depth_framerate_to_30,
+		.n_framerates = ARRAY_SIZE(ds5_depth_framerate_to_30),
+	}, {
+		.width =  848,
+		.height = 480,
+		.framerates = ds5_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+	}, {
+		.width =  640,
+		.height = 480,
+		.framerates = ds5_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+	}, {
+		.width =  640,
+		.height = 360,
+		.framerates = ds5_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+	}, {
+		.width =  480,
+		.height = 270,
+		.framerates = ds5_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+	}, {
+		.width =  424,
+		.height = 240,
+		.framerates = ds5_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+	}, {
+		.width =  256,
+		.height = 144,
+		.framerates = ds5_framerate_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_90),
+	},
+};
+
 static const struct ds5_resolution d41x_depth_sizes[] = {
 	{
 		.width = 1280,
@@ -985,6 +1024,15 @@ static const struct ds5_resolution ds5_size_w10 = {
 	.n_framerates = 1,
 };
 
+static const struct ds5_resolution d40x_calibration_sizes[] = {
+	{
+		.width =  1288,
+		.height = 808,
+		.framerates = ds5_framerate_15_25,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_15_25),
+	},
+};
+
 static const struct ds5_resolution d41x_calibration_sizes[] = {
 	{
 		.width =  1920,
@@ -1037,6 +1085,26 @@ static const struct ds5_resolution ds5_size_imu_extended[] = {
 	.height = 1,
 	.framerates = ds5_imu_framerates,
 	.n_framerates = ARRAY_SIZE(ds5_imu_framerates),
+	},
+};
+
+static const struct ds5_format ds5_depth_formats_d40x[] = {
+	{
+		// TODO: 0x31 is replaced with 0x1e since it caused low FPS in Jetson.
+		.data_type = GMSL_CSI_DT_YUV422_8,	/* Z16 */
+		.mbus_code = MEDIA_BUS_FMT_UYVY8_1X16,
+		.n_resolutions = ARRAY_SIZE(d40x_depth_sizes),
+		.resolutions = d40x_depth_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_RAW_8,	/* Y8 */
+		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
+		.n_resolutions = ARRAY_SIZE(d40x_depth_sizes),
+		.resolutions = d40x_depth_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_RGB_888,	/* 24-bit Calibration */
+		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,	/* FIXME */
+		.n_resolutions = ARRAY_SIZE(d40x_calibration_sizes),
+		.resolutions = d40x_calibration_sizes,
 	},
 };
 
@@ -4812,8 +4880,6 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	if (ret < 0)
 		return ret;
 
-	dev_err(&client->dev, "EHUD_DEBUG: %s(): dev_type = %u, res = {%u, %u}\n",
-			__func__, dev_type, dw, dh);
 	dev_dbg(&client->dev, "%s(): cfg0 %x %ux%u cfg0_md %x %ux%u\n", __func__,
 		 cfg0, dw, dh, cfg0_md, yw, yh);
 
@@ -4825,8 +4891,9 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	case DS5_DEVICE_TYPE_D41X:
 		sensor->formats = ds5_depth_formats_d41x;
 		break;
-	/* TODO EHUD: Should probably be different to 457 */
 	case DS5_DEVICE_TYPE_D40X:
+		sensor->formats = ds5_depth_formats_d40x;
+		break;
 	case DS5_DEVICE_TYPE_D43X:
 	case DS5_DEVICE_TYPE_D45X:
 		sensor->formats = ds5_depth_formats_d43x;
@@ -4867,7 +4934,7 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 		sensor->formats = &ds5_41x_rgb_format;
 		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
 		break;
-	/* TODO EHUD: Should probably be different to 457 */
+	/* TODO EHUD: Should be disabled (no rgb in 401) */
 	case DS5_DEVICE_TYPE_D40X:
 	case DS5_DEVICE_TYPE_D45X:
 		sensor->formats = &ds5_rlt_rgb_format;
