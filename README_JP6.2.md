@@ -18,7 +18,8 @@ The system shall include:
 
 ### Links
 - Intel® RealSense™ camera driver for GMSL* interface [Front Page](./README.md)
-- NVIDIA® Jetson AGX Orin™ board setup - AGX Orin™ [JetPack 6.x](./README_JP6.md) setup guide
+- NVIDIA® Jetson AGX Orin™ board setup - AGX Orin™ [JetPack 6.0](./README_JP6.0.md) setup guide
+- NVIDIA® Jetson AGX Orin™ board setup - AGX Orin™ [JetPack 6.2](./README_JP6.2.md) setup guide
 - NVIDIA® Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 5.x.2](./README_JP5.md) setup guide
 - NVIDIA® Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 4.6.1](./README_JP4.md) setup guide
 - Build Tools manual page [Build Manual page](./README_tools.md)
@@ -116,46 +117,54 @@ sudo cp /boot/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/tegra234-p3737-0000+p3
 
 Following steps required:
 
-1.	Copy entire directory `images/6.2/rootfs/lib/modules/5.15.148-tegra` from host to `/lib/modules/` on Orin target
-2.	Copy `tegra234-camera-d4xx-overlay.dtbo` from host to `/boot/tegra234-camera-d4xx-overlay.dtbo` on Orin target
-3.	For dual camera, copy `tegra234-camera-d4xx-overlay-dual.dtbo` from host to `/boot/tegra234-camera-d4xx-overlay-dual.dtbo` on Orin target
-4.	Copy `tegra234-p3737-0000+p3701-0000-nv.dtb` from host to `/boot/` on Orin
-5.	Copy `Image` from host to `/boot/` on Orin
-6.	Enable and run depmod scan for "extra" & "kernel" modules
-7.	Update initrd
-8.	Run  $ `sudo /opt/nvidia/jetson-io/jetson-io.py`, to exit choose save & reboot:
+1. Copy build artifacts:
+If you build locally use those commands:
+```
+sudo cp -r ./images/6.2/rootfs/lib/modules/5.15.148-tegra /lib/modules/.
+sudo cp    ./images/6.2/rootfs/boot/tegra234-camera-d4xx-overlay.dtbo /boot/.
+sudo cp    ./images/6.2/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/dtb/.
+sudo cp    ./images/6.2/rootfs/boot/Image /boot/
+```
+In case of scp copy from host use this commands:
+```
+tar xf rootfs.tar.gz
+sudo cp -r ./lib/modules/5.15.148-tegra /lib/modules/.
+sudo cp    ./boot/tegra234-camera-d4xx-overlay.dtbo /boot/.
+sudo cp    ./boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/dtb/.
+sudo cp    ./boot/Image /boot/
+```
+2.	Run  $ `sudo /opt/nvidia/jetson-io/jetson-io.py`, to exit choose save & reboot:
 	1.	Configure Jetson AGX CSI Connector
 	2.	Configure for compatible hardware
 	3.	Choose appropriate configuration:
+ 		i.	Jetson RealSense Camera D457
+		ii. Jetson RealSense Camera D457 dual
+    5.	Choose to save & reboot
 
-## Deploy build results on Jetson target
-On build host, copy build results to the right places.
-Assuming user 'nvidia' on Jetson with ip: `10.0.0.116` (if building natively on Jetson use $USER@localhost):
-
+3.	Enable and run depmod scan for "extra" & "kernel" modules
 ```
-# Configuration files
-tar czf rootfs.tar.gz -C images/6.2/rootfs boot lib
-scp rootfs.tar.gz nvidia@10.0.0.116:
-```
-On Jetson target (user home folder) assuming backup step was followed:
-```
-tar xf rootfs.tar.gz
-sudo cp -r boot /
-sudo cp -r lib/modules/* /lib/modules/
-
 # enable extra & kernel modules
 # original file content: cat /etc/depmod.d/ubuntu.conf -- search updates ubuntu built-in
 sudo sed -i 's/search updates/search extra updates kernel/g' /etc/depmod.d/ubuntu.conf
-
 # update driver cache
 sudo depmod
-sudo update-initramfs -uk 5.15.148-tegra
-sudo rm -f /boot/initrd
-sudo ln -s /boot/initrd.img-5.15.148-tegra /boot/initrd
-
-# Enable d4xx overlay for single camera (choose to save & reboot):
-sudo /opt/nvidia/jetson-io/jetson-io.py
+echo "d4xx" | sudo tee /etc/modules-load.d/d4xx.conf
 ```
+4.
+Verify bootloader configuration
+```
+cat /boot/extlinux/extlinux.conf
+----<CUT>----
+LABEL JetsonIO
+    MENU LABEL Custom Header Config: <CSI Jetson RealSense Camera D457>
+    LINUX /boot/dev/Image
+    FDT /boot/dtb/kernel_tegra234-p3737-0000+p3701-0000-nv.dtb
+    APPEND ${cbootargs} root=PARTUUID=bbb3b34e-......
+    OVERLAYS /boot/tegra234-camera-d4xx-overlay.dtbo
+----<CUT>----
+```
+On Jetson target (user home folder) assuming backup step was followed:
+
 
 ### Verify driver loaded - on Jetson:
 - Driver API manual page [Driver API page](./README_driver.md)
