@@ -296,15 +296,15 @@ LABEL JetsonIO_calib
 
 - Reset and reapply patches and rebuild driver:
 ```
-./apply_patches.sh 6.0 reset
+./apply_patches.sh 6.2 reset
 
-./apply_patches.sh 6.0
+./apply_patches.sh 6.2
 
-./build_all.sh 6.0
+./build_all.sh 6.2
 ```
 
 - Deploy 2 DTBO files on the Jetson:
-- In `./images/6.0/rootfs/boot/` folder, locate and rename the following DTBO files:
+- In `./images/6.2/rootfs/boot/` folder, locate and rename the following DTBO files:
     - Rename `tegra234-camera-d4xx-overlay.dtbo` to `tegra234-camera-d4xx-overlay.calib.dtbo`
     - Rename `tegra234-camera-d4xx-overlay-dual.dtbo` to `tegra234-camera-d4xx-overlay-dual.calib.dtbo`
 - Copy the two DTBO files from the build Host to `/boot/` on the Jetson. 
