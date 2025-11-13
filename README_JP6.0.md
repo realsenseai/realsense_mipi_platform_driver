@@ -129,22 +129,18 @@ Following steps required:
 1. Copy build artifacts:
 If you build locally use those commands:
 ```
-mkdir /boot/dev
-mkdir /boot/dev/dtb
 sudo cp -r ./images/6.0/rootfs/lib/modules/5.15.136-tegra /lib/modules/.
-sudo cp    ./images/6.0/rootfs/boot/tegra234-camera-d4xx-overlay.dtbo /boot/dev/.
-sudo cp    ./images/6.0/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/dev/dtb/.
-sudo cp    ./images/6.0/rootfs/boot/Image /boot/dev 
+sudo cp    ./images/6.0/rootfs/boot/tegra234-camera-d4xx-overlay.dtbo /boot/.
+sudo cp    ./images/6.0/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/dtb/.
+sudo cp    ./images/6.0/rootfs/boot/Image /boot/
 ```
 In case of scp copy from host use this commands:
 ```
 tar xf rootfs.tar.gz
-mkdir /boot/dev
-mkdir /boot/dev/dtb
 sudo cp -r ./lib/modules/5.15.136-tegra /lib/modules/.
-sudo cp    ./boot/tegra234-camera-d4xx-overlay.dtbo /boot/dev/.
-sudo cp    ./boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/dev/dtb/.
-sudo cp    ./boot/Image /boot/dev 
+sudo cp    ./boot/tegra234-camera-d4xx-overlay.dtbo /boot/.
+sudo cp    ./boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/dtb/.
+sudo cp    ./boot/Image /boot/
 ```
 2.	Run  $ `sudo /opt/nvidia/jetson-io/jetson-io.py`, to exit choose save & reboot:
 	1.	Configure Jetson AGX CSI Connector
