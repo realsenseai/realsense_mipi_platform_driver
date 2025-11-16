@@ -166,7 +166,7 @@ cat /boot/extlinux/extlinux.conf
 ----<CUT>----
 LABEL JetsonIO
     MENU LABEL Custom Header Config: <CSI Jetson RealSense Camera D457>
-    LINUX /boot/dev/Image
+    LINUX /boot/Image
     FDT /boot/dtb/kernel_tegra234-p3737-0000+p3701-0000-nv.dtb
     APPEND ${cbootargs} root=PARTUUID=bbb3b34e-......
     OVERLAYS /boot/tegra234-camera-d4xx-overlay.dtbo
