@@ -15,7 +15,7 @@ The system shall include:
 
 # Documentation
 
-- NVIDIA® Jetson AGX Orin™ board setup - AGX Orin™ [JetPack 6.x](./README_JP6.md) setup guide
+- NVIDIA® Jetson AGX Orin™ board setup - AGX Orin™ [JetPack 6.0](./README_JP6.0.md) setup guide
 - NVIDIA® Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 5.x.2](./README_JP5.md) setup guide
 - NVIDIA® Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 4.6.1](./README_JP4.md) setup guide
 - Build Tools manual page [Build Manual page](./README_tools.md)
@@ -29,7 +29,8 @@ Please follow the [instruction](https://docs.nvidia.com/sdk-manager/install-with
 
 # JetPack build
 
-- [JetPack 6.x](./README_JP6.md#build-environment-prerequisites)
+- [JetPack 6.0](./README_JP6.0.md#build-environment-prerequisites)
+- [JetPack 6.2](./README_JP6.2.md#build-environment-prerequisites)
 - [JetPack 5.x.2](./README_JP5.md#build-kernel-dtb-and-d457-driver)
 - [JetPack 4.6.1](./README_JP4.md#build-kernel-dtb-and-d457-driver)
 
