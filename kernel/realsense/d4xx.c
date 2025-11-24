@@ -1014,6 +1014,15 @@ static const struct ds5_resolution d46x_calibration_sizes[] = {
 	},
 };
 
+static const struct ds5_resolution ds5_calibration_sizes[] = {
+	{
+		.width =  1280,
+		.height = 800,
+		.framerates = ds5_framerate_15_25,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_15_25),
+	},
+};
+
 static const struct ds5_resolution ds5_size_imu[] = {
 	{
 	.width = 32,
@@ -1111,8 +1120,8 @@ static const struct ds5_format ds5_y_formats_ds5u[] = {
 	}, {
 		.data_type = GMSL_CSI_DT_RGB_888,	/* 24-bit Calibration */
 		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,	/* FIXME */
-		.n_resolutions = ARRAY_SIZE(d43x_calibration_sizes),
-		.resolutions = d43x_calibration_sizes,
+		.n_resolutions = ARRAY_SIZE(ds5_calibration_sizes),
+		.resolutions = ds5_calibration_sizes,
 	},
 };
 
@@ -1713,9 +1722,7 @@ static int ds5_configure(struct ds5 *state)
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	data_type1 = sensor->config.format->data_type;
 	data_type2 = state->is_imu ? 0x00 : md_fmt;
-	/* do not have metadata for y12i */
-	if (state->is_y8 && data_type1 == GMSL_CSI_DT_RGB_888)
-		data_type2 = 0;
+
 	vc_id = state->g_ctx.dst_vc;
 
 	ret = ds5_setup_pipeline(state, data_type1, data_type2, sensor->pipe_id,
