@@ -406,7 +406,7 @@ int main(int argc, char** argv) {
                 fprintf(stderr, "Error opening Ir video devices\n");
                 return 1;
             }
-            setFmt(video_fd, V4L2_PIX_FMT_GREY, width, height);
+            setFmt(video_fd, V4L2_PIX_FMT_Y12I, width, height);
             setFPS(video_fd, fps);
             requestBuffers(video_fd, V4L2_BUF_TYPE_VIDEO_CAPTURE, V4L2_MEMORY_MMAP, SIZE_METADATA_BUFFERS);
             requestBuffers(md_fd, V4L2_BUF_TYPE_META_CAPTURE, V4L2_MEMORY_MMAP, SIZE_METADATA_BUFFERS);      

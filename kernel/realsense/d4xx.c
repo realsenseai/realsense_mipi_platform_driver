@@ -535,7 +535,12 @@ static int ds5_write(struct ds5 *state, u16 reg, u16 val)
 			__func__, reg, value[1], value[0]);
 
 	ret = regmap_raw_write(state->regmap, reg, value, sizeof(value));
-	if (ret < 0)
+	if (ret < 0) {
+		usleep_idle_range(100, 110);
+		ret = regmap_raw_write(state->regmap, reg, value, sizeof(value));
+	}
+
+	if( ret < 0)
 		dev_err(&state->client->dev,
 				"%s(): i2c write failed %d, 0x%04x = 0x%x\n",
 				__func__, ret, reg, val);
@@ -543,6 +548,7 @@ static int ds5_write(struct ds5 *state, u16 reg, u16 val)
 		if (state->dfu_dev.dfu_state_flag == DS5_DFU_IDLE)
 			dev_dbg(&state->client->dev, "%s(): i2c write 0x%04x: 0x%x\n",
 				__func__, reg, val);
+	usleep_idle_range(100, 110);
 
 	return ret;
 }
@@ -551,6 +557,11 @@ static int ds5_raw_write(struct ds5 *state, u16 reg,
 		const void *val, size_t val_len)
 {
 	int ret = regmap_raw_write(state->regmap, reg, val, val_len);
+	if (ret < 0) {
+		usleep_idle_range(100, 110);
+		ret = regmap_raw_write(state->regmap, reg, val, val_len);
+	}
+
 	if (ret < 0)
 		dev_err(&state->client->dev,
 				"%s(): i2c raw write failed %d, %04x size(%d) bytes\n",
@@ -561,20 +572,28 @@ static int ds5_raw_write(struct ds5 *state, u16 reg,
 					"%s(): i2c raw write 0x%04x: %d bytes\n",
 					__func__, reg, (int)val_len);
 
+	usleep_idle_range(100, 110);
+
 	return ret;
 }
 
 static int ds5_read(struct ds5 *state, u16 reg, u16 *val)
 {
 	int ret = regmap_raw_read(state->regmap, reg, val, 2);
+	if (ret < 0) {
+		usleep_idle_range(100, 110);
+		ret = regmap_raw_read(state->regmap, reg, val, 2);
+	}
+
 	if (ret < 0)
 		dev_err(&state->client->dev, "%s(): i2c read failed %d, 0x%04x\n",
 				__func__, ret, reg);
-	else {
+	else
 		if (state->dfu_dev.dfu_state_flag == DS5_DFU_IDLE)
 			dev_dbg(&state->client->dev, "%s(): i2c read 0x%04x: 0x%x\n",
 					__func__, reg, *val);
-	}
+
+	usleep_idle_range(100, 110);
 
 	return ret;
 }
@@ -582,9 +601,16 @@ static int ds5_read(struct ds5 *state, u16 reg, u16 *val)
 static int ds5_raw_read(struct ds5 *state, u16 reg, void *val, size_t val_len)
 {
 	int ret = regmap_raw_read(state->regmap, reg, val, val_len);
+	if (ret < 0) {
+		usleep_idle_range(100, 110);
+		ret = regmap_raw_read(state->regmap, reg, val, val_len);
+	}
+
 	if (ret < 0)
 		dev_err(&state->client->dev, "%s(): i2c read failed %d, 0x%04x\n",
 			__func__, ret, reg);
+
+	usleep_idle_range(100, 110);
 
 	return ret;
 }
@@ -1728,7 +1754,7 @@ static int ds5_configure(struct ds5 *state)
 	ret = ds5_setup_pipeline(state, data_type1, data_type2, sensor->pipe_id,
 				 vc_id);
 	// reset data path when switching to Y12I
-	if (state->is_y8 && data_type1 == GMSL_CSI_DT_RGB_888)
+	if (false && state->is_y8 && data_type1 == GMSL_CSI_DT_RGB_888)
 		max9296_reset_oneshot(state->dser_dev);
 	if (ret < 0)
 		return ret;
@@ -4453,7 +4479,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 		// reset data path when Y12I streaming is done
-		if (state->is_y8 &&
+		if (false && state->is_y8 &&
 			state->ir.sensor.config.format->data_type ==
 			GMSL_CSI_DT_RGB_888) {
 			max9296_reset_oneshot(state->dser_dev);
