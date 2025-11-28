@@ -270,7 +270,7 @@ int main(int argc, char** argv) {
     stream_repeat      = inputArgs[7];
 
     printf("\nTest started: Number of iterations of stream start and stop is %u",stream_repeat);
-    printf("\nrealsense:    RESOLUTION: %u*%u,    FPS: %u\n", width,height,fps);
+    printf("\nrealsense:    RESOLUTION: %u*%u,    FPS: %u\n", width, height, fps);
     temp_strem_inputvalue = stream_repeat;
 
     while (stream_repeat) {
@@ -397,7 +397,18 @@ int main(int argc, char** argv) {
         }
 
         if(Ir_en) {    
-            printf("\n/**************Streaming IR frames start: iteration:%u *****************/\n",temp_strem_inputvalue-stream_repeat);
+            uint32_t format = V4L2_PIX_FMT_GREY;
+            uint16_t iter = temp_strem_inputvalue - stream_repeat;
+            uint16_t size = 1;
+
+            if (iter % 2) {
+                format = V4L2_PIX_FMT_Y12I;
+                width = 1280;
+                height = 800;
+                fps = 25;
+		size = 4;
+            }
+            printf("\n/**************Streaming IR frames start: iteration:%u *****************/\n",iter);
             mdVideoNode = "/dev/video4";
             video_fd = open(mdVideoNode, O_RDWR);
             mdVideoNode = "/dev/video5";
@@ -406,7 +417,8 @@ int main(int argc, char** argv) {
                 fprintf(stderr, "Error opening Ir video devices\n");
                 return 1;
             }
-            setFmt(video_fd, V4L2_PIX_FMT_GREY, width, height);
+	    printf("realsense: %4s: %u*%u/%u\n", (char*)&format, width, height, fps);
+            setFmt(video_fd, format, width, height);
             setFPS(video_fd, fps);
             requestBuffers(video_fd, V4L2_BUF_TYPE_VIDEO_CAPTURE, V4L2_MEMORY_MMAP, SIZE_METADATA_BUFFERS);
             requestBuffers(md_fd, V4L2_BUF_TYPE_META_CAPTURE, V4L2_MEMORY_MMAP, SIZE_METADATA_BUFFERS);      
@@ -417,7 +429,7 @@ int main(int argc, char** argv) {
                     V4L2_BUF_TYPE_VIDEO_CAPTURE,
                     V4L2_MEMORY_MMAP,
                     i,
-                    width * height);
+                    width * height * size);
                 metaDataBuffers[i] = queryMapQueueBuf(md_fd,
                     V4L2_BUF_TYPE_META_CAPTURE,
                     V4L2_MEMORY_MMAP,

@@ -1120,8 +1120,8 @@ static const struct ds5_format ds5_y_formats_ds5u[] = {
 	}, {
 		.data_type = GMSL_CSI_DT_RGB_888,	/* 24-bit Calibration */
 		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,	/* FIXME */
-		.n_resolutions = ARRAY_SIZE(ds5_calibration_sizes),
-		.resolutions = ds5_calibration_sizes,
+		.n_resolutions = ARRAY_SIZE(d43x_calibration_sizes),
+		.resolutions = d43x_calibration_sizes,
 	},
 };
 
@@ -1142,6 +1142,26 @@ static const struct ds5_format ds5_y_formats_41x[] = {
 		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,	/* FIXME */
 		.n_resolutions = ARRAY_SIZE(d41x_calibration_sizes),
 		.resolutions = d41x_calibration_sizes,
+	},
+};
+
+static const struct ds5_format ds5_y_formats_45x[] = {
+	{
+		/* First format: default */
+		.data_type = GMSL_CSI_DT_RAW_8,	/* Y8 */
+		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
+		.n_resolutions = ARRAY_SIZE(y8_sizes),
+		.resolutions = y8_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_YUV422_8,	/* Y8I */
+		.mbus_code = MEDIA_BUS_FMT_VYUY8_1X16,
+		.n_resolutions = ARRAY_SIZE(y8_sizes),
+		.resolutions = y8_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_RGB_888,	/* 24-bit Calibration */
+		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,	/* FIXME */
+		.n_resolutions = ARRAY_SIZE(ds5_calibration_sizes),
+		.resolutions = ds5_calibration_sizes,
 	},
 };
 
@@ -4823,6 +4843,10 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	case DS5_DEVICE_TYPE_D41X:
 		sensor->formats = ds5_y_formats_41x;
 		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_41x);
+		break;
+	case DS5_DEVICE_TYPE_D45X:
+		sensor->formats = ds5_y_formats_45x;
+		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_45x);
 		break;
 	default:
 		sensor->formats = state->variant->formats;
