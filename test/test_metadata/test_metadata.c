@@ -218,7 +218,7 @@ void requestBuffers(int fd, uint32_t type, uint32_t memory, uint32_t count)
     }
 }
 
-void* queryMapQueueBuf(int fd, uint32_t type, uint32_t memory, uint8_t index, uint32_t size)
+void* queryMapQueueBuf(int fd, uint32_t type, uint32_t memory, uint8_t index)
 {
     struct v4l2_buffer v4l2Buffer;
     memset(&v4l2Buffer, 0, sizeof(v4l2Buffer));
@@ -229,7 +229,7 @@ void* queryMapQueueBuf(int fd, uint32_t type, uint32_t memory, uint8_t index, ui
     if (ret)
         return NULL;
     void* buffer = mmap(NULL,
-        size,
+        v4l2Buffer.length,
         PROT_READ | PROT_WRITE,
         MAP_SHARED,
         fd,
@@ -270,7 +270,7 @@ int main(int argc, char** argv) {
     stream_repeat      = inputArgs[7];
 
     printf("\nTest started: Number of iterations of stream start and stop is %u",stream_repeat);
-    printf("\nrealsense:    RESOLUTION: %u*%u,    FPS: %u\n", width, height, fps);
+    printf("\nrealsense:    RESOLUTION: %u*%u,    FPS: %u\n", width,height,fps);
     temp_strem_inputvalue = stream_repeat;
 
     while (stream_repeat) {
@@ -295,13 +295,11 @@ int main(int argc, char** argv) {
                 depthBuffers[i] = queryMapQueueBuf(video_fd,
                     V4L2_BUF_TYPE_VIDEO_CAPTURE,
                     V4L2_MEMORY_MMAP,
-                    i,
-                    2 * width * height);
+                    i);
                 metaDataBuffers[i] = queryMapQueueBuf(md_fd,
                     V4L2_BUF_TYPE_META_CAPTURE,
                     V4L2_MEMORY_MMAP,
-                    i,
-                    4096);
+                    i);
             }
 
             int ret = ioctl(md_fd, VIDIOC_STREAMON, &mdType);
@@ -356,13 +354,11 @@ int main(int argc, char** argv) {
                 depthBuffers[i] = queryMapQueueBuf(video_fd,
                     V4L2_BUF_TYPE_VIDEO_CAPTURE,
                     V4L2_MEMORY_MMAP,
-                    i,
-                    2 * width * height);
+                    i);
                 metaDataBuffers[i] = queryMapQueueBuf(md_fd,
                     V4L2_BUF_TYPE_META_CAPTURE,
                     V4L2_MEMORY_MMAP,
-                    i,
-                    4096);
+                    i);
             }
 
             int ret = ioctl(md_fd, VIDIOC_STREAMON, &mdType);
@@ -397,18 +393,7 @@ int main(int argc, char** argv) {
         }
 
         if(Ir_en) {    
-            uint32_t format = V4L2_PIX_FMT_GREY;
-            uint16_t iter = temp_strem_inputvalue - stream_repeat;
-            uint16_t size = 1;
-
-            if (iter % 2) {
-                format = V4L2_PIX_FMT_Y12I;
-                width = 1280;
-                height = 800;
-                fps = 25;
-		size = 4;
-            }
-            printf("\n/**************Streaming IR frames start: iteration:%u *****************/\n",iter);
+            printf("\n/**************Streaming IR frames start: iteration:%u *****************/\n",temp_strem_inputvalue-stream_repeat);
             mdVideoNode = "/dev/video4";
             video_fd = open(mdVideoNode, O_RDWR);
             mdVideoNode = "/dev/video5";
@@ -417,7 +402,8 @@ int main(int argc, char** argv) {
                 fprintf(stderr, "Error opening Ir video devices\n");
                 return 1;
             }
-	    printf("realsense: %4s: %u*%u/%u\n", (char*)&format, width, height, fps);
+            uint32_t format = V4L2_PIX_FMT_GREY;
+            if (stream_repeat % 2) format = V4L2_PIX_FMT_Y12I;
             setFmt(video_fd, format, width, height);
             setFPS(video_fd, fps);
             requestBuffers(video_fd, V4L2_BUF_TYPE_VIDEO_CAPTURE, V4L2_MEMORY_MMAP, SIZE_METADATA_BUFFERS);
@@ -428,13 +414,11 @@ int main(int argc, char** argv) {
                 depthBuffers[i] = queryMapQueueBuf(video_fd,
                     V4L2_BUF_TYPE_VIDEO_CAPTURE,
                     V4L2_MEMORY_MMAP,
-                    i,
-                    width * height * size);
+                    i);
                 metaDataBuffers[i] = queryMapQueueBuf(md_fd,
                     V4L2_BUF_TYPE_META_CAPTURE,
                     V4L2_MEMORY_MMAP,
-                    i,
-                    4096);
+                    i);
             }
 
             int ret = ioctl(md_fd, VIDIOC_STREAMON, &mdType);
