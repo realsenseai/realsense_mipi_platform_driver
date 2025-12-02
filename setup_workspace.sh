@@ -43,7 +43,7 @@ export DEVDIR=$(cd `dirname $0` && pwd)
 echo "Setup JetPack $1 to sources_$JETPACK_VERSION"
 
 # Display NVIDIA license
-DisplayNvidiaLicense "${REVISION}" "${LICENSE}"
+# DisplayNvidiaLicense "${REVISION}" "${LICENSE}"
 
 # Install L4T gcc if not installed
 if [[ $(uname -m) == aarch64 ]]; then
