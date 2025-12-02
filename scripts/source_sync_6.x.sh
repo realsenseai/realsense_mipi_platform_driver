@@ -191,6 +191,7 @@ function DownloadAndSync {
 	else
 		echo "Downloading default $WHAT source..."
 		echo "YM debug"
+		echo "Clone into: $REPO_URL source dir: "$LDK_SOURCE_DIR"
 		if ! git clone -n "$REPO_URL" ${LDK_SOURCE_DIR} 2>&1 >/dev/null; then
 			echo "$2 source sync failed"
 			return 3
