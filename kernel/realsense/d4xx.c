@@ -659,12 +659,9 @@ static const u16 ds5_framerates[] = {5, 30};
 #define DS5_FRAMERATE_DEFAULT_IDX 1
 
 static const u16 ds5_framerate_30 = 30;
-
-static const u16 ds5_framerate_15_30[] = {15, 30};
-
 static const u16 ds5_framerate_25 = 25;
+static const u16 ds5_framerate_15_30[] = {15, 30};
 static const u16 ds5_framerate_15_25[] = {15, 25};
-
 static const u16 ds5_depth_framerate_to_30[] = {5, 15, 30};
 static const u16 ds5_framerate_to_30[] = {5, 10, 15, 30};
 static const u16 ds5_framerate_to_60[] = {5, 15, 30, 60};
@@ -1005,21 +1002,21 @@ static const struct ds5_resolution d43x_calibration_sizes[] = {
 	},
 };
 
+static const struct ds5_resolution d45x_calibration_sizes[] = {
+	{
+		.width =  1280,
+		.height = 800,
+		.framerates = ds5_framerate_15_25,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_15_25),
+	},
+};
+
 static const struct ds5_resolution d46x_calibration_sizes[] = {
 	{
 		.width =  1600,
 		.height = 1300,
 		.framerates = ds5_framerate_15_30,
 		.n_framerates = ARRAY_SIZE(ds5_framerate_15_30),
-	},
-};
-
-static const struct ds5_resolution ds5_calibration_sizes[] = {
-	{
-		.width =  1280,
-		.height = 800,
-		.framerates = ds5_framerate_15_25,
-		.n_framerates = ARRAY_SIZE(ds5_framerate_15_25),
 	},
 };
 
@@ -1138,8 +1135,8 @@ static const struct ds5_format ds5_y_formats_41x[] = {
 		.n_resolutions = ARRAY_SIZE(y8_41x_sizes),
 		.resolutions = y8_41x_sizes,
 	}, {
-		.data_type = GMSL_CSI_DT_RGB_888,	/* 24-bit Calibration */
-		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,	/* FIXME */
+		.data_type = GMSL_CSI_DT_RGB_888,	/* Y12I, 24-bit Calibration */
+		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,
 		.n_resolutions = ARRAY_SIZE(d41x_calibration_sizes),
 		.resolutions = d41x_calibration_sizes,
 	},
@@ -1158,10 +1155,10 @@ static const struct ds5_format ds5_y_formats_45x[] = {
 		.n_resolutions = ARRAY_SIZE(y8_sizes),
 		.resolutions = y8_sizes,
 	}, {
-		.data_type = GMSL_CSI_DT_RGB_888,	/* 24-bit Calibration */
-		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,	/* FIXME */
-		.n_resolutions = ARRAY_SIZE(ds5_calibration_sizes),
-		.resolutions = ds5_calibration_sizes,
+		.data_type = GMSL_CSI_DT_RGB_888,	/* Y12I, 24-bit Calibration */
+		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,
+		.n_resolutions = ARRAY_SIZE(d45x_calibration_sizes),
+		.resolutions = d45x_calibration_sizes,
 	},
 };
 
