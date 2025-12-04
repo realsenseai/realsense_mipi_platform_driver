@@ -659,12 +659,9 @@ static const u16 ds5_framerates[] = {5, 30};
 #define DS5_FRAMERATE_DEFAULT_IDX 1
 
 static const u16 ds5_framerate_30 = 30;
-
-static const u16 ds5_framerate_15_30[] = {15, 30};
-
 static const u16 ds5_framerate_25 = 25;
+static const u16 ds5_framerate_15_30[] = {15, 30};
 static const u16 ds5_framerate_15_25[] = {15, 25};
-
 static const u16 ds5_depth_framerate_to_30[] = {5, 15, 30};
 static const u16 ds5_framerate_to_30[] = {5, 10, 15, 30};
 static const u16 ds5_framerate_to_60[] = {5, 15, 30, 60};
@@ -1005,6 +1002,15 @@ static const struct ds5_resolution d43x_calibration_sizes[] = {
 	},
 };
 
+static const struct ds5_resolution d45x_calibration_sizes[] = {
+	{
+		.width =  1280,
+		.height = 800,
+		.framerates = ds5_framerate_15_25,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_15_25),
+	},
+};
+
 static const struct ds5_resolution d46x_calibration_sizes[] = {
 	{
 		.width =  1600,
@@ -1129,10 +1135,30 @@ static const struct ds5_format ds5_y_formats_41x[] = {
 		.n_resolutions = ARRAY_SIZE(y8_41x_sizes),
 		.resolutions = y8_41x_sizes,
 	}, {
-		.data_type = GMSL_CSI_DT_RGB_888,	/* 24-bit Calibration */
-		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,	/* FIXME */
+		.data_type = GMSL_CSI_DT_RGB_888,	/* Y12I, 24-bit Calibration */
+		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,
 		.n_resolutions = ARRAY_SIZE(d41x_calibration_sizes),
 		.resolutions = d41x_calibration_sizes,
+	},
+};
+
+static const struct ds5_format ds5_y_formats_45x[] = {
+	{
+		/* First format: default */
+		.data_type = GMSL_CSI_DT_RAW_8,	/* Y8 */
+		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
+		.n_resolutions = ARRAY_SIZE(y8_sizes),
+		.resolutions = y8_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_YUV422_8,	/* Y8I */
+		.mbus_code = MEDIA_BUS_FMT_VYUY8_1X16,
+		.n_resolutions = ARRAY_SIZE(y8_sizes),
+		.resolutions = y8_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_RGB_888,	/* Y12I, 24-bit Calibration */
+		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,
+		.n_resolutions = ARRAY_SIZE(d45x_calibration_sizes),
+		.resolutions = d45x_calibration_sizes,
 	},
 };
 
@@ -1713,9 +1739,7 @@ static int ds5_configure(struct ds5 *state)
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	data_type1 = sensor->config.format->data_type;
 	data_type2 = state->is_imu ? 0x00 : md_fmt;
-	/* do not have metadata for y12i */
-	if (state->is_y8 && data_type1 == GMSL_CSI_DT_RGB_888)
-		data_type2 = 0;
+
 	vc_id = state->g_ctx.dst_vc;
 
 	ret = ds5_setup_pipeline(state, data_type1, data_type2, sensor->pipe_id,
@@ -4817,6 +4841,10 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 		sensor->formats = ds5_y_formats_41x;
 		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_41x);
 		break;
+	case DS5_DEVICE_TYPE_D45X:
+		sensor->formats = ds5_y_formats_45x;
+		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_45x);
+		break;
 	default:
 		sensor->formats = state->variant->formats;
 		sensor->n_formats = state->variant->n_formats;
@@ -5897,4 +5925,4 @@ MODULE_AUTHOR("Guennadi Liakhovetski <guennadi.liakhovetski@intel.com>,\n\
 				Shikun Ding <shikun.ding@intel.com>,\n\
 				Dmitry Perchanov <dmitry.perchanov@intel.com>");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("1.0.1.31");
+MODULE_VERSION("1.0.1.32");

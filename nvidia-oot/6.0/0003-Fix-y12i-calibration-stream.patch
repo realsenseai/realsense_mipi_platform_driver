@@ -1,0 +1,15 @@
+diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+index 7d07ccd7..c64dcc38 100644
+--- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
++++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+@@ -612,7 +612,8 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
+ 	trace_tegra_channel_capture_frame("sof", &ts);
+ 	vb->vb2_buf.timestamp = descr->status.sof_timestamp;
+ 
+-	if (frame_err)
++	/* TODO: Remove the branch or process the error for Y12I only */
++	if (false && frame_err)
+ 		buf->vb2_state = VB2_BUF_STATE_ERROR;
+ 	else
+ 		buf->vb2_state = VB2_BUF_STATE_DONE;
+
