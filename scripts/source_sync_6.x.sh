@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 # SPDX-FileCopyrightText: Copyright (c) 2012-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
@@ -54,6 +55,7 @@ fi
 
 # source dir
 LDK_DIR=$(cd `dirname $0` && pwd)
+LDK_DIR="${LDK_DIR}/sources"
 # script name
 SCRIPT_NAME=`basename $0`
 # info about sources.
@@ -92,7 +94,6 @@ o:tegra/v4l2-src/v4l2_libs:nv-tegra.nvidia.com/tegra/v4l2-src/v4l2_libs.git:
 "
 
 # exit on error on sync
-EOE=0
 # after processing SOURCE_INFO
 NSOURCES=0
 declare -a SOURCE_INFO_PROCESSED
@@ -110,9 +111,8 @@ function Usages {
 	echo "Use: $1 [options]"
 	echo "Available general options are,"
 	echo "     -h     :     help"
-	echo "     -e     : exit on sync error"
 	echo "     -d [DIR] : root of source is DIR"
-	echo "     -t [TAG] : Git tag that will be used to sync all the sources"
+	echo "     -t [TAG] : git tag that will be used to sync all the sources"
 	echo ""
 	echo "By default, all sources are downloaded."
 	echo "Only specified sources are downloaded, if one or more of the following options are mentioned."
@@ -176,30 +176,24 @@ function DownloadAndSync {
 	local REPO_URL="$3"
 	local TAG="$4"
 	local OPT="$5"
-	local RET=0
 
 	if [ -d "${LDK_SOURCE_DIR}" ]; then
 		echo "Directory for $WHAT, ${LDK_SOURCE_DIR}, already exists!"
-		pushd "${LDK_SOURCE_DIR}" > /dev/null
-		git status 2>&1 >/dev/null
-		if [ $? -ne 0 ]; then
+		if ! git -C $LDK_SOURCE_DIR status 2>&1 >/dev/null; then
 			echo "But the directory is not a git repository -- clean it up first"
 			echo ""
-			echo ""
-			popd > /dev/null
 			return 1
 		fi
-		git fetch --all 2>&1 >/dev/null
-		popd > /dev/null
+		if ! git -C $LDK_SOURCE_DIR fetch --all 2>&1 >/dev/null; then
+			echo "$2 source sync failed"
+			return 2
+		fi
 	else
 		echo "Downloading default $WHAT source..."
 
-		git clone "$REPO_URL" -n ${LDK_SOURCE_DIR} 2>&1 >/dev/null
-		if [ $? -ne 0 ]; then
-			echo "$2 source sync failed!"
-			echo ""
-			echo ""
-			return 1
+		if ! git clone -n "$REPO_URL" ${LDK_SOURCE_DIR} 2>&1 >/dev/null; then
+			echo "$2 source sync failed"
+			return 3
 		fi
 
 		echo "The default $WHAT source is downloaded in: ${LDK_SOURCE_DIR}"
@@ -213,28 +207,28 @@ function DownloadAndSync {
 		UpdateTags $OPT $TAG
 	fi
 
-	if [ ! -z "$TAG" ]; then
-		pushd ${LDK_SOURCE_DIR} > /dev/null
-		git tag -l 2>/dev/null | grep -q -P "^$TAG\$"
-		if [ $? -eq 0 ]; then
+	if [[ -n "$TAG" ]]; then
+		if [ -n $(git -C $LDK_SOURCE_DIR tag -l "^$TAG\$") ]; then
 			echo "Syncing up with tag $TAG..."
-			git checkout -b mybranch_$(date +%Y-%m-%d-%s) $TAG
-			echo "$2 source sync'ed to tag $TAG successfully!"
+			if git -C $LDK_SOURCE_DIR checkout -b mybranch_$(date +%Y-%m-%d-%s) $TAG; then
+				echo "$2 source sync'ed to tag $TAG successfully!"
+			else
+				echo "$2 could not sync to tag $TAG!"
+				echo
+				return 4
+			fi
 		else
 			echo "Couldn't find tag $TAG"
 			echo "$2 source sync to tag $TAG failed!"
-			RET=1
+			echo
+			return 5
 		fi
-		popd > /dev/null
 	fi
-	echo ""
-	echo ""
-
-	return "$RET"
+	echo
 }
 
 # prepare processing ....
-GETOPT=":ehd:t:"
+GETOPT=":hd:t:"
 
 OIFS="$IFS"
 IFS=$(echo -en "\n\b")
@@ -260,9 +254,6 @@ while getopts "$GETOPT" opt; do
 					LDK_DIR="$OPTARG"
 					;;
 			esac
-			;;
-		e)
-			EOE=1
 			;;
 		h)
 			Usages "$SCRIPT_NAME"
@@ -321,7 +312,6 @@ while getopts "$GETOPT" opt; do
 done
 shift $((OPTIND-1))
 
-GRET=0
 for ((i=0; i < NSOURCES; i++)); do
 	OPT=$(echo "${SOURCE_INFO_PROCESSED[i]}" | cut -f 1 -d ':')
 	WHAT=$(echo "${SOURCE_INFO_PROCESSED[i]}" | cut -f 2 -d ':')
@@ -330,15 +320,17 @@ for ((i=0; i < NSOURCES; i++)); do
 	DNLOAD=$(echo "${SOURCE_INFO_PROCESSED[i]}" | cut -f 5 -d ':')
 
 	if [ $DALL -eq 1 -o "x${DNLOAD}" == "xy" ]; then
-		DownloadAndSync "$WHAT" "${LDK_DIR}/${WHAT}" "git://${REPO}" "${TAG}" "${OPT}"
-		tRET=$?
-		let GRET=GRET+tRET
-		if [ $tRET -ne 0 -a $EOE -eq 1 ]; then
-			exit $tRET
+		if DownloadAndSync "$WHAT" "${LDK_DIR}/${WHAT}" "https://${REPO}" "${TAG}" "${OPT}"; then
+			true
+		else
+			if [[ $? == 3 ]]; then
+				echo "Trying git protocol"
+				DownloadAndSync "$WHAT" "${LDK_DIR}/${WHAT}" "git://${REPO}" "${TAG}" "${OPT}"
+			else
+				exit 1
+			fi
 		fi
 	fi
 done
 
 ln -sf ../../../../../../nvethernetrm ${LDK_DIR}/nvidia-oot/drivers/net/ethernet/nvidia/nvethernet/nvethernetrm
-
-exit $GRET

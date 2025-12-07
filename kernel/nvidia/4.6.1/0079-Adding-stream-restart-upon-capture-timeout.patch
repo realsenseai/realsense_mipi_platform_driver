@@ -1,0 +1,57 @@
+From dd18e8be0085284127b347bc3f30a4ccda1de590 Mon Sep 17 00:00:00 2001
+From: ejgoldik <ehud.joseph.goldik@realsenseai.com>
+Date: Thu, 18 Sep 2025 16:42:11 +0300
+Subject: [PATCH] Adding stream restart upon capture timeout
+
+Ehud J. Goldik <ehud.joseph.goldik@realsenseai.com>
+---
+ .../media/platform/tegra/camera/vi/vi5_fops.c | 25 ++++++++++++++++++-
+ 1 file changed, 24 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+index 6d6e1777e..67dc5179b 100644
+--- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
++++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+@@ -501,6 +501,24 @@ done:
+ 	return err;
+ }
+ 
++static int vi5_attempt_restart_stream(struct tegra_channel *chan)
++{
++	int err = -EPERM;
++
++	if (chan->num_subdevs > 1) {
++		/* Restart meant for D4xx devices where device 1 is DS5 mux */
++		if (strncmp(chan->subdev[1]->name, "DS5 mux", 7) == 0) {
++			/* Stream OFF */
++			err = v4l2_subdev_call(chan->subdev[1], video, s_stream, 0);
++			if (err == 0) {
++				/* Stream ON */
++				err = v4l2_subdev_call(chan->subdev[1], video, s_stream, 1);
++			}
++		}
++	}
++	return err;
++}
++
+ static void vi5_capture_dequeue(struct tegra_channel *chan,
+ 	struct tegra_channel_buffer *buf)
+ {
+@@ -524,8 +540,13 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
+ 		if (err) {
+ 			if (err == -ETIMEDOUT) {
+ 				dev_err(vi->dev,
+-					"uncorr_err: request timed out after %d ms\n",
++					"uncorr_err: request timed out after %d ms - attempting restart\n",
+ 					CAPTURE_TIMEOUT_MS);
++				err = vi5_attempt_restart_stream(chan);
++				if (err != 0) {
++					dev_err(vi->dev,
++						"uncorr_err: Restart failed\n");
++				}
+ 			} else {
+ 				dev_err(vi->dev, "uncorr_err: request err %d\n", err);
+ 			}
+-- 
+2.43.0
+

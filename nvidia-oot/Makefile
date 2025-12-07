@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2023-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 
 KERNEL_HEADERS ?= /lib/modules/$(shell uname -r)/build
@@ -13,6 +13,10 @@ $(error source directory cannot contain spaces or colons)
 endif
 
 NPROC ?= $(shell nproc)
+
+ifeq ("$(wildcard $(KERNEL_OUTPUT))","")
+$(error kernel headers/output directory "$(KERNEL_OUTPUT)" does not exist!)
+endif
 
 .PHONY : help modules modules_install clean conftest nvidia-headers hwpm nvidia-oot nvgpu
 
@@ -39,7 +43,7 @@ ifeq ($(MAKECMDGOALS), modules)
 	@echo   "================================================================================"
 	mkdir -p $(NVIDIA_CONFTEST)/nvidia;
 	cp -av $(MAKEFILE_DIR)/nvidia-oot/scripts/conftest/* $(NVIDIA_CONFTEST)/nvidia/;
-	$(MAKE) ARCH=arm64 \
+	$(MAKE) -j $(NPROC) ARCH=arm64 \
 		src=$(NVIDIA_CONFTEST)/nvidia obj=$(NVIDIA_CONFTEST)/nvidia \
 		CC=$(CROSS_COMPILE)gcc LD=$(CROSS_COMPILE)ld \
 		NV_KERNEL_SOURCES=$(KERNEL_HEADERS) \
@@ -56,7 +60,7 @@ hwpm: conftest
 	@echo   "make $(MAKECMDGOALS) - hwpm ..."
 	@echo   "================================================================================"
 	$(MAKE) -j $(NPROC) ARCH=arm64 \
-		-C $(KERNEL_HEADERS) \
+		-C $(KERNEL_OUTPUT) \
 		M=$(MAKEFILE_DIR)/hwpm/drivers/tegra/hwpm \
 		CONFIG_TEGRA_OOT_MODULE=m \
 		srctree.hwpm=$(MAKEFILE_DIR)/hwpm \
@@ -72,7 +76,7 @@ nvidia-oot: conftest hwpm
 	@echo   "make $(MAKECMDGOALS) - nvidia-oot ..."
 	@echo   "================================================================================"
 	$(MAKE) -j $(NPROC) ARCH=arm64 \
-		-C $(KERNEL_HEADERS) \
+		-C $(KERNEL_OUTPUT) \
 		M=$(MAKEFILE_DIR)/nvidia-oot \
 		CONFIG_TEGRA_OOT_MODULE=m \
 		srctree.nvidia-oot=$(MAKEFILE_DIR)/nvidia-oot \
@@ -90,7 +94,7 @@ nvgpu: conftest nvidia-oot
 	@echo   "make $(MAKECMDGOALS) - nvgpu ..."
 	@echo   "================================================================================"
 	$(MAKE) -j $(NPROC) ARCH=arm64 \
-		-C $(KERNEL_HEADERS) \
+		-C $(KERNEL_OUTPUT) \
 		M=$(MAKEFILE_DIR)/nvgpu/drivers/gpu/nvgpu \
 		CONFIG_TEGRA_OOT_MODULE=m \
 		srctree.nvidia=$(MAKEFILE_DIR)/nvidia-oot \
@@ -118,9 +122,16 @@ endef
 
 
 nvidia-headers: nvidia-oot
-	mkdir -p $(NVIDIA_HEADERS) && cp -LR $(KERNEL_HEADERS)/* $(NVIDIA_HEADERS) && \
-		cp -LR $(MAKEFILE_DIR)/nvidia-oot/include/* $(NVIDIA_HEADERS)/include/ && \
-		cat $(KERNEL_HEADERS)/Module.symvers $(MAKEFILE_DIR)/nvidia-oot/Module.symvers > \
+	mkdir -p $(NVIDIA_HEADERS)
+	cp -LR $(KERNEL_HEADERS)/* $(NVIDIA_HEADERS)
+	if [ "$(KERNEL_HEADERS)" != "$(KERNEL_OUTPUT)" ] ; then \
+		cp -LR $(KERNEL_OUTPUT)/include/* $(NVIDIA_HEADERS)/include/ ; \
+		cp -LR $(KERNEL_OUTPUT)/arch/arm64/include/* $(NVIDIA_HEADERS)/arch/arm64/include/ ; \
+		cp -LR $(KERNEL_OUTPUT)/scripts/* $(NVIDIA_HEADERS)/scripts/ ; \
+		cp $(KERNEL_OUTPUT)/System.map $(NVIDIA_HEADERS)/ || true ; \
+	fi
+	cp -LR $(MAKEFILE_DIR)/nvidia-oot/include/* $(NVIDIA_HEADERS)/include/
+	cat $(KERNEL_OUTPUT)/Module.symvers $(MAKEFILE_DIR)/nvidia-oot/Module.symvers > \
 		$(NVIDIA_HEADERS)/Module.symvers
 
 
@@ -160,6 +171,7 @@ nvidia-dtbs:
 	@echo   "================================================================================"
 	TEGRA_TOP=$(MAKEFILE_DIR) \
 	srctree=$(KERNEL_HEADERS) \
+	objtree=$(KERNEL_OUTPUT) \
 	oottree=$(MAKEFILE_DIR)/nvidia-oot \
 	HOSTCC=gcc \
 	$(MAKE) -f $(MAKEFILE_DIR)/nvidia-oot/scripts/Makefile.build \

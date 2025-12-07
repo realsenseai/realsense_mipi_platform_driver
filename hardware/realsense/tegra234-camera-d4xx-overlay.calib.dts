@@ -13,7 +13,7 @@
 
 /* camera control gpio definitions */
 / {
-	overlay-name = "Jetson RealSense Camera D457";
+	overlay-name = "Jetson RealSense Camera D457 Calibration";
 	jetson-header-name = "Jetson AGX CSI Connector";
 	compatible = JETSON_COMPATIBLE;
 
@@ -270,7 +270,7 @@
 
 						i2c@1 {
 							status = "okay";
-							reg = <3>; 	// line 18-19 of the I2C switch
+							reg = <3>; 	// line 3 of the I2C switch
 							i2c-mux,deselect-on-exit;
 							#address-cells = <1>;
 							#size-cells = <0>;
@@ -364,7 +364,7 @@
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
 									line_length = "1280"; /* 2200 */
-									embedded_metadata_height = "1";
+									embedded_metadata_height = "0";
 								};
 								gmsl-link {
 									src-csi-port = "b";
@@ -379,7 +379,7 @@
 						};
 						i2c@3 {
 							status = "okay";
-							reg = <5>;	// line 4 of the I2C switch
+							reg = <5>;	// line 5 of the I2C switch
 							i2c-mux,deselect-on-exit;
 							#address-cells = <1>;
 							#size-cells = <0>;
