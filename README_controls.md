@@ -182,7 +182,19 @@ Module parameters configure the driver at load time and define the hardware topo
 
 **Scope:** Intel IPU6 configurations only (`CONFIG_VIDEO_INTEL_IPU6`)
 
-**Format:** 8 values representing VC assignments for: `[Depth, Depth_MD, RGB, RGB_MD, IR, IR_MD, IMU, IMU_MD]`
+**Format:** 8 values representing VC assignments for sensor streams
+
+**Stream Mapping:**
+| Index | Stream Type | Default VC |
+|-------|-------------|------------|
+| 0 | Depth | 0 |
+| 1 | Depth Metadata | 1 |
+| 2 | RGB | 2 |
+| 3 | RGB Metadata | 3 |
+| 4 | IR | 2 |
+| 5 | IR Metadata | 3 |
+| 6 | IMU | 0 |
+| 7 | IMU Metadata | 1 |
 
 **Example:**
 ```bash
@@ -371,7 +383,10 @@ v4l2-ctl -d /dev/video0 -C exposure_absolute
 
 #### 3.2 Custom D4xx Controls
 
-The driver implements extensive custom controls for advanced features. All custom controls use the base ID `DS5_CAMERA_CID_BASE`.
+The driver implements extensive custom controls for advanced features. All custom controls use the base ID `DS5_CAMERA_CID_BASE`, which is defined as `(V4L2_CTRL_CLASS_CAMERA | DS5_DEPTH_STREAM_DT)` = `(0x009A0000 | 0x4000)` = `0x009A4000`.
+
+**Note:** To use custom controls with v4l2-ctl, you'll need to calculate the full control ID. For example:
+- `DS5_CAMERA_CID_LASER_POWER` = `DS5_CAMERA_CID_BASE + 1` = `0x009A4001`
 
 ##### 3.2.1 Laser Power (`DS5_CAMERA_CID_LASER_POWER`)
 
@@ -1024,7 +1039,7 @@ unknown control 'laser_power'
 
 **Solutions:**
 1. List available controls: `v4l2-ctl -d /dev/video0 -L`
-2. Use control ID instead of name: `v4l2-ctl -d /dev/video0 -c 0x009a0901=1`
+2. Use control ID instead of name: `v4l2-ctl -d /dev/video0 -c 0x009a4001=1`
 3. Check sensor type - some controls only available on specific sensors
 4. Verify extended controls for array types: `v4l2-ctl --help-all`
 
@@ -1111,7 +1126,7 @@ dmesg | grep -A 20 "Probing driver for D45x"
 ## References
 
 ### Source Code
-- Main driver: `kernel/realsense/d4xx.c` (5900 lines)
+- Main driver: `kernel/realsense/d4xx.c`
 - Control definitions: Lines 1947-1971
 - V4L2 control configs: Lines 2786-3038
 - sysfs implementation: Lines 5524-5643
@@ -1185,5 +1200,5 @@ Replace `<bus>` with I2C bus number (e.g., `9`, `12`) and `<addr>` with device a
 
 **Document Version:** 1.0  
 **Last Updated:** 2025-12-07  
-**Driver Version:** Based on d4xx.c (5900 lines)  
+**Driver Source:** kernel/realsense/d4xx.c  
 **Applicable JetPack Versions:** 4.6.1, 5.0.2, 5.1.2, 6.0, 6.1, 6.2
