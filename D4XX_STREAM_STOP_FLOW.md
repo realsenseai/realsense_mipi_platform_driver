@@ -40,6 +40,72 @@ The stream stop flow is triggered when user-space applications:
 
 The driver handles these requests through a series of coordinated steps involving the V4L2 subsystem, the D4xx driver, and the camera hardware.
 
+### Stream Stop Flow - High Level Perspective
+
+When a user-space application requests to stop a video stream, the request travels through multiple layers of the software stack, each responsible for different aspects of the shutdown process.
+
+#### User Space to Kernel Transition
+The process begins in user space when an application issues a `VIDIOC_STREAMOFF` ioctl system call or closes the video device file descriptor (e.g., `/dev/video0` for depth stream). This action transitions control from user space to the kernel's V4L2 (Video for Linux 2) subsystem, which serves as the standard Linux framework for video capture devices.
+
+#### V4L2 Layer Processing
+The V4L2 subsystem receives the stop request and propagates it through its media pipeline architecture. In the D4xx driver, this architecture consists of multiple subdevices organized in a specific hierarchy:
+
+1. **Sensor Subdevice Layer**: The V4L2 framework first calls the `s_stream(on=0)` operation on the appropriate sensor subdevice (depth, RGB, IR, or IMU). This lightweight operation simply updates the sensor's internal streaming flag to indicate the stream should be stopped. The actual hardware control is delegated to the next layer.
+
+2. **Mux Subdevice Layer**: The V4L2 framework then invokes `s_stream(on=0)` on the multiplexer (mux) subdevice, which acts as the central coordinator for stream control. This is where the real work happens.
+
+#### Driver Core Processing
+The mux subdevice's `s_stream` handler (`ds5_mux_s_stream`) performs several critical steps:
+
+**Step 1 - Validation and Setup**:
+The driver first performs a sanity check to detect duplicate stop requests. If the stream is already stopped (indicated by the `sensor->streaming` flag), the function returns immediately without any hardware operations, preventing unnecessary I2C transactions and potential state corruption.
+
+**Step 2 - Stream Identification**:
+The driver identifies which type of stream is being stopped (depth, RGB, IR, or IMU) and determines the corresponding hardware configuration. Each stream type has:
+- A unique stream identifier (e.g., `DS5_STREAM_DEPTH`, `DS5_STREAM_RGB`)
+- Specific firmware register addresses for status monitoring
+- Platform-specific resource requirements (e.g., GMSL pipeline IDs)
+
+**Step 3 - Firmware Command**:
+The driver communicates with the camera firmware by writing to the `DS5_START_STOP_STREAM` register (address 0x1000) via I2C. The command is a bitwise OR of the stop flag (`DS5_STREAM_STOP` = 0x100) and the stream identifier. For example, stopping the depth stream would write the value 0x100 (stop flag) | 0x0 (depth ID) = 0x100 to register 0x1000.
+
+This firmware command instructs the camera to halt data transmission for the specified stream. The firmware is responsible for stopping the image sensor pipeline, ceasing MIPI CSI-2 data transmission, and updating its internal state.
+
+#### Platform-Specific Hardware Cleanup
+After the firmware acknowledges the stop command, the driver performs platform-specific hardware cleanup. The exact sequence varies depending on the hardware configuration:
+
+**GMSL/SerDes Platforms** (NVIDIA Jetson with MAX9295/MAX9296):
+On platforms using GMSL (Gigabit Multimedia Serial Link) over coaxial cable, the driver must properly release the deserializer resources:
+- **Pipeline Release**: The MAX9296 deserializer allocates hardware pipelines for each active stream. The driver calls `max9296_release_pipe()` to free the pipeline associated with this stream, making it available for future use.
+- **Y12I Format Special Case**: When stopping an IR stream configured with the Y12I format (12-bit infrared data packed as RGB888), the driver performs a one-shot reset of the MAX9296 deserializer. This is necessary because Y12I uses a non-standard data packing that requires clearing the deserializer's internal state machine.
+- **Multi-Stream Coordination**: On Intel IPU6 platforms with GMSL, the driver checks if any other streams are still active. Only when all streams are stopped does it issue a final deserializer reset to return the hardware to a clean idle state.
+
+**Intel IPU6 Direct MIPI Platforms**:
+On platforms with direct MIPI CSI-2 connections (no GMSL serializer/deserializer), the driver calls `d4xx_reset_oneshot()` to reset the platform-specific data path. This ensures the Intel IPU6 Image System (ISYS) is properly synchronized with the stream state change.
+
+**NVIDIA Tegra Platforms**:
+On Tegra platforms without additional reset requirements, the stream stop relies primarily on the V4L2 Tegra-specific camera framework to handle CSI and VI (Video Input) block coordination.
+
+#### Status Verification and Completion
+After hardware cleanup, the driver reads back the firmware status registers to verify the operation:
+- **Stream Status Register**: Confirms the stream has transitioned to the idle state
+- **Configuration Status Register**: Checks for any error flags (invalid data type, resolution, or frame rate)
+
+These status values are logged for debugging purposes but do not block the stop operation—the stream is considered stopped once the firmware command succeeds.
+
+#### State Update and Return
+Finally, the driver updates its internal state by setting `sensor->streaming = 0`, indicating the stream is no longer active. This flag prevents resource leaks and ensures correct behavior for subsequent stream operations.
+
+The success status propagates back through the V4L2 subsystem to user space, where the application receives confirmation that streaming has stopped and the video device can be safely closed or reconfigured.
+
+#### Error Recovery
+If any step fails (I2C communication error, firmware rejection, hardware timeout), the driver enters an error recovery path:
+- Platform resources (GMSL pipes) are released if they were allocated
+- The streaming state is restored to its previous value to maintain consistency
+- An error code is returned to user space, allowing the application to retry or handle the failure appropriately
+
+This multi-layered approach ensures robust stream shutdown across different hardware platforms while maintaining clean separation of concerns between user space, kernel frameworks, driver logic, firmware, and hardware.
+
 ### Sequence Diagram
 
 ```mermaid
