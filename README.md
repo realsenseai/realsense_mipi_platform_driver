@@ -20,6 +20,7 @@ The system shall include:
 - NVIDIA® Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 4.6.1](./README_JP4.md) setup guide
 - Build Tools manual page [Build Manual page](./README_tools.md)
 - Driver API manual page [Driver API page](./README_driver.md)
+- Driver Controls Overview [Controls page](./README_controls.md)
 
 ## NVIDIA® Jetson AGX Xavier™ and AGX Orin™ board setup
 
