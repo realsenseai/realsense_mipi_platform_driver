@@ -1,0 +1,47 @@
+name: Release JP 6.0
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #v3
+      - name: setup workspace
+        run: yes | ./setup_workspace.sh 6.0
+      - name: apply patches
+        run: git config --global user.email "builder@example.com" && git config --global user.name "builder" && ./apply_patches.sh 6.0
+      - name: build
+        run: ./build_all.sh 6.0
+      - name: Create artifact archives
+        run: |
+          JETPACK_VER="6.0"
+          KERNEL_VERSION="5.15.136-tegra"
+          # Create nvidia-oot modules archive
+          echo "Creating nvidia-oot modules archive"
+          tar -czf "./images/${JETPACK_VER}/nvidia-oot-modules.tar.gz" -C "./images/${JETPACK_VER}/rootfs/" "./lib/modules/${KERNEL_VERSION}/updates"
+          # Create kernel HID modules archive
+          echo "Creating kernel HID modules archive"
+          tar -czf "./images/${JETPACK_VER}/kernel-hid-modules.tar.gz" -C "./images/${JETPACK_VER}/rootfs/" "./lib/modules/${KERNEL_VERSION}/extra"
+          # Create rootfs archive
+          echo "Creating rootfs archive"
+          tar -cjf "./images/${JETPACK_VER}/rootfs.tar.bz2" -C "./images/${JETPACK_VER}/rootfs/" .
+      - name: Upload artifacts to GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            ./images/6.0/nvidia-oot-modules.tar.gz
+            ./images/6.0/kernel-hid-modules.tar.gz
+            ./images/6.0/rootfs/lib/modules/5.15.136-tegra/updates/drivers/media/i2c/d4xx.ko
+            ./images/6.0/rootfs.tar.bz2
+            ./images/6.0/rootfs/boot/tegra234-camera-d4xx-overlay.dtbo
+            ./images/6.0/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb
+            ./images/6.0/rootfs/boot/Image
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
