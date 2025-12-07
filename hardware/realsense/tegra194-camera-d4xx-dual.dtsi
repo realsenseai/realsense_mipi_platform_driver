@@ -296,7 +296,7 @@
 						mclk_khz = "24000";
 						pix_clk_hz = "74250000";
 						line_length = "1280"; /* 2200 */
-						embedded_metadata_height = "0";
+						embedded_metadata_height = "1";
 					};
 					gmsl-link {
 						src-csi-port = "b";
@@ -504,7 +504,7 @@
 						mclk_khz = "24000";
 						pix_clk_hz = "74250000";
 						line_length = "1280"; /* 2200 */
-						embedded_metadata_height = "0";
+						embedded_metadata_height = "1";
 					};
 					gmsl-link {
 						src-csi-port = "b";

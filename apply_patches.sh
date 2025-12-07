@@ -3,8 +3,8 @@
 set -e
 
 if [[ $# < 1 ]]; then
-    echo "apply_patches.sh [--one-cam | --dual-cam] apply [JetPack_version]"
-    echo "apply_patches.sh reset [JetPack_version]"
+    echo "apply_patches.sh [--one-cam | --dual-cam] JetPack_version [apply]"
+    echo "apply_patches.sh JetPack_version reset"
     exit 1
 fi
 
@@ -15,61 +15,71 @@ JP5_D4XX_DTSI="tegra194-camera-d4xx-single.dtsi"
 if [[ "$1" == "--one-cam" ]]; then
     JP5_D4XX_DTSI="tegra194-camera-d4xx-single.dtsi"
     shift
-fi
-if [[ "$1" == "--dual-cam" ]]; then
+elif [[ "$1" == "--dual-cam" ]]; then
     JP5_D4XX_DTSI="tegra194-camera-d4xx-dual.dtsi"
     shift
 fi
 
-DEVDIR=$(cd `dirname $0` && pwd)
+. scripts/setup-common "$1"
 
-. $DEVDIR/scripts/setup-common "$2"
-
-cd "$DEVDIR"
+ACTION="$2"
+[[ -z "$ACTION" ]] && ACTION="apply"
 
 # set JP4 devicetree
 if [[ "$JETPACK_VERSION" == "4.6.1" ]]; then
     JP5_D4XX_DTSI="tegra194-camera-d4xx.dtsi"
 fi
-if [[ "$JETPACK_VERSION" == "6.0" ]]; then
+if [[ "$JETPACK_VERSION" == "6.x" ]]; then
     D4XX_SRC_DST=nvidia-oot
 else
     D4XX_SRC_DST=kernel/nvidia
 fi
+
 # NVIDIA SDK Manager's JetPack 4.6.1 source_sync.sh doesn't set the right folder name, it mismatches with the direct tar
 # package source code. Correct the folder name.
-if [ -d sources_$JETPACK_VERSION/hardware/nvidia/platform/t19x/galen-industrial-dts ]; then
+if [[ "$ACTION" == apply && -d "sources_$JETPACK_VERSION/hardware/nvidia/platform/t19x/galen-industrial-dts" ]]; then
     mv sources_$JETPACK_VERSION/hardware/nvidia/platform/t19x/galen-industrial-dts sources_$JETPACK_VERSION/hardware/nvidia/platform/t19x/galen-industrial
+fi
+if [[ "$ACTION" == reset && -d "sources_$JETPACK_VERSION/hardware/nvidia/platform/t19x/galen-industrial" ]]; then
+    rm -rfv "sources_$JETPACK_VERSION/hardware/nvidia/platform/t19x/galen-industrial" > /dev/null
 fi
 
 apply_external_patches() {
-    if [ $1 = 'apply' ]; then
-        git -C sources_$JETPACK_VERSION/$2 am ${PWD}/$2/$JETPACK_VERSION/*
-    elif [ $1 = 'reset' ]; then
-        git -C sources_$JETPACK_VERSION/$2 reset --hard $L4T_VERSION
+    git -C "sources_$JETPACK_VERSION/$3" status > /dev/null
+    if [[ "$1" == 'apply' ]]; then
+        if ! git -C "sources_$JETPACK_VERSION/$3" diff --quiet || ! git -C "sources_$JETPACK_VERSION/$3" diff --cached --quiet; then
+	    read -p "Repo sources_$JETPACK_VERSION/$3 has changes that may disturb applying patches. Continue (y/N)? " confirm
+            [[ "$confirm" != "y" && "$confirm" != "Y" ]] && exit 1
+        fi
+        ls -Ld "${PWD}/$3/$2"
+        ls -Lw1 "${PWD}/$3/$2"
+        git -C "sources_$JETPACK_VERSION/$3" apply "${PWD}/$3/$2"/*
+    elif [ "$1" = "reset" ]; then
+        if ! git -C "sources_$JETPACK_VERSION/$3" diff --quiet || ! git -C "sources_$JETPACK_VERSION/$3" diff --cached --quiet; then
+            read -p "Repo sources_$JETPACK_VERSION/$3 has changes that will be hard reset. Continue (y/N)? " confirm
+            [[ "$confirm" != "y" && "$confirm" != "Y" ]] && exit 1
+        fi
+        echo -n "$(ls -d "sources_$JETPACK_VERSION/$3"): "
+        git -C "sources_$JETPACK_VERSION/$3" reset --hard $4
     fi
 }
 
-apply_external_patches $1 $D4XX_SRC_DST
+apply_external_patches "$ACTION" "$1" "$D4XX_SRC_DST" "$L4T_VERSION"
 
-if [ -d ${KERNEL_DIR}/${JETPACK_VERSION} ]; then
-    apply_external_patches $1 $KERNEL_DIR
-fi
+[[ -d "sources_$JETPACK_VERSION/$KERNEL_DIR" ]] && apply_external_patches "$ACTION" "$1" "$KERNEL_DIR" "$L4T_VERSION"
 
-if [[ "$JETPACK_VERSION" == "6.0" ]]; then
-    apply_external_patches $1 hardware/nvidia/t23x/nv-public
+if [[ "$JETPACK_VERSION" == "6.x" ]]; then
+    apply_external_patches "$ACTION" "$JETPACK_VERSION" "hardware/nvidia/t23x/nv-public" "$L4T_VERSION"
 else
-    apply_external_patches $1 hardware/nvidia/platform/t19x/galen/kernel-dts
+    apply_external_patches "$ACTION" "$1" "hardware/nvidia/platform/t19x/galen/kernel-dts" "$L4T_VERSION"
 fi
 
-if [ $1 = 'apply' ]; then
-    cp $DEVDIR/kernel/realsense/d4xx.c $DEVDIR/sources_$JETPACK_VERSION/${D4XX_SRC_DST}/drivers/media/i2c/
-    if [[ "$JETPACK_VERSION" == "6.0" ]]; then
+if [[ "$ACTION" = "apply" ]]; then
+    cp -i kernel/realsense/d4xx.c "sources_$JETPACK_VERSION/${D4XX_SRC_DST}/drivers/media/i2c/"
+    if [[ "$JETPACK_VERSION" == "6.x" ]]; then
         # jp6 overlay
-        cp $DEVDIR/hardware/realsense/tegra234-camera-d4xx-overlay.dts $DEVDIR/sources_$JETPACK_VERSION/hardware/nvidia/t23x/nv-public/overlay/
+        cp hardware/realsense/tegra234-camera-d4xx-overlay*.dts "sources_$JETPACK_VERSION/hardware/nvidia/t23x/nv-public/overlay/"
     else
-        cp $DEVDIR/hardware/realsense/$JP5_D4XX_DTSI $DEVDIR/sources_$JETPACK_VERSION/hardware/nvidia/platform/t19x/galen/kernel-dts/common/tegra194-camera-d4xx.dtsi
+        cp "hardware/realsense/${JP5_D4XX_DTSI}" "sources_$JETPACK_VERSION/hardware/nvidia/platform/t19x/galen/kernel-dts/common/tegra194-camera-d4xx.dtsi"
     fi
-elif [ $1 = 'reset' ]; then
-    [[ -f $DEVDIR/sources_$JETPACK_VERSION/${D4XX_SRC_DST}/drivers/media/i2c/d4xx.c ]] && rm $DEVDIR/sources_$JETPACK_VERSION/${D4XX_SRC_DST}/drivers/media/i2c/d4xx.c
 fi
