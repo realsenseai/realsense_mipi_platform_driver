@@ -23,3 +23,64 @@ jobs:
       run: git config --global user.email "builder@example.com" && git config --global user.name "builder" && ./apply_patches.sh 6.0
     - name: build
       run: ./build_all.sh 6.0
+    
+    - name: Create artifact archives
+      run: |
+        JETPACK_VER="6.0"
+        KERNEL_VERSION="5.15.136-tegra"
+        
+        # Create nvidia-oot modules archive
+        echo "Creating nvidia-oot modules archive"
+        tar -czf "./images/${JETPACK_VER}/nvidia-oot-modules.tar.gz" -C "./images/${JETPACK_VER}/rootfs/" "./lib/modules/${KERNEL_VERSION}/updates"
+        
+        # Create kernel HID modules archive
+        echo "Creating kernel HID modules archive"
+        tar -czf "./images/${JETPACK_VER}/kernel-hid-modules.tar.gz" -C "./images/${JETPACK_VER}/rootfs/" "./lib/modules/${KERNEL_VERSION}/extra"
+        
+        # Create rootfs archive
+        echo "Creating rootfs archive"
+        tar -cjf "./images/${JETPACK_VER}/rootfs.tar.bz2" -C "./images/${JETPACK_VER}/rootfs/" .
+    
+    - name: Upload nvidia-oot modules
+      uses: actions/upload-artifact@v4
+      with:
+        name: nvidia-oot-modules
+        path: ./images/6.0/nvidia-oot-modules.tar.gz
+        retention-days: 30
+    
+    - name: Upload kernel HID modules
+      uses: actions/upload-artifact@v4
+      with:
+        name: kernel-hid-modules
+        path: ./images/6.0/kernel-hid-modules.tar.gz
+        retention-days: 30
+    
+    - name: Upload d4xx.ko
+      uses: actions/upload-artifact@v4
+      with:
+        name: d4xx-ko
+        path: ./images/6.0/rootfs/lib/modules/5.15.136-tegra/updates/drivers/media/i2c/d4xx.ko
+        retention-days: 30
+    
+    - name: Upload rootfs
+      uses: actions/upload-artifact@v4
+      with:
+        name: rootfs
+        path: ./images/6.0/rootfs.tar.bz2
+        retention-days: 30
+    
+    - name: Upload dtbo files
+      uses: actions/upload-artifact@v4
+      with:
+        name: dtbo-files
+        path: |
+          ./images/6.0/rootfs/boot/tegra234-camera-d4xx-overlay.dtbo
+          ./images/6.0/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb
+        retention-days: 30
+    
+    - name: Upload kernel Image
+      uses: actions/upload-artifact@v4
+      with:
+        name: kernel-image
+        path: ./images/6.0/rootfs/boot/Image
+        retention-days: 30
