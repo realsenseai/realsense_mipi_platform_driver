@@ -844,75 +844,6 @@ The final media controller topology:
                                         └─────────────┘
 ```
 
-## Streaming Flow (Runtime)
-
-When an application starts streaming:
-
-```mermaid
-sequenceDiagram
-    participant App as Application
-    participant Video as /dev/videoX
-    participant VI as Video Input (VI/IPU6)
-    participant Mux as MUX Subdevice
-    participant Sensor as Active Sensor (d4xx.c)
-    participant HW as DS5 Camera
-
-    App->>Video: VIDIOC_STREAMON
-    Video->>VI: Start capture
-    VI->>Mux: .s_stream(1)
-    activate Mux
-    
-    Mux->>Mux: Determine active sensor<br/>(based on is_depth/is_rgb/is_y8/is_imu)
-    
-    alt CONFIG_VIDEO_D4XX_SERDES
-        Mux->>Mux: max9296_get_available_pipe_id()
-        Note right of Mux: Acquire SerDes pipe
-    end
-    
-    Mux->>Sensor: Prepare sensor configuration
-    Mux->>HW: ds5_configure(state)
-    activate HW
-    HW->>HW: Write stream data type
-    HW->>HW: Write metadata configuration
-    HW->>HW: Write resolution
-    HW->>HW: Write framerate
-    HW-->>Mux: Configuration written
-    deactivate HW
-    
-    Mux->>HW: Write DS5_START_STOP_STREAM (0x1000)<br/>Command: DS5_STREAM_START | stream_id
-    
-    Mux->>HW: Poll stream status (up to 2 seconds)
-    loop Wait for streaming
-        HW->>HW: Read stream status register
-        alt Status == DS5_STREAM_STREAMING
-            HW-->>Mux: Stream started
-        end
-    end
-    
-    Mux-->>VI: Stream started
-    deactivate Mux
-    VI-->>Video: Capture ready
-    Video-->>App: STREAMON success
-    
-    Note over App,HW: === Video frames flowing ===
-    
-    App->>Video: VIDIOC_STREAMOFF
-    Video->>VI: Stop capture
-    VI->>Mux: .s_stream(0)
-    activate Mux
-    Mux->>HW: Write DS5_START_STOP_STREAM<br/>Command: DS5_STREAM_STOP | stream_id
-    HW-->>Mux: Stream stopped
-    
-    alt CONFIG_VIDEO_D4XX_SERDES
-        Mux->>Mux: max9296_release_pipe_id()
-    end
-    
-    Mux-->>VI: Stream stopped
-    deactivate Mux
-    VI-->>Video: Capture stopped
-    Video-->>App: STREAMOFF success
-```
-
 ## Key Data Structures
 
 ### Main State Structure
@@ -978,30 +909,6 @@ enum {
     DS5_MUX_PAD_COUNT
 };
 ```
-
-## Control Handlers
-
-Each sensor and the MUX have dedicated V4L2 control handlers:
-
-### Common Controls (All Sensors)
-- `V4L2_CID_ANALOGUE_GAIN` - Analog gain
-- `V4L2_CID_EXPOSURE_ABSOLUTE` - Exposure time
-- `V4L2_CID_EXPOSURE_AUTO` - Auto-exposure mode
-
-### Depth/IR Specific Controls
-- Custom laser power control
-- Manual laser power control
-- Auto-exposure ROI (Region of Interest)
-
-### RGB Specific Controls
-- `V4L2_CID_AUTO_WHITE_BALANCE` - Auto white balance
-- `V4L2_CID_WHITE_BALANCE_TEMPERATURE` - Color temperature
-
-### MUX Controls
-- Firmware version (read-only)
-- Hardware monitor commands (HWMC)
-- Calibration data get/set
-- IPU6 link frequency and sub-stream configuration
 
 ## Error Handling and Recovery
 
