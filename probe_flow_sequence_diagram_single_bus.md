@@ -38,7 +38,7 @@ graph TB
         V4L2_IMU["IMU Sensor Subdev<br/>/dev/v4l-subdev3<br/>Format: Metadata"]
     end
 
-    subgraph Hardware["Physical Hardware"]
+    subgraph Hardware["DS5 Camera"]
         HW_Depth["DS5 Depth Sensor"]
         HW_RGB["DS5 RGB Sensor"]
         HW_IR["DS5 IR Sensor"]
