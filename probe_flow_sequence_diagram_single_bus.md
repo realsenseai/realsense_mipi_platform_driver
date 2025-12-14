@@ -140,14 +140,14 @@ i2c@0 {
 ### Result in User Space:
 
 ```bash
-# Each sensor appears as separate V4L2 subdevices
-/dev/v4l-subdev0  # Depth sensor stream
-/dev/v4l-subdev1  # Depth metadata stream
-/dev/v4l-subdev2  # RGB sensor stream
-/dev/v4l-subdev3  # RGB metadata stream
-/dev/v4l-subdev4  # IR sensor stream
-/dev/v4l-subdev5  # IR metadata stream
-/dev/v4l-subdev6  # IMU sensor stream
+# Each sensor appears as separate V4L2 video device
+/dev/video0  # Depth sensor stream
+/dev/video1  # Depth metadata stream
+/dev/video2  # RGB sensor stream
+/dev/video03  # RGB metadata stream
+/dev/video04  # IR sensor stream
+/dev/video05  # IR metadata stream
+/dev/video06  # IMU sensor stream
 
 # Media controller shows the complete topology
 media-ctl -p -d /dev/media0
