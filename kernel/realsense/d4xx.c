@@ -2772,6 +2772,7 @@ static int ds5_board_setup(struct ds5 *state)
 	struct device_node *dser_node;
 	struct i2c_client *dser_i2c = NULL;
 	struct device_node *gmsl;
+	struct device_node *ports;
 	int value = 0xFFFF;
 	const char *str_value;
 	int err;
@@ -2845,24 +2846,43 @@ static int ds5_board_setup(struct ds5 *state)
 
 	/* populate g_ctx from DT */
 	/* For single-probe design with multiple ports, gmsl-link is under ports/port@0 */
-	gmsl = of_get_child_by_name(node, "gmsl-link");
-	if (gmsl == NULL) {
-		struct device_node *ports = of_get_child_by_name(node, "ports");
-		if (ports) {
-			struct device_node *port = of_get_child_by_name(ports, "port@0");
-			if (port) {
-				gmsl = of_get_child_by_name(port, "gmsl-link");
-				of_node_put(port);
+	ports = of_get_child_by_name(node, "ports");
+	of_node_put(ports);
+
+	if (ports == NULL) {
+		dev_err(dev, "EHUD_DEBUG: No PORTS!\n");
+		err = -EINVAL;
+		goto error;
+	}
+	else
+	{
+		struct device_node *child = NULL;
+		struct device_node *port = NULL;
+		do
+		{
+			child = of_get_next_child(ports, child);
+
+			if (child != NULL)
+			{
+				dev_err(dev, "EHUD_DEBUG: child name = %s\n", child->name);
 			}
-			of_node_put(ports);
+		} while (child != NULL);
+
+		port = of_get_child_by_name(ports, "port");
+		if (port == NULL) {
+			dev_err(dev, "EHUD_DEBUG: No PORT!\n");
+			err = -EINVAL;
+			goto error;
 		}
-		/* Fallback: try port@0 directly under device node (old DT structure) */
-		if (!gmsl) {
-			struct device_node *port = of_get_child_by_name(node, "port@0");
-			if (port) {
-				gmsl = of_get_child_by_name(port, "gmsl-link");
-				of_node_put(port);
+		else
+		{
+			err = of_property_read_string(port, "cam-type", &str_value);
+			if (err < 0) {
+				dev_err(dev, "No cam-type found\n");
+				goto error;
 			}
+			dev_err(dev, "EHUD_DEBUG: cam-type = %s\n", str_value);
+			gmsl = of_get_child_by_name(port, "gmsl-link");
 		}
 	}
 	if (gmsl == NULL) {
@@ -3969,6 +3989,7 @@ static int ds5_mux_registered(struct v4l2_subdev *sd)
 {
 	struct ds5 *state = v4l2_get_subdevdata(sd);
 	int ret = ds5_sensor_register(state, &state->depth.sensor);
+	dev_warn(&state->client->dev,"%s(): EHUD_DEBUG: registered mux\n", __func__);
 	if (ret < 0)
 		return ret;
 
@@ -4016,6 +4037,7 @@ static const struct v4l2_subdev_internal_ops ds5_mux_internal_ops = {
 
 static int ds5_mux_register(struct i2c_client *c, struct ds5 *state)
 {
+	dev_warn(&state->client->dev,"%s(): EHUD_DEBUG: register mux sd.name = %s\n", __func__, state->mux.sd.subdev.name);
 	return v4l2_async_register_subdev(&state->mux.sd.subdev);
 }
 

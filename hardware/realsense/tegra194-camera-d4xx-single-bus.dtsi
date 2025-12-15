@@ -150,7 +150,7 @@
 							};
 						};
 						port@1 {
-							reg = <0>;
+							reg = <1>;
 							cam-type = "RGB";
 							d4m0_rgb_out: endpoint {
 								port-index = <0>;
@@ -159,16 +159,16 @@
 								vc-id = <1>;
 							};
 							mode0 {
-							pixel_t = "grey_y16";
-							num_lanes = "2";
-							csi_pixel_bit_depth = "16";
-							active_w = "128";
-							active_h = "0";
-							tegra_sinterface = "serial_e";
-							mclk_khz = "24000";
-							pix_clk_hz = "74250000";
-							line_length = "1280"; /* 2200 */
-							embedded_metadata_height = "1";
+								pixel_t = "grey_y16";
+								num_lanes = "2";
+								csi_pixel_bit_depth = "16";
+								active_w = "128";
+								active_h = "0";
+								tegra_sinterface = "serial_e";
+								mclk_khz = "24000";
+								pix_clk_hz = "74250000";
+								line_length = "1280"; /* 2200 */
+								embedded_metadata_height = "1";
 							};
 							gmsl-link {
 								src-csi-port = "b";
@@ -181,7 +181,7 @@
 							};
 						};
 						port@2 {
-							reg = <0>;
+							reg = <2>;
 							cam-type = "Y8";
 							d4m0_y8_out: endpoint {
 								port-index = <0>;
@@ -190,16 +190,16 @@
 								vc-id = <2>;
 							};
 							mode0 {
-							pixel_t = "grey_y16";
-							num_lanes = "2";
-							csi_pixel_bit_depth = "16";
-							active_w = "128";
-							active_h = "0";
-							tegra_sinterface = "serial_b";
-							mclk_khz = "24000";
-							pix_clk_hz = "74250000";
-							line_length = "1280"; /* 2200 */
-							embedded_metadata_height = "1";
+								pixel_t = "grey_y16";
+								num_lanes = "2";
+								csi_pixel_bit_depth = "16";
+								active_w = "128";
+								active_h = "0";
+								tegra_sinterface = "serial_b";
+								mclk_khz = "24000";
+								pix_clk_hz = "74250000";
+								line_length = "1280"; /* 2200 */
+								embedded_metadata_height = "1";
 							};
 							gmsl-link {
 								src-csi-port = "b";
@@ -212,7 +212,7 @@
 							};
 						};
 						port@3 {
-							reg = <0>;
+							reg = <3>;
 							cam-type = "IMU";
 							d4m0_imu_out: endpoint {
 								port-index = <0>;
@@ -221,16 +221,16 @@
 								vc-id = <3>;
 							};
 							mode0 {
-							pixel_t = "grey_y16";
-							num_lanes = "2";
-							csi_pixel_bit_depth = "16";
-							active_w = "128";
-							active_h = "0";
-							tegra_sinterface = "serial_c";
-							mclk_khz = "24000";
-							pix_clk_hz = "74250000";
-							line_length = "1280"; /* 2200 */
-							embedded_metadata_height = "0";
+								pixel_t = "grey_y16";
+								num_lanes = "2";
+								csi_pixel_bit_depth = "16";
+								active_w = "128";
+								active_h = "0";
+								tegra_sinterface = "serial_c";
+								mclk_khz = "24000";
+								pix_clk_hz = "74250000";
+								line_length = "1280"; /* 2200 */
+								embedded_metadata_height = "0";
 							};
 							gmsl-link {
 								src-csi-port = "b";
