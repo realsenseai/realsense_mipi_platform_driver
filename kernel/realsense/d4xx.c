@@ -166,6 +166,9 @@
 #define MAX9295_I2C_ADDR_DEF	0x40
 #define D457_I2C_ADDR	0x10
 #endif
+
+#define DS5_FIXED_REG_ADDR 0x1a
+
 enum ds5_mux_pad {
 	DS5_MUX_PAD_EXTERNAL,
 	DS5_MUX_PAD_DEPTH,
@@ -6344,6 +6347,8 @@ static int ds5_probe(struct i2c_client *c, const struct i2c_device_id *id)
 
 	state->client = c;
 	dev_warn(&c->dev, "Probing driver for D4xx\n");
+	// Alias all addresses to 0x1a
+	c->addr = DS5_FIXED_REG_ADDR;
 
 	state->variant = ds5_variants + id->driver_data;
 #ifdef CONFIG_OF
