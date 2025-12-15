@@ -105,7 +105,7 @@
 					maxim,gmsl-dser-device = <&dser>;
 				};
 
-				d4m0: d4m@1a {
+				ds5_0: ds5@1a {
 					status = "ok";
 					def-addr = <0x10>;
 					reg = <0x1a>;
@@ -120,7 +120,7 @@
 
 						port@0 {
 							reg = <0>;
-							d4m0_out: endpoint {
+							ds5_0_out: endpoint {
 								port-index = <0>;
 								bus-width = <2>;
 								remote-endpoint = <&csi_in0>;
@@ -149,19 +149,11 @@
 						num-lanes = <2>;
 					};
 				};
-			};
 
-			i2c@1 {
-				status = "ok";
-				reg = <0x3>; 	// line 18-19 of the I2C switch
-				#address-cells = <0x1>;
-				i2c-mux,deselect-on-exit;
-				#size-cells = <0x0>;
-
-				d4m1: d4m@1a {
+				ds5_1: ds5@1b {
 					status = "ok";
 					def-addr = <0x10>;
-					reg = <0x1a>;
+					reg = <0x1b>;
 					compatible = "intel,d4xx";
 					vcc-supply = <&p2822_vdd_1v8_cvb>;
 					cam-type = "RGB";
@@ -173,7 +165,7 @@
 
 						port@0 {
 							reg = <0>;
-							d4m1_out: endpoint {
+							ds5_1_out: endpoint {
 								port-index = <1>;
 								bus-width = <2>;
 								remote-endpoint = <&csi_in1>;
@@ -202,17 +194,11 @@
 						num-lanes = <2>;
 					};
 				};
-			};
-			i2c@2 {
-				reg = <0x4>;	// line 4 of the I2C switch
-				#address-cells = <0x1>;
-				i2c-mux,deselect-on-exit;
-				#size-cells = <0x0>;
 
-				d4m2: d4m@1a {
+				ds5_2: ds5@1c {
 					status = "ok";
 					def-addr = <0x10>;
-					reg = <0x1a>;
+					reg = <0x1c>;
 					compatible = "intel,d4xx";
 					vcc-supply = <&p2822_vdd_1v8_cvb>;
 					cam-type = "Y8";
@@ -224,7 +210,7 @@
 
 						port@0 {
 							reg = <0>;
-							d4m2_out: endpoint {
+							ds5_2_out: endpoint {
 								port-index = <2>;
 								bus-width = <2>;
 								remote-endpoint = <&csi_in2>;
@@ -254,17 +240,11 @@
 						num-lanes = <2>;
 					};
 				};
-			};
-			i2c@3 {
-				reg = <0x5>;	// line 4 of the I2C switch
-				#address-cells = <0x1>;
-				i2c-mux,deselect-on-exit;
-				#size-cells = <0x0>;
 
-				d4m3: d4m@1a {
+				ds5_3: ds5@1d {
 					status = "ok";
 					def-addr = <0x10>;
-					reg = <0x1a>;
+					reg = <0x1d>;
 					compatible = "intel,d4xx";
 					vcc-supply = <&p2822_vdd_1v8_cvb>;
 					cam-type = "IMU";
@@ -276,7 +256,7 @@
 
 						port@0 {
 							reg = <0>;
-							d4m3_out: endpoint {
+							ds5_3_out: endpoint {
 								port-index = <3>;
 								bus-width = <2>;
 								remote-endpoint = <&csi_in3>;
@@ -332,7 +312,7 @@
 							status = "ok";
 							port-index = <0>;
 							bus-width = <2>;
-							remote-endpoint = <&d4m0_out>;
+							remote-endpoint = <&ds5_0_out>;
 						};
 					};
 					port@1 {
@@ -362,7 +342,7 @@
 							status = "ok";
 							port-index = <0>;
 							bus-width = <2>;
-							remote-endpoint = <&d4m1_out>;
+							remote-endpoint = <&ds5_1_out>;
 						};
 					};
 					port@1 {
@@ -392,7 +372,7 @@
 							status = "ok";
 							port-index = <0>;
 							bus-width = <2>;
-							remote-endpoint = <&d4m2_out>;
+							remote-endpoint = <&ds5_2_out>;
 						};
 					};
 					port@1 {
@@ -421,7 +401,7 @@
 							status = "ok";
 							port-index = <0>;
 							bus-width = <2>;
-							remote-endpoint = <&d4m3_out>;
+							remote-endpoint = <&ds5_3_out>;
 						};
 					};
 					port@1 {
