@@ -7,7 +7,7 @@ import re
 @pytest.mark.parametrize("device", {'0', '2'})
 def test_fps(device, frames):
 	try:
-		print(f"Device: {device}")
+		print(f"\nDevice: {device}")
 		formats = get_formats(device)
 		for w, h in formats:
 			print(f"format: {w}x{h}")
@@ -38,16 +38,22 @@ def test_fps(device, frames):
 								  timeout=timeout).stderr.splitlines()
 				last = None
 				for line in output:
-					m = re.search(r"cap dqbuf:.*seq:\s*(\d*)\s*bytesused:.*fps:\s*(\d+\.\d+)\s*.*", line)
+					m = re.search(r"cap dqbuf:.*seq:\s*(\d*)\s*bytesused:.*", line)
 					if m:
 						frame = int(m.group(1))
-						fps = float(m.group(2))
+						print(f"\t{frame}", end="")
 						if last:
-							print(f"\tframe: {frame}/{last}, fps: {fps}")
-							assert frame != last, f"Repeated frame: {frame}"
-							assert frame == last+1, f"Frame dropped between: {last} and {frame}"
-							assert FPS/1.1 < fps and fps < FPS *1.1, f"FPS out of margin: {fps}/{FPS}"
+							assert frame > last, f"Repeated frame: {frame}"
+							assert frame == last + 1, f"Frame dropped between: {last} and {frame}"
+						m = re.search(r"cap dqbuf:.*bytesused:.*fps:\s*(\d+\.\d+)\s*.*", line)
+						if m:
+							fps = float(m.group(1))
+							if last:
+								print(f"/{fps}", end="")
+								assert fps > FPS / 1.1, f"FPS too low: {fps}/{FPS}"
+								assert fps < FPS * 1.1, f"FPS too high: {fps}/{FPS}"
 						last = frame
+						print()
 				assert last, "No frames received"
 
 	except Exception as e:
