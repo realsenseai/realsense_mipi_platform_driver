@@ -945,19 +945,6 @@ enum {
 2. **Invalid format requested** → Return `-EINVAL`
 3. **SerDes link failure** → Release resources, return error to user space
 
-## Summary
-
-The initialization flow ensures:
-1. ✅ Proper power sequencing (regulator → I2C → hardware)
-2. ✅ SerDes configuration from device tree
-3. ✅ Multi-sensor support with independent V4L2 subdevices
-4. ✅ Media controller topology with multiplexer
-5. ✅ Integration with platform video capture driver (Tegra VI)
-6. ✅ User space access via standard V4L2 APIs
-7. ✅ Firmware update support via DFU character device
-
-The driver creates a complete V4L2/Media Controller compliant camera subsystem that integrates seamlessly with the Linux kernel's video capture infrastructure.
-
 # Side-step design: i2c aliasing in SW
 
 While the design above is more generic and removes unnecessary multpile probes for single camera,
