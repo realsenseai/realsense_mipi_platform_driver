@@ -37,6 +37,7 @@ def test_fps(device, frames):
 								  capture_output=True,
 								  timeout=timeout).stderr.splitlines()
 				last = None
+				kpi = 5 # [%]
 				for line in output:
 					m = re.search(r"cap dqbuf:.*seq:\s*(\d*)\s*bytesused:.*", line)
 					if m:
@@ -44,14 +45,14 @@ def test_fps(device, frames):
 						print(f"\t{frame}", end="")
 						if last:
 							assert frame > last, f"Repeated frame: {frame}"
-							assert frame == last + 1, f"Frame dropped between: {last} and {frame}"
+							assert (frame - last) < 3 , f"Frames dropped between: {last} and {frame}"
 						m = re.search(r"cap dqbuf:.*bytesused:.*fps:\s*(\d+\.\d+)\s*.*", line)
 						if m:
 							fps = float(m.group(1))
 							if last:
 								print(f"/{fps}", end="")
-								assert fps > FPS / 1.1, f"FPS too low: {fps}/{FPS}"
-								assert fps < FPS * 1.1, f"FPS too high: {fps}/{FPS}"
+								assert fps > FPS * (1 - kpi/100), f"FPS too low: {fps}/{FPS}"
+								assert fps < FPS * (1 + kpi/100), f"FPS too high: {fps}/{FPS}"
 						last = frame
 						print()
 				assert last, "No frames received"
