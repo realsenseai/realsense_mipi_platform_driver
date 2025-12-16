@@ -3,33 +3,85 @@ import pytest
 import re
 
 @pytest.mark.d457
+@pytest.mark.parametrize("frames", {20})
 @pytest.mark.parametrize("device", {'0', '2'})
-@pytest.mark.parametrize("frames", {'100'})
-@pytest.mark.parametrize("timeout", {10})
-def test_fps(device, frames, timeout):
+def test_fps(device, frames):
 	try:
-		cmd = [ "v4l2-ctl",
-		 "-d" + device,
-		 "--stream-mmap",
-		 "--stream-count",
-		 frames,
-		 "--verbose"]
-		output = subprocess.run(cmd,
-						  check=True,
-						  text=True,
-						  capture_output=True,
-						  timeout=timeout).stderr.splitlines()
-		last = None
-		for line in output:
-			m = re.search(r"cap dqbuf:.*seq:\s*(\d*)\s*bytesused:.*fps:\s*(\d+\.\d+)\s*.*", line)
-			if m:
-				frame = int(m.group(1))
-				fps = float(m.group(2))
-				if last:
-					print(f"frame: {frame}/{last}, fps: {fps}")
-					assert frame != last, f"Repeated frame: {frame}"
-					assert frame == last+1, f"Frame droped between: {last} and {frame}"
-				last = frame
+		print(f"Device: {device}")
+		formats = get_formats(device)
+		for w, h in formats:
+			print(f"format: {w}x{h}")
+			for FPS in formats[(w, h)]:
+				cmd = [ "v4l2-ctl",
+					  f"-d{device}",
+					  f"--set-fmt-video=width={w},height={h}",
+					  ]
+				subprocess.check_call(cmd)
+				cmd = [ "v4l2-ctl",
+					  f"-d{device}",
+					  "-p",
+					  f"{FPS}",
+					  ]
+				subprocess.check_call(cmd)
+				cmd = [ "v4l2-ctl",
+					  f"-d{device}",
+					  "--stream-mmap",
+					  "--stream-count",
+					  f"{frames}",
+					  "--verbose",
+					  ]
+				timeout = 5.0 * frames / FPS
+				output = subprocess.run(cmd,
+								  check=True,
+								  text=True,
+								  capture_output=True,
+								  timeout=timeout).stderr.splitlines()
+				last = None
+				for line in output:
+					m = re.search(r"cap dqbuf:.*seq:\s*(\d*)\s*bytesused:.*fps:\s*(\d+\.\d+)\s*.*", line)
+					if m:
+						frame = int(m.group(1))
+						fps = float(m.group(2))
+						if last:
+							print(f"\tframe: {frame}/{last}, fps: {fps}")
+							assert frame != last, f"Repeated frame: {frame}"
+							assert frame == last+1, f"Frame dropped between: {last} and {frame}"
+							assert FPS/1.1 < fps and fps < FPS *1.1, f"FPS out of margin: {fps}/{FPS}"
+						last = frame
+				assert last, "No frames received"
 
 	except Exception as e:
 		assert False, "Exception caught during test: {}".format(e)
+
+def get_formats(device):
+	try:
+		cmd = [ "v4l2-ctl",
+		 "-d" + device,
+		 "--list-formats-ext",
+		 ]
+		output = subprocess.run(cmd,
+						  check=True,
+						  text=True,
+						  capture_output=True
+						  ).stdout.splitlines()
+		formats = {}
+		last = None
+		for line in output:
+			m = re.search(r"\s*Size: Discrete\s*(\d+)x(\d+)", line)
+			if m:
+				w = int(m.group(1))
+				h = int(m.group(2))
+				last = (w ,h)
+				if not last in formats:
+					formats[last] = set()
+				continue
+			m = re.search(r"\s*Interval: Discrete.*\((\d+\.\d+)\s+fps\)", line)
+			if m:
+				fps = float(m.group(1))
+				if last:
+					formats[last].add(fps)
+		return formats
+
+	except Exception as e:
+		assert False, "Exception caught @get_formats: {}".format(e)
+
