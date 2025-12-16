@@ -27,10 +27,10 @@ graph TB
     end
 
     subgraph DT["Device Tree"]
-        DT_Depth["ds5_depth@0x30<br/>compatible='intel,d4xx'<br/>reg=0x10<br/>cam-type='Depth'"]
-        DT_RGB["ds5_rgb@0x33<br/>compatible='intel,d4xx'<br/>reg=0x10<br/>cam-type='RGB'"]
-        DT_IR["ds5_ir@0x34<br/>compatible='intel,d4xx'<br/>reg=0x10<br/>cam-type='Y8'"]
-        DT_IMU["ds5_imu@0x35<br/>compatible='intel,d4xx'<br/>reg=0x10<br/>cam-type='IMU'"]
+        DT_Depth["ds5_depth@0x30<br/>compatible='intel,d4xx'<br/>reg=0x1a<br/>cam-type='Depth'"]
+        DT_RGB["ds5_rgb@0x33<br/>compatible='intel,d4xx'<br/>reg=0x1a<br/>cam-type='RGB'"]
+        DT_IR["ds5_ir@0x34<br/>compatible='intel,d4xx'<br/>reg=0x1a<br/>cam-type='Y8'"]
+        DT_IMU["ds5_imu@0x35<br/>compatible='intel,d4xx'<br/>reg=0x1a<br/>cam-type='IMU'"]
     end
 
     subgraph Driver["D4xx Driver (d4xx.c)"]
@@ -41,10 +41,10 @@ graph TB
     end
 
     subgraph V4L2_Subdevs["V4L2 Subdevices"]
-        V4L2_Depth["Depth Sensor Subdev<br/>/dev/v4l-subdev0<br/>Format: Z16"]
-        V4L2_RGB["RGB Sensor Subdev<br/>/dev/v4l-subdev1<br/>Format: YUYV/RGB"]
-        V4L2_IR["IR Sensor Subdev<br/>/dev/v4l-subdev2<br/>Format: Y8/Y16"]
-        V4L2_IMU["IMU Sensor Subdev<br/>/dev/v4l-subdev3<br/>Format: Metadata"]
+        V4L2_Depth["Depth Sensor Subdev<br/>/dev/video0<br/>Format: Z16"]
+        V4L2_RGB["RGB Sensor Subdev<br/>/dev/video1<br/>Format: YUYV/RGB"]
+        V4L2_IR["IR Sensor Subdev<br/>/dev/video2<br/>Format: Y8/Y16"]
+        V4L2_IMU["IMU Sensor Subdev<br/>/dev/video3<br/>Format: Metadata"]
     end
 
     subgraph Hardware["Physical Hardware"]
@@ -73,10 +73,10 @@ graph TB
     Probe_IMU -->|creates| V4L2_IMU
 
     %% Hardware connection
-    HW_Depth <-->|I2C Reg 0x10| I2C_Bus_0x30
-    HW_RGB <-->|I2C Reg 0x10| I2C_Bus_0x30
-    HW_IR <-->|I2C Reg 0x10| I2C_Bus_0x30
-    HW_IMU <-->|I2C Reg 0x10| I2C_Bus_0x30
+    HW_Depth <-->|I2C Reg 0x1a| I2C_Bus_0x30
+    HW_RGB <-->|I2C Reg 0x1a| I2C_Bus_0x30
+    HW_IR <-->|I2C Reg 0x1a| I2C_Bus_0x30
+    HW_IMU <-->|I2C Reg 0x1a| I2C_Bus_0x30
 
     %% Mux Output
     I2C_Bus_0x30 <--> I2C_Out_0x30
@@ -99,41 +99,55 @@ graph TB
 4. **One MUX per Instance**: Each driver instance creates a MUX subdevice with 5 pads
 5. **Device Tree Configuration**: The I2C addresses and sensor types are defined in the device tree
 
-### Example Multi-Sensor Configuration:
+### Example Multi-Sensor Multi-i2c-bus Configuration:
 
 ```dts
-i2c@1 {
-    /* Depth sensor at address 0x10 */
-    d4m_depth@10 {
+i2c@0 {
+    reg = <0x0> /* Depth sensor at i2c 30 */
+    d4m_depth@1a {
         compatible = "intel,d4xx";
-        reg = <0x10>;              /* I2C address */
+        def-addr = <0x10>;
+        /* reg addr 0x1a */
+        reg = <0x1a>;
         cam-type = "Depth";
         vcc-supply = <&vdd_1v8>;
+        ...
     };
-    
-    /* RGB sensor at address 0x14 */
-    d4m_rgb@14 {
+    ...
+}
+i2c@1 {
+    reg = <0x3> /* RGB sensor at i2c 33 */
+    d4m_rgb@1a {
         compatible = "intel,d4xx";
-        reg = <0x14>;              /* Different I2C address */
+        /* reg addr 0x1a */
+        reg = <0x1a>;
         cam-type = "RGB";
         vcc-supply = <&vdd_1v8>;
+        ...
     };
-    
-    /* IR sensor at address 0x18 */
-    d4m_ir@18 {
+    ...
+};
+i2c@2 {
+    reg = <0x4> /* IR sensor at i2c 34 */
+    d4m_ir@1a {
         compatible = "intel,d4xx";
-        reg = <0x18>;              /* Different I2C address */
+        reg = <0x1a>;
         cam-type = "Y8";
         vcc-supply = <&vdd_1v8>;
+        ...
     };
-    
-    /* IMU at address 0x1C */
-    d4m_imu@1c {
+    ...
+};
+i2c@2 {
+    reg = <0x5> /* IMU sensor at i2c 35 */
+    d4m_imu@1a {
         compatible = "intel,d4xx";
-        reg = <0x1c>;              /* Different I2C address */
+        reg = <0x1a>;
         cam-type = "IMU";
         vcc-supply = <&vdd_1v8>;
+        ...
     };
+    ...
 };
 ```
 
@@ -141,13 +155,13 @@ i2c@1 {
 
 ```bash
 # Each sensor appears as separate V4L2 subdevices
-/dev/v4l-subdev0  # Depth sensor stream
-/dev/v4l-subdev1  # Depth metadata stream
-/dev/v4l-subdev2  # RGB sensor stream
-/dev/v4l-subdev3  # RGB metadata stream
-/dev/v4l-subdev4  # IR sensor stream
-/dev/v4l-subdev5  # IR metadata stream
-/dev/v4l-subdev6  # IMU sensor stream
+/dev/video0  # Depth sensor stream
+/dev/video1  # Depth metadata stream
+/dev/video2  # RGB sensor stream
+/dev/video3  # RGB metadata stream
+/dev/video4  # IR sensor stream
+/dev/video5  # IR metadata stream
+/dev/video6  # IMU sensor stream
 
 # Media controller shows the complete topology
 media-ctl -p -d /dev/media0
@@ -679,7 +693,7 @@ User Space Application Flow:
 **Depth Sensor Subdevice:**
 - Provides Z16 (16-bit depth) data
 - Connected to MUX pad `DS5_MUX_PAD_DEPTH`
-- Controlled via `/dev/v4l-subdevX`
+- Controlled via `/dev/videoX`
 
 **IR Sensor Subdevice:**
 - Provides Y8/Y16 infrared data
@@ -782,7 +796,7 @@ sequenceDiagram
     activate Sensors
     Sensors->>Media: v4l2_device_register_subdev(&depth->sd)
     Media-->>Sensors: Depth subdev registered
-    Note right of Media: Creates /dev/v4l-subdevX
+    Note right of Media: Creates /dev/videoX
     Sensors->>Media: media_create_pad_link(<br/>  depth.pad[0],<br/>  mux.pad[DS5_MUX_PAD_DEPTH],<br/>  IMMUTABLE | ENABLED)
     Media-->>Sensors: Link created
     Sensors-->>Mux: Depth sensor registered and linked

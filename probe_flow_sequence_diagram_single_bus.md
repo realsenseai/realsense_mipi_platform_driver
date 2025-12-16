@@ -1,4 +1,4 @@
-# RealSense MIPI Platform Driver - Probe Flow and Video Device Registration
+# RealSense MIPI Platform Driver - Probe Flow and Video Device Registration - Multi - port design
 
 ## System Architecture Overview
 
@@ -24,7 +24,7 @@ graph TB
     end
 
     subgraph DT["Device Tree"]
-        DT_Depth["ds5_depth@0x30<br/>compatible='intel,d4xx'<br/>reg=0x10<br/>cam-type='DS5'"]
+        DT_Depth["ds5_depth@0x30<br/>compatible='intel,d4xx'<br/>reg=0x1a<br/>cam-type='DS5'"]
     end
 
     subgraph Driver["D4xx Driver (d4xx.c)"]
@@ -32,10 +32,10 @@ graph TB
     end
 
     subgraph V4L2_Subdevs["V4L2 Subdevices"]
-        V4L2_Depth["Depth Sensor Subdev<br/>/dev/v4l-subdev0<br/>Format: Z16"]
-        V4L2_RGB["RGB Sensor Subdev<br/>/dev/v4l-subdev1<br/>Format: YUYV/RGB"]
-        V4L2_IR["IR Sensor Subdev<br/>/dev/v4l-subdev2<br/>Format: Y8/Y16"]
-        V4L2_IMU["IMU Sensor Subdev<br/>/dev/v4l-subdev3<br/>Format: Metadata"]
+        V4L2_Depth["Depth Sensor Subdev<br/>/dev/video0<br/>Format: Z16"]
+        V4L2_RGB["RGB Sensor Subdev<br/>/dev/video2<br/>Format: YUYV/RGB"]
+        V4L2_IR["IR Sensor Subdev<br/>/dev/video4<br/>Format: Y8/Y16"]
+        V4L2_IMU["IMU Sensor Subdev<br/>/dev/video6<br/>Format: Metadata"]
     end
 
     subgraph Hardware["DS5 Camera"]
@@ -58,10 +58,10 @@ graph TB
     Probe_DS5 -->|creates| V4L2_IMU
 
     %% Hardware connection
-    HW_Depth <-->|I2C Reg 0x10| I2C_Bus_0x30
-    HW_RGB <-->|I2C Reg 0x10| I2C_Bus_0x30
-    HW_IR <-->|I2C Reg 0x10| I2C_Bus_0x30
-    HW_IMU <-->|I2C Reg 0x10| I2C_Bus_0x30
+    HW_Depth <-->|I2C Reg 0x1a| I2C_Bus_0x30
+    HW_RGB <-->|I2C Reg 0x1a| I2C_Bus_0x30
+    HW_IR <-->|I2C Reg 0x1a| I2C_Bus_0x30
+    HW_IMU <-->|I2C Reg 0x1a| I2C_Bus_0x30
 
     %% Mux Output
     I2C_Bus_0x30 <--> I2C_Out_0x30
@@ -83,14 +83,16 @@ graph TB
 3. **One V4L2 Subdevice per supported stream**: Upon probe, a V4L2 subdevice node is created for each supported stream
 5. **Device Tree Configuration**: The I2C addresses and sensor types are defined in the device tree
 
-### Example Multi-Sensor Configuration:
+### Example Multi-Sensor - Multi port - Single i2c bus Configuration:
 
 ```dts
 i2c@0 {
     /* D4xx device at address 0x10 */
     d4m@1a {
         compatible = "intel,d4xx";
-        reg = <0x10>;              /* I2C address */
+        def-addr = <0x10>;
+        /* reg addr 0x1a */
+        reg = <0x1a>;
         vcc-supply = <&vdd_1v8>;
     };
     ports {
@@ -141,13 +143,13 @@ i2c@0 {
 
 ```bash
 # Each sensor appears as separate V4L2 subdevices
-/dev/v4l-subdev0  # Depth sensor stream
-/dev/v4l-subdev1  # Depth metadata stream
-/dev/v4l-subdev2  # RGB sensor stream
-/dev/v4l-subdev3  # RGB metadata stream
-/dev/v4l-subdev4  # IR sensor stream
-/dev/v4l-subdev5  # IR metadata stream
-/dev/v4l-subdev6  # IMU sensor stream
+/dev/video0  # Depth sensor stream
+/dev/video1  # Depth metadata stream
+/dev/video2  # RGB sensor stream
+/dev/video3  # RGB metadata stream
+/dev/video4  # IR sensor stream
+/dev/video5  # IR metadata stream
+/dev/video6  # IMU sensor stream
 
 # Media controller shows the complete topology
 media-ctl -p -d /dev/media0
@@ -653,7 +655,7 @@ User Space Application Flow:
 **Depth Sensor Subdevice:**
 - Provides Z16 (16-bit depth) data
 - Connected to MUX pad `DS5_MUX_PAD_DEPTH`
-- Controlled via `/dev/v4l-subdevX`
+- Controlled via `/dev/videoX`
 
 **IR Sensor Subdevice:**
 - Provides Y8/Y16 infrared data
@@ -692,6 +694,10 @@ sequenceDiagram
     deactivate Mux
 ```
 
+### What is MUX Subdevice Initialization?
+
+The MUX (multiplexer) subdevice acts as a central routing hub in the media controller topology, managing the four sensor streams (depth, RGB, IR, IMU) as separate data paths. During initialization, the MUX is configured as a V4L2 subdevice with four SOURCE pads—one for each sensor type—allowing the media framework to route video data from individual sensors to the platform's video capture hardware. The MUX subdevice is named using the I2C adapter ID and address (e.g., "DS5 mux 0-001a") and is marked with `V4L2_SUBDEV_FL_HAS_DEVNODE` to expose it as a device node in `/dev/v4l-subdevX`. All four pads are initialized as SOURCE pads using `media_entity_pads_init()`, establishing the foundation for later linking individual sensor subdevices to their corresponding MUX pads. This architecture enables the media controller to manage each sensor independently while presenting a unified camera device to user space.
+
 ## Phase 10: Control Handler Initialization
 ```mermaid
 sequenceDiagram
@@ -712,6 +718,10 @@ sequenceDiagram
     end
 ```
 
+### What is Control Handler Initialization?
+
+Control handlers provide the V4L2 control interface that allows user space applications to adjust camera parameters like exposure, gain, and laser power through standard V4L2 ioctls. The driver creates separate control handlers for each sensor type (MUX, depth, RGB, IR, IMU) using `ds5_ctrl_init()`, with each handler managing sensor-specific controls—for example, depth and IR sensors get laser power controls, while RGB gets white balance controls. Each control handler is initialized with `v4l2_ctrl_handler_init()` and populated with both standard V4L2 controls (like `V4L2_CID_EXPOSURE_ABSOLUTE` and `V4L2_CID_ANALOGUE_GAIN`) and custom RealSense-specific controls (like calibration data retrieval, hardware monitor commands, and firmware version queries). The controls are marked with flags like `V4L2_CTRL_FLAG_VOLATILE` (value can change without driver intervention) and `V4L2_CTRL_FLAG_EXECUTE_ON_WRITE` (control takes effect immediately), ensuring proper synchronization between hardware state and user space. Finally, each sensor's subdevice has its `ctrl_handler` pointer set to its corresponding handler, enabling the V4L2 framework to route control operations to the correct hardware registers via the `ds5_ctrl_ops` callback functions.
+
 ## Phase 11: Hardware Initialization
 ```mermaid
 sequenceDiagram
@@ -726,6 +736,10 @@ sequenceDiagram
     HW-->>V4L2: Hardware configured
     deactivate HW
 ```
+
+### What is Hardware Initialization?
+
+Hardware initialization configures the D4xx camera's MIPI CSI-2 interface to match the platform's video capture capabilities, ensuring proper data transmission between the camera and the host processor. The driver first reads the camera's MIPI capabilities from hardware registers (0x0300-0x030A) to determine supported lane counts, PHY configuration, and data rate ranges (typically 100-1500 Mbps). Based on the platform configuration—either from the Tegra camera platform (which provides lane count via `state->mux.sd.numlanes`) or a default of 2 lanes for other platforms—the driver writes the lane configuration to register `DS5_MIPI_LANE_NUMS` (0x0400) with the value decremented by one (e.g., 4 lanes = 0x03). The MIPI data rate is set to a default of 1000 Mbps by writing to register `DS5_MIPI_LANE_DATARATE` (0x0402), which can be adjusted based on platform requirements or SerDes configuration. Finally, the driver reads the MIPI configuration status register (0x0500) to verify that the hardware has successfully applied the settings, completing the low-level interface setup required for video streaming.
 
 ## Phase 12: MUX Registration (Async)
 ```mermaid
@@ -743,6 +757,10 @@ sequenceDiagram
     Probe-->>I2C: Probe complete (success)
 ```
 
+### What is MUX Registration (Async)?
+
+Asynchronous subdevice registration is a kernel mechanism that allows camera drivers to register with the V4L2 subsystem before the platform's video capture driver is ready, avoiding probe ordering dependencies. The `ds5_mux_register()` function calls `v4l2_async_register_subdev()` to add the MUX subdevice to the async notifier framework, which queues it for later binding when the platform video driver (e.g., Tegra VI or Intel IPU6) becomes available. This registration is non-blocking—the probe function returns successfully immediately after registration, allowing the kernel to continue booting without waiting for the complete video pipeline to be established. After registration, the probe function creates sysfs attributes under `/sys/bus/i2c/devices/X-XXXX/` for debugging purposes, including `ds5_fw_ver` (firmware version), `ds5_read_reg` (register read interface), and `ds5_write_reg` (register write interface), providing diagnostic access to the camera hardware. The actual connection of the MUX to the video capture pipeline happens asynchronously in Phase 13 when the V4L2 async framework triggers the `ds5_mux_registered()` callback.
+
 ## Phase 13: Async Callback - Sensor Registration and Linking
 ```mermaid
 sequenceDiagram
@@ -756,7 +774,7 @@ sequenceDiagram
     activate Sensors
     Sensors->>Media: v4l2_device_register_subdev(&depth->sd)
     Media-->>Sensors: Depth subdev registered
-    Note right of Media: Creates /dev/v4l-subdevX
+    Note right of Media: Creates /dev/videoX
     Sensors->>Media: media_create_pad_link(<br/>  depth.pad[0],<br/>  mux.pad[DS5_MUX_PAD_DEPTH],<br/>  IMMUTABLE | ENABLED)
     Media-->>Sensors: Link created
     Sensors-->>Mux: Depth sensor registered and linked
@@ -789,6 +807,10 @@ sequenceDiagram
     deactivate Mux
     Note over Media: Video device nodes created by<br/>platform driver (Tegra VI / Intel IPU6)
 ```
+
+### What is Async Callback - Sensor Registration and Linking?
+
+The async callback phase completes the video pipeline topology when the platform video driver binds to the D4xx camera, triggering the `ds5_mux_registered()` callback registered in Phase 12. This callback sequentially registers all four sensor subdevices (depth, IR, RGB, IMU) with the V4L2 device using `v4l2_device_register_subdev()`, which adds each sensor to the media controller graph and makes them visible to user space. For each sensor, the driver creates an immutable media link using `media_create_pad_link()` with flags `MEDIA_LNK_FL_IMMUTABLE | MEDIA_LNK_FL_ENABLED`, connecting the sensor's SOURCE pad (pad 0) to its corresponding MUX SINK pad (e.g., depth sensor → `DS5_MUX_PAD_DEPTH`), establishing the data flow path. These links are marked immutable and always enabled because the hardware topology is fixed—each sensor can only output to its designated MUX pad, and the routing cannot be changed at runtime. After all sensors are registered and linked, the platform video driver (Tegra VI or Intel IPU6) creates the final video device nodes (`/dev/videoX`) that user space applications use to capture video, completing the integration of the RealSense camera into the Linux V4L2/media controller framework.
 
 ## Device Tree Integration
 
@@ -935,3 +957,150 @@ The initialization flow ensures:
 7. ✅ Firmware update support via DFU character device
 
 The driver creates a complete V4L2/Media Controller compliant camera subsystem that integrates seamlessly with the Linux kernel's video capture infrastructure.
+
+# Side-step design: i2c aliasing in SW
+
+While the design above is more generic and removes unnecessary multpile probes for single camera,
+it constitues a large refactor from current design.
+
+An intermediate solution to allow for support of non-muxed boards while minimizing necessary changes is possible.
+Aliasing the i2c bus addresses themselves cannot be done is SW, but it is possible to alias the devices addreses within a bus.
+
+```mermaid
+graph TB
+    subgraph I2C_Addr["I2C MUX"]
+        I2C_Bus_0x30["I2C Address 0x30"]
+    end
+
+    subgraph I2C_Out["I2C Output"]
+        I2C_Out_0x30["I2C Address 0x30"]
+        I2C_Out_0x33["I2C Address 0x33 (Unused)"]
+        I2C_Out_0x34["I2C Address 0x34 (Unused)"]
+        I2C_Out_0x35["I2C Address 0x35 (Unused)"]
+    end
+
+    subgraph I2C_Bus["I2C Bus"]
+        I2C_Addr_0x30["I2C Address 0x30"]
+    end
+
+    subgraph DT["Device Tree"]
+        DT_Depth["ds5_depth@0x30<br/>compatible='intel,d4xx'<br/>reg=0x1a<br/>cam-type='Depth'"]
+        DT_RGB["ds5_rgb@0x30<br/>compatible='intel,d4xx'<br/>reg=0x1b<br/>cam-type='RGB'"]
+        DT_IR["ds5_ir@0x30<br/>compatible='intel,d4xx'<br/>reg=0x1c<br/>cam-type='Y8'"]
+        DT_IMU["ds5_imu@0x30<br/>compatible='intel,d4xx'<br/>reg=0x1d<br/>cam-type='IMU'"]
+    end
+
+    subgraph Driver["D4xx Driver (d4xx.c)"]
+        Probe_Depth["ds5_probe()<br/>instance 1"]
+        Probe_RGB["ds5_probe()<br/>instance 2"]
+        Probe_IR["ds5_probe()<br/>instance 3"]
+        Probe_IMU["ds5_probe()<br/>instance 4"]
+    end
+
+    subgraph V4L2_Subdevs["V4L2 Subdevices"]
+        V4L2_Depth["Depth Sensor Subdev<br/>/dev/video0<br/>Format: Z16"]
+        V4L2_RGB["RGB Sensor Subdev<br/>/dev/video2<br/>Format: YUYV/RGB"]
+        V4L2_IR["IR Sensor Subdev<br/>/dev/video4<br/>Format: Y8/Y16"]
+        V4L2_IMU["IMU Sensor Subdev<br/>/dev/video6<br/>Format: Metadata"]
+    end
+
+    subgraph Hardware["Physical Hardware"]
+        HW_Depth["DS5 Depth Sensor"]
+        HW_RGB["DS5 RGB Sensor"]
+        HW_IR["DS5 IR Sensor"]
+        HW_IMU["DS5 IMU Sensor"]
+    end
+
+    %% Device Tree to I2C Address
+    DT_Depth -.->|defines| I2C_Addr_0x30
+    DT_RGB -.->|defines| I2C_Addr_0x30
+    DT_IR -.->|defines| I2C_Addr_0x30
+    DT_IMU -.->|defines| I2C_Addr_0x30
+
+    %% I2C to Driver Probe
+    I2C_Addr_0x30 -->|I2C match| Probe_Depth
+    I2C_Addr_0x30 -->|I2C match| Probe_RGB
+    I2C_Addr_0x30 -->|I2C match| Probe_IR
+    I2C_Addr_0x30 -->|I2C match| Probe_IMU
+
+    %% Driver to V4L2 Subdevices
+    Probe_Depth -->|creates| V4L2_Depth
+    Probe_RGB -->|creates| V4L2_RGB
+    Probe_IR -->|creates| V4L2_IR
+    Probe_IMU -->|creates| V4L2_IMU
+
+    %% Hardware connection
+    HW_Depth <-->|I2C Reg 0x1a| I2C_Bus_0x30
+    HW_RGB <-->|I2C Reg 0x1a| I2C_Bus_0x30
+    HW_IR <-->|I2C Reg 0x1a| I2C_Bus_0x30
+    HW_IMU <-->|I2C Reg 0x1a| I2C_Bus_0x30
+
+    %% Mux Output
+    I2C_Bus_0x30 <--> I2C_Out_0x30
+    I2C_Bus_0x30 <--> I2C_Out_0x33
+    I2C_Bus_0x30 <--> I2C_Out_0x34
+    I2C_Bus_0x30 <--> I2C_Out_0x35
+    
+    style I2C_Out fill:#e1f5ff,color:#000000
+    style DT fill:#fff4e1,color:#000000
+    style Driver fill:#e8f5e9,color:#000000
+    style V4L2_Subdevs fill:#f3e5f5,color:#000000
+    style Hardware fill:#ffeaa7,color:#000000
+```
+
+### Example Multi-Sensor Multi-i2c-bus Configuration:
+
+```dts
+i2c@0 {
+    reg = <0x0> /* All sensors at i2c 30 */
+    d4m_depth@1a {
+        compatible = "intel,d4xx";
+        def-addr = <0x10>;
+        /* reg addr 0x1a */
+        reg = <0x1a>;
+        cam-type = "Depth";
+        vcc-supply = <&vdd_1v8>;
+        ...
+    };
+    d4m_rgb@1b {
+        compatible = "intel,d4xx";
+        def-addr = <0x10>;
+        /* reg addr (virtual) 0x1b */
+        reg = <0x1b>;
+        cam-type = "RGB";
+        vcc-supply = <&vdd_1v8>;
+        ...
+    };
+    d4m_ir@1c {
+        compatible = "intel,d4xx";
+        def-addr = <0x10>;
+        /* reg addr (virtual) 0x1c */
+        reg = <0x1c>;
+        cam-type = "Y8";
+        vcc-supply = <&vdd_1v8>;
+        ...
+    };
+    d4m_imu@1d {
+        compatible = "intel,d4xx";
+        def-addr = <0x10>;
+        /* reg addr (virtual) 0x1d */
+        reg = <0x1d>;
+        cam-type = "IMU";
+        vcc-supply = <&vdd_1v8>;
+        ...
+    };
+    ...
+};
+```
+
+### Aliasing in D4xx driver
+
+```
+#define DS5_FIXED_REG_ADDR 0x1a
+static int ds5_probe(struct i2c_client *c, const struct i2c_device_id *id)
+{
+    ...
+    // Alias all addresses to 0x1a
+	c->addr = DS5_FIXED_REG_ADDR;
+}
+```
