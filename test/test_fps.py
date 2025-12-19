@@ -50,10 +50,11 @@ def test_fps(device, frames):
                         m = re.search(r"cap dqbuf:.*bytesused:.*fps:\s*(\d+\.\d+)\s*.*", line)
                         if m:
                             fps = float(m.group(1))
-                            if last:
-                                print(f"\b/{fps}", end=',')
-                                assert fps > FPS * (1 - kpi/100), f"FPS too low: {fps}/{FPS}"
-                                assert fps < FPS * (1 + kpi/100), f"FPS too high: {fps}/{FPS}"
+                            print(f"/{fps}", end=',')
+                            assert fps > FPS * (1 - kpi/100), f"FPS too low: {fps}/{FPS}"
+                            assert fps < FPS * (1 + kpi/100), f"FPS too high: {fps}/{FPS}"
+                        else:
+                            print(end=',')
                         last = frame
                 print()
                 assert last, "No frames received"
