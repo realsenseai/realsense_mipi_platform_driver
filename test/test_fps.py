@@ -17,7 +17,7 @@ def test_fps(device, frames):
                        f"--set-fmt-video=width={w},height={h}",
                        ]
                 subprocess.check_call(cmd)
-                print(f"FPS/{FPS}:", end=' ')
+                print(f"FPS/{FPS}:", end='')
                 cmd = [ "v4l2-ctl",
                        f"-d{device}",
                        "-p",
@@ -57,9 +57,9 @@ def test_fps(device, frames):
                             print(end=',')
                         last = frame
                 print()
-                assert last, "No frames received"
+                assert last, "No frames arrived"
     except subprocess.TimeoutExpired:
-        assert False, "No frames received"
+        assert False, "No frames arrived"
 
 def get_formats(device):
     cmd = [ "v4l2-ctl",
