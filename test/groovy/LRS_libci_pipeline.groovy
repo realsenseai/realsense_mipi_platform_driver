@@ -11,9 +11,9 @@ pipeline {
         stage('pytest') {
             steps {
                 script {
-					sh{
-						pytest
-					}
+			sh{
+				pytest test
+			}
                 }
             }
         }

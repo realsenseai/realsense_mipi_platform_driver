@@ -43,7 +43,7 @@ def test_fps(device, frames):
                     m = re.search(r"cap dqbuf:.*seq:\s*(\d*)\s*bytesused:.*", line)
                     if m:
                         frame = int(m.group(1))
-                        print(f"{frame}", end=',')
+                        print(f"{frame}", end='')
                         if last:
                             assert frame > last, f"Repeated frame: {frame}"
                             assert (frame - last) < 3 , f"Frames dropped between: {last} and {frame}"
