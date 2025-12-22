@@ -11,7 +11,7 @@ pipeline {
 		stage('pytest') {
 			steps {
 				script {
-					sh 'pytest --tb=no test'
+					sh 'pytest --tb=no -s test'
 				}
 			}
 		}
