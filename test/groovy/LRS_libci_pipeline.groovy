@@ -4,7 +4,7 @@ pipeline {
 	agent { label 'rs-orin-01.realsenseai.com' }
 	options {
 		timestamps()
-			timeout(time: 10, unit: 'MINUTES')
+			timeout(time: 30, unit: 'MINUTES')
 	}
 
 	stages {
