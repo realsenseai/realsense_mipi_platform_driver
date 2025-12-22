@@ -3,7 +3,7 @@ import pytest
 import re
 
 @pytest.mark.d457
-@pytest.mark.parametrize("frames", {20})
+@pytest.mark.parametrize("frames", {150})
 @pytest.mark.parametrize("device", {'0', '2'})
 def test_fps(device, frames):
     try:
