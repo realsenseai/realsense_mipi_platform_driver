@@ -17,7 +17,7 @@ def test_fps(device, frames):
                        f"--set-fmt-video=width={w},height={h}",
                        ]
                 subprocess.check_call(cmd)
-                print(f"FPS/{FPS}:", end='')
+                print(f"FPS/{FPS}:", end=' ')
                 cmd = [ "v4l2-ctl",
                        f"-d{device}",
                        "-p",
@@ -58,7 +58,7 @@ def test_fps(device, frames):
                                 assert fps > FPS * (1 - kpi/100), f"FPS too low: {fps}/{FPS}"
                                 assert fps < FPS * (1 + kpi/100), f"FPS too high: {fps}/{FPS}"
                             else:
-                                print('*', end='')
+                                print('?', end='')
                                 skip = False
                         print(end=',')
                         last = frame
