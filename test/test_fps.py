@@ -40,9 +40,11 @@ def test_fps(device, frames):
                 last = None
                 skip = True    # skip first FPS measurement
                 kpi = 5 # [%]
+                count = 0
                 for line in output:
                     m = re.search(r"cap dqbuf:.*seq:\s*(\d*) bytesused:", line)
                     if m:
+                        count += 1
                         frame = int(m.group(1))
                         print(f"{frame}", end='')
                         if last:
@@ -62,6 +64,7 @@ def test_fps(device, frames):
                         last = frame
                 print()
                 assert last, "No frames arrived"
+                assert count == frames, f"Missing frames: {count} < {frames}"
     except subprocess.TimeoutExpired:
         assert False, "No frames arrived"
 
