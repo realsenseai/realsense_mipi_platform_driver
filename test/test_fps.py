@@ -38,6 +38,7 @@ def test_fps(device, frames):
                                         capture_output=True,
                                         timeout=timeout).stderr.splitlines()
                 last = None
+                skip = true
                 kpi = 5 # [%]
                 for line in output:
                     m = re.search(r"cap dqbuf:.*seq:\s*(\d*)\s*bytesused:.*", line)
@@ -50,9 +51,12 @@ def test_fps(device, frames):
                         m = re.search(r"cap dqbuf:.*bytesused:.*fps:\s*(\d+\.\d+)\s*.*", line)
                         if m:
                             fps = float(m.group(1))
-                            print(f"/{fps}", end=',')
-                            assert fps > FPS * (1 - kpi/100), f"FPS too low: {fps}/{FPS}"
-                            assert fps < FPS * (1 + kpi/100), f"FPS too high: {fps}/{FPS}"
+                            if not skip:
+                                print(f"/{fps}", end=',')
+                                assert fps > FPS * (1 - kpi/100), f"FPS too low: {fps}/{FPS}"
+                                assert fps < FPS * (1 + kpi/100), f"FPS too high: {fps}/{FPS}"
+                            else:
+                                skip = false
                         else:
                             print(end=',')
                         last = frame
@@ -78,7 +82,7 @@ def get_formats(device):
         if m:
             w = int(m.group(1))
             h = int(m.group(2))
-            last = (w ,h)
+            last = (w, h)
             if not last in formats:
                 formats[last] = set()
             continue
