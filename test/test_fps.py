@@ -55,8 +55,8 @@ def test_fps(device, frames):
                             fps = 1000 / float(m.group(1))
                             print(f"/{fps:.2f}", end='')
                             if not skip:
-                                assert fps > FPS * (1 - kpi/100), f"FPS too low: {fps}/{FPS}"
-                                assert fps < FPS * (1 + kpi/100), f"FPS too high: {fps}/{FPS}"
+                                assert fps > FPS * (1 - kpi/100), f"FPS too low: {fps:.2f}/{FPS}"
+                                assert fps < FPS * (1 + kpi/100), f"FPS too high: {fps:.2f}/{FPS}"
                             else:
                                 print('?', end='')
                                 skip = False

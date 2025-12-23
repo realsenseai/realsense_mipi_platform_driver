@@ -8,25 +8,27 @@ pipeline {
 		timeout(time: 30, unit: 'MINUTES')
 	}
 
-	parameters {
-		string(name: 'ARTIFACTORY_SERVER_URL', description: '', defaultValue: 'https://rsartifactory.realsenseai.com/artifactory')
-		string(name: 'ARTIFACTORY_REPO', description: '', defaultValue: 'realsense_generic_dev-il-local')
-	}
-
 	stages {
-		stage('get artifacts') {
+		stage('Get artifacts') {
 			steps {
 				script {
-					def server = Artifactory.server 'realsense artifacts'
-					server.download spec: 'download-spec.json'
-						def baseDir = new File('/your/path')
-						def newestDir = baseDir.listFiles()
-							.findAll { it.isDirectory() }
-							.max { it.lastModified() }
+					copyArtifacts filter: '**/*.tar.bz2',
+						projectName: 'D4xx_Kernel_Module_Jetson_JP6',
+						flatten: true,
+						target: 'artifacts/'
 				}
 			}
 		}
-		stage('pytest') {
+		stage('Install artifacts') {
+			steps {
+				script {
+					sh """#!/bin/sh
+						tar -xf 'artifacts/rootfs.tar.bz2'
+						"""
+				}
+			}
+		}
+		stage('Pytest') {
 			steps {
 				script {
 					sh 'pytest --tb=no -s test'
