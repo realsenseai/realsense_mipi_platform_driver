@@ -5,34 +5,55 @@ pipeline {
 
 	options {
 		timestamps()
-		timeout(time: 30, unit: 'MINUTES')
+			timeout(time: 30, unit: 'MINUTES')
+	}
+
+	parameters {
+		booleanParam(name: 'REBOOTING', defaultValue: false)
 	}
 
 	stages {
 		stage('Get artifacts') {
+			when {
+				expression { params.REBOOTING == false }
+			}
 			steps {
 				script {
 					copyArtifacts filter: '**/*.tar.bz2',
-						projectName: 'D4xx_Kernel_Module_Jetson_JP6',
-						flatten: true,
-						target: 'artifacts/'
+						      projectName: 'D4xx_Kernel_Module_Jetson_JP6',
+						      flatten: true,
+						      target: 'artifacts/'
 				}
 			}
 		}
 		stage('Install artifacts') {
+			when {
+				expression { params.REBOOTING == false }
+			}
 			steps {
+				sh """#!/bin/sh
+					tar -xf artifacts/rootfs.tar.bz2
+					sudo cp -R lib/modules/* /lib/modules
+					sudo cp -R boot/* /boot/
+					touch rebooting
+				"""
 				script {
-					sh """#!/bin/sh
-						tar -xf 'artifacts/rootfs.tar.bz2'
-						"""
+					build job: env.JOB_NAME, parameters: [
+						string(name: 'REBOOTING', value: true)
+						]
 				}
+				sh 'sudo reboot'
 			}
 		}
 		stage('Pytest') {
+			when {
+				expression { params.REBOOTING == true }
+			}
 			steps {
-				script {
-					sh 'pytest --tb=no -s test'
-				}
+				sh """#!/bin/sh
+					rm rebooting
+					pytest --tb=no -s test'
+				"""
 			}
 		}
 	}
