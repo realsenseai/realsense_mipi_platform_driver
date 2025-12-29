@@ -10,6 +10,7 @@ pipeline {
 
 	parameters {
 		booleanParam(name: 'REBOOT', defaultValue: false)
+		string(name: 'ARTIFACTS', defaultValue: "D4xx_Kernel_Module_Jetson_JP6")
 	}
 
 	stages {
@@ -20,7 +21,7 @@ pipeline {
 			steps {
 				script {
 					copyArtifacts filter: '**/*.tar.bz2',
-						      projectName: 'D4xx_Kernel_Module_Jetson_JP6',
+						      projectName: params.ARTIFACTS,
 						      flatten: true,
 						      target: 'artifacts/'
 				}

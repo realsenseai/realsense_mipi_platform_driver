@@ -49,7 +49,7 @@ def test_fps(device, frames):
                         # print(f"{frame}", end='')
                         if last:
                             assert frame > last, f"Repeated frame: {frame}"
-                            assert (frame - last) < 3 , f"Frames dropped between: {last} and {frame}"
+                            assert (frame - last) < 3, f"Frames dropped between: {last} and {frame}"
                         m = re.search(r"delta:\s*(\d+\.\d+) ms", line)
                         if m:
                             fps = 1000 / float(m.group(1))
