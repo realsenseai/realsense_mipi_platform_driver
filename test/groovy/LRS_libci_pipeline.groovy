@@ -9,13 +9,13 @@ pipeline {
 	}
 
 	parameters {
-		booleanParam(name: 'REBOOTING', defaultValue: false)
+		booleanParam(name: 'REBOOT', defaultValue: false)
 	}
 
 	stages {
 		stage('Get artifacts') {
 			when {
-				expression { params.REBOOTING == false }
+				expression { params.REBOOT == true }
 			}
 			steps {
 				script {
@@ -28,31 +28,33 @@ pipeline {
 		}
 		stage('Install artifacts') {
 			when {
-				expression { params.REBOOTING == false }
+				expression { params.REBOOT == true }
 			}
 			steps {
 				sh """#!/bin/sh
 					tar -xf artifacts/rootfs.tar.bz2
-					sudo cp -R lib/modules/* /lib/modules
-					sudo cp -R boot/* /boot/
-					touch rebooting
+					# external script on agent to install artifacts
+					sudo install.tegra.artifacts.sh
 				"""
 				script {
-					build job: env.JOB_NAME, parameters: [
-						string(name: 'REBOOTING', value: true)
-						]
+					build job: env.JOB_NAME,
+					      wait: false,
+					      parameters: [ booleanParam(name: 'REBOOT', value: false) ]
 				}
-				sh 'sudo reboot'
+			}
+			post {
+				success {
+					sh 'nohup sudo reboot &'
+				}
 			}
 		}
 		stage('Pytest') {
 			when {
-				expression { params.REBOOTING == true }
+				expression { params.REBOOT == false }
 			}
 			steps {
 				sh """#!/bin/sh
-					rm rebooting
-					pytest --tb=no -s test'
+					pytest --tb=no -s test
 				"""
 			}
 		}

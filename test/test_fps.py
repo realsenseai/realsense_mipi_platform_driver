@@ -31,7 +31,7 @@ def test_fps(device, frames):
                        f"{frames}",
                        "--verbose",
                        ]
-                timeout = 5.0 * frames / FPS
+                timeout = 4.0 * frames / FPS
                 output = subprocess.run(cmd,
                                         check=True,
                                         text=True,
@@ -46,21 +46,21 @@ def test_fps(device, frames):
                     if m:
                         count += 1
                         frame = int(m.group(1))
-                        print(f"{frame}", end='')
+                        # print(f"{frame}", end='')
                         if last:
                             assert frame > last, f"Repeated frame: {frame}"
                             assert (frame - last) < 3 , f"Frames dropped between: {last} and {frame}"
                         m = re.search(r"delta:\s*(\d+\.\d+) ms", line)
                         if m:
                             fps = 1000 / float(m.group(1))
-                            print(f"/{fps:.2f}", end='')
+                            # print(f"/{fps:.2f}", end='')
                             if not skip:
                                 assert fps > FPS * (1 - kpi/100), f"FPS too low: {fps:.2f}/{FPS}"
                                 assert fps < FPS * (1 + kpi/100), f"FPS too high: {fps:.2f}/{FPS}"
                             else:
-                                print('?', end='')
+                                # print('?', end='')
                                 skip = False
-                        print(end=',')
+                        # print(end=',')
                         last = frame
                 print()
                 assert last, "No frames arrived"
