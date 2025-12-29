@@ -9,8 +9,16 @@ pipeline {
 	}
 
 	parameters {
-		booleanParam(name: 'REBOOT', defaultValue: false)
-		string(name: 'ARTIFACTS', defaultValue: "D4xx_Kernel_Module_Jetson_JP6")
+		booleanParam(
+			name: 'REBOOT',
+			description: 'When set the artifacts will be installed to target agent and the agent rebooted',
+			defaultValue: false,
+			)
+		string(
+			name: 'ARTIFACTS',
+			description: 'Jenkins job for artifacts to be installed on target agent',
+			defaultValue: "D4xx_Kernel_Module_Jetson_JP6"
+			)
 	}
 
 	stages {
