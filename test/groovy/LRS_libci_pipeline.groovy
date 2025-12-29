@@ -19,6 +19,10 @@ pipeline {
 			description: 'Jenkins job for artifacts to be installed on target agent',
 			defaultValue: "D4xx_Kernel_Module_Jetson_JP6"
 			)
+		string(
+			name: 'BUILD',
+			description: 'Build number for artifacts. Leave empty for last successful'
+			)
 	}
 
 	stages {
@@ -28,9 +32,17 @@ pipeline {
 			}
 			steps {
 				script {
+					def buildSelector
+						if (params.BUILD?.trim()) {
+							buildSelector = specific(params.BUILD)
+						} else {
+							buildSelector = lastSuccessful()
+						}
+
 					copyArtifacts filter: '**/*.tar.bz2',
 						      projectName: params.ARTIFACTS,
 						      flatten: true,
+						      selector: buildSelector,
 						      target: 'artifacts/'
 				}
 			}
@@ -41,6 +53,7 @@ pipeline {
 			}
 			steps {
 				sh """#!/bin/sh
+					rm -rf lib/modules
 					tar -xf artifacts/rootfs.tar.bz2
 					# external script on agent to install artifacts
 					sudo install.tegra.artifacts.sh
