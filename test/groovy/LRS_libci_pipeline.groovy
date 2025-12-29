@@ -36,11 +36,6 @@ pipeline {
 					# external script on agent to install artifacts
 					sudo install.tegra.artifacts.sh
 				"""
-				script {
-					build job: env.JOB_NAME,
-					      wait: false,
-					      parameters: [ booleanParam(name: 'REBOOT', value: false) ]
-				}
 			}
 			post {
 				success {
@@ -49,9 +44,6 @@ pipeline {
 			}
 		}
 		stage('Pytest') {
-			when {
-				expression { params.REBOOT == false }
-			}
 			steps {
 				sh """#!/bin/sh
 					pytest --tb=no -s test
