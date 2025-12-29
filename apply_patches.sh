@@ -12,11 +12,16 @@ fi
 # single - jp5 [default] single cam GMSL board
 # dual - dual cam GMSL board SC20220126
 JP5_D4XX_DTSI="tegra194-camera-d4xx-single.dtsi"
+D4XX_SRC="d4xx.c"
 if [[ "$1" == "--one-cam" ]]; then
     JP5_D4XX_DTSI="tegra194-camera-d4xx-single.dtsi"
     shift
 elif [[ "$1" == "--dual-cam" ]]; then
     JP5_D4XX_DTSI="tegra194-camera-d4xx-dual.dtsi"
+    shift
+elif [[ "$1" == "--Fungzhu" ]]; then
+    JP5_D4XX_DTSI="tegra194-camera-d4xx-fungzhu.dtsi"
+    D4XX_SRC="d4xx_max96712.c"
     shift
 fi
 

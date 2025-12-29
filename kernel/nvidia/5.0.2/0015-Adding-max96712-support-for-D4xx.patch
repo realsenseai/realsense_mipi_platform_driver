@@ -1,0 +1,453 @@
+From 7b804da996780e6768521743477790ec2d5e32d3 Mon Sep 17 00:00:00 2001
+From: ejgoldik <ehud.joseph.goldik@realsenseai.com>
+Date: Mon, 29 Dec 2025 15:13:06 +0200
+Subject: [PATCH] Adding max96712 support for D4xx
+
+Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
+---
+ drivers/media/i2c/max96712.c | 304 ++++++++++++++++++++++++++++++++++-
+ include/media/max96712.h     |  53 ++++++
+ 2 files changed, 354 insertions(+), 3 deletions(-)
+ create mode 100644 include/media/max96712.h
+
+diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
+index 8081385f0..1bbfb5705 100644
+--- a/drivers/media/i2c/max96712.c
++++ b/drivers/media/i2c/max96712.c
+@@ -21,17 +21,62 @@
+ #include <linux/debugfs.h>
+ #include <media/camera_common.h>
+ #include <linux/module.h>
+-
++#include <media/max96712.h>
++#include <linux/of_gpio.h>
++
++/* register specifics */
++
++#define MAX96712_REG5_ADDR 0x5
++#define MAX96712_REG6_ADDR 0x6
++#define MAX96712_CTRL0_ADDR 0x17
++#define MAX96712_CTRL1_ADDR 0x18
++
++#define MAX96712_BACKTOP24_ADDR 0x417
++#define MAX96712_BACKTOP25_ADDR 0x418
++
++#define MAX96712_MIPI_PHY0_ADDR 0x8A0
++#define MAX96712_MIPI_PHY2_ADDR 0x8A2
++#define MAX96712_MIPI_PHY3_ADDR 0x8A3
++#define MAX96712_MIPI_PHY5_ADDR 0x8A5
++#define MAX96712_VIDEO_PIPE_SEL_0_ADDR 0xF0
++#define MAX96712_VIDEO_PIPE_SEL_1_ADDR 0xF1
++#define MAX96712_VIDEO_PIPE_EN_ADDR 0xF4
++#define MAX96712_BACKTOP12_CSI_OUT_EN_ADDR 0x40B
++
++#define MAX96712_MIPI_TX10_ADDR 0x90A
++#define MAX96712_MIPI_TX11_ADDR 0x90B
++#define MAX96712_MIPI_TX13_SRC_0_MAP_ADDR 0x90D
++#define MAX96712_MIPI_TX14_DST_0_MAP_ADDR 0x90E
++#define MAX96712_MIPI_TX15_SRC_1_MAP_ADDR 0x90F
++#define MAX96712_MIPI_TX16_DST_1_MAP_ADDR 0x910
++#define MAX96712_MIPI_TX17_SRC_2_MAP_ADDR 0x911
++#define MAX96712_MIPI_TX18_DST_2_MAP_ADDR 0x912
++#define MAX96712_MIPI_TX19_SRC_3_MAP_ADDR 0x913
++#define MAX96712_MIPI_TX20_DST_3_MAP_ADDR 0x914
++#define MAX96712_MIPI_TX45_MAP_DPHY_DEST_ADDR 0x92D
++#define MAX96712_MIPI_TX51_ADDR 0x933
++
++#define MAX96712_VIDEO_RX0_ADDR 0x100
++
++#define MAX96712_RLMS_A_RLMS58_ADDR 0x1458
++#define MAX96712_RLMS_A_RLMS59_ADDR 0x1459
++#define MAX96712_RLMS_B_RLMS58_ADDR 0x1558
++#define MAX96712_RLMS_B_RLMS59_ADDR 0x1559
++
++
++/* data defines */
++#define MAX96712_MAX_PIPES 4
+ 
+ struct max96712 {
+ 	struct i2c_client *i2c_client;
+ 	struct regmap *regmap;
+ 	const char *channel;
++	struct mutex lock;
+ };
+ struct max96712 *global_priv[4] ;
+ 
+ 
+-int max96712_write_reg_Dser(int slaveAddr,int channel,
++int max96712_write_reg_Dser(int slaveAddr, int channel,
+ 			u16 addr, u8 val)
+ {
+ 	struct i2c_client *i2c_client = NULL;
+@@ -99,6 +144,19 @@ static int max96712_read_reg(struct max96712 *priv,
+ 	return err;
+ }
+ 
++static int max96712_write_reg(struct max96712 *priv,
++			u16 addr, unsigned int val)
++{
++	struct i2c_client *i2c_client = priv->i2c_client;
++	int err;
++
++	err = regmap_write(priv->regmap, addr, val);
++	if (err)
++		dev_err(&i2c_client->dev, "%s:i2c write failed, 0x%x = %x\n",
++			__func__, addr, val);
++
++	return err;
++}
+ 
+ static int max96712_stats_show(struct seq_file *s, void *data)
+ {
+@@ -169,7 +227,10 @@ static int max96712_debugfs_init(const char *dir_name,
+ 	if (np) {
+ 		err = of_property_read_string(np, "channel", &priv->channel);
+ 		if (err)
++		{
+ 			dev_err(&i2c_client->dev, "channel not found\n");
++			return -EINVAL;
++		}
+ 
+ 		err = snprintf(dev_name, sizeof(dev_name), "max96712_%s", priv->channel);
+ 		if (err < 0)
+@@ -228,10 +289,14 @@ static int max96712_probe(struct i2c_client *client,
+ 			"regmap init failed: %ld\n", PTR_ERR(priv->regmap));
+ 		return -ENODEV;
+ 	}
++	mutex_init(&priv->lock);
+ 
++	dev_set_drvdata(&client->dev, priv);
+ 	err = max96712_debugfs_init(NULL, NULL, NULL, priv);
+ 	if (err)
++	{
+ 		return err;
++	}
+ 
+ 	/*set daymode by fault*/
+ 	dev_info(&client->dev, "%s:  success\n", __func__);
+@@ -243,8 +308,12 @@ static int max96712_probe(struct i2c_client *client,
+ static int
+ max96712_remove(struct i2c_client *client)
+ {
++	struct max96712 *priv;
+ 
+ 	if (client != NULL) {
++		priv = dev_get_drvdata(&client->dev);
++
++		mutex_destroy(&priv->lock);
+ 		i2c_unregister_device(client);
+ 		client = NULL;
+ 	}
+@@ -252,13 +321,241 @@ max96712_remove(struct i2c_client *client)
+ 	return 0;
+ }
+ 
++struct reg_pair {
++	u16 addr;
++	u8 val;
++};
++
++static int max96712_set_registers(struct max96712 *priv, struct reg_pair *map, u32 count)
++{
++	int err = 0;
++	u32 j = 0;
++
++	for (j = 0; j < count; j++) {
++		err = max96712_write_reg(priv, map[j].addr, map[j].val);
++		if (err != 0)
++			break;
++	}
++
++	return err;
++}
++
++int max96712_get_available_pipe_id(struct device *dev, int vc_id)
++{
++	/* TODO EHUD: Currently vc_id == pipe id but that's definitely
++	 * not the end goal if we plan to support multiple cameras
++	 */
++	return vc_id;
++}
++EXPORT_SYMBOL(max96712_get_available_pipe_id);
++
++int max96712_release_pipe(struct device *dev, int pipe_id)
++{
++	/* TODO EHUD: pipe id? */
++	return 0;
++}
++EXPORT_SYMBOL(max96712_release_pipe);
++
++void max96712_reset_oneshot(struct device *dev)
++{
++	struct max96712 *priv = dev_get_drvdata(dev);
++	max96712_write_reg(priv, MAX96712_CTRL1_ADDR, 0x0F);
++	msleep(1);
++	max96712_write_reg(priv, MAX96712_CTRL1_ADDR, 0x00);
++	msleep(100);
++}
++EXPORT_SYMBOL(max96712_reset_oneshot);
++
++static int __max96712_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
++			      u8 data_type2, u32 vc_id)
++{
++	int err = 0;
++	struct max96712 *priv = dev_get_drvdata(dev);
++
++	int i = 0;
++
++	struct reg_pair map_pipe_select[] = {
++		{MAX96712_REG5_ADDR, 0x80}, // Enable lock
++		{MAX96712_REG6_ADDR, 0xF1}, // Enable lock
++		{MAX96712_MIPI_PHY0_ADDR, 0x01},
++		{MAX96712_MIPI_PHY2_ADDR, 0xF4},
++		{MAX96712_MIPI_PHY3_ADDR, 0x44},
++		{MAX96712_MIPI_PHY5_ADDR, 0x00},
++		{MAX96712_VIDEO_PIPE_SEL_0_ADDR, 0x10},
++		{MAX96712_VIDEO_PIPE_SEL_1_ADDR, 0x32},
++		{MAX96712_VIDEO_PIPE_EN_ADDR, 0x0F},
++	};
++
++	struct reg_pair map_pipe_control[] = {
++		// Enable 4 mappings for Pipe X
++		{MAX96712_MIPI_TX11_ADDR, 0x0F},
++		// Map data_type1 on vc_id
++		{MAX96712_MIPI_TX13_SRC_0_MAP_ADDR, 0x1E},
++		{MAX96712_MIPI_TX14_DST_0_MAP_ADDR, 0x1E},
++		// Map frame_start on vc_id
++		{MAX96712_MIPI_TX15_SRC_1_MAP_ADDR, 0x00},
++		{MAX96712_MIPI_TX16_DST_1_MAP_ADDR, 0x00},
++		// Map frame end on vc_id
++		{MAX96712_MIPI_TX17_SRC_2_MAP_ADDR, 0x01},
++		{MAX96712_MIPI_TX18_DST_2_MAP_ADDR, 0x01},
++		// Map data_type2 on vc_id
++		{MAX96712_MIPI_TX19_SRC_3_MAP_ADDR, 0x12},
++		{MAX96712_MIPI_TX20_DST_3_MAP_ADDR, 0x12},
++		// All mappings to PHY1 (master for port A)
++		{MAX96712_MIPI_TX45_MAP_DPHY_DEST_ADDR, 0x00},
++		{MAX96712_MIPI_TX10_ADDR, 0x40},
++		{MAX96712_MIPI_TX51_ADDR, 0x10},
++		// SEQ_MISS_EN: Disabled / DIS_PKT_DET: Disabled
++		{MAX96712_VIDEO_RX0_ADDR, 0x23}, // pipe X
++	};
++
++	struct reg_pair map_pipe_opt[] = {
++		{MAX96712_RLMS_A_RLMS58_ADDR, 0x28}, // PHY A Optimization
++		{MAX96712_RLMS_A_RLMS59_ADDR, 0x68}, // PHY A Optimization
++		{MAX96712_RLMS_B_RLMS58_ADDR, 0x28}, // PHY B Optimization
++		{MAX96712_RLMS_B_RLMS59_ADDR, 0x68}, // PHY B Optimization
++		{MAX96712_BACKTOP24_ADDR, 0xf0},
++		{MAX96712_BACKTOP25_ADDR, 0x2f},
++	};
++
++	for (i = 0; i < 12; i++) {
++		map_pipe_control[i].addr += 0x40 * pipe_id;
++	}
++	map_pipe_control[12].addr += 0x12 * pipe_id;
++
++	if (data_type2 == 0x0) {
++		/* For IMU (which has no metadata) we override mapping
++		* to enable only 3
++		*/
++		map_pipe_control[1].val = 0x07;
++	}
++	map_pipe_control[1].val = (vc_id << 6) | data_type1;
++	map_pipe_control[2].val = (vc_id << 6) | data_type1;
++	map_pipe_control[3].val = (vc_id << 6) | 0x00;
++	map_pipe_control[4].val = (vc_id << 6) | 0x00;
++	map_pipe_control[5].val = (vc_id << 6) | 0x01;
++	map_pipe_control[6].val = (vc_id << 6) | 0x01;
++	map_pipe_control[7].val = (vc_id << 6) | data_type2;
++	map_pipe_control[8].val = (vc_id << 6) | data_type2;
++
++	max96712_write_reg(priv, MAX96712_CTRL1_ADDR, 0x14);
++	max96712_write_reg(priv, MAX96712_BACKTOP12_CSI_OUT_EN_ADDR, 0x0);
++
++	err |= max96712_set_registers(priv, map_pipe_select,
++					 ARRAY_SIZE(map_pipe_select));
++
++	err |= max96712_set_registers(priv, map_pipe_control,
++				     ARRAY_SIZE(map_pipe_control));
++
++	err |= max96712_set_registers(priv, map_pipe_opt,
++					 ARRAY_SIZE(map_pipe_opt));
++
++	max96712_write_reg(priv, MAX96712_BACKTOP12_CSI_OUT_EN_ADDR, 0x2);
++
++	max96712_reset_oneshot(dev);
++
++	return err;
++}
++
++int max96712_init_settings(struct device *dev)
++{
++	int err = 0;
++	int i;
++	struct max96712 *priv = dev_get_drvdata(dev);
++
++	mutex_lock(&priv->lock);
++
++	for (i = 0; i < MAX96712_MAX_PIPES; i++)
++		err |= __max96712_set_pipe(dev, i, GMSL_CSI_DT_YUV422_8,
++					  GMSL_CSI_DT_EMBED, i);
++
++	mutex_unlock(&priv->lock);
++
++	return err;
++}
++EXPORT_SYMBOL(max96712_init_settings);
++
++int max96712_set_pipe(struct device *dev, int pipe_id,
++		     u8 data_type1, u8 data_type2, u32 vc_id)
++{
++	struct max96712 *priv = dev_get_drvdata(dev);
++	int err = 0;
++
++	if (pipe_id > (MAX96712_MAX_PIPES - 1)) {
++		dev_info(dev, "%s, input pipe_id: %d exceed max96712 max pipes\n",
++			 __func__, pipe_id);
++		return -EINVAL;
++	}
++
++	dev_dbg(dev, "%s pipe_id %d, data_type1 %u, data_type2 %u, vc_id %u\n",
++		__func__, pipe_id, data_type1, data_type2, vc_id);
++
++	mutex_lock(&priv->lock);
++
++	err = __max96712_set_pipe(dev, pipe_id, data_type1, data_type2, vc_id);
++
++	mutex_unlock(&priv->lock);
++
++	return err;
++}
++EXPORT_SYMBOL(max96712_set_pipe);
++
++int max96712_setup_link(struct device *dev, struct device *s_dev)
++{
++	/* TODO EHUD: Is needed? */
++	return 0;
++}
++EXPORT_SYMBOL(max96712_setup_link);
++
++int max96712_setup_control(struct device *dev, struct device *s_dev)
++{
++	/* TODO EHUD: Is needed? */
++	return 0;
++}
++EXPORT_SYMBOL(max96712_setup_control);
++
++int max96712_reset_control(struct device *dev, struct device *s_dev)
++{
++	/* TODO EHUD: Is needed? */
++	return 0;
++}
++EXPORT_SYMBOL(max96712_reset_control);
++
++int max96712_sdev_register(struct device *dev, struct gmsl_link_ctx *g_ctx)
++{
++	/* TODO EHUD: Is needed? */
++	return 0;
++}
++EXPORT_SYMBOL(max96712_sdev_register);
++
++int max96712_sdev_unregister(struct device *dev, struct device *s_dev)
++{
++	/* TODO EHUD: Is needed? */
++	return 0;
++}
++EXPORT_SYMBOL(max96712_sdev_unregister);
++
++int max96712_power_on(struct device *dev)
++{
++	/* TODO EHUD: Is needed? */
++	return 0;
++}
++EXPORT_SYMBOL(max96712_power_on);
++
++void max96712_power_off(struct device *dev)
++{
++	/* TODO EHUD: Is needed? */
++	return;
++}
++EXPORT_SYMBOL(max96712_power_off);
++
+ static const struct i2c_device_id max96712_id[] = {
+ 	{ "max96712", 0 },
+ 	{ },
+ };
+ 
+ const struct of_device_id max96712_of_match[] = {
+-	{ .compatible = "nvidia,max96712", },
++	{ .compatible = "maxim,max96712", },
+ 	{ },
+ };
+ 
+@@ -268,6 +565,7 @@ static struct i2c_driver max96712_i2c_driver = {
+ 	.driver = {
+ 		.name = "max96712",
+ 		.owner = THIS_MODULE,
++		.of_match_table = of_match_ptr(max96712_of_match),
+ 	},
+ 	.probe = max96712_probe,
+ 	.remove = max96712_remove,
+diff --git a/include/media/max96712.h b/include/media/max96712.h
+new file mode 100644
+index 000000000..e917956bd
+--- /dev/null
++++ b/include/media/max96712.h
+@@ -0,0 +1,53 @@
++/*
++ * Copyright (c) 2018-2025, NVIDIA Corporation.  All rights reserved.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms and conditions of the GNU General Public License,
++ * version 2, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope it will be useful, but WITHOUT
++ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
++ * more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++/**
++ * @file
++ * <b>MAX96712 API: For Maxim Integrated MAX96712 deserializer</b>
++ *
++ * @b Description: Defines elements used to set up and use a
++ *  Maxim Integrated MAX96712 deserializer.
++ */
++
++#ifndef __MAX96712_H__
++#define __MAX96712_H__
++
++#include <linux/types.h>
++#include <media/gmsl-link.h>
++/**
++ * \defgroup max96712 MAX96712 deserializer driver
++ *
++ * Controls the MAX96712 deserializer module.
++ *
++ * @ingroup serdes_group
++ * @{
++ */
++
++int max96712_get_available_pipe_id(struct device *dev, int vc_id);
++int max96712_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
++		     u8 data_type2, u32 vc_id);
++int max96712_release_pipe(struct device *dev, int pipe_id);
++void max96712_reset_oneshot(struct device *dev);
++int max96712_setup_link(struct device *dev, struct device *s_dev);
++int max96712_setup_control(struct device *dev, struct device *s_dev);
++int max96712_reset_control(struct device *dev, struct device *s_dev);
++int max96712_sdev_register(struct device *dev, struct gmsl_link_ctx *g_ctx);
++int max96712_sdev_unregister(struct device *dev, struct device *s_dev);
++int max96712_power_on(struct device *dev);
++void max96712_power_off(struct device *dev);
++int max96712_init_settings(struct device *dev);
++
++#endif  /* __MAX96712_H__ */
+-- 
+2.43.0
+
