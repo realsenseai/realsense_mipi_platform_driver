@@ -19,8 +19,8 @@ if [[ "$1" == "--one-cam" ]]; then
 elif [[ "$1" == "--dual-cam" ]]; then
     JP5_D4XX_DTSI="tegra194-camera-d4xx-dual.dtsi"
     shift
-elif [[ "$1" == "--Fangzhu" ]]; then
-    JP5_D4XX_DTSI="tegra194-camera-d4xx-fangzhu.dtsi"
+elif [[ "$1" == "--fg12-16ch" ]]; then
+    JP5_D4XX_DTSI="tegra194-camera-d4xx-fg12-16ch.dtsi"
     D4XX_SRC="d4xx_max96712.c"
     shift
 fi
