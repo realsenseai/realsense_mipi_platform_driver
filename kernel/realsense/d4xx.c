@@ -5728,6 +5728,7 @@ static int ds5_probe(struct i2c_client *c, const struct i2c_device_id *id)
 	int ret, retry, err = 0;
 #ifdef CONFIG_OF
 	const char *str;
+	uint32_t override_addr = 0;
 #endif
 	if (!state)
 		return -ENOMEM;
@@ -5736,9 +5737,14 @@ static int ds5_probe(struct i2c_client *c, const struct i2c_device_id *id)
 
 	state->client = c;
 	dev_warn(&c->dev, "Probing driver for D4xx\n");
-	// Alias all addresses to 0x1a
-	c->addr = DS5_FIXED_REG_ADDR;
-
+#ifdef CONFIG_OF
+	ret = of_property_read_u32(c->dev.of_node, "override_reg", &override_addr);
+	if (!ret) {
+		// Override probed address
+		dev_dbg(&c->dev, "Using override addr %u\n", override_addr);
+		c->addr = override_addr;
+	}
+#endif
 	state->variant = ds5_variants + id->driver_data;
 #ifdef CONFIG_OF
 	state->vcc = devm_regulator_get(&c->dev, "vcc");
