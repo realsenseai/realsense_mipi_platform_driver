@@ -1,17 +1,17 @@
-From 7b804da996780e6768521743477790ec2d5e32d3 Mon Sep 17 00:00:00 2001
+From 76c0420916c636a85370c5f38cf0a175f7b3a4c1 Mon Sep 17 00:00:00 2001
 From: ejgoldik <ehud.joseph.goldik@realsenseai.com>
-Date: Mon, 29 Dec 2025 15:13:06 +0200
+Date: Wed, 31 Dec 2025 02:31:41 +0200
 Subject: [PATCH] Adding max96712 support for D4xx
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- drivers/media/i2c/max96712.c | 304 ++++++++++++++++++++++++++++++++++-
+ drivers/media/i2c/max96712.c | 307 ++++++++++++++++++++++++++++++++++-
  include/media/max96712.h     |  53 ++++++
- 2 files changed, 354 insertions(+), 3 deletions(-)
+ 2 files changed, 357 insertions(+), 3 deletions(-)
  create mode 100644 include/media/max96712.h
 
 diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
-index 8081385f0..1bbfb5705 100644
+index 8081385f0..efe263b21 100644
 --- a/drivers/media/i2c/max96712.c
 +++ b/drivers/media/i2c/max96712.c
 @@ -21,17 +21,62 @@
@@ -138,7 +138,7 @@ index 8081385f0..1bbfb5705 100644
  		i2c_unregister_device(client);
  		client = NULL;
  	}
-@@ -252,13 +321,241 @@ max96712_remove(struct i2c_client *client)
+@@ -252,13 +321,244 @@ max96712_remove(struct i2c_client *client)
  	return 0;
  }
  
@@ -259,7 +259,6 @@ index 8081385f0..1bbfb5705 100644
 +	map_pipe_control[7].val = (vc_id << 6) | data_type2;
 +	map_pipe_control[8].val = (vc_id << 6) | data_type2;
 +
-+	max96712_write_reg(priv, MAX96712_CTRL1_ADDR, 0x14);
 +	max96712_write_reg(priv, MAX96712_BACKTOP12_CSI_OUT_EN_ADDR, 0x0);
 +
 +	err |= max96712_set_registers(priv, map_pipe_select,
@@ -285,6 +284,10 @@ index 8081385f0..1bbfb5705 100644
 +	struct max96712 *priv = dev_get_drvdata(dev);
 +
 +	mutex_lock(&priv->lock);
++
++	max96712_write_reg(priv, MAX96712_CTRL0_ADDR, 0x14);
++	max96712_write_reg(priv, MAX96712_CTRL1_ADDR, 0xF0);
++	max96712_write_reg(priv, MAX96712_CTRL1_ADDR, 0x00);
 +
 +	for (i = 0; i < MAX96712_MAX_PIPES; i++)
 +		err |= __max96712_set_pipe(dev, i, GMSL_CSI_DT_YUV422_8,
@@ -381,7 +384,7 @@ index 8081385f0..1bbfb5705 100644
  	{ },
  };
  
-@@ -268,6 +565,7 @@ static struct i2c_driver max96712_i2c_driver = {
+@@ -268,6 +568,7 @@ static struct i2c_driver max96712_i2c_driver = {
  	.driver = {
  		.name = "max96712",
  		.owner = THIS_MODULE,
@@ -449,5 +452,5 @@ index 000000000..e917956bd
 +
 +#endif  /* __MAX96712_H__ */
 -- 
-2.43.0
+2.34.1
 
