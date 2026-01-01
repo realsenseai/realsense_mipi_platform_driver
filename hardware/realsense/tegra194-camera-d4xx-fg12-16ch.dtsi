@@ -1,8 +1,11 @@
 #include "dt-bindings/clock/tegra194-clock.h"
 
-#define CAM0_RST_L	TEGRA194_MAIN_GPIO(H, 3)
 #define CAMERA_I2C_MUX_BUS(x) (0x1E + x)
 
+#define CAM0_PWDN TEGRA194_MAIN_GPIO(H, 6)
+#define CAM1_PWDN TEGRA194_MAIN_GPIO(H, 3)
+#define CAM2_PWDN TEGRA194_MAIN_GPIO(T, 5)
+#define CAM3_PWDN TEGRA194_MAIN_GPIO(T, 6)
 
 / {
 	tegra-capture-vi {
@@ -63,17 +66,27 @@
 		};
 	};
 
+	gpio@2200000 {
+		cam0-pwdn {
+			gpio-hog;
+			output-high;
+			status = "okay";
+			gpios = <CAM0_PWDN GPIO_ACTIVE_HIGH>;
+			label = "cam0-pwdn";
+		};
+	};
+
 	i2c@3180000 {
 		status = "ok";
 		clock-frequency = <100000>;
-		tca9548@72 {
+		tca9546@70 {
 			status = "ok";
-			reg = <0x72>;
-			compatible = "nxp,pca9548";
+			reg = <0x70>;
+			compatible = "nxp,pca9546";
 			#address-cells = <1>;
 			#size-cells = <0>;
 			skip_mux_detect = "yes";
-			vcc-supply = <&p2822_vdd_1v8_cvb>;
+			vcc-supply = <&p2822_vdd_sys_en>;
 			/*vcc-pullup-supply = <&battery_reg>;*/
 			force_bus_start = <CAMERA_I2C_MUX_BUS(0)>;
 			vcc_lp = "vcc";
@@ -83,25 +96,19 @@
 				i2c-mux,deselect-on-exit;
 				#size-cells = <0x0>;
 
-				dser: max9296@48 {
+				dser: max96712@29 {
 					status = "ok";
-					reg = <0x48>;
-					compatible = "maxim,max9296";
+					reg = <0x29>;
+					compatible = "maxim,max96712";
 					csi-mode = "2x4";
 					max-src = <1>;
-					reset-gpios = <&tegra_main_gpio CAM0_RST_L GPIO_ACTIVE_HIGH>;
+					channel = "a";
 				};
 
-				ser_prim: max9295_prim@40 {
-					status = "ok";
+				ser_a: max9295_a@40 {
+					compatible = "maxim,max9295";
 					reg = <0x40>;
-					compatible = "maxim,max9295";
-					is-prim-ser;
-				};
-
-				ser_a: max9295_a@42 {
-					compatible = "maxim,max9295";
-					reg = <0x42>;
+					vcc-poc-supply = <&p2822_vdd_sys_en>;
 					maxim,gmsl-dser-device = <&dser>;
 				};
 
@@ -110,7 +117,7 @@
 					def-addr = <0x10>;
 					reg = <0x1a>;
 					compatible = "intel,d4xx";
-					vcc-supply = <&p2822_vdd_1v8_cvb>;
+					vcc-supply = <&p2822_vdd_sys_en>;
 					cam-type = "Depth";
 					maxim,gmsl-ser-device = <&ser_a>;
 					maxim,gmsl-dser-device = <&dser>;
@@ -124,6 +131,7 @@
 								port-index = <0>;
 								bus-width = <2>;
 								remote-endpoint = <&csi_in0>;
+								vc-id = <0>;
 							};
 						};
 					};
@@ -156,7 +164,7 @@
 					reg = <0x1b>;
 					override_reg = <0x1a>;
 					compatible = "intel,d4xx";
-					vcc-supply = <&p2822_vdd_1v8_cvb>;
+					vcc-supply = <&p2822_vdd_sys_en>;
 					cam-type = "RGB";
 					maxim,gmsl-ser-device = <&ser_a>;
 					maxim,gmsl-dser-device = <&dser>;
@@ -170,6 +178,7 @@
 								port-index = <1>;
 								bus-width = <2>;
 								remote-endpoint = <&csi_in1>;
+								vc-id = <1>;
 							};
 						};
 					};
@@ -202,8 +211,8 @@
 					reg = <0x1c>;
 					override_reg = <0x1a>;
 					compatible = "intel,d4xx";
-					vcc-supply = <&p2822_vdd_1v8_cvb>;
-					cam-type = "Y8";
+					vcc-supply = <&p2822_vdd_sys_en>;
+							cam-type = "Y8";
 					maxim,gmsl-ser-device = <&ser_a>;
 					maxim,gmsl-dser-device = <&dser>;
 					ports {
@@ -216,6 +225,7 @@
 								port-index = <2>;
 								bus-width = <2>;
 								remote-endpoint = <&csi_in2>;
+								vc-id = <2>;
 							};
 						};
 					};
@@ -249,8 +259,8 @@
 					reg = <0x1d>;
 					override_reg = <0x1a>;
 					compatible = "intel,d4xx";
-					vcc-supply = <&p2822_vdd_1v8_cvb>;
-					cam-type = "IMU";
+					vcc-supply = <&p2822_vdd_sys_en>;
+							cam-type = "IMU";
 					maxim,gmsl-ser-device = <&ser_a>;
 					maxim,gmsl-dser-device = <&dser>;
 					ports {
@@ -263,6 +273,7 @@
 								port-index = <3>;
 								bus-width = <2>;
 								remote-endpoint = <&csi_in3>;
+								vc-id = <3>;
 							};
 						};
 					};

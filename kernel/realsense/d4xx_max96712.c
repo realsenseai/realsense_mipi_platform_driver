@@ -38,7 +38,7 @@
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 #include <media/max9295.h>
-#include <media/max9296.h>
+#include <media/max96712.h>
 #else
 #include <media/gmsl-link.h>
 #define GMSL_CSI_DT_YUV422_8 0x1E
@@ -1419,7 +1419,7 @@ static int ds5_setup_pipeline(struct ds5 *state, u8 data_type1, u8 data_type2,
 			 pipe_id, data_type1, data_type2, vc_id);
 	ret |= max9295_set_pipe(state->ser_dev, pipe_id,
 				data_type1, data_type2, vc_id);
-	ret |= max9296_set_pipe(state->dser_dev, pipe_id,
+	ret |= max96712_set_pipe(state->dser_dev, pipe_id,
 				data_type1, data_type2, vc_id);
 	if (ret)
 		dev_warn(&state->client->dev,
@@ -1495,7 +1495,7 @@ static int ds5_configure(struct ds5 *state)
 				 vc_id);
 	// reset data path when switching to Y12I
 	if (state->is_y8 && data_type1 == GMSL_CSI_DT_RGB_888)
-		max9296_reset_oneshot(state->dser_dev);
+		max96712_reset_oneshot(state->dser_dev);
 	if (ret < 0)
 		return ret;
 #endif
@@ -3095,7 +3095,7 @@ error:
 }
 
 #endif
-static const struct regmap_config ds5_regmap_max9296 = {
+static const struct regmap_config ds5_regmap_max96712 = {
 	.reg_bits = 16,
 	.val_bits = 8,
 	.reg_format_endian = REGMAP_ENDIAN_BIG,
@@ -3123,13 +3123,13 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 
 	mutex_lock(&serdes_lock__);
 
-	max9296_power_off(state->dser_dev);
+	max96712_power_off(state->dser_dev);
 	/* For now no separate power on required for serializer device */
-	max9296_power_on(state->dser_dev);
+	max96712_power_on(state->dser_dev);
 
 	dev_dbg(dev, "Setup SERDES addressing and control pipeline\n");
 	/* setup serdes addressing and control pipeline */
-	err = max9296_setup_link(state->dser_dev, &state->client->dev);
+	err = max96712_setup_link(state->dser_dev, &state->client->dev);
 	if (err) {
 		dev_err(dev, "gmsl deserializer link config failed\n");
 		goto error;
@@ -3141,7 +3141,7 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 	if (err)
 		dev_err(dev, "gmsl serializer setup failed\n");
 
-	des_err = max9296_setup_control(state->dser_dev, &state->client->dev);
+	des_err = max96712_setup_control(state->dser_dev, &state->client->dev);
 	if (des_err) {
 		dev_err(dev, "gmsl deserializer setup failed\n");
 		/* overwrite err only if deser setup also failed */
@@ -3174,7 +3174,7 @@ static int ds5_serdes_setup(struct ds5 *state)
 	}
 
 	/* Register sensor to deserializer dev */
-	ret = max9296_sdev_register(state->dser_dev, &state->g_ctx);
+	ret = max96712_sdev_register(state->dser_dev, &state->g_ctx);
 	if (ret) {
 		dev_err(&c->dev, "gmsl deserializer register failed\n");
 		return ret;
@@ -3193,9 +3193,9 @@ static int ds5_serdes_setup(struct ds5 *state)
 		return ret;
 	}
 
-	ret = max9296_init_settings(state->dser_dev);
+	ret = max96712_init_settings(state->dser_dev);
 	if (ret) {
-		dev_warn(&c->dev, "%s, failed to init max9296 settings\n",
+		dev_warn(&c->dev, "%s, failed to init max96712 settings\n",
 			__func__);
 		return ret;
 	}
@@ -3911,7 +3911,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	vc_id = state->g_ctx.dst_vc;
 #endif
 #endif
-	dev_dbg(&state->client->dev, "s_stream for stream %s, vc:%d, SENSOR=%s on = %d\n",
+	dev_warn(&state->client->dev, "s_stream for stream %s, vc:%d, SENSOR=%s on = %d\n",
 			sensor->sd.name, vc_id, ds5_get_sensor_name(state), on);
 
 	restore_val = sensor->streaming;
@@ -3920,11 +3920,11 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	if (on) {
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 		sensor->pipe_id =
-			max9296_get_available_pipe_id(state->dser_dev,
+			max96712_get_available_pipe_id(state->dser_dev,
 					(int)state->g_ctx.dst_vc);
 		if (sensor->pipe_id < 0) {
 			dev_err(&state->client->dev,
-				"No free pipe in max9296\n");
+				"No free pipe in max96712\n");
 			ret = -(ENOSR);
 			goto restore_s_state;
 		}
@@ -3973,7 +3973,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		if (state->is_y8 &&
 			state->ir.sensor.config.format->data_type ==
 			GMSL_CSI_DT_RGB_888) {
-			max9296_reset_oneshot(state->dser_dev);
+			max96712_reset_oneshot(state->dser_dev);
 		}
 #ifndef CONFIG_TEGRA_CAMERA_PLATFORM
 		// reset for IPU6
@@ -3985,11 +3985,11 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			}
 		}
 		if (!streaming) {
-			dev_warn(&state->client->dev, "max9296_reset_oneshot\n");
-				max9296_reset_oneshot(state->dser_dev);
+			dev_warn(&state->client->dev, "max96712_reset_oneshot\n");
+				max96712_reset_oneshot(state->dser_dev);
 		}
 #endif
-		if (max9296_release_pipe(state->dser_dev, sensor->pipe_id) < 0)
+		if (max96712_release_pipe(state->dser_dev, sensor->pipe_id) < 0)
 			dev_warn(&state->client->dev, "release pipe failed\n");
 		sensor->pipe_id = -1;
 #else
@@ -4010,7 +4010,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 restore_s_state:
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	if (on && sensor->pipe_id >= 0) {
-		if (max9296_release_pipe(state->dser_dev, sensor->pipe_id) < 0)
+		if (max96712_release_pipe(state->dser_dev, sensor->pipe_id) < 0)
 			dev_warn(&state->client->dev, "release pipe failed\n");
 		sensor->pipe_id = -1;
 	}
@@ -5248,7 +5248,7 @@ static int ds5_remove(struct i2c_client *c)
 			if (ret)
 				dev_warn(&c->dev,
 				  "failed in 9295 reset control\n");
-			ret = max9296_reset_control(state->dser_dev,
+			ret = max96712_reset_control(state->dser_dev,
 				state->g_ctx.s_dev);
 			if (ret)
 				dev_warn(&c->dev,
@@ -5258,12 +5258,12 @@ static int ds5_remove(struct i2c_client *c)
 				state->g_ctx.s_dev);
 			if (ret)
 				dev_warn(&c->dev, "failed to unpair sdev\n");
-			ret = max9296_sdev_unregister(state->dser_dev,
+			ret = max96712_sdev_unregister(state->dser_dev,
 				state->g_ctx.s_dev);
 			if (ret)
 				dev_warn(&c->dev,
 				  "failed to sdev unregister sdev\n");
-			max9296_power_off(state->dser_dev);
+			max96712_power_off(state->dser_dev);
 
 			mutex_unlock(&serdes_lock__);
 			break;

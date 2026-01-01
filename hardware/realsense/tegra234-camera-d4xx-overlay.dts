@@ -87,7 +87,7 @@
 										status = "okay";
 										port-index = <0>;
 										bus-width = <2>;
-										remote-endpoint = <&d4m0_out>;
+										remote-endpoint = <&ds5_0_out>;
 									};
 								};
 								port@1 {
@@ -112,7 +112,7 @@
 										status = "okay";
 										port-index = <0>;
 										bus-width = <2>;
-										remote-endpoint = <&d4m1_out>;
+										remote-endpoint = <&ds5_1_out>;
 									};
 								};
 								port@1 {
@@ -137,7 +137,7 @@
 										status = "okay";
 										port-index = <0>;
 										bus-width = <2>;
-										remote-endpoint = <&d4m2_out>;
+										remote-endpoint = <&ds5_2_out>;
 									};
 								};
 								port@1 {
@@ -162,7 +162,7 @@
 										status = "okay";
 										port-index = <0>;
 										bus-width = <2>;
-										remote-endpoint = <&d4m3_out>;
+										remote-endpoint = <&ds5_3_out>;
 									};
 								};
 								port@1 {
@@ -220,7 +220,7 @@
 								maxim,gmsl-dser-device = <&dser>;
 							};
 
-							d4m0: d4m@1a {
+							ds5_0: ds5@1a {
 								status = "okay";
 								def-addr = <0x10>;
 								reg = <0x1a>;
@@ -236,7 +236,7 @@
 
 									port@0 {
 										reg = <0>;
-										d4m0_out: endpoint {
+										ds5_0_out: endpoint {
 											vc-id = <0>;
 											port-index = <0>;
 											bus-width = <2>;
@@ -266,19 +266,11 @@
 									num-lanes = <2>;
 								};
 							};
-						};
 
-						i2c@1 {
-							status = "okay";
-							reg = <3>; 	// line 18-19 of the I2C switch
-							i2c-mux,deselect-on-exit;
-							#address-cells = <1>;
-							#size-cells = <0>;
-
-							d4m1: d4m@1a {
+							ds5_1: ds5@1b {
 								status = "okay";
 								def-addr = <0x10>;
-								reg = <0x1a>;
+								reg = <0x1b>;
 								compatible = "intel,d4xx";
 								use_sensor_mode_id = "true";
 								vcc-supply = <&vdd_1v8_ls>;
@@ -291,7 +283,7 @@
 
 									port@0 {
 										reg = <0>;
-										d4m1_out: endpoint {
+										ds5_1_out: endpoint {
 											vc-id = <1>;
 											port-index = <1>;
 											bus-width = <2>;
@@ -321,18 +313,11 @@
 									num-lanes = <2>;
 								};
 							};
-						};
-						i2c@2 {
-							status = "okay";
-							reg = <4>;	// line 4 of the I2C switch
-							i2c-mux,deselect-on-exit;
-							#address-cells = <1>;
-							#size-cells = <0>;
 
-							d4m2: d4m@1a {
+							ds5_2: ds5@1c {
 								status = "okay";
 								def-addr = <0x10>;
-								reg = <0x1a>;
+								reg = <0x1c>;
 								compatible = "intel,d4xx";
 								use_sensor_mode_id = "true";
 								vcc-supply = <&vdd_1v8_ls>;
@@ -345,7 +330,7 @@
 
 									port@0 {
 										reg = <0>;
-										d4m2_out: endpoint {
+										ds5_2_out: endpoint {
 											vc-id = <2>;
 											port-index = <2>;
 											bus-width = <2>;
@@ -376,18 +361,11 @@
 									num-lanes = <2>;
 								};
 							};
-						};
-						i2c@3 {
-							status = "okay";
-							reg = <5>;	// line 4 of the I2C switch
-							i2c-mux,deselect-on-exit;
-							#address-cells = <1>;
-							#size-cells = <0>;
 
-							d4m3: d4m@1a {
+							ds5_3: ds5@1d {
 								status = "okay";
 								def-addr = <0x10>;
-								reg = <0x1a>;
+								reg = <0x1d>;
 								compatible = "intel,d4xx";
 								use_sensor_mode_id = "true";
 								vcc-supply = <&vdd_1v8_ls>;
@@ -400,7 +378,7 @@
 
 									port@0 {
 										reg = <0>;
-										d4m3_out: endpoint {
+										ds5_3_out: endpoint {
 											vc-id = <3>;
 											port-index = <3>;
 											bus-width = <2>;
