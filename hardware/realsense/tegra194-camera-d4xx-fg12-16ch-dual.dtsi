@@ -113,14 +113,7 @@
 			};
 		};
 	};
-	/* Override the 12V camera POC regulator to be always on */
-	fixed-regulators {
-		/* TEGRA194_MAIN_GPIO(M, 5) */
-		p2822_vdd_sys_en: regulator@113 {
-			regulator-boot-on;
-			regulator-always-on;
-		};
-	};
+
 	gpio@2200000 {
 		cam0-pwdn {
 			gpio-hog;
@@ -162,7 +155,7 @@
 			#address-cells = <1>;
 			#size-cells = <0>;
 			skip_mux_detect = "yes";
-			vcc-supply = <&p2822_vdd_1v8_cvb>;
+			vcc-supply = <&p2822_vdd_sys_en>;
 			/*vcc-pullup-supply = <&battery_reg>;*/
 			force_bus_start = <CAMERA_I2C_MUX_BUS(0)>;
 			vcc_lp = "vcc";
@@ -193,7 +186,7 @@
 					def-addr = <0x10>;
 					reg = <0x1a>;
 					compatible = "intel,d4xx";
-					vcc-supply = <&p2822_vdd_1v8_cvb>;
+					vcc-supply = <&p2822_vdd_sys_en>;
 					cam-type = "Depth";
 					maxim,gmsl-ser-device = <&ser_a>;
 					maxim,gmsl-dser-device = <&dser_a>;
@@ -240,7 +233,7 @@
 					reg = <0x1b>;
 					override_reg = <0x1a>;
 					compatible = "intel,d4xx";
-					vcc-supply = <&p2822_vdd_1v8_cvb>;
+					vcc-supply = <&p2822_vdd_sys_en>;
 					cam-type = "RGB";
 					maxim,gmsl-ser-device = <&ser_a>;
 					maxim,gmsl-dser-device = <&dser_a>;
@@ -287,7 +280,7 @@
 					reg = <0x1c>;
 					override_reg = <0x1a>;
 					compatible = "intel,d4xx";
-					vcc-supply = <&p2822_vdd_1v8_cvb>;
+					vcc-supply = <&p2822_vdd_sys_en>;
 							cam-type = "Y8";
 					maxim,gmsl-ser-device = <&ser_a>;
 					maxim,gmsl-dser-device = <&dser_a>;
@@ -335,7 +328,7 @@
 					reg = <0x1d>;
 					override_reg = <0x1a>;
 					compatible = "intel,d4xx";
-					vcc-supply = <&p2822_vdd_1v8_cvb>;
+					vcc-supply = <&p2822_vdd_sys_en>;
 							cam-type = "IMU";
 					maxim,gmsl-ser-device = <&ser_a>;
 					maxim,gmsl-dser-device = <&dser_a>;
@@ -402,7 +395,7 @@
 					def-addr = <0x10>;
 					reg = <0x1a>;
 					compatible = "intel,d4xx";
-					vcc-supply = <&p2822_vdd_1v8_cvb>;
+					vcc-supply = <&p2822_vdd_sys_en>;
 					cam-type = "Depth";
 					maxim,gmsl-ser-device = <&ser_b>;
 					maxim,gmsl-dser-device = <&dser_b>;
@@ -449,7 +442,7 @@
 					reg = <0x1b>;
 					override_reg = <0x1a>;
 					compatible = "intel,d4xx";
-					vcc-supply = <&p2822_vdd_1v8_cvb>;
+					vcc-supply = <&p2822_vdd_sys_en>;
 					cam-type = "RGB";
 					maxim,gmsl-ser-device = <&ser_b>;
 					maxim,gmsl-dser-device = <&dser_b>;
@@ -496,7 +489,7 @@
 					reg = <0x1c>;
 					override_reg = <0x1a>;
 					compatible = "intel,d4xx";
-					vcc-supply = <&p2822_vdd_1v8_cvb>;
+					vcc-supply = <&p2822_vdd_sys_en>;
 							cam-type = "Y8";
 					maxim,gmsl-ser-device = <&ser_b>;
 					maxim,gmsl-dser-device = <&dser_b>;
@@ -544,7 +537,7 @@
 					reg = <0x1d>;
 					override_reg = <0x1a>;
 					compatible = "intel,d4xx";
-					vcc-supply = <&p2822_vdd_1v8_cvb>;
+					vcc-supply = <&p2822_vdd_sys_en>;
 							cam-type = "IMU";
 					maxim,gmsl-ser-device = <&ser_b>;
 					maxim,gmsl-dser-device = <&dser_b>;
