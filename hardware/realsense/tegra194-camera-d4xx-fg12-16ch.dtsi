@@ -169,6 +169,7 @@
 					status = "ok";
 					def-addr = <0x10>;
 					reg = <0x1b>;
+					override_reg = <0x1a>;
 					compatible = "intel,d4xx";
 					vcc-supply = <&p2822_vdd_1v8_cvb>;
 					cam-type = "RGB";
@@ -215,6 +216,7 @@
 					status = "ok";
 					def-addr = <0x10>;
 					reg = <0x1c>;
+					override_reg = <0x1a>;
 					compatible = "intel,d4xx";
 					vcc-supply = <&p2822_vdd_1v8_cvb>;
 							cam-type = "Y8";
@@ -262,6 +264,7 @@
 					status = "ok";
 					def-addr = <0x10>;
 					reg = <0x1d>;
+					override_reg = <0x1a>;
 					compatible = "intel,d4xx";
 					vcc-supply = <&p2822_vdd_1v8_cvb>;
 							cam-type = "IMU";
