@@ -95,6 +95,19 @@ The developers can set up the source code with NVIDIA's Jetson git repositories 
 
 ./build_all.sh 5.1.2
 ```
+For Fangzhu FG12-16CH support (Currently only supported on 5.0.2):
+```
+./setup_workspace.sh 5.0.2
+
+- Single camera connected to cam0:
+./apply_patches.sh --fg12-16ch 5.0.2
+
+- Dual camera connected to cam0 and cam4:
+./apply_patches.sh --fg12-16ch-dual 5.0.2
+
+./build_all.sh 5.1.2
+```
+
 Note: dev_dbg() log support will not be enabled by default. If needed, run the `./build_all.sh` script with `--dev-dbg` option like below.
 ```
 ./build_all.sh --dev-dbg 5.1.2
