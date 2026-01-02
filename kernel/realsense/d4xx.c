@@ -3597,19 +3597,6 @@ error:
 }
 
 #endif
-static const struct regmap_config ds5_regmap_max9296 = {
-	.reg_bits = 16,
-	.val_bits = 8,
-	.reg_format_endian = REGMAP_ENDIAN_BIG,
-	.val_format_endian = REGMAP_ENDIAN_NATIVE,
-};
-
-static const struct regmap_config ds5_regmap_max9295 = {
-	.reg_bits = 16,
-	.val_bits = 8,
-	.reg_format_endian = REGMAP_ENDIAN_BIG,
-	.val_format_endian = REGMAP_ENDIAN_NATIVE,
-};
 
 static int ds5_gmsl_serdes_setup(struct ds5 *state)
 {
