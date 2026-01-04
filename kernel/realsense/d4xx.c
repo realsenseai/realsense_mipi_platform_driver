@@ -39,6 +39,34 @@
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 #include <media/max9295.h>
 #include <media/max9296.h>
+#include <media/max96712.h>
+
+/* Deserializer interface structure for abstraction */
+struct dser_interface {
+	/* Pipeline management */
+	int (*get_available_pipe_id)(struct device *dev, int vc_id);
+	int (*set_pipe)(struct device *dev, int pipe_id, u8 data_type1, u8 data_type2, u32 vc_id);
+	int (*release_pipe)(struct device *dev, int pipe_id);
+	void (*reset_oneshot)(struct device *dev);
+	
+	/* Setup and control */
+	int (*setup_link)(struct device *dev, struct device *s_dev);
+	int (*setup_control)(struct device *dev, struct device *s_dev);
+	int (*reset_control)(struct device *dev, struct device *s_dev);
+	
+	/* Device registration */
+	int (*sdev_register)(struct device *dev, struct gmsl_link_ctx *g_ctx);
+	int (*sdev_unregister)(struct device *dev, struct device *s_dev);
+	
+	/* Power management */
+	int (*power_on)(struct device *dev);
+	void (*power_off)(struct device *dev);
+	int (*init_settings)(struct device *dev);
+	
+	/* Identification */
+	const char *name;
+};
+
 #else
 #include <media/gmsl-link.h>
 #define GMSL_CSI_DT_YUV422_8 0x1E
@@ -429,6 +457,7 @@ struct ds5 {
 	struct device *dser_dev;
 	struct i2c_client *ser_i2c;
 	struct i2c_client *dser_i2c;
+	const struct dser_interface *dser_ops;
 #endif
 };
 
@@ -437,6 +466,42 @@ struct ds5_counters {
 	unsigned int n_fmt;
 	unsigned int n_ctrl;
 };
+
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+/* MAX9296 deserializer interface implementation */
+static const struct dser_interface max9296_interface = {
+	.get_available_pipe_id = max9296_get_available_pipe_id,
+	.set_pipe = max9296_set_pipe,
+	.release_pipe = max9296_release_pipe,
+	.reset_oneshot = max9296_reset_oneshot,
+	.setup_link = max9296_setup_link,
+	.setup_control = max9296_setup_control,
+	.reset_control = max9296_reset_control,
+	.sdev_register = max9296_sdev_register,
+	.sdev_unregister = max9296_sdev_unregister,
+	.power_on = max9296_power_on,
+	.power_off = max9296_power_off,
+	.init_settings = max9296_init_settings,
+	.name = "max9296",
+};
+
+/* MAX96712 deserializer interface implementation */
+static const struct dser_interface max96712_interface = {
+	.get_available_pipe_id = max96712_get_available_pipe_id,
+	.set_pipe = max96712_set_pipe,
+	.release_pipe = max96712_release_pipe,
+	.reset_oneshot = max96712_reset_oneshot,
+	.setup_link = max96712_setup_link,
+	.setup_control = max96712_setup_control,
+	.reset_control = max96712_reset_control,
+	.sdev_register = max96712_sdev_register,
+	.sdev_unregister = max96712_sdev_unregister,
+	.power_on = max96712_power_on,
+	.power_off = max96712_power_off,
+	.init_settings = max96712_init_settings,
+	.name = "max96712",
+};
+#endif
 
 #define ds5_from_depth_sd(sd) container_of(sd, struct ds5, depth.sd)
 #define ds5_from_ir_sd(sd) container_of(sd, struct ds5, ir.sd)
@@ -1419,7 +1484,7 @@ static int ds5_setup_pipeline(struct ds5 *state, u8 data_type1, u8 data_type2,
 			 pipe_id, data_type1, data_type2, vc_id);
 	ret |= max9295_set_pipe(state->ser_dev, pipe_id,
 				data_type1, data_type2, vc_id);
-	ret |= max9296_set_pipe(state->dser_dev, pipe_id,
+	ret |= state->dser_ops->set_pipe(state->dser_dev, pipe_id,
 				data_type1, data_type2, vc_id);
 	if (ret)
 		dev_warn(&state->client->dev,
@@ -1495,7 +1560,7 @@ static int ds5_configure(struct ds5 *state)
 				 vc_id);
 	// reset data path when switching to Y12I
 	if (state->is_y8 && data_type1 == GMSL_CSI_DT_RGB_888)
-		max9296_reset_oneshot(state->dser_dev);
+		state->dser_ops->reset_oneshot(state->dser_dev);
 	if (ret < 0)
 		return ret;
 #endif
@@ -2856,6 +2921,18 @@ static int ds5_board_setup(struct ds5 *state)
 	}
 
 	state->dser_dev = &dser_i2c->dev;
+	/* Initialize deserializer interface */
+	if (!strcmp(dser_node->name, "max9296")) {
+		state->dser_ops = &max9296_interface;
+	} else if (!strcmp(dser_node->name, "max96712")) {
+		state->dser_ops = &max96712_interface;
+	} else {
+		dev_err(dev, "%s: Unsupported deserializer = %s\n", __func__, dser_node->name);
+		/* Should not be used, this is just to make sure we don't have NULL pointers */
+		state->dser_ops = &max9296_interface;
+		goto error;
+	}
+	dev_info(dev, "Using deserializer %s\n", state->dser_ops->name);
 
 	/* populate g_ctx from DT */
 	gmsl = of_get_child_by_name(node, "gmsl-link");
@@ -3057,6 +3134,9 @@ static int ds5_board_setup(struct ds5 *state)
 
 
 	state->dser_dev = &state->dser_i2c->dev;
+	/* Initialize deserializer interface */
+	state->dser_ops = &max9296_interface;
+	
 
 	/* populate g_ctx from pdata */
 	state->g_ctx.dst_csi_port = GMSL_CSI_PORT_A;
@@ -3107,13 +3187,13 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 
 	mutex_lock(&serdes_lock__);
 
-	max9296_power_off(state->dser_dev);
+	state->dser_ops->power_off(state->dser_dev);
 	/* For now no separate power on required for serializer device */
-	max9296_power_on(state->dser_dev);
+	state->dser_ops->power_on(state->dser_dev);
 
 	dev_dbg(dev, "Setup SERDES addressing and control pipeline\n");
 	/* setup serdes addressing and control pipeline */
-	err = max9296_setup_link(state->dser_dev, &state->client->dev);
+	err = state->dser_ops->setup_link(state->dser_dev, &state->client->dev);
 	if (err) {
 		dev_err(dev, "gmsl deserializer link config failed\n");
 		goto error;
@@ -3125,7 +3205,7 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 	if (err)
 		dev_err(dev, "gmsl serializer setup failed\n");
 
-	des_err = max9296_setup_control(state->dser_dev, &state->client->dev);
+	des_err = state->dser_ops->setup_control(state->dser_dev, &state->client->dev);
 	if (des_err) {
 		dev_err(dev, "gmsl deserializer setup failed\n");
 		/* overwrite err only if deser setup also failed */
@@ -3158,7 +3238,7 @@ static int ds5_serdes_setup(struct ds5 *state)
 	}
 
 	/* Register sensor to deserializer dev */
-	ret = max9296_sdev_register(state->dser_dev, &state->g_ctx);
+	ret = state->dser_ops->sdev_register(state->dser_dev, &state->g_ctx);
 	if (ret) {
 		dev_err(&c->dev, "gmsl deserializer register failed\n");
 		return ret;
@@ -3177,7 +3257,7 @@ static int ds5_serdes_setup(struct ds5 *state)
 		return ret;
 	}
 
-	ret = max9296_init_settings(state->dser_dev);
+	ret = state->dser_ops->init_settings(state->dser_dev);
 	if (ret) {
 		dev_warn(&c->dev, "%s, failed to init max9296 settings\n",
 			__func__);
@@ -3904,7 +3984,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	if (on) {
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 		sensor->pipe_id =
-			max9296_get_available_pipe_id(state->dser_dev,
+			state->dser_ops->get_available_pipe_id(state->dser_dev,
 					(int)state->g_ctx.dst_vc);
 		if (sensor->pipe_id < 0) {
 			dev_err(&state->client->dev,
@@ -3957,7 +4037,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		if (state->is_y8 &&
 			state->ir.sensor.config.format->data_type ==
 			GMSL_CSI_DT_RGB_888) {
-			max9296_reset_oneshot(state->dser_dev);
+			state->dser_ops->reset_oneshot(state->dser_dev);
 		}
 #ifndef CONFIG_TEGRA_CAMERA_PLATFORM
 		// reset for IPU6
@@ -3969,11 +4049,11 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			}
 		}
 		if (!streaming) {
-			dev_warn(&state->client->dev, "max9296_reset_oneshot\n");
-				max9296_reset_oneshot(state->dser_dev);
+			dev_warn(&state->client->dev, "deserializer reset oneshot\n");
+				state->dser_ops->reset_oneshot(state->dser_dev);
 		}
 #endif
-		if (max9296_release_pipe(state->dser_dev, sensor->pipe_id) < 0)
+		if (state->dser_ops->release_pipe(state->dser_dev, sensor->pipe_id) < 0)
 			dev_warn(&state->client->dev, "release pipe failed\n");
 		sensor->pipe_id = -1;
 #else
@@ -3994,7 +4074,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 restore_s_state:
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	if (on && sensor->pipe_id >= 0) {
-		if (max9296_release_pipe(state->dser_dev, sensor->pipe_id) < 0)
+		if (state->dser_ops->release_pipe(state->dser_dev, sensor->pipe_id) < 0)
 			dev_warn(&state->client->dev, "release pipe failed\n");
 		sensor->pipe_id = -1;
 	}
@@ -5232,7 +5312,7 @@ static int ds5_remove(struct i2c_client *c)
 			if (ret)
 				dev_warn(&c->dev,
 				  "failed in 9295 reset control\n");
-			ret = max9296_reset_control(state->dser_dev,
+			ret = state->dser_ops->reset_control(state->dser_dev,
 				state->g_ctx.s_dev);
 			if (ret)
 				dev_warn(&c->dev,
@@ -5242,12 +5322,12 @@ static int ds5_remove(struct i2c_client *c)
 				state->g_ctx.s_dev);
 			if (ret)
 				dev_warn(&c->dev, "failed to unpair sdev\n");
-			ret = max9296_sdev_unregister(state->dser_dev,
+			ret = state->dser_ops->sdev_unregister(state->dser_dev,
 				state->g_ctx.s_dev);
 			if (ret)
 				dev_warn(&c->dev,
 				  "failed to sdev unregister sdev\n");
-			max9296_power_off(state->dser_dev);
+			state->dser_ops->power_off(state->dser_dev);
 
 			mutex_unlock(&serdes_lock__);
 			break;
