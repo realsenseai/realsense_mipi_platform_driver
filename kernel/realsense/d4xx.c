@@ -3303,11 +3303,7 @@ static int ds5_board_setup(struct ds5 *state)
 	int err;
 	int i;
 
-	err = of_property_read_u32(node, "reg", &state->g_ctx.sdev_reg);
-	if (err < 0) {
-		dev_err(dev, "reg not found\n");
-		goto error;
-	}
+	state->g_ctx.sdev_reg = state->client->addr;
 
 	err = of_property_read_u32(node, "def-addr",
 					&state->g_ctx.sdev_def);
@@ -5741,7 +5737,7 @@ static int ds5_probe(struct i2c_client *c, const struct i2c_device_id *id)
 	ret = of_property_read_u32(c->dev.of_node, "override_reg", &override_addr);
 	if (!ret) {
 		// Override probed address
-		dev_dbg(&c->dev, "Using override addr %u\n", override_addr);
+		dev_dbg(&c->dev, "Using override addr 0x%x\n", override_addr);
 		c->addr = override_addr;
 	}
 #endif
