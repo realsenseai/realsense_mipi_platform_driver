@@ -271,6 +271,7 @@
 								status = "okay";
 								def-addr = <0x10>;
 								reg = <0x1b>;
+								override_reg = <0x1a>;
 								compatible = "intel,d4xx";
 								use_sensor_mode_id = "true";
 								vcc-supply = <&vdd_1v8_ls>;
@@ -318,6 +319,7 @@
 								status = "okay";
 								def-addr = <0x10>;
 								reg = <0x1c>;
+								override_reg = <0x1a>;
 								compatible = "intel,d4xx";
 								use_sensor_mode_id = "true";
 								vcc-supply = <&vdd_1v8_ls>;
@@ -366,6 +368,7 @@
 								status = "okay";
 								def-addr = <0x10>;
 								reg = <0x1d>;
+								override_reg = <0x1a>;
 								compatible = "intel,d4xx";
 								use_sensor_mode_id = "true";
 								vcc-supply = <&vdd_1v8_ls>;
