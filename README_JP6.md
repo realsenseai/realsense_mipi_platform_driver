@@ -102,6 +102,7 @@ Assuming 6.2 (or 6.1) build the kernel version is 5.15.148-tegra. For 6.0 the ke
 - dtb: `images/6.2/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb`
 - dtb overlay: `images/6.2/rootfs/boot/tegra234-camera-d4xx-overlay.dtbo`
 - dtb dual camera overlay: `images/6.2/rootfs/boot/tegra234-camera-d4xx-overlay-dual.dtbo`
+- dtb fg12-16ch camera overlay: `images/6.0/rootfs/boot/tegra234-camera-d4xx-overlay-fg12-16ch.dtbo`
 - kernel modules: `images/6.2/rootfs/lib/modules/5.15.148-tegra`
 
 ## Backup JetPack 6.2 boot configuration and drivers (optional)
@@ -119,11 +120,12 @@ Following steps required:
 1.	Copy entire directory `images/6.2/rootfs/lib/modules/5.15.148-tegra` from host to `/lib/modules/` on Orin target
 2.	Copy `tegra234-camera-d4xx-overlay.dtbo` from host to `/boot/tegra234-camera-d4xx-overlay.dtbo` on Orin target
 3.	For dual camera, copy `tegra234-camera-d4xx-overlay-dual.dtbo` from host to `/boot/tegra234-camera-d4xx-overlay-dual.dtbo` on Orin target
-4.	Copy `tegra234-p3737-0000+p3701-0000-nv.dtb` from host to `/boot/` on Orin
-5.	Copy `Image` from host to `/boot/` on Orin
-6.	Enable and run depmod scan for "extra" & "kernel" modules
-7.	Update initrd
-8.	Run  $ `sudo /opt/nvidia/jetson-io/jetson-io.py`, to exit choose save & reboot:
+4.	For fg12-16ch, copy `tegra234-camera-d4xx-overlay-fg12-16ch.dtbo` from host to `/boot/tegra234-camera-d4xx-overlay-fg12-16ch.dtbo` on Orin target
+5.	Copy `tegra234-p3737-0000+p3701-0000-nv.dtb` from host to `/boot/` on Orin
+6.	Copy `Image` from host to `/boot/` on Orin
+7.	Enable and run depmod scan for "extra" & "kernel" modules
+8.	Update initrd
+9.	Run  $ `sudo /opt/nvidia/jetson-io/jetson-io.py`, to exit choose save & reboot:
 	1.	Configure Jetson AGX CSI Connector
 	2.	Configure for compatible hardware
 	3.	Choose appropriate configuration:
