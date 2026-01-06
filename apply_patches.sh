@@ -67,7 +67,6 @@ apply_external_patches() {
         fi
         echo -n "$(ls -d "sources_$JETPACK_VERSION/$3"): "
         git -C "sources_$JETPACK_VERSION/$3" reset --hard $4
-        git -C "sources_$JETPACK_VERSION/$3" clean -dfx
     fi
 }
 
