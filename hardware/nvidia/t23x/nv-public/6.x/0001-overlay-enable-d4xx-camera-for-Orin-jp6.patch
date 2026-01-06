@@ -1,26 +1,28 @@
-From 00f96bc253e0e35235b221af28bddf25d185d84d Mon Sep 17 00:00:00 2001
-From: Dmitry Perchanov <dmitry.perchanov@intel.com>
-Date: Mon, 20 May 2024 18:16:07 +0300
+From 2312ddb9f1024eadb99ec7cd5a332e4037fcb078 Mon Sep 17 00:00:00 2001
+From: ejgoldik <ehud.joseph.goldik@realsenseai.com>
+Date: Tue, 6 Jan 2026 14:58:26 +0200
 Subject: [PATCH] overlay: enable d4xx camera for Orin jp6
 
-Signed-off-by: Dmitry Perchanov <dmitry.perchanov@intel.com>
+Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- overlay/Makefile | 2 ++
- 1 file changed, 2 insertion(+)
+ overlay/Makefile | 4 ++++
+ 1 file changed, 4 insertions(+)
 
 diff --git a/overlay/Makefile b/overlay/Makefile
-index c88bbe2..3f6354e 100644
+index c88bbe2..36b712a 100644
 --- a/overlay/Makefile
 +++ b/overlay/Makefile
-@@ -60,6 +60,8 @@ dtbo-y += tegra234-p3767-camera-p3768-imx219-A.dtbo
+@@ -60,6 +60,10 @@ dtbo-y += tegra234-p3767-camera-p3768-imx219-A.dtbo
  dtbo-y += tegra234-p3767-camera-p3768-imx219-imx477.dtbo
  dtbo-y += tegra234-p3767-camera-p3768-imx477-C.dtbo
  dtbo-y += tegra234-p3767-camera-p3768-imx477-A.dtbo
 +dtbo-y += tegra234-camera-d4xx-overlay.dtbo
 +dtbo-y += tegra234-camera-d4xx-overlay-dual.dtbo
++dtbo-y += tegra234-camera-d4xx-overlay-fg12-16ch.dtbo
++
  
  ifneq ($(dtb-y),)
  dtb-y := $(addprefix $(makefile-path)/,$(dtb-y))
 -- 
-2.34.1
+2.43.0
 
