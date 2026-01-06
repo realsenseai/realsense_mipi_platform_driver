@@ -104,6 +104,7 @@ Assuming 6.2 (or 6.1) build the kernel version is 5.15.148-tegra. For 6.0 the ke
 - dtb: `images/6.2/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb`
 - dtb overlay: `images/6.2/rootfs/boot/tegra234-camera-d4xx-overlay.dtbo`
 - dtb dual camera overlay: `images/6.2/rootfs/boot/tegra234-camera-d4xx-overlay-dual.dtbo`
+- dtb fg12-16ch camera overlay: `images/6.0/rootfs/boot/tegra234-camera-d4xx-overlay-fg12-16ch.dtbo`
 - kernel modules: `images/6.2/rootfs/lib/modules/5.15.148-tegra`
 
 ## Backup JetPack 6.2 boot configuration and drivers (optional)
@@ -176,6 +177,9 @@ LABEL dev
 ```
 sudo reboot
 ```
+
+For fg12-16ch/dual/quad, use `tegra234-camera-d4xx-overlay-fg12-16ch</dual/quad>.dtbo` 
+
 On Jetson target (user home folder) assuming backup step was followed:
 
 ### Verify driver loaded - on Jetson:
