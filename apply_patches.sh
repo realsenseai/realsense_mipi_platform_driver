@@ -115,8 +115,13 @@ if [[ "$ACTION" = "apply" ]]; then
     if [[ "$JETPACK_VERSION" == "6.x" ]]; then
         # jp6 overlay
         cp hardware/realsense/tegra234-camera-d4xx-overlay*.dts "sources_$SOURCES_VERSION/hardware/nvidia/t23x/nv-public/overlay/"
+        # max96712 header
+        cp nvidia-oot/max96712.h "sources_$SOURCES_VERSION/nvidia-oot/include/media/"
     else
+        # device tree
         cp "hardware/realsense/${JP5_D4XX_DTSI}" "sources_$SOURCES_VERSION/hardware/nvidia/platform/t19x/galen/kernel-dts/common/tegra194-camera-d4xx.dtsi"
+        # max96712 header
+        cp kernel/nvidia/max96712.h "sources_$SOURCES_VERSION/kernel/nvidia/include/media/"
     fi
     
     # Stage all modified files after patching
