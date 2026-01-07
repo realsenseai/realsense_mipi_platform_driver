@@ -24,6 +24,19 @@
 	jetson-header-name = "Jetson AGX CSI Connector";
 	compatible = JETSON_COMPATIBLE;
 
+	fragment@1 {
+		target-path = "/";
+		__overlay__ {
+			vdd_cam12v_poc: regulator-vdd-cam12v-poc {
+					compatible = "regulator-fixed";
+					regulator-name = "vdd-cam12v-poc";
+					regulator-min-microvolt = <12000000>;
+					regulator-max-microvolt = <12000000>;
+					gpio = <&gpio CAM12V_POC GPIO_ACTIVE_HIGH>;
+					enable-active-high;
+			};
+		};
+	};
 	fragment@0 {
 		target-path = "/";
 		__overlay__ {
@@ -238,7 +251,7 @@
 								override_reg = <0x1a>;
 								compatible = "intel,d4xx";
 								use_sensor_mode_id = "true";
-								vcc-supply = <&vdd_1v8_ls>;
+								vcc-supply = <&vdd_cam12v_poc>;
 								cam-type = "IMU";
 								nvidia,gmsl-ser-device = <&ser_a>;
 								nvidia,gmsl-dser-device = <&dser>;
@@ -286,7 +299,7 @@
 								override_reg = <0x1a>;
 								compatible = "intel,d4xx";
 								use_sensor_mode_id = "true";
-								vcc-supply = <&vdd_1v8_ls>;
+								vcc-supply = <&vdd_cam12v_poc>;
 								cam-type = "Y8";
 								nvidia,gmsl-ser-device = <&ser_a>;
 								nvidia,gmsl-dser-device = <&dser>;
@@ -335,7 +348,7 @@
 								override_reg = <0x1a>;
 								compatible = "intel,d4xx";
 								use_sensor_mode_id = "true";
-								vcc-supply = <&vdd_1v8_ls>;
+								vcc-supply = <&vdd_cam12v_poc>;
 								cam-type = "RGB";
 								nvidia,gmsl-ser-device = <&ser_a>;
 								nvidia,gmsl-dser-device = <&dser>;
@@ -382,7 +395,7 @@
 								reg = <0x1a>;
 								compatible = "intel,d4xx";
 								use_sensor_mode_id = "true";
-								vcc-supply = <&vdd_1v8_ls>;
+								vcc-supply = <&vdd_cam12v_poc>;
 								cam-type = "Depth";
 								nvidia,gmsl-ser-device = <&ser_a>;
 								nvidia,gmsl-dser-device = <&dser>;
