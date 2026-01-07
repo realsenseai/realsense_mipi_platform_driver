@@ -1,14 +1,12 @@
-From 76c0420916c636a85370c5f38cf0a175f7b3a4c1 Mon Sep 17 00:00:00 2001
+From c398d95e9b324be66f3ceff4672a89f8c9389855 Mon Sep 17 00:00:00 2001
 From: ejgoldik <ehud.joseph.goldik@realsenseai.com>
-Date: Wed, 31 Dec 2025 02:31:41 +0200
+Date: Wed, 7 Jan 2026 11:25:31 +0200
 Subject: [PATCH] Adding max96712 support for D4xx
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
  drivers/media/i2c/max96712.c | 307 ++++++++++++++++++++++++++++++++++-
- include/media/max96712.h     |  53 ++++++
- 2 files changed, 357 insertions(+), 3 deletions(-)
- create mode 100644 include/media/max96712.h
+ 1 file changed, 304 insertions(+), 3 deletions(-)
 
 diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
 index 8081385f0..efe263b21 100644
@@ -392,65 +390,6 @@ index 8081385f0..efe263b21 100644
  	},
  	.probe = max96712_probe,
  	.remove = max96712_remove,
-diff --git a/include/media/max96712.h b/include/media/max96712.h
-new file mode 100644
-index 000000000..e917956bd
---- /dev/null
-+++ b/include/media/max96712.h
-@@ -0,0 +1,53 @@
-+/*
-+ * Copyright (c) 2018-2025, NVIDIA Corporation.  All rights reserved.
-+ *
-+ * This program is free software; you can redistribute it and/or modify it
-+ * under the terms and conditions of the GNU General Public License,
-+ * version 2, as published by the Free Software Foundation.
-+ *
-+ * This program is distributed in the hope it will be useful, but WITHOUT
-+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
-+ * more details.
-+ *
-+ * You should have received a copy of the GNU General Public License
-+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
-+ */
-+
-+/**
-+ * @file
-+ * <b>MAX96712 API: For Maxim Integrated MAX96712 deserializer</b>
-+ *
-+ * @b Description: Defines elements used to set up and use a
-+ *  Maxim Integrated MAX96712 deserializer.
-+ */
-+
-+#ifndef __MAX96712_H__
-+#define __MAX96712_H__
-+
-+#include <linux/types.h>
-+#include <media/gmsl-link.h>
-+/**
-+ * \defgroup max96712 MAX96712 deserializer driver
-+ *
-+ * Controls the MAX96712 deserializer module.
-+ *
-+ * @ingroup serdes_group
-+ * @{
-+ */
-+
-+int max96712_get_available_pipe_id(struct device *dev, int vc_id);
-+int max96712_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
-+		     u8 data_type2, u32 vc_id);
-+int max96712_release_pipe(struct device *dev, int pipe_id);
-+void max96712_reset_oneshot(struct device *dev);
-+int max96712_setup_link(struct device *dev, struct device *s_dev);
-+int max96712_setup_control(struct device *dev, struct device *s_dev);
-+int max96712_reset_control(struct device *dev, struct device *s_dev);
-+int max96712_sdev_register(struct device *dev, struct gmsl_link_ctx *g_ctx);
-+int max96712_sdev_unregister(struct device *dev, struct device *s_dev);
-+int max96712_power_on(struct device *dev);
-+void max96712_power_off(struct device *dev);
-+int max96712_init_settings(struct device *dev);
-+
-+#endif  /* __MAX96712_H__ */
 -- 
-2.34.1
+2.43.0
 
