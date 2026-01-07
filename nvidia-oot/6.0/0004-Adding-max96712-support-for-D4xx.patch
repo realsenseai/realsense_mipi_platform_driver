@@ -1,14 +1,12 @@
-From 5efa0840e04f513fba71cdbe51e2c70d2b86c91b Mon Sep 17 00:00:00 2001
+From b421e72305297310b82c87fc00ccdd38145ada30 Mon Sep 17 00:00:00 2001
 From: ejgoldik <ehud.joseph.goldik@realsenseai.com>
-Date: Tue, 6 Jan 2026 14:36:53 +0200
+Date: Wed, 7 Jan 2026 11:10:20 +0200
 Subject: [PATCH] Adding max96712 support for D4xx
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
  drivers/media/i2c/max96712.c | 297 ++++++++++++++++++++++++++++++++++-
- include/media/max96712.h     |  40 +++++
- 2 files changed, 332 insertions(+), 5 deletions(-)
- create mode 100644 include/media/max96712.h
+ 1 file changed, 292 insertions(+), 5 deletions(-)
 
 diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
 index 8e237eef..6d0646e7 100644
@@ -375,52 +373,6 @@ index 8e237eef..6d0646e7 100644
  	},
  	.probe = max96712_probe,
  	.remove = max96712_remove,
-diff --git a/include/media/max96712.h b/include/media/max96712.h
-new file mode 100644
-index 00000000..07fad5e2
---- /dev/null
-+++ b/include/media/max96712.h
-@@ -0,0 +1,40 @@
-+/* SPDX-License-Identifier: GPL-2.0 */
-+/* Copyright (c) 2018-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved. */
-+
-+/**
-+ * @file
-+ * <b>MAX96712 API: For Maxim Integrated MAX96712 deserializer</b>
-+ *
-+ * @b Description: Defines elements used to set up and use a
-+ *  Maxim Integrated MAX96712 deserializer.
-+ */
-+
-+#ifndef __MAX96712_H__
-+#define __MAX96712_H__
-+
-+#include <linux/types.h>
-+#include <media/gmsl-link.h>
-+/**
-+ * \defgroup max96712 MAX96712 deserializer driver
-+ *
-+ * Controls the MAX96712 deserializer module.
-+ *
-+ * @ingroup serdes_group
-+ * @{
-+ */
-+
-+int max96712_get_available_pipe_id(struct device *dev, int vc_id);
-+int max96712_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
-+		     u8 data_type2, u32 vc_id);
-+int max96712_release_pipe(struct device *dev, int pipe_id);
-+void max96712_reset_oneshot(struct device *dev);
-+int max96712_setup_link(struct device *dev, struct device *s_dev);
-+int max96712_setup_control(struct device *dev, struct device *s_dev);
-+int max96712_reset_control(struct device *dev, struct device *s_dev);
-+int max96712_sdev_register(struct device *dev, struct gmsl_link_ctx *g_ctx);
-+int max96712_sdev_unregister(struct device *dev, struct device *s_dev);
-+int max96712_power_on(struct device *dev);
-+void max96712_power_off(struct device *dev);
-+int max96712_init_settings(struct device *dev);
-+
-+#endif  /* __MAX96712_H__ */
 -- 
 2.43.0
 
