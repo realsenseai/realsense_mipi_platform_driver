@@ -105,6 +105,7 @@ Assuming 6.2 (or 6.1) build the kernel version is 5.15.148-tegra. For 6.0 the ke
 - dtb overlay: `images/6.2/rootfs/boot/tegra234-camera-d4xx-overlay.dtbo`
 - dtb dual camera overlay: `images/6.2/rootfs/boot/tegra234-camera-d4xx-overlay-dual.dtbo`
 - dtb fg12-16ch camera overlay: `images/6.0/rootfs/boot/tegra234-camera-d4xx-overlay-fg12-16ch.dtbo`
+- dtb fg12-16ch dual camera overlay: `images/6.0/rootfs/boot/tegra234-camera-d4xx-overlay-fg12-16ch-dual.dtbo`
 - kernel modules: `images/6.2/rootfs/lib/modules/5.15.148-tegra`
 
 ## Backup JetPack 6.2 boot configuration and drivers (optional)
