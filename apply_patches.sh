@@ -81,7 +81,7 @@ else
 fi
 
 if [[ "$ACTION" = "apply" ]]; then
-    cp -i kernel/realsense/d4xx.c "sources_$JETPACK_VERSION/${D4XX_SRC_DST}/drivers/media/i2c/d4xx.c"
+    cp -i kernel/realsense/d4xx.c "sources_$JETPACK_VERSION/${D4XX_SRC_DST}/drivers/media/i2c/"
     if [[ "$JETPACK_VERSION" == "6.x" ]]; then
         # jp6 overlay
         cp hardware/realsense/tegra234-camera-d4xx-overlay*.dts "sources_$JETPACK_VERSION/hardware/nvidia/t23x/nv-public/overlay/"
