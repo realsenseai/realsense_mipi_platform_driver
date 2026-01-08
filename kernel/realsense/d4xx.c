@@ -1781,7 +1781,7 @@ static int ds5_configure(struct ds5 *state)
 				state->dser_ops->get_available_pipe_id(state->dser_dev, (int)state->g_ctx.dst_vc);
 			mutex_unlock(&serdes_lock__);
 			if (sensor->pipe_id < 0) {
-				dev_err(&state->client->dev, "No free pipe in max9296\n");
+				dev_err(&state->client->dev, "No free pipe in %s\n",state->dser_ops->name);
 				ret = -(ENOSR);
 				return ret;
 			}
@@ -2341,7 +2341,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 				continue;
 
 			if (sensor->pipe_id >= 0) {
-				int release_ret = max9296_release_pipe(state->dser_dev,
+				int release_ret = state->dser_ops->release_pipe(state->dser_dev,
 									     sensor->pipe_id);
 				dev_warn(&state->client->dev, "release pipe %d (%d)\n",
 					sensor->pipe_id, release_ret);
@@ -2354,7 +2354,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 
 		dev_info(&state->client->dev,
 			"%s(): Re-initializing SERDES link\n", __func__);
-		max9296_reset_oneshot(state->dser_dev);
+		state->dser_ops->reset_oneshot(state->dser_dev);
 		msleep(300);
 	}
 #endif
@@ -3763,8 +3763,8 @@ static int ds5_serdes_setup(struct ds5 *state)
 
 	ret = state->dser_ops->init_settings(state->dser_dev);
 	if (ret) {
-		dev_warn(&c->dev, "%s, failed to init max9296 settings\n",
-			__func__);
+		dev_warn(&c->dev, "%s, failed to init %s settings\n",
+			__func__, state->dser_ops->name);
 		return ret;
 	}
 
