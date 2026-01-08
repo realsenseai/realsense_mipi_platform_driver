@@ -124,6 +124,7 @@ The necessary files are:
 - kernel image `images/5.1.2/arch/arm64/boot/Image`
 - dtb `images/5.1.2/arch/arm64/boot/dts/nvidia/tegra194-p2888-0001-p2822-0000.dtb`
 - D457 driver `images/5.1.2/drivers/media/i2c/d4xx.ko`
+- MAX96712 driver `images/5.1.2/drivers/media/i2c/max96712.ko`
 - UVC Video driver `images/5.1.2/drivers/media/usb/uvc/uvcvideo.ko`
 - V4L2 Core Video driver `images/5.1.2/drivers/media/v4l2-core/videobuf-core.ko`
 - V4L2 VMalloc Video driver `images/5.1.2/drivers/media/v4l2-core/videobuf-vmalloc.ko`
@@ -133,6 +134,7 @@ Copy build results from Host to Jetson target `10.0.0.116` user `nvidia`
 scp ./images/5.1.2/arch/arm64/boot/Image nvidia@10.0.0.116:~/
 scp ./images/5.1.2/arch/arm64/boot/dts/nvidia/tegra194-p2888-0001-p2822-0000.dtb nvidia@10.0.0.116:~/
 scp ./images/5.1.2/drivers/media/i2c/d4xx.ko nvidia@10.0.0.116:~/
+scp ./images/5.1.2/drivers/media/i2c/max96712.ko nvidia@10.0.0.116:~/
 scp ./images/5.1.2/drivers/media/usb/uvc/uvcvideo.ko nvidia@10.0.0.116:~/
 scp ./images/5.1.2/drivers/media/v4l2-core/videobuf-core.ko nvidia@10.0.0.116:~/
 scp ./images/5.1.2/drivers/media/v4l2-core/videobuf-vmalloc.ko nvidia@10.0.0.116:~/
@@ -145,6 +147,7 @@ sudo mkdir /lib/modules/$(uname -r)/updates
 sudo cp Image /boot/d457/
 sudo cp tegra194-p2888-0001-p2822-0000.dtb /boot/d457/
 sudo cp d4xx.ko /lib/modules/$(uname -r)/updates/
+sudo cp max96712.ko /lib/modules/$(uname -r)/updates/
 sudo cp uvcvideo.ko /lib/modules/$(uname -r)/updates/
 sudo cp videobuf-core.ko /lib/modules/$(uname -r)/updates/
 sudo cp videobuf-vmalloc.ko /lib/modules/$(uname -r)/updates/
