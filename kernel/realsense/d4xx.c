@@ -3415,7 +3415,6 @@ static int ds5_board_setup(struct ds5 *state)
 	}
 
 	dser_i2c = of_find_i2c_device_by_node(dser_node);
-	of_node_put(dser_node);
 
 	if (dser_i2c == NULL) {
 		err = -EPROBE_DEFER;
@@ -3439,6 +3438,7 @@ static int ds5_board_setup(struct ds5 *state)
 		goto error;
 	}
 	dev_info(dev, "Using deserializer %s\n", state->dser_ops->name);
+	of_node_put(dser_node);
 
 	/* populate g_ctx from DT */
 	gmsl = of_get_child_by_name(node, "gmsl-link");
