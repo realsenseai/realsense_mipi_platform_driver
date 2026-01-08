@@ -3259,8 +3259,8 @@ static int ds5_serdes_setup(struct ds5 *state)
 
 	ret = state->dser_ops->init_settings(state->dser_dev);
 	if (ret) {
-		dev_warn(&c->dev, "%s, failed to init max9296 settings\n",
-			__func__);
+		dev_warn(&c->dev, "%s, failed to init %s settings\n",
+			__func__, state->dser_ops->name);
 		return ret;
 	}
 
@@ -3988,7 +3988,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 					(int)state->g_ctx.dst_vc);
 		if (sensor->pipe_id < 0) {
 			dev_err(&state->client->dev,
-				"No free pipe in max9296\n");
+				"No free pipe in %s\n", state->dser_ops->name);
 			ret = -(ENOSR);
 			goto restore_s_state;
 		}
