@@ -1,23 +1,24 @@
-From b9fe99a161c68ecd596479c6e859f39d728c96a0 Mon Sep 17 00:00:00 2001
+From e6d53969e4a66980e2f984d9b6a4b8a4f6fa8fdc Mon Sep 17 00:00:00 2001
 From: ejgoldik <ehud.joseph.goldik@realsenseai.com>
-Date: Wed, 7 Jan 2026 12:03:58 +0200
+Date: Thu, 15 Jan 2026 09:04:07 +0200
 Subject: [PATCH] overlay: enable d4xx camera for Orin jp6
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- overlay/Makefile | 5 +++++
- 1 file changed, 5 insertions(+)
+ overlay/Makefile | 6 ++++++
+ 1 file changed, 6 insertions(+)
 
 diff --git a/overlay/Makefile b/overlay/Makefile
-index c88bbe2..717d6f3 100644
+index c88bbe2..e4e6244 100644
 --- a/overlay/Makefile
 +++ b/overlay/Makefile
-@@ -60,6 +60,11 @@ dtbo-y += tegra234-p3767-camera-p3768-imx219-A.dtbo
+@@ -60,6 +60,12 @@ dtbo-y += tegra234-p3767-camera-p3768-imx219-A.dtbo
  dtbo-y += tegra234-p3767-camera-p3768-imx219-imx477.dtbo
  dtbo-y += tegra234-p3767-camera-p3768-imx477-C.dtbo
  dtbo-y += tegra234-p3767-camera-p3768-imx477-A.dtbo
 +dtbo-y += tegra234-camera-d4xx-overlay.dtbo
 +dtbo-y += tegra234-camera-d4xx-overlay-dual.dtbo
++dtbo-y += tegra234-camera-d4xx-overlay-max96712-EV.dtbo
 +dtbo-y += tegra234-camera-d4xx-overlay-fg12-16ch.dtbo
 +dtbo-y += tegra234-camera-d4xx-overlay-fg12-16ch-dual.dtbo
 +
