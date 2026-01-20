@@ -49,7 +49,7 @@ if [ "$#" -eq 0 ]; then
     echo "No TARGET specified, skipping copy and reboot."
 else
     echo "Copying files and setting permissions on remote host..."
-    cp ${LOCAL_DIR}/install_to_kernel_6.2.sh ${LOCAL_DIR}/kernel_mod/6.2/
+    cp ${LOCAL_DIR}/scripts/install_to_kernel_6.2.sh ${LOCAL_DIR}/kernel_mod/6.2/
     # Use SSH ControlMaster to reuse a single SSH connection
     CONTROL_PATH="/tmp/ssh-control-${USERNAME}-${TARGET}"
     ssh -o ControlMaster=yes -o ControlPath="${CONTROL_PATH}" -o ControlPersist=10s -fN ${USERNAME}@${TARGET}
