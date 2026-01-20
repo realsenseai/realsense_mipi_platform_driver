@@ -40,7 +40,7 @@ fi
 export DEVDIR=$(cd `dirname $0` && pwd)
 
 . $DEVDIR/scripts/setup-common "$1"
-echo "Setup JetPack $1 to sources_$JETPACK_VERSION"
+echo "Setup JetPack $1 to sources_$1"
 
 # Display NVIDIA license
 DisplayNvidiaLicense "${REVISION}" "${LICENSE}"
@@ -72,21 +72,54 @@ echo "In a case you have local changes you may reset them with ./apply_patches.s
 echo
 # Clone L4T kernel source repo
 cd $DEVDIR
-if [[ -f "./scripts/source_sync_$1.sh" ]]; then
-	"./scripts/source_sync_$1.sh" -t "$L4T_VERSION" -d "sources_$JETPACK_VERSION"
-elif [[ -f "./scripts/source_sync_$JETPACK_VERSION.sh" ]]; then
-	"./scripts/source_sync_$JETPACK_VERSION.sh" -t "$L4T_VERSION" -d "sources_$JETPACK_VERSION"
+
+# Check if local tar ball exists in ~/nvidia_sources_cash
+NVIDIA_CACHE_DIR="$HOME/nvidia_sources_cash"
+TARBALL_NAME="backup_sources_$1.tar.gz"
+TARBALL_PATH="$NVIDIA_CACHE_DIR/$TARBALL_NAME"
+
+if [[ -f "$TARBALL_PATH" ]]; then
+    echo "Found local tar ball: $TARBALL_PATH"
+    echo "Extracting sources from local cache instead of cloning from NVIDIA repository..."
+    
+    # Remove existing sources directory if it exists
+    if [[ -d "sources_$1" ]]; then
+        echo "Removing existing sources_$1 directory..."
+        rm -rf "sources_$1"
+    fi
+    
+    # Extract tar ball
+    echo "Extracting $TARBALL_NAME..."
+    tar -xzf "$TARBALL_PATH"
+    
+    # Check what directory was extracted and rename if necessary
+    # The tar ball might contain sources_6.x instead of sources_6.0
+    EXTRACTED_DIR=$(tar -tzf "$TARBALL_PATH" | head -1 | cut -d'/' -f1)
+    if [[ "$EXTRACTED_DIR" != "sources_$1" ]]; then
+        echo "Renaming extracted directory from $EXTRACTED_DIR to sources_$1..."
+        mv "$EXTRACTED_DIR" "sources_$1"
+    fi
+    
+    echo "Sources extracted successfully from local cache."
+else
+    echo "Local tar ball not found at $TARBALL_PATH"
+    echo "Cloning sources from NVIDIA repository..."
+    if [[ -f "./scripts/source_sync_$1.sh" ]]; then
+	"./scripts/source_sync_$1.sh" -t "$L4T_VERSION" -d "sources_$1"
+    elif [[ -f "./scripts/source_sync_$JETPACK_VERSION.sh" ]]; then
+        ./scripts/source_sync_$JETPACK_VERSION.sh -t $L4T_VERSION -d sources_$1
+    fi
 fi
 
 # copy Makefile for jp6
 if [[ "$JETPACK_VERSION" == "6.x" ]]; then
-    cp ./nvidia-oot/Makefile "sources_$JETPACK_VERSION/"
-    cp ./kernel/kernel-jammy-src/Makefile "sources_$JETPACK_VERSION/kernel"
+    cp ./nvidia-oot/Makefile "sources_$1/"
+    cp ./kernel/kernel-jammy-src/Makefile "sources_$1/kernel"
 fi
 
 # remove BUILD_NUMBER env dependency kernel vermagic
 if [[ "${JETPACK_VERSION}" == "4.6.1" ]]; then
-    sed -i s/'UTS_RELEASE=\$(KERNELRELEASE)-ab\$(BUILD_NUMBER)'/'UTS_RELEASE=\$(KERNELRELEASE)'/g ./sources_$JETPACK_VERSION/kernel/kernel-4.9/Makefile
-    sed -i 's/the-space :=/E =/g' ./sources_$JETPACK_VERSION/kernel/kernel-4.9/scripts/Kbuild.include
-    sed -i 's/the-space += /the-space = \$E \$E/g' ./sources_$JETPACK_VERSION/kernel/kernel-4.9/scripts/Kbuild.include
+    sed -i s/'UTS_RELEASE=\$(KERNELRELEASE)-ab\$(BUILD_NUMBER)'/'UTS_RELEASE=\$(KERNELRELEASE)'/g ./sources_$1/kernel/kernel-4.9/Makefile
+    sed -i 's/the-space :=/E =/g' ./sources_$1/kernel/kernel-4.9/scripts/Kbuild.include
+    sed -i 's/the-space += /the-space = \$E \$E/g' ./sources_$1/kernel/kernel-4.9/scripts/Kbuild.include
 fi
