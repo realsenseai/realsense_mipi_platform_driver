@@ -7,8 +7,8 @@ index 7d07ccd7..c64dcc38 100644
  	vb->vb2_buf.timestamp = descr->status.sof_timestamp;
  
 -	if (frame_err)
-+	/* TODO: Remove the branch or process the error for Y12I only */
-+	if (false && frame_err)
++	/* TODO: Remove once Y12I streaming fixed */
++	if (frame_err && chan->fmtinfo->fourcc != V4L2_PIX_FMT_Y12I)
  		buf->vb2_state = VB2_BUF_STATE_ERROR;
  	else
  		buf->vb2_state = VB2_BUF_STATE_DONE;
