@@ -1,18 +1,18 @@
-From 550ad9e1df431cfe7296ace600fe70185b061dd1 Mon Sep 17 00:00:00 2001
+From e88999ee6eb9ea831b75426b12a21aff066274dd Mon Sep 17 00:00:00 2001
 From: ejgoldik <ehud.joseph.goldik@realsenseai.com>
-Date: Thu, 15 Jan 2026 09:28:13 +0200
+Date: Wed, 21 Jan 2026 16:43:22 +0200
 Subject: [PATCH] Adding max96712 support for D4xx
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- drivers/media/i2c/max96712.c | 297 ++++++++++++++++++++++++++++++++++-
- 1 file changed, 292 insertions(+), 5 deletions(-)
+ drivers/media/i2c/max96712.c | 296 ++++++++++++++++++++++++++++++++++-
+ 1 file changed, 291 insertions(+), 5 deletions(-)
 
 diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
-index 8e237eef..92b06cf2 100644
+index 8e237eef..79506d58 100644
 --- a/drivers/media/i2c/max96712.c
 +++ b/drivers/media/i2c/max96712.c
-@@ -16,7 +16,50 @@
+@@ -16,7 +16,49 @@
  #include <linux/gpio.h>
  #include <linux/of.h>
  #include <linux/of_gpio.h>
@@ -26,7 +26,6 @@ index 8e237eef..92b06cf2 100644
 +#define MAX96712_CTRL0_ADDR 0x17
 +#define MAX96712_CTRL1_ADDR 0x18
 +
-+#define MAX96712_BACKTOP24_ADDR 0x417
 +#define MAX96712_BACKTOP25_ADDR 0x418
 +
 +#define MAX96712_MIPI_PHY0_ADDR 0x8A0
@@ -49,7 +48,7 @@ index 8e237eef..92b06cf2 100644
 +#define MAX96712_MIPI_TX19_SRC_3_MAP_ADDR 0x913
 +#define MAX96712_MIPI_TX20_DST_3_MAP_ADDR 0x914
 +#define MAX96712_MIPI_TX45_MAP_DPHY_DEST_ADDR 0x92D
-+#define MAX96712_MIPI_TX51_ADDR 0x933
++#define MAX96712_MIPI_TX51_ADDR 0x973
 +
 +#define MAX96712_VIDEO_RX0_ADDR 0x100
 +
@@ -64,7 +63,7 @@ index 8e237eef..92b06cf2 100644
  
  struct max96712 {
  	struct i2c_client *i2c_client;
-@@ -99,6 +142,19 @@ static int max96712_read_reg(struct max96712 *priv,
+@@ -99,6 +141,19 @@ static int max96712_read_reg(struct max96712 *priv,
  	return err;
  }
  
@@ -84,7 +83,7 @@ index 8e237eef..92b06cf2 100644
  
  static int max96712_stats_show(struct seq_file *s, void *data)
  {
-@@ -153,8 +209,9 @@ static const struct file_operations max96712_debugfs_fops = {
+@@ -153,8 +208,9 @@ static const struct file_operations max96712_debugfs_fops = {
  	.release = single_release,
  };
  
@@ -95,7 +94,7 @@ index 8e237eef..92b06cf2 100644
  	struct i2c_client *i2c_client = priv->i2c_client;
  	struct device_node *np = i2c_client->dev.of_node;
  	unsigned int pwdn_gpio = 0;
-@@ -170,6 +227,7 @@ static int  max96712_power_on(struct max96712 *priv)
+@@ -170,6 +226,7 @@ static int  max96712_power_on(struct max96712 *priv)
  	}
  	return 0;
  }
@@ -103,7 +102,7 @@ index 8e237eef..92b06cf2 100644
  
  static int max96712_debugfs_init(const char *dir_name,
  				struct dentry **d_entry,
-@@ -252,7 +310,9 @@ static int max96712_probe(struct i2c_client *client,
+@@ -252,7 +309,9 @@ static int max96712_probe(struct i2c_client *client,
  
  	mutex_init(&max96712_rw);
  
@@ -114,7 +113,7 @@ index 8e237eef..92b06cf2 100644
  	if (err) {
  		dev_err(&client->dev, "Failed to power on err =%d\n",err);
  		return err;
-@@ -274,8 +334,11 @@ static int max96712_remove(struct i2c_client *client)
+@@ -274,8 +333,11 @@ static int max96712_remove(struct i2c_client *client)
  static void max96712_remove(struct i2c_client *client)
  #endif
  {
@@ -127,7 +126,7 @@ index 8e237eef..92b06cf2 100644
  		i2c_unregister_device(client);
  		client = NULL;
  	}
-@@ -284,13 +347,236 @@ static void max96712_remove(struct i2c_client *client)
+@@ -284,13 +346,236 @@ static void max96712_remove(struct i2c_client *client)
  #endif
  }
  
@@ -214,9 +213,8 @@ index 8e237eef..92b06cf2 100644
 +		// All mappings to PHY1 (master for port A)
 +		{MAX96712_MIPI_TX45_MAP_DPHY_DEST_ADDR, 0x00},
 +		{MAX96712_MIPI_TX10_ADDR, 0x40},
-+		{MAX96712_MIPI_TX51_ADDR, 0x10},
 +		// SEQ_MISS_EN: Disabled / DIS_PKT_DET: Disabled
-+		{MAX96712_VIDEO_RX0_ADDR, 0x23}, // pipe X
++		{MAX96712_VIDEO_RX0_ADDR, 0x33}, // pipe X
 +	};
 +
 +	struct reg_pair map_pipe_opt[] = {
@@ -224,7 +222,6 @@ index 8e237eef..92b06cf2 100644
 +		{MAX96712_RLMS_A_RLMS59_ADDR, 0x68}, // PHY A Optimization
 +		{MAX96712_RLMS_B_RLMS58_ADDR, 0x28}, // PHY B Optimization
 +		{MAX96712_RLMS_B_RLMS59_ADDR, 0x68}, // PHY B Optimization
-+		{MAX96712_BACKTOP24_ADDR, 0xf0},
 +		{MAX96712_BACKTOP25_ADDR, 0x2f},
 +	};
 +
@@ -237,7 +234,7 @@ index 8e237eef..92b06cf2 100644
 +		/* For IMU (which has no metadata) we override mapping
 +		* to enable only 3
 +		*/
-+		map_pipe_control[1].val = 0x07;
++		map_pipe_control[0].val = 0x07;
 +	}
 +	map_pipe_control[1].val = (vc_id << 6) | data_type1;
 +	map_pipe_control[2].val = (vc_id << 6) | data_type1;
@@ -255,6 +252,8 @@ index 8e237eef..92b06cf2 100644
 +
 +	err |= max96712_set_registers(priv, map_pipe_control,
 +				     ARRAY_SIZE(map_pipe_control));
++
++	max96712_write_reg(priv, MAX96712_MIPI_TX51_ADDR, 0x2);
 +
 +	err |= max96712_set_registers(priv, map_pipe_opt,
 +					 ARRAY_SIZE(map_pipe_opt));
@@ -365,7 +364,7 @@ index 8e237eef..92b06cf2 100644
  	{ },
  };
  
-@@ -300,6 +586,7 @@ static struct i2c_driver max96712_i2c_driver = {
+@@ -300,6 +585,7 @@ static struct i2c_driver max96712_i2c_driver = {
  	.driver = {
  		.name = "max96712",
  		.owner = THIS_MODULE,
