@@ -73,8 +73,8 @@ echo
 # Clone L4T kernel source repo
 cd $DEVDIR
 
-# Check if local tar ball exists in ~/nvidia_sources_cash
-NVIDIA_CACHE_DIR="$HOME/nvidia_sources_cash"
+# Check if local tar ball exists in ~/nvidia_sources_cache
+NVIDIA_CACHE_DIR="$HOME/nvidia_sources_cache"
 TARBALL_NAME="backup_sources_$1.tar.gz"
 TARBALL_PATH="$NVIDIA_CACHE_DIR/$TARBALL_NAME"
 
