@@ -163,7 +163,7 @@ struct dser_interface {
 #define DS5_STATUS_INVALID_RES		0x4
 #define DS5_STATUS_INVALID_FPS		0x8
 
-#define MIPI_LANE_RATE			1000
+#define MIPI_LANE_RATE			750
 
 #define MAX_DEPTH_EXP			200000
 #define MAX_RGB_EXP			10000
@@ -4212,7 +4212,7 @@ static int ds5_hw_init(struct i2c_client *c, struct ds5 *state)
 #else
 	n_lanes = 2;
 #endif
-
+	dev_err(sd->dev, "%s(): n_lanes = %u", __func__, n_lanes);
 	ret = ds5_write(state, DS5_MIPI_LANE_NUMS, n_lanes - 1);
 	if (!ret)
 		ret = ds5_write(state, DS5_MIPI_LANE_DATARATE, MIPI_LANE_RATE);
