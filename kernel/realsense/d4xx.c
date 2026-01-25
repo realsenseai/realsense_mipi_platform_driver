@@ -851,6 +851,40 @@ static const struct ds5_resolution y8_sizes[] = {
 	}
 };
 
+static const struct ds5_resolution y8_40x_sizes[] = {
+	{
+		.width = 1280,
+		.height = 720,
+		.framerates = ds5_depth_framerate_to_30,
+		.n_framerates = ARRAY_SIZE(ds5_depth_framerate_to_30),
+	}, {
+		.width =  848,
+		.height = 480,
+		.framerates = ds5_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+	}, {
+		.width =  640,
+		.height = 480,
+		.framerates = ds5_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+	}, {
+		.width =  640,
+		.height = 360,
+		.framerates = ds5_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+	}, {
+		.width =  480,
+		.height = 270,
+		.framerates = ds5_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+	}, {
+		.width =  424,
+		.height = 240,
+		.framerates = ds5_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+	},
+};
+
 static const struct ds5_resolution y8_41x_sizes[] = {
 	{
 		.width = 1920,
@@ -1188,6 +1222,26 @@ static const struct ds5_format ds5_y_formats_ds5u[] = {
 		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,	/* FIXME */
 		.n_resolutions = ARRAY_SIZE(d43x_calibration_sizes),
 		.resolutions = d43x_calibration_sizes,
+	},
+};
+
+static const struct ds5_format ds5_y_formats_40x[] = {
+	{
+		/* First format: default */
+		.data_type = GMSL_CSI_DT_RAW_8,	/* Y8 */
+		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
+		.n_resolutions = ARRAY_SIZE(y8_40x_sizes),
+		.resolutions = y8_40x_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_YUV422_8,	/* Y8I */
+		.mbus_code = MEDIA_BUS_FMT_VYUY8_1X16,
+		.n_resolutions = ARRAY_SIZE(y8_40x_sizes),
+		.resolutions = y8_40x_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_RGB_888,	/* Y12I, 24-bit Calibration */
+		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,
+		.n_resolutions = ARRAY_SIZE(d40x_calibration_sizes),
+		.resolutions = d40x_calibration_sizes,
 	},
 };
 
@@ -4909,6 +4963,10 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 
 	sensor = &state->ir.sensor;
 	switch (dev_type) {
+	case DS5_DEVICE_TYPE_D40X:
+        sensor->formats = ds5_y_formats_40x;
+        sensor->n_formats = ARRAY_SIZE(ds5_y_formats_40x);
+        break;
 	case DS5_DEVICE_TYPE_D41X:
 		sensor->formats = ds5_y_formats_41x;
 		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_41x);
@@ -5999,4 +6057,4 @@ MODULE_AUTHOR("Guennadi Liakhovetski <guennadi.liakhovetski@intel.com>,\n\
 				Shikun Ding <shikun.ding@intel.com>,\n\
 				Dmitry Perchanov <dmitry.perchanov@intel.com>");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("1.0.2.0");
+MODULE_VERSION("1.0.2.1");
