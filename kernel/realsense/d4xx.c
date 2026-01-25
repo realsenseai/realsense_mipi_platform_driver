@@ -65,6 +65,7 @@
 #define DS5_FW_VERSION			0x030C
 #define DS5_FW_BUILD			0x030E
 #define DS5_DEVICE_TYPE			0x0310
+#define DS5_DEVICE_TYPE_D40X		8
 #define DS5_DEVICE_TYPE_D41X		7
 #define DS5_DEVICE_TYPE_D45X		6
 #define DS5_DEVICE_TYPE_D43X		5
@@ -4811,6 +4812,8 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	if (ret < 0)
 		return ret;
 
+	dev_err(&client->dev, "EHUD_DEBUG: %s(): dev_type = %u, res = {%u, %u}\n",
+			__func__, dev_type, dw, dh);
 	dev_dbg(&client->dev, "%s(): cfg0 %x %ux%u cfg0_md %x %ux%u\n", __func__,
 		 cfg0, dw, dh, cfg0_md, yw, yh);
 
@@ -4822,6 +4825,8 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	case DS5_DEVICE_TYPE_D41X:
 		sensor->formats = ds5_depth_formats_d41x;
 		break;
+	/* TODO EHUD: Should probably be different to 457 */
+	case DS5_DEVICE_TYPE_D40X:
 	case DS5_DEVICE_TYPE_D43X:
 	case DS5_DEVICE_TYPE_D45X:
 		sensor->formats = ds5_depth_formats_d43x;
@@ -4862,6 +4867,8 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 		sensor->formats = &ds5_41x_rgb_format;
 		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
 		break;
+	/* TODO EHUD: Should probably be different to 457 */
+	case DS5_DEVICE_TYPE_D40X:
 	case DS5_DEVICE_TYPE_D45X:
 		sensor->formats = &ds5_rlt_rgb_format;
 		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
