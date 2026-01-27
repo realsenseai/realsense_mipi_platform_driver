@@ -1,4 +1,13 @@
-# Intel® RealSense™ camera driver for GMSL* interface
+<p align="center">
+<!-- Light mode -->
+<img src="https://github.com/realsenseai/librealsense/raw/master/doc/img/realsense-logo-light-mode.png#gh-light-mode-only" alt="Logo for light mode" width="30%"/>
+
+<!-- Dark mode -->
+<img src="https://github.com/realsenseai/librealsense/raw/master/doc/img/realsense-logo-dark-mode.png#gh-dark-mode-only" alt="Logo for dark mode" width="30%"/>
+<br><br>
+</p>
+
+# RealSense™ camera driver for GMSL* interface
 
 # D457 MIPI on NVIDIA® Jetson AGX Xavier™ and AGX Orin™
 The RealSense™ MIPI platform driver enables the user to control and stream RealSense™ 3D MIPI cameras.
