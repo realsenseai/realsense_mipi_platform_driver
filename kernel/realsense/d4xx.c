@@ -4992,11 +4992,7 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 		sensor->formats = &ds5_41x_rgb_format;
 		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
 		break;
-	/* TODO EHUD: Should be disabled (no rgb in 401) */
 	case DS5_DEVICE_TYPE_D40X:
-		sensor->formats = NULL;
-		sensor->n_formats = 0;
-		break;
 	case DS5_DEVICE_TYPE_D45X:
 		sensor->formats = &ds5_rlt_rgb_format;
 		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
