@@ -430,7 +430,7 @@ index 9481358b0..87f9dcf7a 100644
 +		// 4 lanes on port A, write 0x50 for 2 lanes
 +		{MAX9296_LANE_CTRL1_ADDR, 0xD0},
 +		// 1500Mbps/lane on port A
-+		{MAX9296_PHY1_CLK_ADDR, 0x28},
++		{MAX9296_PHY1_CLK_ADDR, 0x2F},
 +		// Do not un-double 8bpp (Un-double 8bpp data)
 +		//{0x031C, 0x00},
 +		// Do not un-double 8bpp
