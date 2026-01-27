@@ -204,7 +204,7 @@ index b2e29b640..4b03b1ef8 100644
 +		// Enable all pipes
 +		{MAX9295_PIPE_EN_ADDR, 0xF3},
 +		// Write 0x33 for 4 lanes
-+		{MAX9295_MIPI_RX1_ADDR, 0x11},
++		{MAX9295_MIPI_RX1_ADDR, 0x33},
 +		// All pipes pull clock from port B
 +		{MAX9295_CSI_PORT_SEL_ADDR, 0x6F},
 +		// All pipes pull data from port B
@@ -428,9 +428,9 @@ index 9481358b0..87f9dcf7a 100644
 +		{0x1558, 0x28}, // PHY B Optimization
 +		{0x1559, 0x68}, // PHY B Optimization
 +		// 4 lanes on port A, write 0x50 for 2 lanes
-+		{MAX9296_LANE_CTRL1_ADDR, 0x50},
++		{MAX9296_LANE_CTRL1_ADDR, 0xD0},
 +		// 1500Mbps/lane on port A
-+		{MAX9296_PHY1_CLK_ADDR, 0x2F},
++		{MAX9296_PHY1_CLK_ADDR, 0x28},
 +		// Do not un-double 8bpp (Un-double 8bpp data)
 +		//{0x031C, 0x00},
 +		// Do not un-double 8bpp

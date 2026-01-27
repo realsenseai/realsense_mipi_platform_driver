@@ -19,7 +19,7 @@
 				vi_in0: endpoint {
 					status = "ok";
 					port-index = <0>;
-					bus-width = <2>;
+					bus-width = <4>;
 					vc-id = <0>;
 					remote-endpoint = <&csi_out0>;
 				};
@@ -32,7 +32,7 @@
 					status = "ok";
 					vc-id = <1>;
 					port-index = <0>;
-					bus-width = <2>;
+					bus-width = <4>;
 					remote-endpoint = <&csi_out1>;
 				};
 			};
@@ -43,7 +43,7 @@
 				vi_in2: endpoint {
 					status = "ok";
 					port-index = <0>;
-					bus-width = <2>;
+					bus-width = <4>;
 					vc-id = <2>;
 					remote-endpoint = <&csi_out2>;
 				};
@@ -55,7 +55,7 @@
 				vi_in3: endpoint {
 					status = "ok";
 					port-index = <0>;
-					bus-width = <2>;
+					bus-width = <4>;
 					vc-id = <3>;
 					remote-endpoint = <&csi_out3>;
 				};
@@ -122,14 +122,14 @@
 							reg = <0>;
 							ds5_0_out: endpoint {
 								port-index = <0>;
-								bus-width = <2>;
+								bus-width = <4>;
 								remote-endpoint = <&csi_in0>;
 							};
 						};
 					};
 					mode0 {
 						pixel_t = "grey_y16";
-						num_lanes = "2";
+						num_lanes = "4";
 						csi_pixel_bit_depth = "16";
 						active_w = "128";
 						active_h = "0";
@@ -146,7 +146,7 @@
 						csi-mode = "1x4";
 						st-vc = <0>;
 						vc-id = <0>;
-						num-lanes = <2>;
+						num-lanes = <4>;
 					};
 				};
 
@@ -168,14 +168,14 @@
 							reg = <0>;
 							ds5_1_out: endpoint {
 								port-index = <1>;
-								bus-width = <2>;
+								bus-width = <4>;
 								remote-endpoint = <&csi_in1>;
 							};
 						};
 					};
 					mode0 {
 						pixel_t = "grey_y16";
-						num_lanes = "2";
+						num_lanes = "4";
 						csi_pixel_bit_depth = "16";
 						active_w = "128";
 						active_h = "0";
@@ -192,7 +192,7 @@
 						csi-mode = "1x4";
 						st-vc = <0>;
 						vc-id = <1>;
-						num-lanes = <2>;
+						num-lanes = <4>;
 					};
 				};
 
@@ -214,7 +214,7 @@
 							reg = <0>;
 							ds5_2_out: endpoint {
 								port-index = <2>;
-								bus-width = <2>;
+								bus-width = <4>;
 								remote-endpoint = <&csi_in2>;
 							};
 						};
@@ -222,7 +222,7 @@
 					/* mode0: Y8, mode1: depth D16 */
 					mode0 {
 						pixel_t = "grey_y16";
-						num_lanes = "2";
+						num_lanes = "4";
 						csi_pixel_bit_depth = "16";
 						active_w = "128";
 						active_h = "0";
@@ -239,7 +239,7 @@
 						csi-mode = "1x4";
 						st-vc = <0>;
 						vc-id = <2>;
-						num-lanes = <2>;
+						num-lanes = <4>;
 					};
 				};
 
@@ -261,14 +261,14 @@
 							reg = <0>;
 							ds5_3_out: endpoint {
 								port-index = <3>;
-								bus-width = <2>;
+								bus-width = <4>;
 								remote-endpoint = <&csi_in3>;
 							};
 						};
 					};
 					mode0 {
 						pixel_t = "grey_y16";
-						num_lanes = "2";
+						num_lanes = "4";
 						csi_pixel_bit_depth = "16";
 						active_w = "128";
 						active_h = "0";
@@ -285,7 +285,7 @@
 						csi-mode = "1x4";
 						st-vc = <0>;
 						vc-id = <3>;
-						num-lanes = <2>;
+						num-lanes = <4>;
 					};
 				};
 			};
@@ -314,7 +314,7 @@
 						csi_in0: endpoint@0 {
 							status = "ok";
 							port-index = <0>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&ds5_0_out>;
 						};
 					};
@@ -344,7 +344,7 @@
 						csi_in1: endpoint@2 {
 							status = "ok";
 							port-index = <0>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&ds5_1_out>;
 						};
 					};
@@ -374,7 +374,7 @@
 						csi_in2: endpoint@4 {
 							status = "ok";
 							port-index = <0>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&ds5_2_out>;
 						};
 					};
@@ -403,7 +403,7 @@
 						csi_in3: endpoint@6 {
 							status = "ok";
 							port-index = <0>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&ds5_3_out>;
 						};
 					};
