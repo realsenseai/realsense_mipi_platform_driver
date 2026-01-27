@@ -29,7 +29,7 @@ index 7c5913c6..396b9bc3 100644
  
  obj-m += max9295.o
  obj-m += max9296.o
-+subdir-ccflags-y += -DCONFIG_VIDEO_D4XX_SERDES
++#subdir-ccflags-y += -DCONFIG_VIDEO_D4XX_SERDES
 +subdir-ccflags-y += -DCONFIG_TEGRA_CAMERA_PLATFORM
 +obj-m += d4xx.o
  ifeq ($(findstring ack_src,$(NV_BUILD_KERNEL_OPTIONS)),)
