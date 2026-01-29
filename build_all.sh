@@ -19,7 +19,7 @@ NPROC=$(nproc)
 
 . $DEVDIR/scripts/setup-common "$1"
 
-SRCS="$DEVDIR/sources_$JETPACK_VERSION"
+SRCS="$DEVDIR/sources_$1"
 if [[ -n "$2" ]]; then
     SRCS=$(realpath $2)
 fi

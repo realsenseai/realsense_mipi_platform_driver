@@ -46,7 +46,7 @@ def run_test(cmd):
                 timeout=200,
                 check=True )
     except Exception as e:
-        print( "Exception occurred.")
+        print("Exception occurred: {}".format( e ))
 
 
 def run_tests_on_d457():     
@@ -73,6 +73,7 @@ if __name__ == '__main__':
     except getopt.GetoptError as err:
         print( err )
         usage()
+        sys.exit ( 1 )
 
     for opt, arg in opts:
         if opt in ('-h', '--help'):

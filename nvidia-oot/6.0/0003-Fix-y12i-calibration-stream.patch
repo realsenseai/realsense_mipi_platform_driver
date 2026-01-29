@@ -2,14 +2,15 @@ diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/p
 index 7d07ccd7..c64dcc38 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
 +++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-@@ -612,7 +612,8 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
+@@ -582,7 +641,10 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
  	trace_tegra_channel_capture_frame("sof", &ts);
  	vb->vb2_buf.timestamp = descr->status.sof_timestamp;
  
 -	if (frame_err)
-+	/* TODO: Remove the branch or process the error for Y12I only */
-+	if (false && frame_err)
++	/* TODO: Remove Y12I frame_err workaround once Y12I is fixed
++	 * Currently there is a black-bar at the bottom of the frame.
++	 */
++	if (frame_err && chan->fmtinfo->fourcc != V4L2_PIX_FMT_Y12I)
  		buf->vb2_state = VB2_BUF_STATE_ERROR;
  	else
  		buf->vb2_state = VB2_BUF_STATE_DONE;
-
