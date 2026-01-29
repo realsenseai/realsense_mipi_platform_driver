@@ -1,9 +1,9 @@
-# Intel® RealSense™ camera driver for GMSL* interface
+# RealSense™ camera driver for GMSL* interface
 
 ## Third Party Programs
 
 
-### This file specifies all 3rd party SW components used for Intel® RealSense™ MIPI Platform Driver and the inbound license for each of these 3rd party components.
+### This file specifies all 3rd party SW components used for RealSense™ MIPI Platform Driver and the inbound license for each of these 3rd party components.
 
 
 #### BSD 2-clause "Simplified" License

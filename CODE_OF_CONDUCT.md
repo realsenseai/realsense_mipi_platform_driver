@@ -1,4 +1,4 @@
-# Intel® RealSense™ camera driver for GMSL* interface
+# RealSense™ camera driver for GMSL* interface
 
 # Contributor Covenant Code of Conduct
 
