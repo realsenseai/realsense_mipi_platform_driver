@@ -50,6 +50,9 @@
 #define GMSL_CSI_DT_RAW_8 0x2A
 #define GMSL_CSI_DT_EMBED 0x12
 #endif
+/* Custom formats (known only to the FW) */
+#define GMSL_CSI_DT_CUSTOM_Y8I_16 0x32
+#define GMSL_CSI_DT_CUSTOM_IR_RGB_16 0x2F
 
 //#define DS5_DRIVER_NAME "DS5 RealSense camera driver"
 #define DS5_DRIVER_NAME "d4xx"
@@ -65,6 +68,7 @@
 #define DS5_FW_VERSION			0x030C
 #define DS5_FW_BUILD			0x030E
 #define DS5_DEVICE_TYPE			0x0310
+#define DS5_DEVICE_TYPE_D40X		8
 #define DS5_DEVICE_TYPE_D41X		7
 #define DS5_DEVICE_TYPE_D45X		6
 #define DS5_DEVICE_TYPE_D43X		5
@@ -675,6 +679,45 @@ static const u16 ds5_framerate_100[] = {100};
 static const u16 ds5_framerate_90[] = {90};
 static const u16 ds5_imu_framerates[] = {50, 100, 200, 400};
 
+static const struct ds5_resolution d40x_depth_sizes[] = {
+	{
+		.width = 1280,
+		.height = 720,
+		.framerates = ds5_depth_framerate_to_30,
+		.n_framerates = ARRAY_SIZE(ds5_depth_framerate_to_30),
+	}, {
+		.width =  848,
+		.height = 480,
+		.framerates = ds5_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+	}, {
+		.width =  640,
+		.height = 480,
+		.framerates = ds5_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+	}, {
+		.width =  640,
+		.height = 360,
+		.framerates = ds5_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+	}, {
+		.width =  480,
+		.height = 270,
+		.framerates = ds5_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+	}, {
+		.width =  424,
+		.height = 240,
+		.framerates = ds5_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+	}, {
+		.width =  256,
+		.height = 144,
+		.framerates = ds5_framerate_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_90),
+	},
+};
+
 static const struct ds5_resolution d41x_depth_sizes[] = {
 	{
 		.width = 1280,
@@ -809,6 +852,40 @@ static const struct ds5_resolution y8_sizes[] = {
 		.framerates = ds5_framerate_to_90,
 		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
 	}
+};
+
+static const struct ds5_resolution y8_40x_sizes[] = {
+	{
+		.width = 1280,
+		.height = 720,
+		.framerates = ds5_depth_framerate_to_30,
+		.n_framerates = ARRAY_SIZE(ds5_depth_framerate_to_30),
+	}, {
+		.width =  848,
+		.height = 480,
+		.framerates = ds5_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+	}, {
+		.width =  640,
+		.height = 480,
+		.framerates = ds5_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+	}, {
+		.width =  640,
+		.height = 360,
+		.framerates = ds5_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+	}, {
+		.width =  480,
+		.height = 270,
+		.framerates = ds5_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+	}, {
+		.width =  424,
+		.height = 240,
+		.framerates = ds5_framerate_to_90,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
+	},
 };
 
 static const struct ds5_resolution y8_41x_sizes[] = {
@@ -984,6 +1061,15 @@ static const struct ds5_resolution ds5_size_w10 = {
 	.n_framerates = 1,
 };
 
+static const struct ds5_resolution d40x_calibration_sizes[] = {
+	{
+		.width =  1288,
+		.height = 808,
+		.framerates = ds5_framerate_15_25,
+		.n_framerates = ARRAY_SIZE(ds5_framerate_15_25),
+	},
+};
+
 static const struct ds5_resolution d41x_calibration_sizes[] = {
 	{
 		.width =  1920,
@@ -1036,6 +1122,26 @@ static const struct ds5_resolution ds5_size_imu_extended[] = {
 	.height = 1,
 	.framerates = ds5_imu_framerates,
 	.n_framerates = ARRAY_SIZE(ds5_imu_framerates),
+	},
+};
+
+static const struct ds5_format ds5_depth_formats_d40x[] = {
+	{
+		// TODO: 0x31 is replaced with 0x1e since it caused low FPS in Jetson.
+		.data_type = GMSL_CSI_DT_YUV422_8,	/* Z16 */
+		.mbus_code = MEDIA_BUS_FMT_UYVY8_1X16,
+		.n_resolutions = ARRAY_SIZE(d40x_depth_sizes),
+		.resolutions = d40x_depth_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_RAW_8,	/* Y8 */
+		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
+		.n_resolutions = ARRAY_SIZE(d40x_depth_sizes),
+		.resolutions = d40x_depth_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_RGB_888,	/* 24-bit Calibration */
+		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,	/* FIXME */
+		.n_resolutions = ARRAY_SIZE(d40x_calibration_sizes),
+		.resolutions = d40x_calibration_sizes,
 	},
 };
 
@@ -1120,6 +1226,31 @@ static const struct ds5_format ds5_y_formats_ds5u[] = {
 		.n_resolutions = ARRAY_SIZE(d43x_calibration_sizes),
 		.resolutions = d43x_calibration_sizes,
 	},
+};
+
+static const struct ds5_format ds5_y_formats_40x[] = {
+	{
+		/* First format: default */
+		.data_type = GMSL_CSI_DT_RAW_8,	/* Y8 */
+		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
+		.n_resolutions = ARRAY_SIZE(y8_40x_sizes),
+		.resolutions = y8_40x_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_YUV422_8,	/* Y8I */
+		.mbus_code = MEDIA_BUS_FMT_VYUY8_1X16,
+		.n_resolutions = ARRAY_SIZE(y8_40x_sizes),
+		.resolutions = y8_40x_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_RGB_888,	/* Y12I, 24-bit Calibration */
+		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,
+		.n_resolutions = ARRAY_SIZE(d40x_calibration_sizes),
+		.resolutions = d40x_calibration_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_YUV422_8,	/* YUYV */
+		.mbus_code = MEDIA_BUS_FMT_YUYV8_1X16,
+		.n_resolutions = ARRAY_SIZE(y8_40x_sizes),
+		.resolutions = y8_40x_sizes,
+	}
 };
 
 static const struct ds5_format ds5_y_formats_41x[] = {
@@ -1760,10 +1891,26 @@ static int ds5_configure(struct ds5 *state)
 	if (state->is_depth && fmt != 0)
 		ret = ds5_write(state, dt_addr, 0x31);
 	else if (state->is_y8 && fmt != 0 &&
-		 sensor->config.format->data_type == GMSL_CSI_DT_YUV422_8)
-		ret = ds5_write(state, dt_addr, 0x32);
-	else
+		sensor->config.format->data_type == GMSL_CSI_DT_YUV422_8) {
+		if (sensor->config.format->mbus_code == MEDIA_BUS_FMT_VYUY8_1X16)
+		{
+			/* This is the custom Y8I format - 
+			* telling FW to enable "etMipiDataType_UserDefined3_R8L8"
+			*/
+			ret = ds5_write(state, dt_addr, GMSL_CSI_DT_CUSTOM_Y8I_16);
+		} else if (sensor->config.format->mbus_code == MEDIA_BUS_FMT_YUYV8_1X16) {
+			/* This is the custom RGB through IR format - 
+			* telling FW to enable "etMipiDataType_UserDefined0_IR_RGB"
+			*/
+			ret = ds5_write(state, dt_addr, GMSL_CSI_DT_CUSTOM_IR_RGB_16);
+		} else {
+			dev_err(sensor->sd.dev, "%s(): Illegal mbus_code %u for IR sensor\n",
+					__func__, sensor->config.format->mbus_code);
+			return -EINVAL;
+		}
+	} else {
 		ret = ds5_write(state, dt_addr, fmt);
+	}
 	if (ret < 0)
 		return ret;
 
@@ -4822,6 +4969,9 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	case DS5_DEVICE_TYPE_D41X:
 		sensor->formats = ds5_depth_formats_d41x;
 		break;
+	case DS5_DEVICE_TYPE_D40X:
+		sensor->formats = ds5_depth_formats_d40x;
+		break;
 	case DS5_DEVICE_TYPE_D43X:
 	case DS5_DEVICE_TYPE_D45X:
 		sensor->formats = ds5_depth_formats_d43x;
@@ -4837,6 +4987,10 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 
 	sensor = &state->ir.sensor;
 	switch (dev_type) {
+	case DS5_DEVICE_TYPE_D40X:
+        sensor->formats = ds5_y_formats_40x;
+        sensor->n_formats = ARRAY_SIZE(ds5_y_formats_40x);
+        break;
 	case DS5_DEVICE_TYPE_D41X:
 		sensor->formats = ds5_y_formats_41x;
 		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_41x);
@@ -4862,6 +5016,7 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 		sensor->formats = &ds5_41x_rgb_format;
 		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
 		break;
+	case DS5_DEVICE_TYPE_D40X:
 	case DS5_DEVICE_TYPE_D45X:
 		sensor->formats = &ds5_rlt_rgb_format;
 		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
@@ -5925,4 +6080,4 @@ MODULE_AUTHOR("Guennadi Liakhovetski <guennadi.liakhovetski@intel.com>,\n\
 				Shikun Ding <shikun.ding@intel.com>,\n\
 				Dmitry Perchanov <dmitry.perchanov@intel.com>");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("1.0.1.33");
+MODULE_VERSION("1.0.2.4");
