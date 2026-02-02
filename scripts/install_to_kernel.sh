@@ -41,6 +41,8 @@ if [ "${JETPACK_VERSION}" = "5.0.2" ]; then
           sudo cp videobuf-core.ko /lib/modules/$(uname -r)/updates/
     echo "sudo cp videobuf-vmalloc.ko /lib/modules/$(uname -r)/updates/"
           sudo cp videobuf-vmalloc.ko /lib/modules/$(uname -r)/updates/
+    echo "sudo cp Image /boot/${FOLDER}/."
+          sudo cp Image /boot/${FOLDER}/.
 elif [ "${JETPACK_VERSION}" = "6.2" ]; then
     tar xf rootfs.tar.gz
     echo "sudo cp -r lib/modules/$(uname -r) /lib/modules/."
@@ -49,10 +51,10 @@ elif [ "${JETPACK_VERSION}" = "6.2" ]; then
           sudo cp boot/tegra234-camera-d4xx-overlay*.dtbo /boot/.
     echo "sudo cp boot/dtb/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/dtb/."
           sudo cp boot/dtb/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/dtb/.
+    echo "sudo cp boot/Image /boot/${FOLDER}/."
+          sudo cp boot/Image /boot/${FOLDER}/.
 fi
 
-echo "sudo cp Image /boot/${FOLDER}/."
-      sudo cp Image /boot/${FOLDER}/.
 echo "sudo depmod"
       sudo depmod
 echo "done - rebooting"

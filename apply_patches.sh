@@ -62,6 +62,9 @@ apply_external_patches() {
         fi
         ls -Ld "${PWD}/$3/$2"
         ls -Lw1 "${PWD}/$3/$2"
+        # Store the original commit hash before applying patches
+        ORIGINAL_COMMIT=$(git -C "sources_$SOURCES_VERSION/$3" rev-parse HEAD)
+        echo "$ORIGINAL_COMMIT" > "sources_$SOURCES_VERSION/$3/.realsense_patch_base"
         git -C "sources_$SOURCES_VERSION/$3" apply "${PWD}/$3/$2"/*
     elif [ "$1" = "reset" ]; then
         if ! git -C "sources_$SOURCES_VERSION/$3" diff --quiet || ! git -C "sources_$SOURCES_VERSION/$3" diff --cached --quiet; then
@@ -69,7 +72,14 @@ apply_external_patches() {
             [[ "$confirm" != "y" && "$confirm" != "Y" ]] && exit 1
         fi
         echo -n "$(ls -d "sources_$SOURCES_VERSION/$3"): "
-        git -C "sources_$SOURCES_VERSION/$3" reset --hard $4
+        # Reset to original commit if .realsense_patch_base exists, otherwise use L4T_VERSION
+        if [[ -f "sources_$SOURCES_VERSION/$3/.realsense_patch_base" ]]; then
+            RESET_TARGET=$(cat "sources_$SOURCES_VERSION/$3/.realsense_patch_base")
+            git -C "sources_$SOURCES_VERSION/$3" reset --hard "$RESET_TARGET"
+            rm -f "sources_$SOURCES_VERSION/$3/.realsense_patch_base"
+        else
+            git -C "sources_$SOURCES_VERSION/$3" reset --hard $4
+        fi
     fi
 }
 
