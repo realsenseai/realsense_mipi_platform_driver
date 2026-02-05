@@ -7,7 +7,7 @@ show_help() {
     echo "Aggregate kernel modules and optionally copy them to a remote device."
     echo ""
     echo "Arguments:"
-    echo "  KERNEL_VERSION  Kernel version to aggregate (6.0, 6.1, or 6.2) (required)"
+    echo "  KERNEL_VERSION  Kernel version to aggregate (6.0, 6.1, 6.2, or 6.2.1) (required)"
     echo "  IP_ADDRESS      Target device IP address (optional - if not provided, only aggregates locally)"
     echo "  USERNAME        SSH username for remote device (default: administrator)"
     echo "  REMOTE_PATH     Remote path to copy files to (default: /home/USERNAME/)"
@@ -42,8 +42,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Validate kernel version
-if [[ "$KERNEL_VERSION" != "6.0" && "$KERNEL_VERSION" != "6.1" && "$KERNEL_VERSION" != "6.2" ]]; then
-    echo "Error: Invalid kernel version '$KERNEL_VERSION'. Must be 6.0, 6.1, or 6.2"
+if [[ "$KERNEL_VERSION" != "6.0" && "$KERNEL_VERSION" != "6.1" && "$KERNEL_VERSION" != "6.2" && "$KERNEL_VERSION" != "6.2.1" ]]; then
+    echo "Error: Invalid kernel version '$KERNEL_VERSION'. Must be 6.0, 6.1, 6.2, or 6.2.1"
     echo ""
     show_help
 fi

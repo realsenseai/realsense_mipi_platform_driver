@@ -7,7 +7,7 @@ if [ "$#" -lt 1 ] || [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
       echo "Update the kernel modules and boot files on the local device for a specific JetPack version."
       echo ""
       echo "Arguments:"
-      echo "  JETPACK_VERSION   JetPack version (e.g., 5.0.2, 5.1.2, 6.2)"
+      echo "  JETPACK_VERSION   JetPack version (e.g., 5.0.2, 5.1.2, 6.0, 6.1, 6.2, 6.2.1)"
       echo "  BOOT_FOLDER       Folder name under /boot to copy Image (default: dev)"
       echo ""
       echo "Example:"
@@ -41,9 +41,7 @@ if [ "${JETPACK_VERSION}" = "5.0.2" ]; then
           sudo cp videobuf-core.ko /lib/modules/$(uname -r)/updates/
     echo "sudo cp videobuf-vmalloc.ko /lib/modules/$(uname -r)/updates/"
           sudo cp videobuf-vmalloc.ko /lib/modules/$(uname -r)/updates/
-    echo "sudo cp Image /boot/${FOLDER}/."
-          sudo cp Image /boot/${FOLDER}/.
-elif [ "${JETPACK_VERSION}" = "6.2" ]; then
+elif [ "${JETPACK_VERSION}" = "6.0" ] || [ "${JETPACK_VERSION}" = "6.1" ] || [ "${JETPACK_VERSION}" = "6.2" ] || [ "${JETPACK_VERSION}" = "6.2.1" ]; then
     tar xf rootfs.tar.gz
     echo "sudo cp -r lib/modules/$(uname -r) /lib/modules/."
           sudo cp -r lib/modules/$(uname -r) /lib/modules/.
@@ -51,10 +49,10 @@ elif [ "${JETPACK_VERSION}" = "6.2" ]; then
           sudo cp boot/tegra234-camera-d4xx-overlay*.dtbo /boot/.
     echo "sudo cp boot/dtb/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/dtb/."
           sudo cp boot/dtb/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/dtb/.
-    echo "sudo cp boot/Image /boot/${FOLDER}/."
-          sudo cp boot/Image /boot/${FOLDER}/.
 fi
 
+echo "sudo cp boot/Image /boot/${FOLDER}/."
+      sudo cp boot/Image /boot/${FOLDER}/.
 echo "sudo depmod"
       sudo depmod
 echo "done - rebooting"

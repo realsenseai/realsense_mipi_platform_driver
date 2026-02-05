@@ -4,6 +4,7 @@
 The RealSense™ MIPI platform driver enables the user to control and stream RealSense™ 3D MIPI cameras.
 The system shall include:
 * NVIDIA® Jetson™ platform Supported JetPack versions are:
+    - [6.2.1 production release](https://developer.nvidia.com/embedded/jetpack-sdk-621)
     - [6.2 production release](https://developer.nvidia.com/embedded/jetpack-sdk-62)
     - [6.1 production release](https://developer.nvidia.com/embedded/jetpack-sdk-61)
     - [6.0 production release](https://developer.nvidia.com/embedded/jetpack-sdk-60)

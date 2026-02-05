@@ -33,7 +33,7 @@ function DisplayNvidiaLicense {
 if [[ "$1" == "-h" ]]; then
     echo "setup_workspace.sh [JetPack_version]"
     echo "setup_workspace.sh -h"
-    echo "JetPack_version can be 4.6.1, 5.0.2, 5.1.2, 6.0, 6.1, 6.2"
+    echo "JetPack_version can be 4.6.1, 5.0.2, 5.1.2, 6.0, 6.1, 6.2, 6.2.1"
     exit 1
 fi
 
