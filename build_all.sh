@@ -3,16 +3,31 @@
 set -e
 
 if [[ $# < 1 || "$1" == "-h" ]]; then
-    echo "build_all.sh [--dev-dbg] JetPack_version [JetPack_Linux_source]"
+    echo "build_all.sh [--clean] [--dev-dbg] JetPack_version [JetPack_Linux_source]"
     echo "build_all.sh -h"
     exit 1
 fi
 
+CLEAN=0
 DEVDBG=0
-if [[ "$1" == "--dev-dbg" ]]; then
-    DEVDBG=1
-    shift
-fi
+
+# Parse optional flags
+while [[ "$1" == --* ]]; do
+    case "$1" in
+        --clean)
+            CLEAN=1
+            shift
+            ;;
+        --dev-dbg)
+            DEVDBG=1
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+done
 
 export DEVDIR=$(cd `dirname $0` && pwd)
 NPROC=$(nproc)
@@ -40,6 +55,14 @@ fi
 
 export LOCALVERSION=-tegra
 export TEGRA_KERNEL_OUT="$DEVDIR/images/$1"
+
+# Clean if requested
+if [[ $CLEAN == 1 ]]; then
+    echo "Cleaning build artifacts for $1..."
+    rm -rf $TEGRA_KERNEL_OUT
+    rm -rf $SRCS/out
+fi
+
 mkdir -p $TEGRA_KERNEL_OUT
 export KERNEL_MODULES_OUT=$TEGRA_KERNEL_OUT/modules
 
@@ -87,16 +110,16 @@ if [[ "$JETPACK_VERSION" == "6.x" ]]; then
     KERNELVERSION=$(cat $KERNEL_HEADERS/include/config/kernel.release)
     KERNEL_MODULES_OUT=$INSTALL_MOD_PATH/lib/modules/${KERNELVERSION}
     mkdir -p $KERNEL_MODULES_OUT/extra
-    cp $KERNEL_MODULES_OUT/kernel/drivers/iio/buffer/kfifo_buf.ko $KERNEL_MODULES_OUT/extra/
-    cp $KERNEL_MODULES_OUT/kernel/drivers/iio/buffer/industrialio-triggered-buffer.ko $KERNEL_MODULES_OUT/extra/
-    cp $KERNEL_MODULES_OUT/kernel/drivers/iio/common/hid-sensors/hid-sensor-iio-common.ko $KERNEL_MODULES_OUT/extra/
-    cp $KERNEL_MODULES_OUT/kernel/drivers/hid/hid-sensor-hub.ko $KERNEL_MODULES_OUT/extra/
-    cp $KERNEL_MODULES_OUT/kernel/drivers/iio/accel/hid-sensor-accel-3d.ko $KERNEL_MODULES_OUT/extra/
-    cp $KERNEL_MODULES_OUT/kernel/drivers/iio/gyro/hid-sensor-gyro-3d.ko $KERNEL_MODULES_OUT/extra/
-    cp $KERNEL_MODULES_OUT/kernel/drivers/iio/common/hid-sensors/hid-sensor-trigger.ko $KERNEL_MODULES_OUT/extra/
+    cp $KERNEL_MODULES_OUT/kernel/drivers/iio/buffer/kfifo_buf.ko $KERNEL_MODULES_OUT/extra/ || true
+    cp $KERNEL_MODULES_OUT/kernel/drivers/iio/buffer/industrialio-triggered-buffer.ko $KERNEL_MODULES_OUT/extra/ || true
+    cp $KERNEL_MODULES_OUT/kernel/drivers/iio/common/hid-sensors/hid-sensor-iio-common.ko $KERNEL_MODULES_OUT/extra/ || true
+    cp $KERNEL_MODULES_OUT/kernel/drivers/hid/hid-sensor-hub.ko $KERNEL_MODULES_OUT/extra/ || true
+    cp $KERNEL_MODULES_OUT/kernel/drivers/iio/accel/hid-sensor-accel-3d.ko $KERNEL_MODULES_OUT/extra/ || true
+    cp $KERNEL_MODULES_OUT/kernel/drivers/iio/gyro/hid-sensor-gyro-3d.ko $KERNEL_MODULES_OUT/extra/ || true
+    cp $KERNEL_MODULES_OUT/kernel/drivers/iio/common/hid-sensors/hid-sensor-trigger.ko $KERNEL_MODULES_OUT/extra/ || true
     # RealSense cameras support
-    cp $KERNEL_MODULES_OUT/kernel/drivers/media/usb/uvc/uvcvideo.ko $KERNEL_MODULES_OUT/extra/
-    cp $KERNEL_MODULES_OUT/kernel/drivers/media/v4l2-core/videodev.ko $KERNEL_MODULES_OUT/extra/
+    cp $KERNEL_MODULES_OUT/kernel/drivers/media/usb/uvc/uvcvideo.ko $KERNEL_MODULES_OUT/extra/ || true
+    cp $KERNEL_MODULES_OUT/kernel/drivers/media/v4l2-core/videodev.ko $KERNEL_MODULES_OUT/extra/ || true
 else
 #jp4/5
     cd $SRCS/$KERNEL_DIR

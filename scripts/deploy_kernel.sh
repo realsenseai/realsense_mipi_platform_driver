@@ -8,7 +8,7 @@ if [ "$#" -eq 0 ] || [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
     echo "Package kernel modules, optionally copy them to the TARGET, update boot files and reboot the TARGET."
     echo ""
     echo "Arguments:"
-    echo "  JETPACK_VERSION   JetPack version (e.g., 5.0.2, 5.1.2, 6.0, 6.2) - REQUIRED"
+    echo "  JETPACK_VERSION   JetPack version (e.g., 5.0.2, 5.1.2, 6.0, 6.1, 6.2, 6.2.1) - REQUIRED"
     echo "  TARGET            Target device hostname or IP address"
     echo "  USERNAME          SSH username for TARGET (default: administrator)"
     echo "  REMOTE_PATH       Remote path to copy files to (default: dev)"
@@ -58,7 +58,7 @@ if [ "${JETPACK_VERSION}" = "5.0.2" ]; then
     cp "${IMG_DIR}/drivers/media/usb/uvc/uvcvideo.ko" "${DEST_DIR}/" 2>/dev/null || true
     cp "${IMG_DIR}/drivers/media/v4l2-core/videobuf-core.ko" "${DEST_DIR}/" 2>/dev/null || true
     cp "${IMG_DIR}/drivers/media/v4l2-core/videobuf-vmalloc.ko" "${DEST_DIR}/" 2>/dev/null || true
-elif [ "${JETPACK_VERSION}" = "6.2" ]; then
+elif [ "${JETPACK_VERSION}" = "6.0" ] || [ "${JETPACK_VERSION}" = "6.1" ] || [ "${JETPACK_VERSION}" = "6.2" ] || [ "${JETPACK_VERSION}" = "6.2.1" ]; then
     echo "Packing ${DEST_DIR}/rootfs.tar.gz"
     tar czf ${DEST_DIR}/rootfs.tar.gz -C images/${JETPACK_VERSION}/rootfs boot lib
 fi
