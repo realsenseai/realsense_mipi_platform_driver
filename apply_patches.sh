@@ -55,8 +55,13 @@ fi
 
 # Create nvethernetrm symlink for JP 6.x (moved from source_sync_6.x.sh)
 # JP 5.x handles nvethernetrm differently (full path clone, not a symlink)
-if [[ "$ACTION" == reset ]] && [[ "$JETPACK_VERSION" =~ ^6\. ]]; then
-    ln -sf ../../../../../../nvethernetrm "sources_$SOURCES_VERSION/nvidia-oot/drivers/net/ethernet/nvidia/nvethernet/nvethernetrm"
+# Must remove the directory first since git reset restores it as a real directory
+# and ln -sf cannot replace a directory with a symlink
+if [[ "$JETPACK_VERSION" =~ ^6\. ]]; then
+    if [[ "$ACTION" == reset ]] || [[ "$ACTION" == apply ]]; then
+        rm -rf "sources_$SOURCES_VERSION/nvidia-oot/drivers/net/ethernet/nvidia/nvethernet/nvethernetrm"
+        ln -sf ../../../../../../nvethernetrm "sources_$SOURCES_VERSION/nvidia-oot/drivers/net/ethernet/nvidia/nvethernet/nvethernetrm"
+    fi
 fi
 
 apply_external_patches() {
