@@ -4693,6 +4693,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	int ret = 0;
 	unsigned int i = 0;
 	int restore_val = 0;
+	int attempt;
 	u16 config_status_base, stream_status_base, stream_id, vc_id;
 	struct ds5_sensor *sensor = state->mux.last_set;
 
@@ -4742,10 +4743,19 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		// set manually, need to configure vc in pdata
 		state->g_ctx.dst_vc = vc_id;
 #endif
+		/*
+		 * Serialize SERDES pipe allocation and configuration
+		 * across all d4xx instances sharing the same GMSL link.
+		 * Without this, concurrent pipe setups race on the shared
+		 * MAX9295/MAX9296 hardware, causing I2C NACKs (-121) that
+		 * take down the entire bus.
+		 */
+		mutex_lock(&serdes_lock__);
 		sensor->pipe_id =
 			max9296_get_available_pipe_id(state->dser_dev,
 					(int)state->g_ctx.dst_vc);
 		if (sensor->pipe_id < 0) {
+			mutex_unlock(&serdes_lock__);
 			dev_err(&state->client->dev,
 				"No free pipe in max9296\n");
 			ret = -(ENOSR);
@@ -4754,6 +4764,9 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 #endif
 
 		ret = ds5_configure(state);
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+		mutex_unlock(&serdes_lock__);
+#endif
 		if (ret)
 			goto restore_s_state;
 
@@ -4762,20 +4775,75 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		if (ret < 0)
 			goto restore_s_state;
 
-		// check streaming status from FW
-		for (i = 0; i < DS5_START_MAX_COUNT; i++) {
-			ds5_read(state, stream_status_base, &streaming);
-			ds5_read(state, config_status_base, &status);
-			if ((status & DS5_STATUS_STREAMING) &&
-					streaming == DS5_STREAM_STREAMING)
-				break;
+		// check streaming status from FW, with one retry
+		for (attempt = 0; attempt < 2; attempt++) {
+			for (i = 0; i < DS5_START_MAX_COUNT; i++) {
+				ret = ds5_read(state, stream_status_base,
+					       &streaming);
+				if (ret < 0) {
+					msleep_range(DS5_START_POLL_TIME);
+					continue;
+				}
+				ret = ds5_read(state, config_status_base,
+					       &status);
+				if (ret < 0) {
+					msleep_range(DS5_START_POLL_TIME);
+					continue;
+				}
+				if ((status & DS5_STATUS_STREAMING) &&
+						streaming == DS5_STREAM_STREAMING)
+					break;
 
-			msleep_range(DS5_START_POLL_TIME);
+				/* Fail fast on firmware config errors */
+				if (status & (DS5_STATUS_INVALID_DT |
+					      DS5_STATUS_INVALID_RES |
+					      DS5_STATUS_INVALID_FPS)) {
+					dev_err(&state->client->dev,
+						"start: FW rejected config, status 0x%04x\n",
+						status);
+					i = DS5_START_MAX_COUNT;
+					break;
+				}
+
+				msleep_range(DS5_START_POLL_TIME);
+			}
+
+			if (i < DS5_START_MAX_COUNT)
+				break; /* success */
+
+			if (attempt == 0) {
+				/*
+				 * First attempt timed out. Stop the stream,
+				 * wait for FW to confirm idle, then retry.
+				 * The SERDES pipe and FW config are still in
+				 * place — only the start command needs resending.
+				 */
+				dev_warn(&state->client->dev,
+					"start timeout (status 0x%04x, stream 0x%04x), retrying\n",
+					status, streaming);
+				ds5_write(state, DS5_START_STOP_STREAM,
+					  DS5_STREAM_STOP | stream_id);
+				for (i = 0; i < DS5_START_MAX_COUNT; i++) {
+					ret = ds5_read(state,
+						       stream_status_base,
+						       &streaming);
+					if (ret == 0 &&
+					    streaming == DS5_STREAM_IDLE)
+						break;
+					msleep_range(DS5_START_POLL_TIME);
+				}
+				/* Re-send start command */
+				ret = ds5_write(state, DS5_START_STOP_STREAM,
+						DS5_STREAM_START | stream_id);
+				if (ret < 0)
+					goto restore_s_state;
+			}
 		}
 
-		if (DS5_START_MAX_COUNT == i) {
+		if (i >= DS5_START_MAX_COUNT) {
 			dev_err(&state->client->dev,
-				"start streaming failed, exit on timeout\n");
+				"start streaming failed after retry, status 0x%04x stream 0x%04x\n",
+				status, streaming);
 			/* notify fw */
 			ret = ds5_write(state, DS5_START_STOP_STREAM,
 					DS5_STREAM_STOP | stream_id);
@@ -4791,7 +4859,44 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		if (ret < 0)
 			goto restore_s_state;
 
+		/*
+		 * Wait for firmware to confirm stream has actually stopped.
+		 * Without this, a rapid stop/start cycle (e.g. resolution
+		 * change) can reconfigure the SERDES pipeline while the
+		 * firmware is still tearing down the previous stream,
+		 * corrupting GMSL link state and causing I2C NACKs (-121).
+		 */
+		for (i = 0; i < DS5_START_MAX_COUNT; i++) {
+			ret = ds5_read(state, stream_status_base, &streaming);
+			if (ret < 0) {
+				dev_warn(&state->client->dev,
+					"stop: i2c read failed (%d), retry %u\n",
+					ret, i);
+				msleep_range(DS5_START_POLL_TIME);
+				continue;
+			}
+			if (streaming == DS5_STREAM_IDLE) {
+				dev_dbg(&state->client->dev,
+					"stream stopped after %dms\n",
+					i * DS5_START_POLL_TIME);
+				break;
+			}
+			msleep_range(DS5_START_POLL_TIME);
+		}
+
+		if (i == DS5_START_MAX_COUNT) {
+			dev_warn(&state->client->dev,
+				"stop streaming timeout, stream_status: 0x%04x\n",
+				streaming);
+		}
+
+		/* Reset ret to 0 — stop polling is best-effort,
+		 * we still proceed with SERDES cleanup below.
+		 */
+		ret = 0;
+
 #ifdef CONFIG_VIDEO_D4XX_SERDES
+		mutex_lock(&serdes_lock__);
 		// reset data path when Y12I streaming is done
 		if (state->is_y8 &&
 			state->ir.sensor.config.format->data_type ==
@@ -4815,6 +4920,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		if (max9296_release_pipe(state->dser_dev, sensor->pipe_id) < 0)
 			dev_warn(&state->client->dev, "release pipe failed\n");
 		sensor->pipe_id = -1;
+		mutex_unlock(&serdes_lock__);
 #else
 #ifdef CONFIG_VIDEO_INTEL_IPU6
 		d4xx_reset_oneshot(state);
@@ -4836,9 +4942,11 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 restore_s_state:
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	if (on && sensor->pipe_id >= 0) {
+		mutex_lock(&serdes_lock__);
 		if (max9296_release_pipe(state->dser_dev, sensor->pipe_id) < 0)
 			dev_warn(&state->client->dev, "release pipe failed\n");
 		sensor->pipe_id = -1;
+		mutex_unlock(&serdes_lock__);
 	}
 #endif
 
