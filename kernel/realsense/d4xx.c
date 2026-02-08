@@ -329,6 +329,12 @@ static const struct hwm_cmd ewb = {
 	.magic_word = 0xCDAB,
 	.opcode = 0x18,
 };
+
+static const struct hwm_cmd cmd_hw_reset = {
+	.header = 0x14,
+	.magic_word = 0xCDAB,
+	.opcode = 0x20,  /* HW reset opcode */
+};
 #ifdef CONFIG_VIDEO_INTEL_IPU6
 static const s64 link_freq_menu_items[] = {
 	D4XX_LINK_FREQ_360MHZ,
@@ -2141,6 +2147,9 @@ static int ds5_hw_set_exposure(struct ds5 *state, u32 base, s32 val)
  */
 #define DS5_CAMERA_CID_HWMC_RW		(DS5_CAMERA_CID_BASE+32)
 
+/* HW reset with recovery for GMSL connections */
+#define DS5_CAMERA_CID_HW_RESET		(DS5_CAMERA_CID_BASE+33)
+
 #define DS5_HWMC_DATA			0x4900
 #define DS5_HWMC_STATUS			0x4904
 #define DS5_HWMC_RESP_LEN		0x4908
@@ -2275,6 +2284,146 @@ static int ds5_set_calibration_data(struct ds5 *state,
 	}
 
 	return ret;
+}
+
+/* HW reset timeout and polling parameters */
+#define DS5_HW_RESET_INITIAL_DELAY_MS	100
+#define DS5_HW_RESET_POLL_INTERVAL_MS	200
+#define DS5_HW_RESET_TIMEOUT_MS		10000
+#define DS5_HW_RESET_MAX_RETRIES	(DS5_HW_RESET_TIMEOUT_MS / DS5_HW_RESET_POLL_INTERVAL_MS)
+
+/*
+ * Register 0x5020 status values (from firmware):
+ * - 0xDEAD: Device in normal UVC mode (ready) - ICT returns error for unhandled cmd
+ * - 0x04030201: Device in DFU mode (DFU magic bytes, little-endian)
+ * - I2C error: Device not yet responding (still resetting)
+ */
+#define DS5_HW_RESET_STATUS_READY	0xDEAD
+#define DS5_HW_RESET_DFU_MAGIC_LSW	0x0201  /* Lower 16 bits of 0x04030201 */
+
+/*
+ * ds5_hw_reset_with_recovery - Perform hardware reset with GMSL recovery
+ * @state: Driver state structure
+ *
+ * This function sends a hardware reset command to the D4XX device and
+ * waits for it to come back online. For GMSL connections, unlike USB,
+ * there is no automatic re-enumeration, so we must poll the device
+ * until it becomes responsive again.
+ *
+ * Returns 0 on success, negative error code on failure.
+ */
+static int ds5_hw_reset_with_recovery(struct ds5 *state)
+{
+	int ret;
+	int retry;
+	u16 status = 0;
+	bool device_went_down = false;
+
+	dev_info(&state->client->dev, "%s(): Initiating HW reset with recovery\n",
+		__func__);
+
+	/* 1. Send HW reset command */
+	ret = ds5_raw_write(state, DS5_HWMC_DATA, &cmd_hw_reset, sizeof(cmd_hw_reset));
+	if (ret < 0) {
+		dev_err(&state->client->dev, "%s(): Failed to write HW reset command: %d\n",
+			__func__, ret);
+		return ret;
+	}
+
+	ret = ds5_write(state, DS5_HWMC_EXEC, 0x01);
+	if (ret < 0) {
+		dev_err(&state->client->dev, "%s(): Failed to execute HW reset command: %d\n",
+			__func__, ret);
+		return ret;
+	}
+
+	dev_info(&state->client->dev, "%s(): HW reset command sent, waiting for device...\n",
+		__func__);
+
+	/* 2. Brief delay to allow reset to begin */
+	msleep(DS5_HW_RESET_INITIAL_DELAY_MS);
+
+	/* 3. Poll for device to come back online */
+	for (retry = 0; retry < DS5_HW_RESET_MAX_RETRIES; retry++) {
+		msleep(DS5_HW_RESET_POLL_INTERVAL_MS);
+
+		ret = ds5_read(state, 0x5020, &status);
+
+		if (ret < 0) {
+			/* I2C failed - device is resetting (expected during reset) */
+			device_went_down = true;
+			dev_dbg(&state->client->dev,
+				"%s(): Device not responding (resetting), retry %d\n",
+				__func__, retry);
+			continue;
+		}
+
+		/* I2C succeeded - check status */
+		if (status == DS5_HW_RESET_STATUS_READY) {
+			/* 0xDEAD means device is in normal UVC mode (ready) */
+			dev_info(&state->client->dev,
+				"%s(): Device ready after %d ms, status: 0x%04x\n",
+				__func__,
+				DS5_HW_RESET_INITIAL_DELAY_MS +
+				(retry + 1) * DS5_HW_RESET_POLL_INTERVAL_MS,
+				status);
+			break;
+		}
+
+		if (status == DS5_HW_RESET_DFU_MAGIC_LSW) {
+			/* 0x0201 is lower 16-bits of DFU magic 0x04030201 */
+			dev_warn(&state->client->dev,
+				"%s(): Device in DFU/recovery mode after reset\n", __func__);
+			state->dfu_dev.dfu_state_flag = DS5_DFU_RECOVERY;
+			return 0;
+		}
+
+		/* Other status - keep waiting */
+		dev_dbg(&state->client->dev,
+			"%s(): Unexpected status 0x%04x, retry %d\n",
+			__func__, status, retry);
+	}
+
+	if (retry >= DS5_HW_RESET_MAX_RETRIES) {
+		dev_err(&state->client->dev,
+			"%s(): Device did not become ready after %d ms (last status: 0x%04x, i2c ret: %d)\n",
+			__func__, DS5_HW_RESET_INITIAL_DELAY_MS + DS5_HW_RESET_TIMEOUT_MS,
+			status, ret);
+		return -ETIMEDOUT;
+	}
+
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	/* 4. Re-initialize SERDES link if available */
+	if (state->dser_dev) {
+		dev_info(&state->client->dev,
+			"%s(): Re-initializing SERDES link\n", __func__);
+		max9296_reset_oneshot(state->dser_dev);
+		msleep(300);
+	}
+#endif
+
+	/* 5. Verify device is operational by reading firmware version */
+	ret = ds5_read(state, DS5_FW_VERSION, &state->fw_version);
+	if (ret < 0) {
+		dev_err(&state->client->dev,
+			"%s(): Failed to read firmware version: %d\n", __func__, ret);
+		return ret;
+	}
+
+	ret = ds5_read(state, DS5_FW_BUILD, &state->fw_build);
+	if (ret < 0) {
+		dev_err(&state->client->dev,
+			"%s(): Failed to read firmware build: %d\n", __func__, ret);
+		return ret;
+	}
+
+	dev_info(&state->client->dev,
+		"%s(): HW reset complete. Firmware: %d.%d.%d.%d\n",
+		__func__,
+		(state->fw_version >> 8) & 0xff, state->fw_version & 0xff,
+		(state->fw_build >> 8) & 0xff, state->fw_build & 0xff);
+
+	return 0;
 }
 
 static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on);
@@ -2576,11 +2725,25 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 	case DS5_CAMERA_CID_HWMC_RW:
 		if (ctrl->p_new.p_u8) {
+			struct hwm_cmd *cmd = (struct hwm_cmd *)ctrl->p_new.p_u8;
 			u16 size = *((u8 *)ctrl->p_new.p_u8 + 1) << 8;
 			size |= *((u8 *)ctrl->p_new.p_u8 + 0);
-			ret = ds5_send_hwmc(state, size + 4,
-					(struct hwm_cmd *)ctrl->p_new.p_u8);
+
+			/* Check if this is a HW reset command (opcode 0x20) */
+			if (cmd->opcode == 0x20) {
+				dev_info(&state->client->dev,
+					"%s(): HW reset detected via HWMC_RW, using recovery path\n",
+					__func__);
+				ret = ds5_hw_reset_with_recovery(state);
+			} else {
+				ret = ds5_send_hwmc(state, size + 4, cmd);
+			}
 		}
+		break;
+	case DS5_CAMERA_CID_HW_RESET:
+		dev_info(&state->client->dev, "%s(): HW reset requested via V4L2 control\n",
+			__func__);
+		ret = ds5_hw_reset_with_recovery(state);
 		break;
 	case DS5_CAMERA_CID_PWM:
 		if (state->is_depth)
@@ -3159,6 +3322,18 @@ static const struct v4l2_ctrl_config ds5_ctrl_hwmc_rw = {
 	.def = 240,
 	.step = 1,
 	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
+static const struct v4l2_ctrl_config ds5_ctrl_hw_reset = {
+	.ops = &ds5_ctrl_ops,
+	.id = DS5_CAMERA_CID_HW_RESET,
+	.name = "HW Reset",
+	.type = V4L2_CTRL_TYPE_BUTTON,
+	.min = 0,
+	.max = 1,
+	.step = 1,
+	.def = 0,
+	.flags = V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 };
 
 static const struct v4l2_ctrl_config ds5_ctrl_pwm = {
@@ -3908,6 +4083,7 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 		ctrls->ewb = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_ewb, sensor);
 		ctrls->hwmc = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_hwmc, sensor);
 		v4l2_ctrl_new_custom(hdl, &ds5_ctrl_hwmc_rw, sensor);
+		v4l2_ctrl_new_custom(hdl, &ds5_ctrl_hw_reset, sensor);
 	}
 	// DEPTH custom
 	if (sid == DEPTH_SID)
@@ -6080,4 +6256,4 @@ MODULE_AUTHOR("Guennadi Liakhovetski <guennadi.liakhovetski@intel.com>,\n\
 				Shikun Ding <shikun.ding@intel.com>,\n\
 				Dmitry Perchanov <dmitry.perchanov@intel.com>");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("1.0.2.4");
+MODULE_VERSION("1.0.2.5");
