@@ -18,6 +18,9 @@ if [[ "$1" == "--one-cam" ]]; then
 elif [[ "$1" == "--dual-cam" ]]; then
     JP5_D4XX_DTSI="tegra194-camera-d4xx-dual.dtsi"
     shift
+elif [[ "$1" == "--max96712-EV" ]]; then
+    JP5_D4XX_DTSI="tegra194-camera-d4xx-max96712-EV.dtsi"
+    shift
 elif [[ "$1" == "--fg12-16ch" ]]; then
     JP5_D4XX_DTSI="tegra194-camera-d4xx-fg12-16ch.dtsi"
     shift
