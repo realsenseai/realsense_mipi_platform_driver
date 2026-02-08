@@ -21,7 +21,7 @@ Requires `git config user.name` and `git config user.email` to be set.
 
 Always reset patches before re-applying:
 ```bash
-./apply_patches.sh reset $VERSION
+./apply_patches.sh $VERSION reset
 ```
 
 ```bash
@@ -47,18 +47,23 @@ For Debian packages:
 
 ### Step 3: Deploy to Jetson
 
-Two deploy scripts exist:
+To deploy use this bash command:
 
-**General (all versions):**
 ```bash
-./scripts/deploy_kernel.sh $VERSION <TARGET_IP> [USERNAME] [REMOTE_PATH] [REMOTE_BOOT_FOLDER]
+./scripts/deploy_kernel.sh $VERSION <TARGET_IP> [USERNAME] [REMOTE_PATH]
 ```
 
 Defaults: USERNAME=`administrator`, REMOTE_PATH='git.USER.NAME'
 
+The command must have all 3 arguments to perform the full deploy.
+Ask the user to provide username and remote path if not provided.
+Save in mempory for the next deploy command.
+
 Deploy packs build artifacts into `kernel_mod/$VERSION/`, SCPs to the Jetson, runs the on-device install script, then reboots.
 
 Without a TARGET argument, deploy only packages locally (no SCP/reboot).
+
+reboot of the jetson will take about 2-5 minutes. After reboot, the new kernel/modules should be active.
 
 ## Build Architecture Details
 
@@ -81,19 +86,21 @@ Native builds on aarch64 skip toolchain setup. Cross-compilation toolchains are 
 - `hardware/realsense/tegra234-camera-d4xx-overlay*.dts` → overlay dir (JP 6.x)
 - `hardware/realsense/tegra194-camera-d4xx-*.dtsi` → DT dir (JP 4/5)
 
-## Verification After Deploy
+### Step 4: Verify deployment
 
-On the Jetson device:
+After deploy and reboot, SSH into the Jetson and run:
+
 ```bash
-sudo dmesg | grep d4xx          # Check driver probe
-ls -l /dev/video*                # Should show 6 video devices per camera
-cat /dev/d4xx-dfu-*              # Check firmware version
-v4l2-ctl -d0 --stream-mmap      # Verify streaming
+sudo dmesg | grep d4xx          # Check driver probe — expect "d4xx" probe messages with no errors
+ls -l /dev/video*                # Should show 6 video devices per camera (video0–video5)
+v4l2-ctl -d0 --stream-mmap      # Verify streaming works
 ```
+
+If `dmesg` shows no d4xx messages or `/dev/video*` devices are missing, the driver did not load — check for patch/build version mismatch or missing DTB overlay.
 
 ## Common Issues
 
-- **Patches fail to apply**: Run `./apply_patches.sh reset $VERSION` first, then re-apply.
+- **Patches fail to apply**: Run `./apply_patches.sh $VERSION reset` first, then re-apply.
 - **Missing git identity**: Set `git config user.name` and `git config user.email` before `apply_patches.sh`.
 - **Workspace not set up**: Run `./setup_workspace.sh $VERSION` first (downloads NVIDIA sources + toolchain).
 - **BUILD_NUMBER set**: If `BUILD_NUMBER` env var is set (common in CI), it changes the kernel vermagic string.
