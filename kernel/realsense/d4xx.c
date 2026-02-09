@@ -419,6 +419,17 @@ struct ds5_sensor {
 	const struct ds5_format *formats;
 	unsigned int n_formats;
 	int pipe_id;
+	int last_pipe_id;
+	u16 pipe_data_type1;
+	u16 pipe_data_type2;
+	u32 pipe_vc_id;
+	bool pipe_configured;
+	u16 cached_dt_value;
+	u16 cached_md_value;
+	u16 cached_override_value;
+	u16 cached_fps_value;
+	u16 cached_width_value;
+	u16 cached_height_value;
 };
 
 #ifdef CONFIG_TEGRA_CAMERA_PLATFORM
@@ -536,6 +547,8 @@ static int ds5_write(struct ds5 *state, u16 reg, u16 val)
 {
 	int ret;
 	u8 value[2];
+	int retry;
+	int delay_ms = 10;
 
 	value[1] = val >> 8;
 	value[0] = val & 0x00FF;
@@ -544,7 +557,28 @@ static int ds5_write(struct ds5 *state, u16 reg, u16 val)
 			"%s(): writing to register: 0x%04x, value1: 0x%x, value2:0x%x\n",
 			__func__, reg, value[1], value[0]);
 
-	ret = regmap_raw_write(state->regmap, reg, value, sizeof(value));
+	for (retry = 0; retry < 3; retry++) {
+		ret = regmap_raw_write(state->regmap, reg, value, sizeof(value));
+		if (ret == 0)
+			break;
+		
+		/* Retry only on timeout/remote IO errors */
+		if (ret != -ETIMEDOUT && ret != -EREMOTEIO) {
+			dev_err(&state->client->dev,
+					"%s(): i2c write failed %d, 0x%04x = 0x%x\n",
+					__func__, ret, reg, val);
+			return ret;
+		}
+		
+		if (retry < 2) {
+			dev_dbg(&state->client->dev,
+					"%s(): retry %d after %dms delay, 0x%04x\n",
+					__func__, retry + 1, delay_ms, reg);
+			msleep(delay_ms);
+			delay_ms *= 2;
+		}
+	}
+	
 	if (ret < 0)
 		dev_err(&state->client->dev,
 				"%s(): i2c write failed %d, 0x%04x = 0x%x\n",
@@ -560,7 +594,32 @@ static int ds5_write(struct ds5 *state, u16 reg, u16 val)
 static int ds5_raw_write(struct ds5 *state, u16 reg,
 		const void *val, size_t val_len)
 {
-	int ret = regmap_raw_write(state->regmap, reg, val, val_len);
+	int ret;
+	int retry;
+	int delay_ms = 10;
+	
+	for (retry = 0; retry < 3; retry++) {
+		ret = regmap_raw_write(state->regmap, reg, val, val_len);
+		if (ret == 0)
+			break;
+		
+		/* Retry only on timeout/remote IO errors */
+		if (ret != -ETIMEDOUT && ret != -EREMOTEIO) {
+			dev_err(&state->client->dev,
+					"%s(): i2c raw write failed %d, %04x size(%d) bytes\n",
+					__func__, ret, reg, (int)val_len);
+			return ret;
+		}
+		
+		if (retry < 2) {
+			dev_dbg(&state->client->dev,
+					"%s(): retry %d after %dms delay, 0x%04x\n",
+					__func__, retry + 1, delay_ms, reg);
+			msleep(delay_ms);
+			delay_ms *= 2;
+		}
+	}
+	
 	if (ret < 0)
 		dev_err(&state->client->dev,
 				"%s(): i2c raw write failed %d, %04x size(%d) bytes\n",
@@ -576,7 +635,31 @@ static int ds5_raw_write(struct ds5 *state, u16 reg,
 
 static int ds5_read(struct ds5 *state, u16 reg, u16 *val)
 {
-	int ret = regmap_raw_read(state->regmap, reg, val, 2);
+	int ret;
+	int retry;
+	int delay_ms = 10;
+	
+	for (retry = 0; retry < 3; retry++) {
+		ret = regmap_raw_read(state->regmap, reg, val, 2);
+		if (ret == 0)
+			break;
+		
+		/* Retry only on timeout/remote IO errors */
+		if (ret != -ETIMEDOUT && ret != -EREMOTEIO) {
+			dev_err(&state->client->dev, "%s(): i2c read failed %d, 0x%04x\n",
+					__func__, ret, reg);
+			return ret;
+		}
+		
+		if (retry < 2) {
+			dev_dbg(&state->client->dev,
+					"%s(): retry %d after %dms delay, 0x%04x\n",
+					__func__, retry + 1, delay_ms, reg);
+			msleep(delay_ms);
+			delay_ms *= 2;
+		}
+	}
+	
 	if (ret < 0)
 		dev_err(&state->client->dev, "%s(): i2c read failed %d, 0x%04x\n",
 				__func__, ret, reg);
@@ -1827,6 +1910,11 @@ static int ds5_configure(struct ds5 *state)
 	u16 data_type1, data_type2;
 #endif
 	u16 dt_addr, md_addr, override_addr, fps_addr, width_addr, height_addr;
+	u16 dt_value = 0;
+	u16 md_value = 0;
+	u16 fps_value = 0;
+	u16 width_value = 0;
+	u16 height_value = 0;
 	int ret;
 
 	if (state->is_depth) {
@@ -1878,14 +1966,31 @@ static int ds5_configure(struct ds5 *state)
 	data_type2 = state->is_imu ? 0x00 : md_fmt;
 
 	vc_id = state->g_ctx.dst_vc;
-
-	ret = ds5_setup_pipeline(state, data_type1, data_type2, sensor->pipe_id,
-				 vc_id);
-	// reset data path when switching to Y12I
-	if (state->is_y8 && data_type1 == GMSL_CSI_DT_RGB_888)
-		max9296_reset_oneshot(state->dser_dev);
-	if (ret < 0)
-		return ret;
+	if (!sensor->pipe_configured ||
+		sensor->pipe_id != sensor->last_pipe_id ||
+		sensor->pipe_data_type1 != data_type1 ||
+		sensor->pipe_data_type2 != data_type2 ||
+		sensor->pipe_vc_id != vc_id) {
+		ret = ds5_setup_pipeline(state, data_type1, data_type2,
+					 sensor->pipe_id, vc_id);
+		// reset data path when switching to Y12I
+		if (state->is_y8 && data_type1 == GMSL_CSI_DT_RGB_888)
+			max9296_reset_oneshot(state->dser_dev);
+		if (ret < 0)
+			return ret;
+		sensor->pipe_configured = true;
+		sensor->last_pipe_id = sensor->pipe_id;
+		sensor->pipe_data_type1 = data_type1;
+		sensor->pipe_data_type2 = data_type2;
+		sensor->pipe_vc_id = vc_id;
+		dev_warn(&state->client->dev,
+				"pipe %d configured (dt1=0x%x dt2=0x%x vc=%u)\n",
+				sensor->pipe_id, data_type1, data_type2, vc_id);
+	} else {
+		dev_warn(&state->client->dev,
+				"pipe %d already configured (dt1=0x%x dt2=0x%x vc=%u)\n",
+				sensor->pipe_id, data_type1, data_type2, vc_id);
+	}
 #endif
 
 	fmt = sensor->streaming ? sensor->config.format->data_type : 0;
@@ -1895,55 +2000,72 @@ static int ds5_configure(struct ds5 *state)
 	 * Set IR stream Y8I data type as 0x32
 	 */
 	if (state->is_depth && fmt != 0)
-		ret = ds5_write(state, dt_addr, 0x31);
+		dt_value = 0x31;
 	else if (state->is_y8 && fmt != 0 &&
 		sensor->config.format->data_type == GMSL_CSI_DT_YUV422_8) {
-		if (sensor->config.format->mbus_code == MEDIA_BUS_FMT_VYUY8_1X16)
-		{
-			/* This is the custom Y8I format - 
-			* telling FW to enable "etMipiDataType_UserDefined3_R8L8"
-			*/
-			ret = ds5_write(state, dt_addr, GMSL_CSI_DT_CUSTOM_Y8I_16);
+		if (sensor->config.format->mbus_code == MEDIA_BUS_FMT_VYUY8_1X16) {
+			dt_value = GMSL_CSI_DT_CUSTOM_Y8I_16;
 		} else if (sensor->config.format->mbus_code == MEDIA_BUS_FMT_YUYV8_1X16) {
-			/* This is the custom RGB through IR format - 
-			* telling FW to enable "etMipiDataType_UserDefined0_IR_RGB"
-			*/
-			ret = ds5_write(state, dt_addr, GMSL_CSI_DT_CUSTOM_IR_RGB_16);
+			dt_value = GMSL_CSI_DT_CUSTOM_IR_RGB_16;
 		} else {
 			dev_err(sensor->sd.dev, "%s(): Illegal mbus_code %u for IR sensor\n",
 					__func__, sensor->config.format->mbus_code);
 			return -EINVAL;
 		}
 	} else {
-		ret = ds5_write(state, dt_addr, fmt);
+		dt_value = fmt;
 	}
-	if (ret < 0)
-		return ret;
 
-	ret = ds5_write(state, md_addr, (vc_id << 8) | md_fmt);
-	if (ret < 0)
-		return ret;
+	if (sensor->cached_dt_value != dt_value) {
+		ret = ds5_write(state, dt_addr, dt_value);
+		if (ret < 0)
+			return ret;
+		sensor->cached_dt_value = dt_value;
+	}
+
+	md_value = (vc_id << 8) | md_fmt;
+	if (sensor->cached_md_value != md_value) {
+		ret = ds5_write(state, md_addr, md_value);
+		if (ret < 0)
+			return ret;
+		sensor->cached_md_value = md_value;
+	}
 
 	if (!sensor->streaming)
 		return ret;
 
 	if (override_addr != 0) {
-		ret = ds5_write(state, override_addr, fmt);
-		if (ret < 0)
-			return ret;
+		if (sensor->cached_override_value != fmt) {
+			ret = ds5_write(state, override_addr, fmt);
+			if (ret < 0)
+				return ret;
+			sensor->cached_override_value = fmt;
+		}
 	}
 
-	ret = ds5_write(state, fps_addr, sensor->config.framerate);
-	if (ret < 0)
-		return ret;
+	fps_value = sensor->config.framerate;
+	if (sensor->cached_fps_value != fps_value) {
+		ret = ds5_write(state, fps_addr, fps_value);
+		if (ret < 0)
+			return ret;
+		sensor->cached_fps_value = fps_value;
+	}
 
-	ret = ds5_write(state, width_addr, sensor->config.resolution->width);
-	if (ret < 0)
-		return ret;
+	width_value = sensor->config.resolution->width;
+	if (sensor->cached_width_value != width_value) {
+		ret = ds5_write(state, width_addr, width_value);
+		if (ret < 0)
+			return ret;
+		sensor->cached_width_value = width_value;
+	}
 
-	ret = ds5_write(state, height_addr, sensor->config.resolution->height);
-	if (ret < 0)
-		return ret;
+	height_value = sensor->config.resolution->height;
+	if (sensor->cached_height_value != height_value) {
+		ret = ds5_write(state, height_addr, height_value);
+		if (ret < 0)
+			return ret;
+		sensor->cached_height_value = height_value;
+	}
 
 	return 0;
 }
@@ -4751,6 +4873,8 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			ret = -(ENOSR);
 			goto restore_s_state;
 		}
+		sensor->pipe_configured = false;
+		sensor->last_pipe_id = sensor->pipe_id;
 #endif
 
 		ret = ds5_configure(state);
@@ -4815,6 +4939,8 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		if (max9296_release_pipe(state->dser_dev, sensor->pipe_id) < 0)
 			dev_warn(&state->client->dev, "release pipe failed\n");
 		sensor->pipe_id = -1;
+		sensor->last_pipe_id = -1;
+		sensor->pipe_configured = false;
 #else
 #ifdef CONFIG_VIDEO_INTEL_IPU6
 		d4xx_reset_oneshot(state);
@@ -4839,6 +4965,8 @@ restore_s_state:
 		if (max9296_release_pipe(state->dser_dev, sensor->pipe_id) < 0)
 			dev_warn(&state->client->dev, "release pipe failed\n");
 		sensor->pipe_id = -1;
+		sensor->last_pipe_id = -1;
+		sensor->pipe_configured = false;
 	}
 #endif
 
