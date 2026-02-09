@@ -132,6 +132,7 @@
 #define DS5_EXPOSURE_ROI_RIGHT		0x001C
 #define DS5_MANUAL_LASER_POWER		0x0024
 #define DS5_PWM_FREQUENCY		0x0028
+#define DS5_CAMERA_SYNC_MODE		0x002C
 
 #define DS5_DEPTH_CONFIG_STATUS		0x4800
 #define DS5_RGB_CONFIG_STATUS		0x4802
@@ -2133,6 +2134,7 @@ static int ds5_hw_set_exposure(struct ds5 *state, u32 base, s32 val)
 #define DS5_CAMERA_CID_ERB			(DS5_CAMERA_CID_BASE+13)
 #define DS5_CAMERA_CID_EWB			(DS5_CAMERA_CID_BASE+14)
 #define DS5_CAMERA_CID_HWMC			(DS5_CAMERA_CID_BASE+15)
+#define DS5_CAMERA_CID_SYNC_MODE		(DS5_CAMERA_CID_BASE+16)
 
 #define DS5_CAMERA_CID_PWM			(DS5_CAMERA_CID_BASE+22)
 
@@ -2582,6 +2584,15 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 					(struct hwm_cmd *)ctrl->p_new.p_u8);
 		}
 		break;
+	case DS5_CAMERA_CID_SYNC_MODE:
+		dev_info(&state->client->dev, "%s(): XU SYNC_MODE control received, value: %d\n",
+			__func__, ctrl->val);
+		if (state->is_depth) {
+			ret = ds5_write(state, base | DS5_CAMERA_SYNC_MODE, ctrl->val);
+			dev_info(&state->client->dev, "%s(): SYNC_MODE command passed to FW, addr: 0x%x, value: %d, ret: %d\n",
+				__func__, base | DS5_CAMERA_SYNC_MODE, ctrl->val, ret);
+		}
+		break;
 	case DS5_CAMERA_CID_PWM:
 		if (state->is_depth)
 			ret = ds5_write(state, base | DS5_PWM_FREQUENCY, ctrl->val);
@@ -2922,6 +2933,10 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			data[bufLen - 1] = 0;
 		}
 		break;
+	case DS5_CAMERA_CID_SYNC_MODE:
+		if (state->is_depth)
+			ds5_read(state, base | DS5_CAMERA_SYNC_MODE, ctrl->p_new.p_u16);
+		break;
 	case DS5_CAMERA_CID_PWM:
 		if (state->is_depth)
 			ds5_read(state, base | DS5_PWM_FREQUENCY, ctrl->p_new.p_u16);
@@ -3158,6 +3173,18 @@ static const struct v4l2_ctrl_config ds5_ctrl_hwmc_rw = {
 	.max = 0xFFFFFFFF,
 	.def = 240,
 	.step = 1,
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
+static const struct v4l2_ctrl_config ds5_ctrl_sync_mode = {
+	.ops = &ds5_ctrl_ops,
+	.id = DS5_CAMERA_CID_SYNC_MODE,
+	.name = "Camera Sync Mode",
+	.type = V4L2_CTRL_TYPE_INTEGER,
+	.min = 0,
+	.max = 4,
+	.step = 1,
+	.def = 0,
 	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 };
 
@@ -3910,8 +3937,10 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 		v4l2_ctrl_new_custom(hdl, &ds5_ctrl_hwmc_rw, sensor);
 	}
 	// DEPTH custom
-	if (sid == DEPTH_SID)
+	if (sid == DEPTH_SID) {
+		v4l2_ctrl_new_custom(hdl, &ds5_ctrl_sync_mode, sensor);
 		v4l2_ctrl_new_custom(hdl, &ds5_ctrl_pwm, sensor);
+	}
 	// IMU custom
 	if (sid == IMU_SID)
 		ctrls->fw_version = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_fw_version, sensor);
