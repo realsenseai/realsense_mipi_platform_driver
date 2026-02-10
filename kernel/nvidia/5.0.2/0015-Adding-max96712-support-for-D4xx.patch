@@ -1,18 +1,18 @@
-From c398d95e9b324be66f3ceff4672a89f8c9389855 Mon Sep 17 00:00:00 2001
+From 29c0552aaf01373b5177e3d7be4fcf3aad217d94 Mon Sep 17 00:00:00 2001
 From: ejgoldik <ehud.joseph.goldik@realsenseai.com>
-Date: Wed, 7 Jan 2026 11:25:31 +0200
+Date: Wed, 11 Feb 2026 01:29:44 +0200
 Subject: [PATCH] Adding max96712 support for D4xx
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- drivers/media/i2c/max96712.c | 307 ++++++++++++++++++++++++++++++++++-
- 1 file changed, 304 insertions(+), 3 deletions(-)
+ drivers/media/i2c/max96712.c | 328 ++++++++++++++++++++++++++++++++++-
+ 1 file changed, 325 insertions(+), 3 deletions(-)
 
 diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
-index 8081385f0..efe263b21 100644
+index 8081385f0..6d451c034 100644
 --- a/drivers/media/i2c/max96712.c
 +++ b/drivers/media/i2c/max96712.c
-@@ -21,17 +21,62 @@
+@@ -21,17 +21,63 @@
  #include <linux/debugfs.h>
  #include <media/camera_common.h>
  #include <linux/module.h>
@@ -68,6 +68,7 @@ index 8081385f0..efe263b21 100644
  	struct regmap *regmap;
  	const char *channel;
 +	struct mutex lock;
++	int pwdn_gpio;
  };
  struct max96712 *global_priv[4] ;
  
@@ -77,7 +78,7 @@ index 8081385f0..efe263b21 100644
  			u16 addr, u8 val)
  {
  	struct i2c_client *i2c_client = NULL;
-@@ -99,6 +144,19 @@ static int max96712_read_reg(struct max96712 *priv,
+@@ -99,6 +145,19 @@ static int max96712_read_reg(struct max96712 *priv,
  	return err;
  }
  
@@ -97,7 +98,7 @@ index 8081385f0..efe263b21 100644
  
  static int max96712_stats_show(struct seq_file *s, void *data)
  {
-@@ -169,7 +227,10 @@ static int max96712_debugfs_init(const char *dir_name,
+@@ -169,7 +228,10 @@ static int max96712_debugfs_init(const char *dir_name,
  	if (np) {
  		err = of_property_read_string(np, "channel", &priv->channel);
  		if (err)
@@ -108,13 +109,30 @@ index 8081385f0..efe263b21 100644
  
  		err = snprintf(dev_name, sizeof(dev_name), "max96712_%s", priv->channel);
  		if (err < 0)
-@@ -228,10 +289,14 @@ static int max96712_probe(struct i2c_client *client,
+@@ -216,6 +278,7 @@ static int max96712_probe(struct i2c_client *client,
+ {
+ 	struct max96712 *priv;
+ 	int err = 0;
++	struct device_node *np = NULL;
+ 
+ 	dev_info(&client->dev, "%s: enter\n", __func__);
+ 
+@@ -228,10 +291,23 @@ static int max96712_probe(struct i2c_client *client,
  			"regmap init failed: %ld\n", PTR_ERR(priv->regmap));
  		return -ENODEV;
  	}
 +	mutex_init(&priv->lock);
- 
++
++	np = client->dev.of_node;
++	if (np) {
++		priv->pwdn_gpio = of_get_named_gpio(np, "pwdn-gpios", 0);
++		if (priv->pwdn_gpio < 0) {
++			dev_err(&client->dev,"%s: Could not retrieve pwdn_gpio = %d\n",
++				__func__, priv->pwdn_gpio);
++		}
++	}
 +	dev_set_drvdata(&client->dev, priv);
+ 
  	err = max96712_debugfs_init(NULL, NULL, NULL, priv);
  	if (err)
 +	{
@@ -123,7 +141,7 @@ index 8081385f0..efe263b21 100644
  
  	/*set daymode by fault*/
  	dev_info(&client->dev, "%s:  success\n", __func__);
-@@ -243,8 +308,12 @@ static int max96712_probe(struct i2c_client *client,
+@@ -243,8 +319,12 @@ static int max96712_probe(struct i2c_client *client,
  static int
  max96712_remove(struct i2c_client *client)
  {
@@ -136,7 +154,7 @@ index 8081385f0..efe263b21 100644
  		i2c_unregister_device(client);
  		client = NULL;
  	}
-@@ -252,13 +321,244 @@ max96712_remove(struct i2c_client *client)
+@@ -252,13 +332,254 @@ max96712_remove(struct i2c_client *client)
  	return 0;
  }
  
@@ -237,10 +255,10 @@ index 8081385f0..efe263b21 100644
 +		{MAX96712_BACKTOP25_ADDR, 0x2f},
 +	};
 +
-+	for (i = 0; i < 12; i++) {
++	for (i = 0; i < (ARRAY_SIZE(map_pipe_control) - 1); i++) {
 +		map_pipe_control[i].addr += 0x40 * pipe_id;
 +	}
-+	map_pipe_control[12].addr += 0x12 * pipe_id;
++	map_pipe_control[(ARRAY_SIZE(map_pipe_control) - 1)].addr += 0x12 * pipe_id;
 +
 +	if (data_type2 == 0x0) {
 +		/* For IMU (which has no metadata) we override mapping
@@ -359,15 +377,25 @@ index 8081385f0..efe263b21 100644
 +
 +int max96712_power_on(struct device *dev)
 +{
-+	/* TODO EHUD: Is needed? */
-+	return 0;
++    struct max96712 *priv = dev_get_drvdata(dev);
++    if (priv->pwdn_gpio > 0) {
++        gpio_direction_output(priv->pwdn_gpio, 1);
++        gpio_set_value(priv->pwdn_gpio, 1);
++        msleep(100);
++    }
++    return 0;
 +}
 +EXPORT_SYMBOL(max96712_power_on);
 +
 +void max96712_power_off(struct device *dev)
 +{
-+	/* TODO EHUD: Is needed? */
-+	return;
++    struct max96712 *priv = dev_get_drvdata(dev);
++    if (priv->pwdn_gpio > 0) {
++        gpio_direction_output(priv->pwdn_gpio, 1);
++        gpio_set_value(priv->pwdn_gpio, 0);
++        msleep(100);
++    }
++    return;
 +}
 +EXPORT_SYMBOL(max96712_power_off);
 +
@@ -382,7 +410,7 @@ index 8081385f0..efe263b21 100644
  	{ },
  };
  
-@@ -268,6 +568,7 @@ static struct i2c_driver max96712_i2c_driver = {
+@@ -268,6 +589,7 @@ static struct i2c_driver max96712_i2c_driver = {
  	.driver = {
  		.name = "max96712",
  		.owner = THIS_MODULE,
@@ -391,5 +419,5 @@ index 8081385f0..efe263b21 100644
  	.probe = max96712_probe,
  	.remove = max96712_remove,
 -- 
-2.43.0
+2.34.1
 
