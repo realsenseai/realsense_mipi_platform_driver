@@ -24,12 +24,12 @@ using namespace realsense::utils;
 #pragma pack(push, 1)
 struct HWMC {
 	HWMC(const vector<int32_t> &inParams):header(0x14), magic_word(0xCDAB), opcode(0) {
+		memset(params, 0, sizeof(params));
 		if (inParams.empty()) {
 			cerr << "Error: HWMC requires at least an opcode" << endl;
 			return;
 		}
 		opcode = inParams[0];
-		memset(params, 0, sizeof(params));
 		size_t paramCount = std::min(inParams.size() - 1, sizeof(params)/sizeof(params[0]));
 		for (size_t i = 0; i < paramCount; i++)
 			params[i] = inParams[i + 1];

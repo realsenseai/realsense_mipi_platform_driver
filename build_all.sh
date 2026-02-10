@@ -67,7 +67,7 @@ if [[ $CLEAN == 1 ]]; then
     rm -rf "$SRCS/out"
 fi
 
-mkdir -p $TEGRA_KERNEL_OUT
+mkdir -p "$TEGRA_KERNEL_OUT"
 export KERNEL_MODULES_OUT=$TEGRA_KERNEL_OUT/modules
 
 # Check if BUILD_NUMBER is set as it will add a postfix to the kernel name "vermagic" (normally it happens on CI who have BUILD_NUMBER defined)
@@ -103,7 +103,7 @@ if [[ "$JETPACK_VERSION" == "6.x" ]]; then
     fi
     make ARCH=arm64 modules
     make ARCH=arm64 dtbs
-    mkdir -p $TEGRA_KERNEL_OUT/rootfs/boot/dtb
+    mkdir -p "$TEGRA_KERNEL_OUT"/rootfs/boot/dtb
     cp $SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-p3737-0000+p3701-0000-nv.dtb $TEGRA_KERNEL_OUT/rootfs/boot/dtb/
     cp $SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-p3737-0000+p3701-0005-nv.dtb $TEGRA_KERNEL_OUT/rootfs/boot/dtb/
     cp $SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/

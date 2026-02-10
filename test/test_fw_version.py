@@ -32,13 +32,18 @@ def test_fw_version(device):
         assert fw_version == (fw_version & 0x05FFFFFF), "Expected FW version is 5.x.x.x, but received {}".format(fw_version_str)
 
         # Get DFU device name
-        dfu_device = subprocess.check_output(["ls", "/sys/class/d4xx-class/"]).decode()
-        assert "d4xx-dfu-" in dfu_device, "D4xx DFU device not found"
+        dfu_device_output = subprocess.check_output(["ls", "/sys/class/d4xx-class/"]).decode()
 
-        # Validate DFU device name to prevent path traversal
-        dfu_device_name = dfu_device.strip()
-        if not re.match(r'^d4xx-dfu-[0-9]+$', dfu_device_name):
-            raise ValueError(f"Invalid DFU device name: {dfu_device_name}")
+        # Parse ls output, which may contain multiple entries, and select a valid DFU device
+        dfu_entries = [line.strip() for line in dfu_device_output.splitlines() if line.strip()]
+        dfu_pattern = re.compile(r'^d4xx-dfu-[0-9]+$')
+        dfu_device_name = None
+        for entry in dfu_entries:
+            if dfu_pattern.match(entry):
+                dfu_device_name = entry
+                break
+
+        assert dfu_device_name is not None, "D4xx DFU device not found"
 
         # Get FW version from DFU device info
         dfu_device_path = f"/dev/{dfu_device_name}"
