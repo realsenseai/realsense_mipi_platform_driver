@@ -7,7 +7,7 @@ The system shall include:
     - [6.2 production release](https://developer.nvidia.com/embedded/jetpack-sdk-62)
     - [6.1 production release](https://developer.nvidia.com/embedded/jetpack-sdk-61)
     - [6.0 production release](https://developer.nvidia.com/embedded/jetpack-sdk-60)
-* RealSense™ De-Serialize board (DS457)
+* RealSense™ De-Serialize board
 * Jetson AGX Orin™ Passive adapter board from [Leopard Imaging® LI-JTX1-SUB-ADPT](https://leopardimaging.com/product/accessories/adapters-carrier-boards/for-nvidia-jetson/li-jtx1-sub-adpt/)
 * RS MIPI camera [D457](https://store.realsenseai.com/buy-intel-realsense-depth-camera-d457.html)
 
