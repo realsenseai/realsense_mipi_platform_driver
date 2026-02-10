@@ -46,7 +46,7 @@ Reset D457 patches (and any other changes) for kernel image, dtb and D457 driver
 ```
 
 Note: The `--one-cam` and `--dual-cam` option applies only for JetPack 5.0.2,
-compatible with RealSense™ DES457 deserializer.
+compatible with RealSense™ deserializer.
 - By setting the `--one-cam` option it builds DT with only camera on GMSL link A (default).
 
 - By setting the `--dual-cam` option it builds DT with dual cameras on GMSL link A and B.
