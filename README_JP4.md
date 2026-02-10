@@ -5,8 +5,8 @@ The RealSense™ MIPI platform driver enables the user to control and stream Rea
 
 The system shall include:
 * NVIDIA® Jetson™ platform (Currently Supported JetPack versions are: 4.6.1)
-* RealSense™ De-Serialize board (https://store.intelrealsense.com/buy-intel-realsense-des457.html)
-* RS MIPI camera (e.g. https://store.intelrealsense.com/buy-intel-realsense-depth-camera-d457.html)
+* RealSense™ De-Serialize board
+* RS MIPI camera (e.g. https://store.realsenseai.com/buy-intel-realsense-depth-camera-d457.html)
 
 > Note: This MIPI reference driver is based on RealSense™ de-serialize board. For other de-serialize boards, modification might be needed.
 

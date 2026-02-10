@@ -1,15 +1,15 @@
-# Intel® RealSense™ camera driver for GMSL* interface
+# RealSense™ camera driver for GMSL* interface
 
-# D457 MIPI on NVIDIA® Jetson AGX Orin™ JetPack 6.x 
-The Intel® RealSense™ MIPI platform driver enables the user to control and stream RealSense™ 3D MIPI cameras.
+# D457 MIPI on NVIDIA® Jetson AGX Orin™ JetPack 6.x
+The RealSense™ MIPI platform driver enables the user to control and stream RealSense™ 3D MIPI cameras.
 The system shall include:
 * NVIDIA® Jetson™ platform Supported JetPack versions are:
     - [6.2 production release](https://developer.nvidia.com/embedded/jetpack-sdk-62)
     - [6.1 production release](https://developer.nvidia.com/embedded/jetpack-sdk-61)
     - [6.0 production release](https://developer.nvidia.com/embedded/jetpack-sdk-60)
-* RealSense™ [De-Serialize board](https://store.intelrealsense.com/buy-intel-realsense-des457.html)
+* RealSense™ De-Serialize board
 * Jetson AGX Orin™ Passive adapter board from [Leopard Imaging® LI-JTX1-SUB-ADPT](https://leopardimaging.com/product/accessories/adapters-carrier-boards/for-nvidia-jetson/li-jtx1-sub-adpt/)
-* RS MIPI camera [D457](https://store.intelrealsense.com/buy-intel-realsense-depth-camera-d457.html)
+* RS MIPI camera [D457](https://store.realsenseai.com/buy-intel-realsense-depth-camera-d457.html)
 
 ![orin_adapter](https://github.com/dmipx/realsense_mipi_platform_driver/assets/104717350/524e3eb6-6e6b-41cf-9562-9c0f920dd821)
 
@@ -17,7 +17,7 @@ The system shall include:
 > Note: This MIPI reference driver is based on RealSense™ de-serialize board. For other de-serialize boards, modification might be needed. 
 
 ### Links
-- Intel® RealSense™ camera driver for GMSL* interface [Front Page](./README.md)
+- RealSense™ camera driver for GMSL* interface [Front Page](./README.md)
 - NVIDIA® Jetson AGX Orin™ board setup - AGX Orin™ [JetPack 6.0](./README_JP6.0.md) setup guide
 - NVIDIA® Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 5.x.2](./README_JP5.md) setup guide
 - NVIDIA® Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 4.6.1](./README_JP4.md) setup guide
@@ -36,7 +36,7 @@ sudo apt-get install -y build-essential bc wget flex bison curl libssl-dev xxd t
 ```
 ## Build NVIDIA® kernel drivers, dtb and D457 driver
 
-1. Clone [realsense_mipi_platform_driver](https://github.com/IntelRealSense/realsense_mipi_platform_driver.git) repo.
+1. Clone [realsense_mipi_platform_driver](https://github.com/realsenseai/realsense_mipi_platform_driver.git) repo.
 2. The developers can set up build environment, ARM64 compiler, kernel sources and NVIDIA's Jetson git repositories by using the setup script.
 3. Apply patches for kernel drivers, nvidia-oot module and tegra devicetree.
 4. Build project
@@ -45,7 +45,7 @@ sudo apt-get install -y build-essential bc wget flex bison curl libssl-dev xxd t
 
 Assuming building for 6.0. One can also build for 6.1, 6.2 just replace the last parameter.
 ```
-git clone --branch dev --single-branch https://github.com/IntelRealSense/realsense_mipi_platform_driver.git
+git clone --branch dev --single-branch https://github.com/realsenseai/realsense_mipi_platform_driver.git
 cd realsense_mipi_platform_driver
 ./setup_workspace.sh 6.0
 ./apply_patches.sh 6.0
