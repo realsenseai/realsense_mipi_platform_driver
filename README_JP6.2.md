@@ -8,9 +8,9 @@ The system shall include:
     - [6.2 production release](https://developer.nvidia.com/embedded/jetpack-sdk-62)
     - [6.1 production release](https://developer.nvidia.com/embedded/jetpack-sdk-61)
     - [6.0 production release](https://developer.nvidia.com/embedded/jetpack-sdk-60)
-* RealSense™ [De-Serialize board](https://store.intelrealsense.com/buy-intel-realsense-des457.html)
+* RealSense™ De-Serialize board (DES457)
 * Jetson AGX Orin™ Passive adapter board from [Leopard Imaging® LI-JTX1-SUB-ADPT](https://leopardimaging.com/product/accessories/adapters-carrier-boards/for-nvidia-jetson/li-jtx1-sub-adpt/)
-* RS MIPI camera [D457](https://store.intelrealsense.com/buy-intel-realsense-depth-camera-d457.html)
+* RS MIPI camera [D457](https://store.realsenseai.com/buy-intel-realsense-depth-camera-d457.html)
 
 ![orin_adapter](https://github.com/dmipx/realsense_mipi_platform_driver/assets/104717350/524e3eb6-6e6b-41cf-9562-9c0f920dd821)
 
@@ -38,7 +38,7 @@ sudo apt-get install -y build-essential bc wget flex bison curl libssl-dev xxd t
 ```
 ## Build NVIDIA® kernel drivers, dtb and D457 driver
 
-1. Clone [realsense_mipi_platform_driver](https://github.com/IntelRealSense/realsense_mipi_platform_driver.git) repo.
+1. Clone [realsense_mipi_platform_driver](https://github.com/realsenseai/realsense_mipi_platform_driver.git) repo.
 2. The developers can set up build environment, ARM64 compiler, kernel sources and NVIDIA's Jetson git repositories by using the setup script.
 3. Apply patches for kernel drivers, nvidia-oot module and tegra devicetree.
 4. Build project
@@ -47,7 +47,7 @@ sudo apt-get install -y build-essential bc wget flex bison curl libssl-dev xxd t
 
 Assuming building for 6.2. One can also build for 6.1, 6.0 just replace the last parameter.
 ```
-git clone --branch dev --single-branch https://github.com/IntelRealSense/realsense_mipi_platform_driver.git
+git clone --branch dev --single-branch https://github.com/realsenseai/realsense_mipi_platform_driver.git
 cd realsense_mipi_platform_driver
 ./setup_workspace.sh 6.2
 ./apply_patches.sh 6.2
