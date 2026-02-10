@@ -66,16 +66,6 @@
 		};
 	};
 
-	gpio@2200000 {
-		cam0-pwdn {
-			gpio-hog;
-			output-high;
-			status = "okay";
-			gpios = <CAM0_PWDN GPIO_ACTIVE_HIGH>;
-			label = "cam0-pwdn";
-		};
-	};
-
 	i2c@3180000 {
 		status = "ok";
 		clock-frequency = <100000>;
@@ -103,6 +93,7 @@
 					csi-mode = "2x4";
 					max-src = <1>;
 					channel = "a";
+					pwdn-gpios = <&tegra_main_gpio CAM0_PWDN GPIO_ACTIVE_HIGH>;
 				};
 
 				ser_a: max9295_a@40 {
