@@ -62,8 +62,10 @@ elif [ "${JETPACK_VERSION}" = "6.0" ] || [ "${JETPACK_VERSION}" = "6.1" ] || [ "
     echo "Packing ${DEST_DIR}/rootfs.tar.gz"
     tar czf ${DEST_DIR}/rootfs.tar.gz -C images/${JETPACK_VERSION}/rootfs boot lib
 fi
-if [ "$#" -eq 0 ]; then
+
+if [ -z "${TARGET}" ]; then
     echo "No TARGET specified, skipping copy and reboot."
+    exit 0
 else
     echo "Copying files and setting permissions on remote host..."
     cp ${LOCAL_DIR}/scripts/install_to_kernel.sh ${LOCAL_DIR}/kernel_mod/${JETPACK_VERSION}/

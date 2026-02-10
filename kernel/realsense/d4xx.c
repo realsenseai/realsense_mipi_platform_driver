@@ -184,8 +184,12 @@ enum ds5_mux_pad {
 #define DFU_WAIT_RET_LEN 6
 
 #define DS5_START_POLL_TIME	10
-#define DS5_START_MAX_TIME	2000
+#define DS5_START_MAX_TIME	700
 #define DS5_START_MAX_COUNT	(DS5_START_MAX_TIME / DS5_START_POLL_TIME)
+
+/* I2C retry configuration */
+#define DS5_I2C_RETRY_COUNT	5
+#define DS5_I2C_RETRY_DELAY_US	5000
 
 /* DFU definition section */
 #define DFU_MAGIC_NUMBER "/0x01/0x02/0x03/0x04"
@@ -518,15 +522,27 @@ static inline void msleep_range(unsigned int delay_base)
 static int ds5_write_8(struct ds5 *state, u16 reg, u8 val)
 {
 	int ret;
+	int retry;
 
-	ret = regmap_raw_write(state->regmap, reg, &val, 1);
+	for (retry = 0; retry < DS5_I2C_RETRY_COUNT; retry++) {
+		ret = regmap_raw_write(state->regmap, reg, &val, 1);
+		if (ret == 0)
+			break;
+		if (retry < DS5_I2C_RETRY_COUNT - 1) {
+			dev_warn(&state->client->dev,
+				"%s(): i2c write retry %d, 0x%04x = 0x%x, err %d\n",
+				__func__, retry + 1, reg, val, ret);
+			usleep_range(DS5_I2C_RETRY_DELAY_US,
+				     DS5_I2C_RETRY_DELAY_US + 500);
+		}
+	}
 	if (ret < 0)
-		dev_err(&state->client->dev, "%s(): i2c write failed %d, 0x%04x = 0x%x\n",
-			__func__, ret, reg, val);
-	else
-		if (state->dfu_dev.dfu_state_flag == DS5_DFU_IDLE)
-			dev_dbg(&state->client->dev, "%s(): i2c write 0x%04x: 0x%x\n",
-				 __func__, reg, val);
+		dev_err(&state->client->dev,
+			"%s(): i2c write failed after %d retries, 0x%04x = 0x%x, err %d\n",
+			__func__, DS5_I2C_RETRY_COUNT, reg, val, ret);
+	else if (state->dfu_dev.dfu_state_flag == DS5_DFU_IDLE)
+		dev_dbg(&state->client->dev, "%s(): i2c write 0x%04x: 0x%x\n",
+			__func__, reg, val);
 
 	return ret;
 }
@@ -535,6 +551,7 @@ static int ds5_write_8(struct ds5 *state, u16 reg, u8 val)
 static int ds5_write(struct ds5 *state, u16 reg, u16 val)
 {
 	int ret;
+	int retry;
 	u8 value[2];
 
 	value[1] = val >> 8;
@@ -544,15 +561,25 @@ static int ds5_write(struct ds5 *state, u16 reg, u16 val)
 			"%s(): writing to register: 0x%04x, value1: 0x%x, value2:0x%x\n",
 			__func__, reg, value[1], value[0]);
 
-	ret = regmap_raw_write(state->regmap, reg, value, sizeof(value));
+	for (retry = 0; retry < DS5_I2C_RETRY_COUNT; retry++) {
+		ret = regmap_raw_write(state->regmap, reg, value, sizeof(value));
+		if (ret == 0)
+			break;
+		if (retry < DS5_I2C_RETRY_COUNT - 1) {
+			dev_warn(&state->client->dev,
+				"%s(): i2c write retry %d, 0x%04x = 0x%x, err %d\n",
+				__func__, retry + 1, reg, val, ret);
+			usleep_range(DS5_I2C_RETRY_DELAY_US,
+				     DS5_I2C_RETRY_DELAY_US + 500);
+		}
+	}
 	if (ret < 0)
 		dev_err(&state->client->dev,
-				"%s(): i2c write failed %d, 0x%04x = 0x%x\n",
-				__func__, ret, reg, val);
-	else
-		if (state->dfu_dev.dfu_state_flag == DS5_DFU_IDLE)
-			dev_dbg(&state->client->dev, "%s(): i2c write 0x%04x: 0x%x\n",
-				__func__, reg, val);
+			"%s(): i2c write failed after %d retries, 0x%04x = 0x%x, err %d\n",
+			__func__, DS5_I2C_RETRY_COUNT, reg, val, ret);
+	else if (state->dfu_dev.dfu_state_flag == DS5_DFU_IDLE)
+		dev_dbg(&state->client->dev, "%s(): i2c write 0x%04x: 0x%x\n",
+			__func__, reg, val);
 
 	return ret;
 }
@@ -560,41 +587,82 @@ static int ds5_write(struct ds5 *state, u16 reg, u16 val)
 static int ds5_raw_write(struct ds5 *state, u16 reg,
 		const void *val, size_t val_len)
 {
-	int ret = regmap_raw_write(state->regmap, reg, val, val_len);
+	int ret;
+	int retry;
+
+	for (retry = 0; retry < DS5_I2C_RETRY_COUNT; retry++) {
+		ret = regmap_raw_write(state->regmap, reg, val, val_len);
+		if (ret == 0)
+			break;
+		if (retry < DS5_I2C_RETRY_COUNT - 1) {
+			dev_warn(&state->client->dev,
+				"%s(): i2c raw write retry %d, 0x%04x size(%d), err %d\n",
+				__func__, retry + 1, reg, (int)val_len, ret);
+			usleep_range(DS5_I2C_RETRY_DELAY_US,
+				     DS5_I2C_RETRY_DELAY_US + 500);
+		}
+	}
 	if (ret < 0)
 		dev_err(&state->client->dev,
-				"%s(): i2c raw write failed %d, %04x size(%d) bytes\n",
-				__func__, ret, reg, (int)val_len);
-	else
-		if (state->dfu_dev.dfu_state_flag == DS5_DFU_IDLE)
-			dev_dbg(&state->client->dev,
-					"%s(): i2c raw write 0x%04x: %d bytes\n",
-					__func__, reg, (int)val_len);
+			"%s(): i2c raw write failed after %d retries, 0x%04x size(%d), err %d\n",
+			__func__, DS5_I2C_RETRY_COUNT, reg, (int)val_len, ret);
+	else if (state->dfu_dev.dfu_state_flag == DS5_DFU_IDLE)
+		dev_dbg(&state->client->dev,
+			"%s(): i2c raw write 0x%04x: %d bytes\n",
+			__func__, reg, (int)val_len);
 
 	return ret;
 }
 
 static int ds5_read(struct ds5 *state, u16 reg, u16 *val)
 {
-	int ret = regmap_raw_read(state->regmap, reg, val, 2);
-	if (ret < 0)
-		dev_err(&state->client->dev, "%s(): i2c read failed %d, 0x%04x\n",
-				__func__, ret, reg);
-	else {
-		if (state->dfu_dev.dfu_state_flag == DS5_DFU_IDLE)
-			dev_dbg(&state->client->dev, "%s(): i2c read 0x%04x: 0x%x\n",
-					__func__, reg, *val);
+	int ret;
+	int retry;
+
+	for (retry = 0; retry < DS5_I2C_RETRY_COUNT; retry++) {
+		ret = regmap_raw_read(state->regmap, reg, val, 2);
+		if (ret == 0)
+			break;
+		if (retry < DS5_I2C_RETRY_COUNT - 1) {
+			dev_warn(&state->client->dev,
+				"%s(): i2c read retry %d, 0x%04x, err %d\n",
+				__func__, retry + 1, reg, ret);
+			usleep_range(DS5_I2C_RETRY_DELAY_US,
+				     DS5_I2C_RETRY_DELAY_US + 500);
+		}
 	}
+	if (ret < 0)
+		dev_err(&state->client->dev,
+			"%s(): i2c read failed after %d retries, 0x%04x, err %d\n",
+			__func__, DS5_I2C_RETRY_COUNT, reg, ret);
+	else if (state->dfu_dev.dfu_state_flag == DS5_DFU_IDLE)
+		dev_dbg(&state->client->dev, "%s(): i2c read 0x%04x: 0x%x\n",
+			__func__, reg, *val);
 
 	return ret;
 }
 
 static int ds5_raw_read(struct ds5 *state, u16 reg, void *val, size_t val_len)
 {
-	int ret = regmap_raw_read(state->regmap, reg, val, val_len);
+	int ret;
+	int retry;
+
+	for (retry = 0; retry < DS5_I2C_RETRY_COUNT; retry++) {
+		ret = regmap_raw_read(state->regmap, reg, val, val_len);
+		if (ret == 0)
+			break;
+		if (retry < DS5_I2C_RETRY_COUNT - 1) {
+			dev_warn(&state->client->dev,
+				"%s(): i2c raw read retry %d, 0x%04x size(%d), err %d\n",
+				__func__, retry + 1, reg, (int)val_len, ret);
+			usleep_range(DS5_I2C_RETRY_DELAY_US,
+				     DS5_I2C_RETRY_DELAY_US + 500);
+		}
+	}
 	if (ret < 0)
-		dev_err(&state->client->dev, "%s(): i2c read failed %d, 0x%04x\n",
-			__func__, ret, reg);
+		dev_err(&state->client->dev,
+			"%s(): i2c raw read failed after %d retries, 0x%04x size(%d), err %d\n",
+			__func__, DS5_I2C_RETRY_COUNT, reg, (int)val_len, ret);
 
 	return ret;
 }
@@ -3761,7 +3829,7 @@ static const struct regmap_config ds5_regmap_max9295 = {
 	.reg_format_endian = REGMAP_ENDIAN_BIG,
 	.val_format_endian = REGMAP_ENDIAN_NATIVE,
 };
-static struct mutex serdes_lock__;
+static DEFINE_MUTEX(serdes_lock__);
 
 static int ds5_gmsl_serdes_setup(struct ds5 *state)
 {
@@ -4775,8 +4843,8 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		if (ret < 0)
 			goto restore_s_state;
 
-		// check streaming status from FW, with one retry
-		for (attempt = 0; attempt < 2; attempt++) {
+		// check streaming status from FW, with two retries
+		for (attempt = 0; attempt < 3; attempt++) {
 			for (i = 0; i < DS5_START_MAX_COUNT; i++) {
 				ret = ds5_read(state, stream_status_base,
 					       &streaming);
