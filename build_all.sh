@@ -59,8 +59,12 @@ export TEGRA_KERNEL_OUT="$DEVDIR/images/$1"
 # Clean if requested
 if [[ $CLEAN == 1 ]]; then
     echo "Cleaning build artifacts for $1..."
-    rm -rf $TEGRA_KERNEL_OUT
-    rm -rf $SRCS/out
+    if [[ -z "$TEGRA_KERNEL_OUT" ]]; then
+        echo "Error: TEGRA_KERNEL_OUT is not set"
+        exit 1
+    fi
+    rm -rf "$TEGRA_KERNEL_OUT"
+    rm -rf "$SRCS/out"
 fi
 
 mkdir -p $TEGRA_KERNEL_OUT
@@ -75,7 +79,7 @@ export KERNEL_MODULES_OUT=$TEGRA_KERNEL_OUT/modules
 if [[ "$JETPACK_VERSION" == "6.x" ]]; then
     cd $SRCS
     export KERNEL_HEADERS=$SRCS/kernel/kernel-jammy-src
-    ln -sf $TEGRA_KERNEL_OUT $SRCS/out
+    ln -sf "$TEGRA_KERNEL_OUT" "$SRCS/out"
     if [[ "$DEVDBG" == "1" ]]; then
         cd $KERNEL_HEADERS
         # Generate .config file from default defconfig

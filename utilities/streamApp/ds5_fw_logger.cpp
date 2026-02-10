@@ -112,7 +112,10 @@ int main(int argc, char *argv[])
 			cout << "FW_Log_Data:";
 			for (i = 4; i < sizeof(ds5_fw_log_msg) + HEADER_SIZE; i++)
 			{
-				cout << uppercase << std::setfill ('0') << setw(2) << std::hex << (int)log[j*sizeof(ds5_fw_log_msg)+i] << " ";
+				size_t idx = j * sizeof(ds5_fw_log_msg) + i;
+				if (idx >= sizeof(log))
+					break;
+				cout << uppercase << std::setfill ('0') << setw(2) << std::hex << (int)log[idx] << " ";
 			}
 			cout << endl;
 			last_seq = msg->seq_id;

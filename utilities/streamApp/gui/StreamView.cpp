@@ -232,7 +232,12 @@ int StreamView::start(uint32_t memoryType) {
         break;
     case V4L2_MEMORY_USERPTR:
         for (int i = 0; i < mBuffersCount; i++) {
-            mRsBuffers.emplace_back(malloc(bufferLength), bufferLength, i);
+            void* ptr = malloc(bufferLength);
+            if (ptr == nullptr) {
+                RS_LOGE("Failed to allocate buffer %d of size %u", i, bufferLength);
+                return -1;
+            }
+            mRsBuffers.emplace_back(ptr, bufferLength, i);
         }
         break;
     default:
@@ -281,7 +286,15 @@ void StreamView::processCaptureResult(uint32_t index)
     uint32_t cnt = 0;
     char* left;
     char* right;
-    char image[mFormat.calcBytesPerFrame()];
+    // Use heap allocation instead of VLA to prevent stack overflow
+    uint32_t frameSize = mFormat.calcBytesPerFrame();
+    constexpr uint32_t MAX_FRAME_SIZE = 64 * 1024 * 1024; // 64MB max
+    if (frameSize == 0 || frameSize > MAX_FRAME_SIZE) {
+        RS_LOGE("Invalid frame size: %u", frameSize);
+        return;
+    }
+    std::vector<char> imageVec(frameSize);
+    char* image = imageVec.data();
     //lock_guard<mutex> lock(mMutex);
     switch(mStreamType) {
     case V4L2Utils::StreamUtils::StreamType::RS_DEPTH_STREAM:

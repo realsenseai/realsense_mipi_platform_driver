@@ -1,8 +1,12 @@
 #!/bin/bash
 set -e
 
-# add jenkins user to sudo group
-# add the following line to /etc/sudoers for jenkins user, here nvidia
+# SECURITY WARNING: The sudoers configuration below grants passwordless root access.
+# Only use in isolated CI/CD environments with restricted network access.
+# Never enable on production systems or systems with sensitive data.
+# Consider using dedicated CI service accounts with audit logging.
+#
+# To enable for jenkins/CI user (NOT RECOMMENDED for production):
 # nvidia ALL=(root) NOPASSWD: /sbin/reboot, /sbin/install.tegra.artifacts.sh
 
 RELEASE=$(ls lib/modules)
