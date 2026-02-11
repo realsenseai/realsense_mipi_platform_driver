@@ -1,18 +1,18 @@
-From 29c0552aaf01373b5177e3d7be4fcf3aad217d94 Mon Sep 17 00:00:00 2001
+From 63bf100fd5dab0e5b2fca23463bb9ac901159fe2 Mon Sep 17 00:00:00 2001
 From: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 Date: Wed, 11 Feb 2026 01:29:44 +0200
 Subject: [PATCH] Adding max96712 support for D4xx
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- drivers/media/i2c/max96712.c | 328 ++++++++++++++++++++++++++++++++++-
- 1 file changed, 325 insertions(+), 3 deletions(-)
+ drivers/media/i2c/max96712.c | 337 ++++++++++++++++++++++++++++++++++-
+ 1 file changed, 334 insertions(+), 3 deletions(-)
 
 diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
-index 8081385f0..6d451c034 100644
+index 8081385f0..0caedb1ae 100644
 --- a/drivers/media/i2c/max96712.c
 +++ b/drivers/media/i2c/max96712.c
-@@ -21,17 +21,63 @@
+@@ -21,17 +21,64 @@
  #include <linux/debugfs.h>
  #include <media/camera_common.h>
  #include <linux/module.h>
@@ -28,6 +28,7 @@ index 8081385f0..6d451c034 100644
 +#define MAX96712_CTRL1_ADDR 0x18
 +
 +#define MAX96712_BACKTOP24_ADDR 0x417
++#define MAX96712_BACKTOP22_ADDR 0x415
 +#define MAX96712_BACKTOP25_ADDR 0x418
 +
 +#define MAX96712_MIPI_PHY0_ADDR 0x8A0
@@ -78,7 +79,7 @@ index 8081385f0..6d451c034 100644
  			u16 addr, u8 val)
  {
  	struct i2c_client *i2c_client = NULL;
-@@ -99,6 +145,19 @@ static int max96712_read_reg(struct max96712 *priv,
+@@ -99,6 +146,18 @@ static int max96712_read_reg(struct max96712 *priv,
  	return err;
  }
  
@@ -87,7 +88,6 @@ index 8081385f0..6d451c034 100644
 +{
 +	struct i2c_client *i2c_client = priv->i2c_client;
 +	int err;
-+
 +	err = regmap_write(priv->regmap, addr, val);
 +	if (err)
 +		dev_err(&i2c_client->dev, "%s:i2c write failed, 0x%x = %x\n",
@@ -154,7 +154,7 @@ index 8081385f0..6d451c034 100644
  		i2c_unregister_device(client);
  		client = NULL;
  	}
-@@ -252,13 +332,254 @@ max96712_remove(struct i2c_client *client)
+@@ -252,13 +332,263 @@ max96712_remove(struct i2c_client *client)
  	return 0;
  }
  
@@ -197,8 +197,6 @@ index 8081385f0..6d451c034 100644
 +{
 +	struct max96712 *priv = dev_get_drvdata(dev);
 +	max96712_write_reg(priv, MAX96712_CTRL1_ADDR, 0x0F);
-+	msleep(1);
-+	max96712_write_reg(priv, MAX96712_CTRL1_ADDR, 0x00);
 +	msleep(100);
 +}
 +EXPORT_SYMBOL(max96712_reset_oneshot);
@@ -210,18 +208,6 @@ index 8081385f0..6d451c034 100644
 +	struct max96712 *priv = dev_get_drvdata(dev);
 +
 +	int i = 0;
-+
-+	struct reg_pair map_pipe_select[] = {
-+		{MAX96712_REG5_ADDR, 0x80}, // Enable lock
-+		{MAX96712_REG6_ADDR, 0xF1}, // Enable lock
-+		{MAX96712_MIPI_PHY0_ADDR, 0x01},
-+		{MAX96712_MIPI_PHY2_ADDR, 0xF4},
-+		{MAX96712_MIPI_PHY3_ADDR, 0x44},
-+		{MAX96712_MIPI_PHY5_ADDR, 0x00},
-+		{MAX96712_VIDEO_PIPE_SEL_0_ADDR, 0x10},
-+		{MAX96712_VIDEO_PIPE_SEL_1_ADDR, 0x32},
-+		{MAX96712_VIDEO_PIPE_EN_ADDR, 0x0F},
-+	};
 +
 +	struct reg_pair map_pipe_control[] = {
 +		// Enable 4 mappings for Pipe X
@@ -240,19 +226,8 @@ index 8081385f0..6d451c034 100644
 +		{MAX96712_MIPI_TX20_DST_3_MAP_ADDR, 0x12},
 +		// All mappings to PHY1 (master for port A)
 +		{MAX96712_MIPI_TX45_MAP_DPHY_DEST_ADDR, 0x00},
-+		{MAX96712_MIPI_TX10_ADDR, 0x40},
-+		{MAX96712_MIPI_TX51_ADDR, 0x10},
 +		// SEQ_MISS_EN: Disabled / DIS_PKT_DET: Disabled
 +		{MAX96712_VIDEO_RX0_ADDR, 0x23}, // pipe X
-+	};
-+
-+	struct reg_pair map_pipe_opt[] = {
-+		{MAX96712_RLMS_A_RLMS58_ADDR, 0x28}, // PHY A Optimization
-+		{MAX96712_RLMS_A_RLMS59_ADDR, 0x68}, // PHY A Optimization
-+		{MAX96712_RLMS_B_RLMS58_ADDR, 0x28}, // PHY B Optimization
-+		{MAX96712_RLMS_B_RLMS59_ADDR, 0x68}, // PHY B Optimization
-+		{MAX96712_BACKTOP24_ADDR, 0xf0},
-+		{MAX96712_BACKTOP25_ADDR, 0x2f},
 +	};
 +
 +	for (i = 0; i < (ARRAY_SIZE(map_pipe_control) - 1); i++) {
@@ -264,7 +239,7 @@ index 8081385f0..6d451c034 100644
 +		/* For IMU (which has no metadata) we override mapping
 +		* to enable only 3
 +		*/
-+		map_pipe_control[1].val = 0x07;
++		map_pipe_control[0].val = 0x07;
 +	}
 +	map_pipe_control[1].val = (vc_id << 6) | data_type1;
 +	map_pipe_control[2].val = (vc_id << 6) | data_type1;
@@ -275,20 +250,11 @@ index 8081385f0..6d451c034 100644
 +	map_pipe_control[7].val = (vc_id << 6) | data_type2;
 +	map_pipe_control[8].val = (vc_id << 6) | data_type2;
 +
-+	max96712_write_reg(priv, MAX96712_BACKTOP12_CSI_OUT_EN_ADDR, 0x0);
-+
-+	err |= max96712_set_registers(priv, map_pipe_select,
-+					 ARRAY_SIZE(map_pipe_select));
-+
 +	err |= max96712_set_registers(priv, map_pipe_control,
 +				     ARRAY_SIZE(map_pipe_control));
 +
-+	err |= max96712_set_registers(priv, map_pipe_opt,
-+					 ARRAY_SIZE(map_pipe_opt));
-+
-+	max96712_write_reg(priv, MAX96712_BACKTOP12_CSI_OUT_EN_ADDR, 0x2);
-+
 +	max96712_reset_oneshot(dev);
++	max96712_write_reg(priv, MAX96712_VIDEO_PIPE_EN_ADDR, 0xF);
 +
 +	return err;
 +}
@@ -296,18 +262,61 @@ index 8081385f0..6d451c034 100644
 +int max96712_init_settings(struct device *dev)
 +{
 +	int err = 0;
-+	int i;
 +	struct max96712 *priv = dev_get_drvdata(dev);
++	struct reg_pair map_pipe_opt[] =
++	{
++		/* ----------Video pipes configure ----------------------*/
++		{MAX96712_REG6_ADDR, 0xF1}, // Enable link - Why is this needed?
++		{MAX96712_VIDEO_PIPE_SEL_0_ADDR, 0x10}, //0xF0, Link A ID 0 to pipe 0 , Link A ID 1 to pipe 1
++		{MAX96712_VIDEO_PIPE_SEL_1_ADDR, 0x32}, //0xF1, Link A ID 2 to pipe 2 , Link A ID 3 to pipe 3
++		{MAX96712_VIDEO_PIPE_EN_ADDR, 0x00}, //0xF4, Enable pipe 0-3, 0xFF
++	};
++
++	struct reg_pair map_phy_opt_4x2[] =
++	{
++		/* MIPI D-PHY Config */
++		{MAX96712_MIPI_PHY0_ADDR, 0x1}, //0x8A0
++		{MAX96712_MIPI_PHY3_ADDR, 0x44}, //0x8A3, Default 4x2 lane mapping
++		//{MAX96712_MIPI_PHY4_ADDR, 0x44}, //0x8A4, Default 4x2 lane mapping
++
++		/* 4 lanes on port A,  0x40 -> 2 lanes, 0xC0 -> 4 lanes */
++		{MAX96712_MIPI_TX10_ADDR + (0x40 * 0), 0x40}, //0x90A, MIPI PHY0
++		{MAX96712_MIPI_TX10_ADDR + (0x40 * 1), 0x40}, //0x94A, MIPI PHY1
++		{MAX96712_MIPI_TX10_ADDR + (0x40 * 2), 0x40}, //0x98A, MIPI PHY2
++		{MAX96712_MIPI_TX10_ADDR + (0x40 * 3), 0x40}, //0x9CA, MIPI PHY3
++
++		/* Put DPLL for ctrl 1 and 2 in reset (config_soft_rst_n = 0) before changing MIPI lane rates */
++		//{0x1C00, 0xF4}, //PHY0
++		{0x1D00, 0xF4}, //PHY1
++		//{0x1E00, 0xF4}, //PHY2
++		//{0x1F00, 0xF4}, //PHY3
++
++		/* 1500Mbps/lane on port A */
++		//{MAX96712_BACKTOP22_ADDR + (0x3 * 0), 0x2F}, //0x415
++		{MAX96712_BACKTOP22_ADDR + (0x3 * 1), 0x2F}, //0x418
++		//{MAX96712_BACKTOP22_ADDR + (0x3 * 2), 0x2F}, //0x41B
++		//{MAX96712_BACKTOP22_ADDR + (0x3 * 3), 0x2F}, //0x41E
++
++		/* Release DPLL reset (config_soft_rst_n = 1) */
++		//{0x1C00, 0xF5}, //PHY0
++		{0x1D00, 0xF5}, //PHY1
++		//{0x1E00, 0xF5}, //PHY2
++		//{0x1F00, 0xF5}, //PHY3
++
++		/* 0x02: ALT_MEM_MAP8, 0x10: ALT2_MEM_MAP8 */
++		{MAX96712_MIPI_TX51_ADDR + (0x40 * 0), 0x10}, //MIPI TX0
++		{MAX96712_MIPI_TX51_ADDR + (0x40 * 1), 0x10}, //0x10, MIPI TX1
++		{MAX96712_MIPI_TX51_ADDR + (0x40 * 2), 0x10}, //0x10, MIPI TX2
++		{MAX96712_MIPI_TX51_ADDR + (0x40 * 3), 0x10}, //MIPI TX3
++
++		{MAX96712_MIPI_PHY2_ADDR, 0xF4}, //0x8A2 TODO: EHUD - 0xF0?
++		{MAX96712_BACKTOP12_CSI_OUT_EN_ADDR, 0x02},  // (CSI_OUT_EN): CSI output enabled
++	};
 +
 +	mutex_lock(&priv->lock);
 +
-+	max96712_write_reg(priv, MAX96712_CTRL0_ADDR, 0x14);
-+	max96712_write_reg(priv, MAX96712_CTRL1_ADDR, 0xF0);
-+	max96712_write_reg(priv, MAX96712_CTRL1_ADDR, 0x00);
-+
-+	for (i = 0; i < MAX96712_MAX_PIPES; i++)
-+		err |= __max96712_set_pipe(dev, i, GMSL_CSI_DT_YUV422_8,
-+					  GMSL_CSI_DT_EMBED, i);
++	err |= max96712_set_registers(priv, map_pipe_opt, ARRAY_SIZE(map_pipe_opt));
++	err |= max96712_set_registers(priv, map_phy_opt_4x2, ARRAY_SIZE(map_phy_opt_4x2));
 +
 +	mutex_unlock(&priv->lock);
 +
@@ -410,7 +419,7 @@ index 8081385f0..6d451c034 100644
  	{ },
  };
  
-@@ -268,6 +589,7 @@ static struct i2c_driver max96712_i2c_driver = {
+@@ -268,6 +598,7 @@ static struct i2c_driver max96712_i2c_driver = {
  	.driver = {
  		.name = "max96712",
  		.owner = THIS_MODULE,
