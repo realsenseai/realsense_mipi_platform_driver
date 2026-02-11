@@ -126,51 +126,63 @@ scp rootfs.tar.gz nvidia@10.0.0.116:
 
 Following steps required:
 
-1. Copy build artifacts:
+1. Create "dev" directory in boot (in order to not override the default kernel)
+```
+sudo mkdir /boot/development
+```
+2. Copy build artifacts:
 If you build locally use those commands:
 ```
 sudo cp -r ./images/6.0/rootfs/lib/modules/5.15.136-tegra /lib/modules/.
-sudo cp    ./images/6.0/rootfs/boot/tegra234-camera-d4xx-overlay.dtbo /boot/.
+sudo cp    ./images/6.0/rootfs/boot/tegra234-camera-d4xx-overlay*.dtbo /boot/dev/.
 sudo cp    ./images/6.0/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/dtb/.
-sudo cp    ./images/6.0/rootfs/boot/Image /boot/
+sudo cp    ./images/6.0/rootfs/boot/Image /boot/dev/.
 ```
 In case of scp copy from host use this commands:
 ```
 tar xf rootfs.tar.gz
 sudo cp -r ./lib/modules/5.15.136-tegra /lib/modules/.
-sudo cp    ./boot/tegra234-camera-d4xx-overlay.dtbo /boot/.
+sudo cp    ./boot/tegra234-camera-d4xx-overlay*.dtbo /boot/dev/.
 sudo cp    ./boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/dtb/.
-sudo cp    ./boot/Image /boot/
+sudo cp    ./boot/Image /boot/dev/.
 ```
-2.	Run  $ `sudo /opt/nvidia/jetson-io/jetson-io.py`, to exit choose save & reboot:
-	1.	Configure Jetson AGX CSI Connector
-	2.	Configure for compatible hardware
-	3.	Choose appropriate configuration:
- 		i.	Jetson RealSense Camera D457
-		ii. Jetson RealSense Camera D457 dual
-    5.	Choose to save & reboot
-
-3.	Enable and run depmod scan for "extra" & "kernel" modules
+3.	Run depmod
 ```
-# enable extra & kernel modules
-# original file content: cat /etc/depmod.d/ubuntu.conf -- search updates ubuntu built-in
-sudo sed -i 's/search updates/search extra updates kernel/g' /etc/depmod.d/ubuntu.conf
-# update driver cache
 sudo depmod
-echo "d4xx" | sudo tee /etc/modules-load.d/d4xx.conf
 ```
-4.
-Verify bootloader configuration
+4. Modify bootloader configuration:
+ - open /boot/extlinux/extlinux.conf for editing using your preferred editor
+ - Copy existing primary kernel and rename the copy to "dev"
+ - Change the "MENU LABEL" to a meaningfull label (e.g "development kernel")
+ - Change the "LINUX" line to point to the newely copied /boot/**dev**/Image
+ - Add the "FDT" line pointing at the newely copied device tree "/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb"
+ - add the "OVERLAYS" line pointing to the required overlay "tegra234-camera-d4xx-overlay/dual/else>.dtb
+ - Select the new lable as the default
+
+The result should be:
+
 ```
-cat /boot/extlinux/extlinux.conf
-----<CUT>----
-LABEL JetsonIO
-    MENU LABEL Custom Header Config: <CSI Jetson RealSense Camera D457>
+...
+DEFAULT dev
+
+LABEL primary
+    MENU LABEL primary kernel
     LINUX /boot/Image
-    FDT /boot/dtb/kernel_tegra234-p3737-0000+p3701-0000-nv.dtb
-    APPEND ${cbootargs} root=PARTUUID=bbb3b34e-......
-    OVERLAYS /boot/tegra234-camera-d4xx-overlay.dtbo
-----<CUT>----
+    INITRD /boot/initrd
+    APPEND ${cbootargs} root=...
+
+LABEL dev
+    MENU LABEL development kernel
+    LINUX /boot/dev/Image
+    INITRD /boot/initrd
+    APPEND ${cbootargs} root=...
+    FDT /boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb
+    OVERLAYS /boot/dev/tegra234-camera-d4xx-overlay.dtbo
+
+```
+5. reboot
+```
+sudo reboot
 ```
 On Jetson target (user home folder) assuming backup step was followed:
 
