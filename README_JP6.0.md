@@ -224,50 +224,6 @@ nvidia@ubuntu:~$ sudo dmesg | grep pca954x
 [    3.933113] pca954x 2-0072: probe failed
 ```
 
-- Configuration with jetson-io tool system fail to boot with message "couldn't find root partition"
-Verify bootloader configuration
-`/boot/extlinux/extlinux.conf`
-Sometimes configuration tool missing APPEND parameters. Duplicate `primary` section `APPEND` line to `JetsonIO` `APPEND` section, verify it's similar.
-
-Example Bad:
-```
-LABEL primary
-    MENU LABEL primary kernel
-    LINUX /boot/Image
-    INITRD /boot/initrd
-    APPEND ${cbootargs} root=PARTUUID=634b7e44-aacc-4dd9-a769-3a664b83b159 rw rootwait rootfstype=ext4 mminit_loglevel=4 console=ttyTCU0,115200 console=ttyAMA0,115200 firmware_class.path=/etc/firmware fbcon=map:0 net.ifnames=0 nospectre_bhb video=efifb:off console=tty0 nv-auto-config
-
-LABEL JetsonIO
-    MENU LABEL Custom Header Config: <CSI Jetson RealSense Camera D457 dual>
-    LINUX /boot/Image
-    FDT /boot/dtb/kernel_tegra234-p3737-0000+p3701-0000-nv.dtb
-    INITRD /boot/initrd
-    APPEND ${cbootargs}
-    OVERLAYS /boot/tegra234-camera-d4xx-overlay-dual.dtbo
-```
-Example Good:
-```
-LABEL primary
-    MENU LABEL primary kernel
-    LINUX /boot/Image
-    INITRD /boot/initrd
-    APPEND ${cbootargs} root=PARTUUID=634b7e44-aacc-4dd9-a769-3a664b83b159 rw rootwait rootfstype=ext4 mminit_loglevel=4 console=ttyTCU0,115200 console=ttyAMA0,115200 firmware_class.path=/etc/firmware fbcon=map:0 net.ifnames=0 nospectre_bhb video=efifb:off console=tty0 nv-auto-config
-
-LABEL JetsonIO
-    MENU LABEL Custom Header Config: <CSI Jetson RealSense Camera D457 dual>
-    LINUX /boot/Image
-    FDT /boot/dtb/kernel_tegra234-p3737-0000+p3701-0000-nv.dtb
-    INITRD /boot/initrd
-    APPEND ${cbootargs} root=PARTUUID=634b7e44-aacc-4dd9-a769-3a664b83b159 rw rootwait rootfstype=ext4 mminit_loglevel=4 console=ttyTCU0,115200 console=ttyAMA0,115200 firmware_class.path=/etc/firmware fbcon=map:0 net.ifnames=0 nospectre_bhb video=efifb:off console=tty0 nv-auto-config
-    OVERLAYS /boot/tegra234-camera-d4xx-overlay-dual.dtbo
-```
-- Configuration tool jetson-io terminates without configuration menu.
-verify that `/boot/dtb` has only one dtb file
-```
-nvidia@ubuntu:~$ ls /boot/dtb/
-kernel_tegra234-p3737-0000+p3701-0000-nv.dtb
-```
-
 - kernel does not recognize the I2C device
 ```
 # Make sure which Jetson Carrier board is used:
