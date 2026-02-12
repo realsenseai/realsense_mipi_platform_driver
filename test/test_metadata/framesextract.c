@@ -73,7 +73,8 @@ void process_frame_data(void){
             char *token;
             unsigned int col = 0;
             char tmp[1024];
-            strcpy(tmp, line);
+            strncpy(tmp, line, sizeof(tmp) - 1);
+            tmp[sizeof(tmp) - 1] = '\0';
             token = strtok(tmp, ",");
             unsigned long int curr_val = 0;
             while (token && col < 3) {
@@ -128,7 +129,8 @@ void process_frame_data(void){
                 while (fgets(line, sizeof(line), csv)) {
                     lines[count] = strdup(line);
                     char tmp[1024];
-                    strcpy(tmp, line);
+                    strncpy(tmp, line, sizeof(tmp) - 1);
+                    tmp[sizeof(tmp) - 1] = '\0';
                     char *token = strtok(tmp, ",");
                     int col = 0;
                     while (token && col < 3) {

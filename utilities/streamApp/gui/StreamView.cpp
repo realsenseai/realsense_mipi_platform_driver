@@ -232,7 +232,19 @@ int StreamView::start(uint32_t memoryType) {
         break;
     case V4L2_MEMORY_USERPTR:
         for (int i = 0; i < mBuffersCount; i++) {
-            mRsBuffers.emplace_back(malloc(bufferLength), bufferLength, i);
+            void* ptr = malloc(bufferLength);
+            if (ptr == nullptr) {
+                RS_LOGE("Failed to allocate buffer %d of size %u", i, bufferLength);
+                // Free previously allocated buffers before returning
+                for (auto& buf : mRsBuffers) {
+                    if (buf.buffer != nullptr) {
+                        free(buf.buffer);
+                    }
+                }
+                mRsBuffers.clear();
+                return -1;
+            }
+            mRsBuffers.emplace_back(ptr, bufferLength, i);
         }
         break;
     default:
@@ -281,7 +293,19 @@ void StreamView::processCaptureResult(uint32_t index)
     uint32_t cnt = 0;
     char* left;
     char* right;
-    char image[mFormat.calcBytesPerFrame()];
+    // Use static heap allocation instead of VLA to prevent stack overflow
+    // Static buffer is reused across calls to avoid per-frame allocation overhead
+    uint32_t frameSize = mFormat.calcBytesPerFrame();
+    constexpr uint32_t MAX_FRAME_SIZE = 64 * 1024 * 1024; // 64MB max
+    if (frameSize == 0 || frameSize > MAX_FRAME_SIZE) {
+        RS_LOGE("Invalid frame size: %u", frameSize);
+        return;
+    }
+    static std::vector<char> imageVec;
+    if (imageVec.size() < frameSize) {
+        imageVec.resize(frameSize);
+    }
+    char* image = imageVec.data();
     //lock_guard<mutex> lock(mMutex);
     switch(mStreamType) {
     case V4L2Utils::StreamUtils::StreamType::RS_DEPTH_STREAM:

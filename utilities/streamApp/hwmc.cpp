@@ -6,6 +6,7 @@
 #include <vector>
 #include <cstring>
 #include <iomanip>
+#include <algorithm>
 
 #include <fcntl.h>
 #include <sys/ioctl.h>
@@ -22,11 +23,16 @@ using namespace realsense::utils;
 
 #pragma pack(push, 1)
 struct HWMC {
-	HWMC(const vector<int32_t> &inParams):header(0x14), magic_word(0xCDAB) {
-		opcode = inParams[0];
+	HWMC(const vector<int32_t> &inParams):header(0x14), magic_word(0xCDAB), opcode(0) {
 		memset(params, 0, sizeof(params));
-		for (size_t i = 1; i < inParams.size(); i++)
-			params[i-1] = inParams[i];
+		if (inParams.empty()) {
+			cerr << "Error: HWMC requires at least an opcode" << endl;
+			return;
+		}
+		opcode = inParams[0];
+		size_t paramCount = std::min(inParams.size() - 1, sizeof(params)/sizeof(params[0]));
+		for (size_t i = 0; i < paramCount; i++)
+			params[i] = inParams[i + 1];
 	}
 	uint16_t header = 0x14;
 	uint16_t magic_word = 0xCDAB;
@@ -64,7 +70,7 @@ int main(int argc, char *argv[]) {
 	if (!fd)
 		return -1;
 
-	uint8_t hwmcBuff[1028] {0};
+	uint8_t hwmcBuff[1024 + sizeof(struct HWMC)] {0};
 	memset(hwmcBuff, 0, sizeof(hwmcBuff));
 
 	struct v4l2_ext_control ctrl {0};
@@ -84,9 +90,13 @@ int main(int argc, char *argv[]) {
             return -1;
         }
 	if (hmc.opcode == *(hwmcBuff + sizeof(struct HWMC))) {
-	uint16_t outLen = hwmcBuff[1001 + sizeof(struct HWMC)] << 8;
+		uint16_t outLen = hwmcBuff[1001 + sizeof(struct HWMC)] << 8;
 		outLen |= hwmcBuff[1000 + sizeof(struct HWMC)];
 		cout << "output length: "<< outLen << endl;;
+		// Bounds check: ensure we don't read past buffer
+		uint16_t maxLen = sizeof(hwmcBuff) - sizeof(struct HWMC) - 4;
+		if (outLen > maxLen)
+			outLen = maxLen;
 		for (int i = 0; i < outLen; ++i) {
 			if (i != 0 && 0 == (i % 16))
 				cout << endl;
