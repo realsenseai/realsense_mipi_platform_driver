@@ -133,7 +133,8 @@ sudo cp    ./images/6.2/rootfs/boot/Image /boot/dev/.
 In case of scp copy from host use this commands:
 ```
 tar xf rootfs.tar.gz
-sudo cp -r ./lib/modules/5.15.148-tegra /lib/modules/.
+sudo rm -r  /lib/modules
+sudo cp -r ./lib/modules/ /lib/
 sudo cp    ./boot/tegra234-camera-d4xx-overlay*.dtbo /boot/dev/.
 sudo cp    ./boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/dtb/.
 sudo cp    ./boot/Image /boot/dev/.
@@ -141,6 +142,9 @@ sudo cp    ./boot/Image /boot/dev/.
 3.	Run depmod
 ```
 sudo depmod
+sudo update-initramfs -uk 5.15.148-tegra
+sudo rm -f /boot/initrd
+sudo ln -s /boot/initrd.img-5.15.148-tegra /boot/initrd
 ```
 4. Modify bootloader configuration:
  - open /boot/extlinux/extlinux.conf for editing using your preferred editor
