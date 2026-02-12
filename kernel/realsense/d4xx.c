@@ -132,6 +132,7 @@
 #define DS5_EXPOSURE_ROI_RIGHT		0x001C
 #define DS5_MANUAL_LASER_POWER		0x0024
 #define DS5_PWM_FREQUENCY		0x0028
+#define DS5_CAMERA_SYNC_MODE		0x002C
 
 #define DS5_DEPTH_CONFIG_STATUS		0x4800
 #define DS5_RGB_CONFIG_STATUS		0x4802
@@ -387,6 +388,7 @@ struct ds5_ctrls {
 		struct v4l2_ctrl *link_freq;
 		struct v4l2_ctrl *query_sub_stream;
 		struct v4l2_ctrl *set_sub_stream;
+		struct v4l2_ctrl *sync_mode;
 	};
 };
 
@@ -2139,6 +2141,7 @@ static int ds5_hw_set_exposure(struct ds5 *state, u32 base, s32 val)
 #define DS5_CAMERA_CID_ERB			(DS5_CAMERA_CID_BASE+13)
 #define DS5_CAMERA_CID_EWB			(DS5_CAMERA_CID_BASE+14)
 #define DS5_CAMERA_CID_HWMC			(DS5_CAMERA_CID_BASE+15)
+#define DS5_CAMERA_CID_SYNC_MODE		(DS5_CAMERA_CID_BASE+16)
 
 #define DS5_CAMERA_CID_PWM			(DS5_CAMERA_CID_BASE+22)
 
@@ -2745,6 +2748,15 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			__func__);
 		ret = ds5_hw_reset_with_recovery(state);
 		break;
+	case DS5_CAMERA_CID_SYNC_MODE:
+		dev_info(&state->client->dev, "%s(): XU SYNC_MODE control received, value: %d\n",
+			__func__, ctrl->val);
+		if (state->is_depth) {
+			ret = ds5_write(state, base | DS5_CAMERA_SYNC_MODE, ctrl->val);
+			dev_info(&state->client->dev, "%s(): SYNC_MODE command passed to FW, addr: 0x%x, value: %d, ret: %d\n",
+				__func__, base | DS5_CAMERA_SYNC_MODE, ctrl->val, ret);
+		}
+		break;
 	case DS5_CAMERA_CID_PWM:
 		if (state->is_depth)
 			ret = ds5_write(state, base | DS5_PWM_FREQUENCY, ctrl->val);
@@ -3085,6 +3097,10 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			data[bufLen - 1] = 0;
 		}
 		break;
+	case DS5_CAMERA_CID_SYNC_MODE:
+		if (state->is_depth)
+			ds5_read(state, base | DS5_CAMERA_SYNC_MODE, ctrl->p_new.p_u16);
+		break;
 	case DS5_CAMERA_CID_PWM:
 		if (state->is_depth)
 			ds5_read(state, base | DS5_PWM_FREQUENCY, ctrl->p_new.p_u16);
@@ -3334,6 +3350,34 @@ static const struct v4l2_ctrl_config ds5_ctrl_hw_reset = {
 	.step = 1,
 	.def = 0,
 	.flags = V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
+/* Sync mode menu arrays for different camera platforms */
+static const char * const sync_mode_menu_full[] = {
+	"Default",           /* 0 */
+	"Master",            /* 1 */
+	"Slave",             /* 2 */
+	"Full Slave",        /* 3 */
+	"Sub Pre-Master",    /* 4 */
+	"Full Master",       /* 5 */
+};
+
+static const char * const sync_mode_menu_d401[] = {
+	"Default",           /* 0 */
+	"(unsupported)",     /* 1 - rejected in s_ctrl for D401 */
+	"Slave",             /* 2 */
+};
+
+static struct v4l2_ctrl_config ds5_ctrl_sync_mode = {
+	.ops = &ds5_ctrl_ops,
+	.id = DS5_CAMERA_CID_SYNC_MODE,
+	.name = "Camera Sync Mode",
+	.type = V4L2_CTRL_TYPE_MENU,
+	.min = 0,
+	.max = 5,
+	.def = 0,
+	.qmenu = sync_mode_menu_full,
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 };
 
 static const struct v4l2_ctrl_config ds5_ctrl_pwm = {
@@ -4086,8 +4130,10 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 		v4l2_ctrl_new_custom(hdl, &ds5_ctrl_hw_reset, sensor);
 	}
 	// DEPTH custom
-	if (sid == DEPTH_SID)
+	if (sid == DEPTH_SID) {
+		ctrls->sync_mode = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_sync_mode, sensor);
 		v4l2_ctrl_new_custom(hdl, &ds5_ctrl_pwm, sensor);
+	}
 	// IMU custom
 	if (sid == IMU_SID)
 		ctrls->fw_version = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_fw_version, sensor);
@@ -5149,6 +5195,8 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 		sensor->formats = ds5_depth_formats_d40x;
 		break;
 	case DS5_DEVICE_TYPE_D43X:
+		sensor->formats = ds5_depth_formats_d43x;
+		break;
 	case DS5_DEVICE_TYPE_D45X:
 		sensor->formats = ds5_depth_formats_d43x;
 		break;
@@ -5599,6 +5647,61 @@ static int ds5_dfu_device_open(struct inode *inode, struct file *file)
 	return 0;
 };
 
+/* Adjust sync_mode control range based on device type.
+ * Must be called after ds5_mux_init() which creates the control.
+ */
+static void ds5_adjust_sync_mode_control(struct i2c_client *client, struct ds5 *state)
+{
+	u16 dev_type = 0;
+	int ret;
+
+	if (!state->ctrls.sync_mode)
+		return;
+
+	ret = ds5_read(state, DS5_DEVICE_TYPE, &dev_type);
+	if (ret < 0) {
+		dev_warn(&client->dev, "%s(): Failed to read device type\n", __func__);
+		return;
+	}
+
+	switch (dev_type) {
+	case DS5_DEVICE_TYPE_D41X:
+		/* D41X does not support sync mode */
+		dev_info(&client->dev, "%s(): D41X does not support sync mode\n", __func__);
+		__v4l2_ctrl_modify_range(state->ctrls.sync_mode, 0, 0, 0, 0);
+		break;
+	case DS5_DEVICE_TYPE_D40X:
+		/* D401 only supports modes 0 (Default) and 2 (Slave) */
+		__v4l2_ctrl_modify_range(state->ctrls.sync_mode, 0, 2, 0, 0);
+		state->ctrls.sync_mode->qmenu = sync_mode_menu_d401;
+		dev_info(&client->dev, "%s(): D401 sync mode: 0 (Default), 2 (Slave)\n", __func__);
+		break;
+	case DS5_DEVICE_TYPE_D43X:
+		/* D430 GMSL supports all 6 sync modes (0-5) */
+		__v4l2_ctrl_modify_range(state->ctrls.sync_mode, 0, 5, 0, 0);
+		state->ctrls.sync_mode->qmenu = sync_mode_menu_full;
+		dev_info(&client->dev, "%s(): D430 GMSL sync mode: all modes 0-5 supported\n", __func__);
+		break;
+	case DS5_DEVICE_TYPE_D45X:
+		/* D450 supports all 6 sync modes (0-5) */
+		__v4l2_ctrl_modify_range(state->ctrls.sync_mode, 0, 5, 0, 0);
+		state->ctrls.sync_mode->qmenu = sync_mode_menu_full;
+		dev_info(&client->dev, "%s(): D450 sync mode: all modes 0-5 supported\n", __func__);
+		break;
+	case DS5_DEVICE_TYPE_D46X:
+		/* D46X does not support sync mode */
+		dev_info(&client->dev, "%s(): D46X does not support sync mode\n", __func__);
+		__v4l2_ctrl_modify_range(state->ctrls.sync_mode, 0, 0, 0, 0);
+		break;
+	default:
+		/* Unknown device - disable sync mode */
+		dev_warn(&client->dev, "%s(): Unknown device type %d, disabling sync mode\n",
+			__func__, dev_type);
+		__v4l2_ctrl_modify_range(state->ctrls.sync_mode, 0, 0, 0, 0);
+		break;
+	}
+}
+
 static int ds5_v4l_init(struct i2c_client *c, struct ds5 *state)
 {
 	int ret;
@@ -5626,6 +5729,10 @@ static int ds5_v4l_init(struct i2c_client *c, struct ds5 *state)
 	ret = ds5_mux_init(c, state);
 	if (ret < 0)
 		goto e_imu;
+
+	/* Adjust sync_mode control range based on device type - must be done
+	 * after ds5_mux_init() creates the control */
+	ds5_adjust_sync_mode_control(c, state);
 
 	ret = ds5_hw_init(c, state);
 	if (ret < 0)
