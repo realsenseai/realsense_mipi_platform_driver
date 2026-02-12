@@ -1,40 +1,81 @@
 #!/bin/bash
 
-export JETPACK_VERSION="$1"
+supported="7.1, 7.0, 6.2.1, 6.2, 6.1, 6.0, 5.1.2, 5.0.2, 4.6.1"
+
+if [[ $1 == "-h" ]]; then
+    echo "$0 JetPack_version"
+    echo "$0 -h"
+    echo "JetPack_version can be $supported"
+    exit 1
+fi
+
+version="$1"
+if [[ -z "$version" ]]; then
+	version="${supported%%,*}"
+	if [[ -f "jetpack_version" ]]; then
+		version="$(cat jetpack_version)"
+	fi
+fi
+
+export JETPACK_VERSION="$version"
 export REVISION="35.1"
 export L4T_VERSION=jetson_"${REVISION}"
 export KERNEL_DIR="kernel/kernel-5.10"
 export LICENSE=release
+export ARCH=arm64
+export version="$version"
 
-if [[ "$JETPACK_VERSION" =~ ^6\.[0-2](\.[0-9]+)?$ ]]; then
-    if [[ $JETPACK_VERSION == "6.2.1" ]]; then
-	    REVISION="36.4.4"
-    elif [[ $JETPACK_VERSION == "6.2" ]]; then
-	    REVISION="36.4.3"
-    elif [[ $JETPACK_VERSION == "6.1" ]]; then
-	    REVISION="36.4"
-    elif [[ $JETPACK_VERSION == "6.0" ]]; then
-	    REVISION="36.3"
-    fi;
-    KERNEL_DIR="kernel/kernel-jammy-src"
-    JETPACK_VERSION="6.x"
+function version_lt {
+    IFS='.' read -r -a v1 <<< "$1"
+    IFS='.' read -r -a v2 <<< "$2"
+    for i in 0 1 2; do
+        [[ v1[i] -lt v2[i] ]] && return 0
+        [[ v1[i] -gt v2[i] ]] && return 1
+    done
+    return 1
+}
+
+echo "JetPack version $version..."
+if [[ "$JETPACK_VERSION" =~ ^7\.[0-1]$ ]]; then
+	if [[ $JETPACK_VERSION == "7.1" ]]; then
+		REVISION="38.4"
+	elif [[ $JETPACK_VERSION == "7.0" ]]; then
+		REVISION="38.2"
+	fi;
+	KERNEL_DIR="kernel/kernel-noble-src"
+	JETPACK_VERSION="7.x"
+	L4T_VERSION=jetson_"${REVISION}"
+elif [[ "$JETPACK_VERSION" =~ ^6\.[0-2](\.[0-9]+)?$ ]]; then
+	if [[ $JETPACK_VERSION == "6.2.1" ]]; then
+		REVISION="36.4.4"
+	elif [[ $JETPACK_VERSION == "6.2" ]]; then
+		REVISION="36.4.3"
+	elif [[ $JETPACK_VERSION == "6.1" ]]; then
+		REVISION="36.4"
+	elif [[ $JETPACK_VERSION == "6.0" ]]; then
+		REVISION="36.3"
+	fi;
+	KERNEL_DIR="kernel/kernel-jammy-src"
+	JETPACK_VERSION="6.x"
 	L4T_VERSION=jetson_"${REVISION}"
 elif [[ "$JETPACK_VERSION" =~ ^5.[0-1].2$ ]]; then
-    if [[ $JETPACK_VERSION == "5.1.2" ]]; then
-	    REVISION="35.4.1"
-    elif [[ $JETPACK_VERSION == "5.0.2" ]]; then
-	    REVISION="35.1"
+	if [[ $JETPACK_VERSION == "5.1.2" ]]; then
+		REVISION="35.4.1"
+	elif [[ $JETPACK_VERSION == "5.0.2" ]]; then
+		REVISION="35.1"
 		LICENSE=Release
-    fi
-    KERNEL_DIR="kernel/kernel-5.10"
-    JETPACK_VERSION="5.x"
+	fi
+	KERNEL_DIR="kernel/kernel-5.10"
+	JETPACK_VERSION="5.x"
 	L4T_VERSION=jetson_"${REVISION}"
 elif [[ $JETPACK_VERSION == "4.6.1" ]]; then
-    KERNEL_DIR="kernel/kernel-4.9"
-    REVISION="32.7.1"
-    L4T_VERSION="tegra-l4t-r${REVISION}"
+	KERNEL_DIR="kernel/kernel-4.9"
+	REVISION="32.7.1"
+	L4T_VERSION="tegra-l4t-r${REVISION}"
 	LICENSE=T186
+	JETPACK_VERSION="4.x"
 else
-    echo "Wrong JetPack version ($JETPACK_VERSION)! Only 6.2.1, 6.2, 6.1, 6.0, 5.1.2, 5.0.2 and 4.6.1 supported."
-    exit 1
+	echo "Wrong JetPack version ($JETPACK_VERSION)! Only $supported supported."
+	exit 1
 fi
+echo "$version" > jetpack_version
