@@ -185,8 +185,12 @@ enum ds5_mux_pad {
 #define DFU_WAIT_RET_LEN 6
 
 #define DS5_START_POLL_TIME	10
-#define DS5_START_MAX_TIME	2000
+#define DS5_START_MAX_TIME	700
 #define DS5_START_MAX_COUNT	(DS5_START_MAX_TIME / DS5_START_POLL_TIME)
+
+/* I2C retry configuration */
+#define DS5_I2C_RETRY_COUNT	5
+#define DS5_I2C_RETRY_DELAY_US	5000
 
 /* DFU definition section */
 #define DFU_MAGIC_NUMBER "/0x01/0x02/0x03/0x04"
@@ -520,15 +524,27 @@ static inline void msleep_range(unsigned int delay_base)
 static int ds5_write_8(struct ds5 *state, u16 reg, u8 val)
 {
 	int ret;
+	int retry;
 
-	ret = regmap_raw_write(state->regmap, reg, &val, 1);
+	for (retry = 0; retry < DS5_I2C_RETRY_COUNT; retry++) {
+		ret = regmap_raw_write(state->regmap, reg, &val, 1);
+		if (ret == 0)
+			break;
+		if (retry < DS5_I2C_RETRY_COUNT - 1) {
+			dev_warn(&state->client->dev,
+				"%s(): i2c write retry %d, 0x%04x = 0x%x, err %d\n",
+				__func__, retry + 1, reg, val, ret);
+			usleep_range(DS5_I2C_RETRY_DELAY_US,
+				     DS5_I2C_RETRY_DELAY_US + 500);
+		}
+	}
 	if (ret < 0)
-		dev_err(&state->client->dev, "%s(): i2c write failed %d, 0x%04x = 0x%x\n",
-			__func__, ret, reg, val);
-	else
-		if (state->dfu_dev.dfu_state_flag == DS5_DFU_IDLE)
-			dev_dbg(&state->client->dev, "%s(): i2c write 0x%04x: 0x%x\n",
-				 __func__, reg, val);
+		dev_err(&state->client->dev,
+			"%s(): i2c write failed after %d retries, 0x%04x = 0x%x, err %d\n",
+			__func__, DS5_I2C_RETRY_COUNT, reg, val, ret);
+	else if (state->dfu_dev.dfu_state_flag == DS5_DFU_IDLE)
+		dev_dbg(&state->client->dev, "%s(): i2c write 0x%04x: 0x%x\n",
+			__func__, reg, val);
 
 	return ret;
 }
@@ -537,6 +553,7 @@ static int ds5_write_8(struct ds5 *state, u16 reg, u8 val)
 static int ds5_write(struct ds5 *state, u16 reg, u16 val)
 {
 	int ret;
+	int retry;
 	u8 value[2];
 
 	value[1] = val >> 8;
@@ -546,15 +563,25 @@ static int ds5_write(struct ds5 *state, u16 reg, u16 val)
 			"%s(): writing to register: 0x%04x, value1: 0x%x, value2:0x%x\n",
 			__func__, reg, value[1], value[0]);
 
-	ret = regmap_raw_write(state->regmap, reg, value, sizeof(value));
+	for (retry = 0; retry < DS5_I2C_RETRY_COUNT; retry++) {
+		ret = regmap_raw_write(state->regmap, reg, value, sizeof(value));
+		if (ret == 0)
+			break;
+		if (retry < DS5_I2C_RETRY_COUNT - 1) {
+			dev_warn(&state->client->dev,
+				"%s(): i2c write retry %d, 0x%04x = 0x%x, err %d\n",
+				__func__, retry + 1, reg, val, ret);
+			usleep_range(DS5_I2C_RETRY_DELAY_US,
+				     DS5_I2C_RETRY_DELAY_US + 500);
+		}
+	}
 	if (ret < 0)
 		dev_err(&state->client->dev,
-				"%s(): i2c write failed %d, 0x%04x = 0x%x\n",
-				__func__, ret, reg, val);
-	else
-		if (state->dfu_dev.dfu_state_flag == DS5_DFU_IDLE)
-			dev_dbg(&state->client->dev, "%s(): i2c write 0x%04x: 0x%x\n",
-				__func__, reg, val);
+			"%s(): i2c write failed after %d retries, 0x%04x = 0x%x, err %d\n",
+			__func__, DS5_I2C_RETRY_COUNT, reg, val, ret);
+	else if (state->dfu_dev.dfu_state_flag == DS5_DFU_IDLE)
+		dev_dbg(&state->client->dev, "%s(): i2c write 0x%04x: 0x%x\n",
+			__func__, reg, val);
 
 	return ret;
 }
@@ -562,41 +589,82 @@ static int ds5_write(struct ds5 *state, u16 reg, u16 val)
 static int ds5_raw_write(struct ds5 *state, u16 reg,
 		const void *val, size_t val_len)
 {
-	int ret = regmap_raw_write(state->regmap, reg, val, val_len);
+	int ret;
+	int retry;
+
+	for (retry = 0; retry < DS5_I2C_RETRY_COUNT; retry++) {
+		ret = regmap_raw_write(state->regmap, reg, val, val_len);
+		if (ret == 0)
+			break;
+		if (retry < DS5_I2C_RETRY_COUNT - 1) {
+			dev_warn(&state->client->dev,
+				"%s(): i2c raw write retry %d, 0x%04x size(%d), err %d\n",
+				__func__, retry + 1, reg, (int)val_len, ret);
+			usleep_range(DS5_I2C_RETRY_DELAY_US,
+				     DS5_I2C_RETRY_DELAY_US + 500);
+		}
+	}
 	if (ret < 0)
 		dev_err(&state->client->dev,
-				"%s(): i2c raw write failed %d, %04x size(%d) bytes\n",
-				__func__, ret, reg, (int)val_len);
-	else
-		if (state->dfu_dev.dfu_state_flag == DS5_DFU_IDLE)
-			dev_dbg(&state->client->dev,
-					"%s(): i2c raw write 0x%04x: %d bytes\n",
-					__func__, reg, (int)val_len);
+			"%s(): i2c raw write failed after %d retries, 0x%04x size(%d), err %d\n",
+			__func__, DS5_I2C_RETRY_COUNT, reg, (int)val_len, ret);
+	else if (state->dfu_dev.dfu_state_flag == DS5_DFU_IDLE)
+		dev_dbg(&state->client->dev,
+			"%s(): i2c raw write 0x%04x: %d bytes\n",
+			__func__, reg, (int)val_len);
 
 	return ret;
 }
 
 static int ds5_read(struct ds5 *state, u16 reg, u16 *val)
 {
-	int ret = regmap_raw_read(state->regmap, reg, val, 2);
-	if (ret < 0)
-		dev_err(&state->client->dev, "%s(): i2c read failed %d, 0x%04x\n",
-				__func__, ret, reg);
-	else {
-		if (state->dfu_dev.dfu_state_flag == DS5_DFU_IDLE)
-			dev_dbg(&state->client->dev, "%s(): i2c read 0x%04x: 0x%x\n",
-					__func__, reg, *val);
+	int ret;
+	int retry;
+
+	for (retry = 0; retry < DS5_I2C_RETRY_COUNT; retry++) {
+		ret = regmap_raw_read(state->regmap, reg, val, 2);
+		if (ret == 0)
+			break;
+		if (retry < DS5_I2C_RETRY_COUNT - 1) {
+			dev_warn(&state->client->dev,
+				"%s(): i2c read retry %d, 0x%04x, err %d\n",
+				__func__, retry + 1, reg, ret);
+			usleep_range(DS5_I2C_RETRY_DELAY_US,
+				     DS5_I2C_RETRY_DELAY_US + 500);
+		}
 	}
+	if (ret < 0)
+		dev_err(&state->client->dev,
+			"%s(): i2c read failed after %d retries, 0x%04x, err %d\n",
+			__func__, DS5_I2C_RETRY_COUNT, reg, ret);
+	else if (state->dfu_dev.dfu_state_flag == DS5_DFU_IDLE)
+		dev_dbg(&state->client->dev, "%s(): i2c read 0x%04x: 0x%x\n",
+			__func__, reg, *val);
 
 	return ret;
 }
 
 static int ds5_raw_read(struct ds5 *state, u16 reg, void *val, size_t val_len)
 {
-	int ret = regmap_raw_read(state->regmap, reg, val, val_len);
+	int ret;
+	int retry;
+
+	for (retry = 0; retry < DS5_I2C_RETRY_COUNT; retry++) {
+		ret = regmap_raw_read(state->regmap, reg, val, val_len);
+		if (ret == 0)
+			break;
+		if (retry < DS5_I2C_RETRY_COUNT - 1) {
+			dev_warn(&state->client->dev,
+				"%s(): i2c raw read retry %d, 0x%04x size(%d), err %d\n",
+				__func__, retry + 1, reg, (int)val_len, ret);
+			usleep_range(DS5_I2C_RETRY_DELAY_US,
+				     DS5_I2C_RETRY_DELAY_US + 500);
+		}
+	}
 	if (ret < 0)
-		dev_err(&state->client->dev, "%s(): i2c read failed %d, 0x%04x\n",
-			__func__, ret, reg);
+		dev_err(&state->client->dev,
+			"%s(): i2c raw read failed after %d retries, 0x%04x size(%d), err %d\n",
+			__func__, DS5_I2C_RETRY_COUNT, reg, (int)val_len, ret);
 
 	return ret;
 }
@@ -3805,7 +3873,7 @@ static const struct regmap_config ds5_regmap_max9295 = {
 	.reg_format_endian = REGMAP_ENDIAN_BIG,
 	.val_format_endian = REGMAP_ENDIAN_NATIVE,
 };
-static struct mutex serdes_lock__;
+static DEFINE_MUTEX(serdes_lock__);
 
 static int ds5_gmsl_serdes_setup(struct ds5 *state)
 {
@@ -4739,6 +4807,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	int ret = 0;
 	unsigned int i = 0;
 	int restore_val = 0;
+	int attempt;
 	u16 config_status_base, stream_status_base, stream_id, vc_id;
 	struct ds5_sensor *sensor = state->mux.last_set;
 
@@ -4788,10 +4857,19 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		// set manually, need to configure vc in pdata
 		state->g_ctx.dst_vc = vc_id;
 #endif
+		/*
+		 * Serialize SERDES pipe allocation and configuration
+		 * across all d4xx instances sharing the same GMSL link.
+		 * Without this, concurrent pipe setups race on the shared
+		 * MAX9295/MAX9296 hardware, causing I2C NACKs (-121) that
+		 * take down the entire bus.
+		 */
+		mutex_lock(&serdes_lock__);
 		sensor->pipe_id =
 			max9296_get_available_pipe_id(state->dser_dev,
 					(int)state->g_ctx.dst_vc);
 		if (sensor->pipe_id < 0) {
+			mutex_unlock(&serdes_lock__);
 			dev_err(&state->client->dev,
 				"No free pipe in max9296\n");
 			ret = -(ENOSR);
@@ -4800,6 +4878,9 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 #endif
 
 		ret = ds5_configure(state);
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+		mutex_unlock(&serdes_lock__);
+#endif
 		if (ret)
 			goto restore_s_state;
 
@@ -4808,20 +4889,75 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		if (ret < 0)
 			goto restore_s_state;
 
-		// check streaming status from FW
-		for (i = 0; i < DS5_START_MAX_COUNT; i++) {
-			ds5_read(state, stream_status_base, &streaming);
-			ds5_read(state, config_status_base, &status);
-			if ((status & DS5_STATUS_STREAMING) &&
-					streaming == DS5_STREAM_STREAMING)
-				break;
+		// check streaming status from FW: initial attempt plus one retry
+		for (attempt = 0; attempt < 3; attempt++) {
+			for (i = 0; i < DS5_START_MAX_COUNT; i++) {
+				ret = ds5_read(state, stream_status_base,
+					       &streaming);
+				if (ret < 0) {
+					msleep_range(DS5_START_POLL_TIME);
+					continue;
+				}
+				ret = ds5_read(state, config_status_base,
+					       &status);
+				if (ret < 0) {
+					msleep_range(DS5_START_POLL_TIME);
+					continue;
+				}
+				if ((status & DS5_STATUS_STREAMING) &&
+						streaming == DS5_STREAM_STREAMING)
+					break;
 
-			msleep_range(DS5_START_POLL_TIME);
+				/* Fail fast on firmware config errors */
+				if (status & (DS5_STATUS_INVALID_DT |
+					      DS5_STATUS_INVALID_RES |
+					      DS5_STATUS_INVALID_FPS)) {
+					dev_err(&state->client->dev,
+						"start: FW rejected config, status 0x%04x\n",
+						status);
+					i = DS5_START_MAX_COUNT;
+					break;
+				}
+
+				msleep_range(DS5_START_POLL_TIME);
+			}
+
+			if (i < DS5_START_MAX_COUNT)
+				break; /* success */
+
+			if (attempt == 0) {
+				/*
+				 * First attempt timed out. Stop the stream,
+				 * wait for FW to confirm idle, then retry.
+				 * The SERDES pipe and FW config are still in
+				 * place — only the start command needs resending.
+				 */
+				dev_warn(&state->client->dev,
+					"start timeout (status 0x%04x, stream 0x%04x), retrying\n",
+					status, streaming);
+				ds5_write(state, DS5_START_STOP_STREAM,
+					  DS5_STREAM_STOP | stream_id);
+				for (i = 0; i < DS5_START_MAX_COUNT; i++) {
+					ret = ds5_read(state,
+						       stream_status_base,
+						       &streaming);
+					if (ret == 0 &&
+					    streaming == DS5_STREAM_IDLE)
+						break;
+					msleep_range(DS5_START_POLL_TIME);
+				}
+				/* Re-send start command */
+				ret = ds5_write(state, DS5_START_STOP_STREAM,
+						DS5_STREAM_START | stream_id);
+				if (ret < 0)
+					goto restore_s_state;
+			}
 		}
 
-		if (DS5_START_MAX_COUNT == i) {
+		if (i >= DS5_START_MAX_COUNT) {
 			dev_err(&state->client->dev,
-				"start streaming failed, exit on timeout\n");
+				"start streaming failed after retry, status 0x%04x stream 0x%04x\n",
+				status, streaming);
 			/* notify fw */
 			ret = ds5_write(state, DS5_START_STOP_STREAM,
 					DS5_STREAM_STOP | stream_id);
@@ -4837,7 +4973,44 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		if (ret < 0)
 			goto restore_s_state;
 
+		/*
+		 * Wait for firmware to confirm stream has actually stopped.
+		 * Without this, a rapid stop/start cycle (e.g. resolution
+		 * change) can reconfigure the SERDES pipeline while the
+		 * firmware is still tearing down the previous stream,
+		 * corrupting GMSL link state and causing I2C NACKs (-121).
+		 */
+		for (i = 0; i < DS5_START_MAX_COUNT; i++) {
+			ret = ds5_read(state, stream_status_base, &streaming);
+			if (ret < 0) {
+				dev_warn(&state->client->dev,
+					"stop: i2c read failed (%d), retry %u\n",
+					ret, i);
+				msleep_range(DS5_START_POLL_TIME);
+				continue;
+			}
+			if (streaming == DS5_STREAM_IDLE) {
+				dev_dbg(&state->client->dev,
+					"stream stopped after %dms\n",
+					i * DS5_START_POLL_TIME);
+				break;
+			}
+			msleep_range(DS5_START_POLL_TIME);
+		}
+
+		if (i == DS5_START_MAX_COUNT) {
+			dev_warn(&state->client->dev,
+				"stop streaming timeout, stream_status: 0x%04x\n",
+				streaming);
+		}
+
+		/* Reset ret to 0 — stop polling is best-effort,
+		 * we still proceed with SERDES cleanup below.
+		 */
+		ret = 0;
+
 #ifdef CONFIG_VIDEO_D4XX_SERDES
+		mutex_lock(&serdes_lock__);
 		// reset data path when Y12I streaming is done
 		if (state->is_y8 &&
 			state->ir.sensor.config.format->data_type ==
@@ -4861,6 +5034,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		if (max9296_release_pipe(state->dser_dev, sensor->pipe_id) < 0)
 			dev_warn(&state->client->dev, "release pipe failed\n");
 		sensor->pipe_id = -1;
+		mutex_unlock(&serdes_lock__);
 #else
 #ifdef CONFIG_VIDEO_INTEL_IPU6
 		d4xx_reset_oneshot(state);
@@ -4882,9 +5056,11 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 restore_s_state:
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	if (on && sensor->pipe_id >= 0) {
+		mutex_lock(&serdes_lock__);
 		if (max9296_release_pipe(state->dser_dev, sensor->pipe_id) < 0)
 			dev_warn(&state->client->dev, "release pipe failed\n");
 		sensor->pipe_id = -1;
+		mutex_unlock(&serdes_lock__);
 	}
 #endif
 
@@ -6363,4 +6539,4 @@ MODULE_AUTHOR("Guennadi Liakhovetski <guennadi.liakhovetski@intel.com>,\n\
 				Shikun Ding <shikun.ding@intel.com>,\n\
 				Dmitry Perchanov <dmitry.perchanov@intel.com>");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("1.0.2.5");
+MODULE_VERSION("1.0.2.6");

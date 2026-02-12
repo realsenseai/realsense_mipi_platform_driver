@@ -4,25 +4,10 @@ Date: Tue, 3 Feb 2026 17:06:10 +0200
 Subject: [PATCH] Add GPIO tunneling for the external sync support
 
 ---
- .gitignore                  |  7 +++++++
  drivers/media/i2c/max9295.c | 11 +++++++++--
  drivers/media/i2c/max9296.c | 11 +++++++++++
- 3 files changed, 27 insertions(+), 2 deletions(-)
- create mode 100644 .gitignore
+ 2 files changed, 20 insertions(+), 2 deletions(-)
 
-diff --git a/.gitignore b/.gitignore
-new file mode 100644
-index 00000000..648c10ed
---- /dev/null
-+++ b/.gitignore
-@@ -0,0 +1,7 @@
-+/device-tree
-+*.cmd
-+*.ko
-+*.mod*
-+*.o*
-+*.symvers
-+/drivers/misc/mods
 diff --git a/drivers/media/i2c/max9295.c b/drivers/media/i2c/max9295.c
 index e7c77845..40568147 100644
 --- a/drivers/media/i2c/max9295.c
