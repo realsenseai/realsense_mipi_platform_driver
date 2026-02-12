@@ -153,11 +153,11 @@ sudo depmod
 4. Modify bootloader configuration:
  - open /boot/extlinux/extlinux.conf for editing using your preferred editor
  - Copy existing primary kernel and rename the copy to "dev"
- - Change the "MENU LABEL" to a meaningfull label (e.g "development kernel")
- - Change the "LINUX" line to point to the newely copied /boot/**dev**/Image
- - Add the "FDT" line pointing at the newely copied device tree "/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb"
+ - Change the "MENU LABEL" to a meaningful label (e.g "development kernel")
+ - Change the "LINUX" line to point to the newly copied /boot/**dev**/Image
+ - Add the "FDT" line pointing at the newly copied device tree "/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb"
  - add the "OVERLAYS" line pointing to the required overlay "tegra234-camera-d4xx-overlay/dual/else>.dtb
- - Select the new lable as the default
+ - Select the new label as the default
 
 The result should be:
 
