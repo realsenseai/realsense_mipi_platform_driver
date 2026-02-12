@@ -128,7 +128,7 @@ Following steps required:
 
 1. Create "dev" directory in boot (in order to not override the default kernel)
 ```
-sudo mkdir /boot/development
+sudo mkdir /boot/dev
 ```
 2. Copy build artifacts:
 If you build locally use those commands:
