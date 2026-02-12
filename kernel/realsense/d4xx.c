@@ -4843,7 +4843,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		if (ret < 0)
 			goto restore_s_state;
 
-		// check streaming status from FW, with two retries
+		// check streaming status from FW: initial attempt plus one retry
 		for (attempt = 0; attempt < 3; attempt++) {
 			for (i = 0; i < DS5_START_MAX_COUNT; i++) {
 				ret = ds5_read(state, stream_status_base,
