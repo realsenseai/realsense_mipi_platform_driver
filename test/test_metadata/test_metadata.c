@@ -116,6 +116,7 @@ static int streamFrames(int videoNode_fd, int md_fd, void* metaDataBuffers[SIZE_
         mdV4l2Buffer.type = V4L2_BUF_TYPE_META_CAPTURE;
         mdV4l2Buffer.memory = V4L2_MEMORY_MMAP;
 
+		fprintf(stderr, "Dqueue buffers...\n");
         int ret = ioctl(videoNode_fd, VIDIOC_DQBUF, &realsenseV4l2Buffer);
         if (ret < 0) {
             fprintf(stderr, "Error dequeuing depth buffer: %s\n", strerror(errno));
@@ -126,6 +127,7 @@ static int streamFrames(int videoNode_fd, int md_fd, void* metaDataBuffers[SIZE_
             fprintf(stderr, "Error dequeuing metadata buffer: %s\n", strerror(errno));
             return -1;
         }
+		fprintf(stderr, "Dqueue buffers done\n");
 
         FILE *f;
         if (first_write) {
@@ -343,8 +345,11 @@ int main(int argc, char** argv) {
                 fprintf(stderr, "Error opening color video devices\n");
                 return 1;
             }
+			fprintf(stderr, "Setting format\n");
             setFmt(video_fd, V4L2_PIX_FMT_YUYV, width, height);
+			fprintf(stderr, "Setting FPS\n");
             setFPS(video_fd, fps);
+			fprintf(stderr, "Requesting buffers\n");
             requestBuffers(video_fd, V4L2_BUF_TYPE_VIDEO_CAPTURE, V4L2_MEMORY_MMAP, SIZE_METADATA_BUFFERS);
             requestBuffers(md_fd, V4L2_BUF_TYPE_META_CAPTURE, V4L2_MEMORY_MMAP, SIZE_METADATA_BUFFERS); 
 
@@ -361,16 +366,19 @@ int main(int argc, char** argv) {
                     i);
             }
 
+			fprintf(stderr, "Stream ON/metadata\n");
             int ret = ioctl(md_fd, VIDIOC_STREAMON, &mdType);
             if (ret < 0) {
                 fprintf(stderr, "Error starting color metadata stream: %s\n", strerror(errno));
                 return 1;
             }
+			fprintf(stderr, "Stream ON/video\n");
             ret = ioctl(video_fd, VIDIOC_STREAMON, &vType);
             if (ret < 0) {
                 fprintf(stderr, "Error starting color stream: %s\n", strerror(errno));
                 return 1;
             }
+			fprintf(stderr, "Streams are ON\n");
             
             clock_gettime(CLOCK_MONOTONIC, &stream_start);
             streamFrames(video_fd, md_fd, metaDataBuffers, 0, "color");
@@ -379,6 +387,7 @@ int main(int argc, char** argv) {
                 munmap(depthBuffers[i], 2 * width * height);
                 munmap(metaDataBuffers[i], 4096);
             }
+			fprintf(stderr, "Stream OFF\n");
             ret = ioctl(md_fd, VIDIOC_STREAMOFF, &mdType);
             if (ret < 0) {
                 fprintf(stderr, "Error stopping color metadata stream: %s\n", strerror(errno));

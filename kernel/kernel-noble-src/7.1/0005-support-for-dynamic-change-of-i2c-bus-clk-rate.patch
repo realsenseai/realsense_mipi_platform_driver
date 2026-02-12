@@ -1,0 +1,104 @@
+From ce6faaedef68204e8b132bf44a0e4d2432dfb7ad Mon Sep 17 00:00:00 2001
+From: Arun-Prasad-V <arun.prasad.v@intel.com>
+Date: Mon, 4 Nov 2024 12:52:39 +0530
+Subject: [PATCH] Support for dynamic change of i2c bus-clk-rate
+
+Signed-off-by: Arun Prasad V <arun.prasad.v@intel.com>
+---
+ drivers/i2c/i2c-core-base.c    | 45 ++++++++++++++++++++++++++++++++++
+ include/linux/i2c.h            |  5 ++++
+ 3 files changed, 92 insertions(+)
+
+diff --git a/drivers/i2c/i2c-core-base.c b/drivers/i2c/i2c-core-base.c
+index c232535ca8f4..2edd24973cca 100644
+--- a/drivers/i2c/i2c-core-base.c
++++ b/drivers/i2c/i2c-core-base.c
+@@ -1285,10 +1285,33 @@ delete_device_store(struct device *dev, struct device_attribute *attr,
+ static DEVICE_ATTR_IGNORE_LOCKDEP(delete_device, S_IWUSR, NULL,
+ 				  delete_device_store);
+ 
++static ssize_t show_bus_clk_rate(struct device *dev,
++		struct device_attribute *attr, char *buf)
++{
++	struct i2c_adapter *adap = to_i2c_adapter(dev);
++
++	return sprintf(buf, "%ld\n", adap->bus_clk_rate);
++}
++
++static ssize_t set_bus_clk_rate(struct device *dev,
++		struct device_attribute *attr, const char *buf, size_t count)
++{
++	struct i2c_adapter *adap = to_i2c_adapter(dev);
++	char *p = (char *)buf;
++	int bus_clk_rate;
++
++	bus_clk_rate = memparse(p, &p);
++	dev_info(dev, "Setting clock rate %d on next transfer\n", bus_clk_rate);
++	adap->bus_clk_rate = bus_clk_rate;
++	return count;
++}
++static DEVICE_ATTR(bus_clk_rate, 0644, show_bus_clk_rate, set_bus_clk_rate);
++
+ static struct attribute *i2c_adapter_attrs[] = {
+ 	&dev_attr_name.attr,
+ 	&dev_attr_new_device.attr,
+ 	&dev_attr_delete_device.attr,
++	&dev_attr_bus_clk_rate.attr,
+ 	NULL
+ };
+ ATTRIBUTE_GROUPS(i2c_adapter);
+@@ -1401,6 +1424,28 @@ static int i2c_setup_host_notify_irq_domain(struct i2c_adapter *adap)
+ 	return 0;
+ }
+ 
++int i2c_set_adapter_bus_clk_rate(struct i2c_adapter *adap, int bus_rate)
++{
++	i2c_lock_bus(adap, I2C_LOCK_ROOT_ADAPTER);
++	adap->bus_clk_rate = bus_rate;
++	i2c_unlock_bus(adap, I2C_LOCK_ROOT_ADAPTER);
++
++	return 0;
++}
++EXPORT_SYMBOL_GPL(i2c_set_adapter_bus_clk_rate);
++
++int i2c_get_adapter_bus_clk_rate(struct i2c_adapter *adap)
++{
++	int bus_clk_rate;
++
++	i2c_lock_bus(adap, I2C_LOCK_ROOT_ADAPTER);
++	bus_clk_rate = adap->bus_clk_rate;
++	i2c_unlock_bus(adap, I2C_LOCK_ROOT_ADAPTER);
++
++	return bus_clk_rate;
++}
++EXPORT_SYMBOL_GPL(i2c_get_adapter_bus_clk_rate);
++
+ /**
+  * i2c_handle_smbus_host_notify - Forward a Host Notify event to the correct
+  * I2C client.
+diff --git a/include/linux/i2c.h b/include/linux/i2c.h
+index 2ce3efbe9198..9d876ad6373c 100644
+--- a/include/linux/i2c.h
++++ b/include/linux/i2c.h
+@@ -131,6 +131,10 @@ int i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num);
+ /* Unlocked flavor */
+ int __i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num);
+ 
++/* Change bus clock rate for i2c adapter */
++extern int i2c_set_adapter_bus_clk_rate(struct i2c_adapter *adap, int bus_rate);
++extern int i2c_get_adapter_bus_clk_rate(struct i2c_adapter *adap);
++
+ /* This is the very generalized SMBus access routine. You probably do not
+    want to use this, though; one of the functions below may be much easier,
+    and probably just as fast.
+@@ -737,6 +741,7 @@ struct i2c_adapter {
+ 	const struct i2c_adapter_quirks *quirks;
+ 
+ 	struct irq_domain *host_notify_domain;
++	unsigned long bus_clk_rate;
+ 	struct regulator *bus_regulator;
+ 
+ 	struct dentry *debugfs;
+-- 
+2.34.1
+
