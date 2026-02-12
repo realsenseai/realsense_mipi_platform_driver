@@ -1,0 +1,86 @@
+From 71e364f579128502a796b19ad929d95bd42139e2 Mon Sep 17 00:00:00 2001
+From: Nikolai-L <nikolai.lyskov@realsenseai.com>
+Date: Tue, 3 Feb 2026 17:06:10 +0200
+Subject: [PATCH] Add GPIO tunneling for the external sync support
+
+---
+ drivers/media/i2c/max9295.c | 11 +++++++++--
+ drivers/media/i2c/max9296.c | 11 +++++++++++
+ 3 files changed, 27 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/media/i2c/max9295.c b/drivers/media/i2c/max9295.c
+index e7c77845..40568147 100644
+--- a/drivers/media/i2c/max9295.c
++++ b/drivers/media/i2c/max9295.c
+@@ -24,6 +24,7 @@
+ #define MAX9295_CTRL0_ADDR 0x10
+ #define MAX9295_SRC_CTRL_ADDR 0x2BF
+ #define MAX9295_SRC_PWDN_ADDR 0x02BE
++#define MAX9295_2C0_ADDR 0x02C0
+ #define MAX9295_SRC_OUT_RCLK_ADDR 0x3F1
+ #define MAX9295_START_PIPE_ADDR 0x311
+ #define MAX9295_PIPE_EN_ADDR 0x2
+@@ -84,7 +85,12 @@
+ 
+ #define MAX9295_RESET_ALL 0x80
+ #define MAX9295_RESET_SRC 0x60
++#define MAX9295_RESET_ESYNC 0x77
++
+ #define MAX9295_PWDN_GPIO 0x90
++#define MAX9295_PWDN_ESYNC 0x04
++
++#define MAX9295_2C0_ESYNC 0x57
+ 
+ #define MAX9295_MAX_PIPES 0x4
+ 
+@@ -354,8 +360,9 @@ int max9295_setup_control(struct device *dev)
+ 	max9295_write_reg(dev, MAX9295_I2C4_ADDR, (g_ctx->sdev_reg << 1));
+ 	max9295_write_reg(dev, MAX9295_I2C5_ADDR, (g_ctx->sdev_def << 1));
+ 
+-	max9295_write_reg(dev, MAX9295_SRC_PWDN_ADDR, MAX9295_PWDN_GPIO);
+-	max9295_write_reg(dev, MAX9295_SRC_CTRL_ADDR, MAX9295_RESET_SRC);
++	max9295_write_reg(dev, MAX9295_SRC_PWDN_ADDR, MAX9295_PWDN_ESYNC);
++	max9295_write_reg(dev, MAX9295_SRC_CTRL_ADDR, MAX9295_RESET_ESYNC);
++	max9295_write_reg(dev, MAX9295_2C0_ADDR, MAX9295_2C0_ESYNC);
+ 	max9295_write_reg(dev, MAX9295_SRC_OUT_RCLK_ADDR, MAX9295_SRC_RCLK);
+ 
+ 	g_ctx->serdev_found = true;
+diff --git a/drivers/media/i2c/max9296.c b/drivers/media/i2c/max9296.c
+index 97559460..d50bea51 100644
+--- a/drivers/media/i2c/max9296.c
++++ b/drivers/media/i2c/max9296.c
+@@ -16,6 +16,10 @@
+ #include <media/max9296.h>
+ 
+ /* register specifics */
++#define MAX9296_2C5_ADDR 0x2C5
++#define MAX9296_2C6_ADDR 0x2C6
++#define MAX9296_2C7_ADDR 0x2C7
++
+ #define MAX9296_DST_CSI_MODE_ADDR 0x330
+ #define MAX9296_LANE_MAP1_ADDR 0x333
+ #define MAX9296_LANE_MAP2_ADDR 0x334
+@@ -44,6 +48,10 @@
+ #define MAX9296_CTRL0_ADDR 0x10
+ 
+ /* data defines */
++#define MAX9296_2C5_ESYNC 0xAA
++#define MAX9296_2C6_ESYNC 0x17
++#define MAX9296_2C7_ESYNC 0x47
++
+ #define MAX9296_CSI_MODE_4X2 0x1
+ #define MAX9296_CSI_MODE_2X4 0x4
+ #define MAX9296_LANE_MAP1_4X2 0x44
+@@ -354,6 +362,9 @@ int max9296_setup_control(struct device *dev, struct device *s_dev)
+ 
+ 	max9296_write_reg(dev,
+ 			MAX9296_PWDN_PHYS_ADDR, MAX9296_ALLPHYS_NOSTDBY);
++	max9296_write_reg(dev, MAX9296_2C5_ADDR, MAX9296_2C5_ESYNC);
++	max9296_write_reg(dev, MAX9296_2C6_ADDR, MAX9296_2C6_ESYNC);
++	max9296_write_reg(dev, MAX9296_2C7_ADDR, MAX9296_2C7_ESYNC);
+ 
+ 	priv->sdev_ref++;
+ 
+-- 
+2.43.0
+
