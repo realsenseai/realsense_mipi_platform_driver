@@ -27,6 +27,9 @@ elif [[ "$1" == "--fg12-16ch" ]]; then
 elif [[ "$1" == "--fg12-16ch-dual" ]]; then
     JP5_D4XX_DTSI="tegra194-camera-d4xx-fg12-16ch-dual.dtsi"
     shift
+elif [[ "$1" == "--RDK" ]]; then
+    JP5_D4XX_DTSI="tegra194-camera-d4xx-RDK.dtsi"
+    shift
 fi
 
 . scripts/setup-common "$1"
