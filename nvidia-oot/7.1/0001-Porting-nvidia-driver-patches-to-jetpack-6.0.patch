@@ -443,7 +443,7 @@ index 91f8d5f8..d9be2677 100644
  
  	len = strscpy(cap->driver, "tegra-video", sizeof(cap->driver));
  	if (len < 0)
-@@ -2224,6 +2230,62 @@ static long tegra_channel_default_ioctl(struct file *file, void *fh,
+@@ -2224,6 +2230,66 @@ static long tegra_channel_default_ioctl(struct file *file, void *fh,
  	return v4l2_g_parm_cap(chan->video, sd, a);
  }
  
@@ -455,9 +455,11 @@ index 91f8d5f8..d9be2677 100644
 +	int ret = 0;
 +	struct v4l2_subdev_frame_interval interval;
 +
++	struct v4l2_subdev_pad_config pad_cfg;
++	struct v4l2_subdev_state state = {.pads = &pad_cfg};
 +	/* dmipx: fixing G_PARM EINVAL error */
-+//	ret = v4l2_subdev_call(sd, video, g_frame_interval, &interval);
-+	ret = sd->ops->video->g_frame_interval(sd, &interval);
++	ret = v4l2_subdev_call(sd, pad, get_frame_interval, &state, &interval);
++	// ret = sd->ops->pad->get_frame_interval(sd, &state, &interval);
 +
 +	a->parm.capture.timeperframe.numerator = interval.interval.numerator;
 +	a->parm.capture.timeperframe.denominator = interval.interval.denominator;
@@ -482,12 +484,14 @@ index 91f8d5f8..d9be2677 100644
 +	struct v4l2_subdev *sd = chan->subdev_on_csi;
 +	int ret = 0;
 +
++	struct v4l2_subdev_pad_config pad_cfg;
++	struct v4l2_subdev_state state = {.pads = &pad_cfg};
 +	struct v4l2_subdev_frame_interval interval;
 +	interval.pad = 1;
 +	interval.interval.numerator = a->parm.capture.timeperframe.numerator;
 +	interval.interval.denominator = a->parm.capture.timeperframe.denominator;
 +
-+	ret = v4l2_subdev_call(sd, video, s_frame_interval, &interval);
++	ret = v4l2_subdev_call(sd, pad, set_frame_interval, &state, &interval);
 +	if (ret == -ENOIOCTLCMD)
 +			return -ENOTTY;
 +
@@ -563,8 +567,8 @@ index 91f8d5f8..d9be2677 100644
 +	cap->capabilities = cap->device_caps | V4L2_CAP_DEVICE_CAPS |
 +			V4L2_CAP_EXT_PIX_FORMAT | V4L2_CAP_VIDEO_CAPTURE;
 +
-+	strlcpy(cap->driver, "tegra-embedded", sizeof(cap->driver));
-+	strlcpy(cap->card, vfh->vdev->name, sizeof(cap->card));
++	strscpy(cap->driver, "tegra-embedded", sizeof(cap->driver));
++	strscpy(cap->card, vfh->vdev->name, sizeof(cap->card));
 +	snprintf(cap->bus_info, sizeof(cap->bus_info), "platform:%s:%u",
 +			dev_name(chan->vi->dev), chan->port[0]);
 +
@@ -578,7 +582,7 @@ index 91f8d5f8..d9be2677 100644
 +		return -EINVAL;
 +
 +	f->pixelformat = V4L2_META_FMT_D4XX;
-+	strlcpy(f->description, "D4XX metadata format", sizeof(f->description));
++	strscpy(f->description, "D4XX metadata format", sizeof(f->description));
 +
 +	return 0;
 +}

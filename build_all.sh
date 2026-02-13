@@ -35,6 +35,7 @@ if [[ "$1" == "-h" ]]; then
 fi
 
 SRCS="$DEVDIR/sources_$JETPACK_VERSION"
+
 if [[ -n "$2" ]]; then
     SRCS=$(realpath $2)
 fi
@@ -50,7 +51,7 @@ else
         export CROSS_COMPILE=$DEVDIR/l4t-gcc/$JETPACK_VERSION/bin/aarch64-buildroot-linux-gnu-
     elif [[ "$JETPACK_VERSION" == "5.x" ]]; then
         export CROSS_COMPILE=$DEVDIR/l4t-gcc/$JETPACK_VERSION/bin/aarch64-buildroot-linux-gnu-
-    elif [[ "$JETPACK_VERSION" == "4.6.1" ]]; then
+    elif [[ "$JETPACK_VERSION" == "4.x" ]]; then
         export CROSS_COMPILE=$DEVDIR/l4t-gcc/$JETPACK_VERSION/bin/aarch64-linux-gnu-
     fi
 fi
@@ -83,15 +84,15 @@ fi
 # Build jp6 out-of-tree modules
 # following: 
 # https://docs.nvidia.com/jetson/archives/r36.2/DeveloperGuide/SD/Kernel/KernelCustomization.html#building-the-jetson-linux-kernel
-if version_lt "$JETPACK_VERSION" "6.0" ]]; then
-#jp4/5
+if version_lt "$JETPACK_VERSION" "6.0"; then
+    #JP4/5
     cd $SRCS/$KERNEL_DIR
-    make ARCH=arm64 O=$TEGRA_KERNEL_OUT tegra_defconfig
+    make O=$TEGRA_KERNEL_OUT tegra_defconfig
     if [[ "$DEVDBG" == "1" ]]; then
         scripts/config --file $TEGRA_KERNEL_OUT/.config --enable DYNAMIC_DEBUG
     fi
-    make ARCH=arm64 O=$TEGRA_KERNEL_OUT -j${NPROC}
-    make ARCH=arm64 O=$TEGRA_KERNEL_OUT modules_install INSTALL_MOD_PATH=$KERNEL_MODULES_OUT
+    make O=$TEGRA_KERNEL_OUT -j${NPROC}
+    make O=$TEGRA_KERNEL_OUT modules_install INSTALL_MOD_PATH=$KERNEL_MODULES_OUT
 else
     cd $SRCS
     export KERNEL_HEADERS=$SRCS/$KERNEL_DIR
@@ -99,33 +100,33 @@ else
     if [[ "$DEVDBG" == "1" ]]; then
         cd $KERNEL_HEADERS
         # Generate .config file from default defconfig
-        make ARCH=arm64 defconfig
+        make defconfig
         # Update the CONFIG_DYNAMIC_DEBUG and CONFIG_DEBUG_CORE flags in .config file
         scripts/config --enable DYNAMIC_DEBUG
         scripts/config --enable DYNAMIC_DEBUG_CORE
         # Convert the .config file into defconfig 
-        make ARCH=arm64 savedefconfig
+        make savedefconfig
         # Save the new generated file as custom_defconfig
         cp defconfig ./arch/arm64/configs/custom_defconfig
         # Remove unwanted
         rm defconfig .config
-        make ARCH=arm64 mrproper
+        make mrproper
         cd $SRCS
         # Building the Image with custom_defconfig
-        make ARCH=arm64 KERNEL_DEF_CONFIG=custom_defconfig -C kernel
+        make KERNEL_DEF_CONFIG=custom_defconfig -C kernel
     else
         # Building the Image with default defconfig
-        make ARCH=arm64 -C kernel
+        dtstree=$SRCS/hardware \
+        make -C kernel
     fi
-    make ARCH=arm64 modules
-    make ARCH=arm64 dtbs
+    make modules
+    ! version_lt "$JETPACK_VERSION" "7.0" || make dtbs
     mkdir -p $TEGRA_KERNEL_OUT/rootfs/boot/dtb
     cp $SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-p3737-0000+p3701-0000-nv.dtb $TEGRA_KERNEL_OUT/rootfs/boot/dtb/
     cp $SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-p3737-0000+p3701-0005-nv.dtb $TEGRA_KERNEL_OUT/rootfs/boot/dtb/
     cp $SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/
     export INSTALL_MOD_PATH=$TEGRA_KERNEL_OUT/rootfs/
-    make ARCH=arm64 install -C kernel
-    make ARCH=arm64 modules_install
+    make modules_install
     # iio support
     KERNELVERSION=$(cat $KERNEL_HEADERS/include/config/kernel.release)
     KERNEL_MODULES_OUT=$INSTALL_MOD_PATH/lib/modules/${KERNELVERSION}

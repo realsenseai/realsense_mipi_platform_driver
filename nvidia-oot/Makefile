@@ -82,6 +82,7 @@ nvidia-oot: conftest hwpm
 		srctree.nvidia-oot=$(MAKEFILE_DIR)/nvidia-oot \
 		srctree.hwpm=$(MAKEFILE_DIR)/hwpm \
 		srctree.nvconftest=$(NVIDIA_CONFTEST) \
+		NV_OOT_IVC_EXT_SKIP_BUILD=y \
 		KBUILD_EXTRA_SYMBOLS=$(MAKEFILE_DIR)/hwpm/drivers/tegra/hwpm/Module.symvers \
 		$(MAKECMDGOALS)
 

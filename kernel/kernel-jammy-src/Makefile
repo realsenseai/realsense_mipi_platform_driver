@@ -28,25 +28,21 @@ kernel:
 	@echo   "Building $(KERNEL_SRC_DIR) sources"
 	@echo   "================================================================================"
 	$(MAKE) \
-		ARCH=arm64 \
 		-C $(kernel_source_dir) $(O_OPT) \
 		LOCALVERSION=$(version) \
 		$(KERNEL_DEF_CONFIG)
 
 	$(MAKE) -j $(NPROC) \
-		ARCH=arm64 \
 		-C $(kernel_source_dir) $(O_OPT) \
 		LOCALVERSION=$(version) \
 		--output-sync=target Image
 
 	$(MAKE) -j $(NPROC) \
-		ARCH=arm64 \
 		-C $(kernel_source_dir) $(O_OPT) \
 		LOCALVERSION=$(version) \
 		--output-sync=target dtbs
 
 	$(MAKE) -j $(NPROC) \
-		ARCH=arm64 \
 		-C $(kernel_source_dir) $(O_OPT) \
 		LOCALVERSION=$(version) \
 		--output-sync=target modules
@@ -68,7 +64,6 @@ install:
 	@echo   "================================================================================"
 	install $(kernel_image) $(INSTALL_MOD_PATH)/boot/
 	$(MAKE) \
-		ARCH=arm64 \
 		-C $(kernel_source_dir) $(O_OPT) \
 		LOCALVERSION=$(version) \
 		INSTALL_MOD_PATH=$(INSTALL_MOD_PATH) \
@@ -83,7 +78,6 @@ clean:
 	@echo   "Cleaning $(KERNEL_SRC_DIR) sources"
 	@echo   "================================================================================"
 	$(MAKE) \
-		ARCH=arm64 \
 		-C $(kernel_source_dir) $(O_OPT) \
 		mrproper
 	@echo   "================================================================================"

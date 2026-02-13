@@ -26,13 +26,14 @@ function DisplayNvidiaLicense {
     ## display the page ##
     echo -e "${LICENSE}\n"
 
-    read -t 30 -n 1 -s -r -e -p $'\e[33mPress any key within 30 seconds to ACCEPT and continue...\e[0m'
+    read -n 1 -s -r -e -p $'\e[33mPress any key to ACCEPT and continue...\e[0m'
     echo
 }
 
 export DEVDIR=$(cd `dirname $0` && pwd)
 
 . $DEVDIR/scripts/setup-common "$1"
+
 echo "Setup JetPack "$version" to sources_$JETPACK_VERSION"
 
 # Display NVIDIA license
@@ -57,12 +58,11 @@ else
         elif [[ "$JETPACK_VERSION" == "5.x" ]]; then
             wget --quiet --show-progress https://developer.nvidia.com/embedded/jetson-linux/bootlin-toolchain-gcc-93 -O aarch64--glibc--stable-final.tar.gz
             tar xf aarch64--glibc--stable-final.tar.gz
-        elif [[ "$JETPACK_VERSION" == "4.6.1" ]]; then
+        elif [[ "$JETPACK_VERSION" == "4.x" ]]; then
             wget --quiet --show-progress http://releases.linaro.org/components/toolchain/binaries/7.3-2018.05/aarch64-linux-gnu/gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu.tar.xz
             tar xf gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu.tar.xz --strip-components 1
         fi
     fi
-    echo
 fi
 
 [[ -d sources_$JETPACK_VERSION ]] && echo -e "In a case you have local changes you may reset them with ./apply_patches.sh reset\n"
@@ -99,22 +99,18 @@ if [[ ! -d sources_$JETPACK_VERSION && -f "$TARBALL_PATH" ]]; then
     echo "Sources extracted successfully from local cache"
 else
     echo "Cloning sources from NVIDIA repository..."
-    if [[ -f "./scripts/source_sync_$1.sh" ]]; then
-        "./scripts/source_sync_$1.sh" -t "$L4T_VERSION" -d "sources_$JETPACK_VERSION"
-    elif [[ -f "./scripts/source_sync_$JETPACK_VERSION.sh" ]]; then
-        ./scripts/source_sync_$JETPACK_VERSION.sh -t $L4T_VERSION -d sources_$JETPACK_VERSION
-    fi
+    ./scripts/sync-sources.sh -t $L4T_VERSION -d sources_$JETPACK_VERSION -k
 fi
 
 # copy Makefile for jp6
 if ! version_lt "$JETPACK_VERSION" "6.x"; then
     cp ./nvidia-oot/Makefile "sources_$JETPACK_VERSION/"
-    cp ./$KERNEL_DIR/Makefile "sources_$JETPACK_VERSION/kernel"
+    cp ./$KERNEL_DIR/Makefile "sources_$JETPACK_VERSION/kernel/"
 fi
 
 # remove BUILD_NUMBER env dependency kernel vermagic
-if [[ "${JETPACK_VERSION}" == "4.6.1" ]]; then
-    sed -i s/'UTS_RELEASE=\$(KERNELRELEASE)-ab\$(BUILD_NUMBER)'/'UTS_RELEASE=\$(KERNELRELEASE)'/g ./sources_$1/kernel/kernel-4.9/Makefile
-    sed -i 's/the-space :=/E =/g' ./sources_$1/kernel/kernel-4.9/scripts/Kbuild.include
-    sed -i 's/the-space += /the-space = \$E \$E/g' ./sources_$1/kernel/kernel-4.9/scripts/Kbuild.include
+if [[ "${JETPACK_VERSION}" == "4.x" ]]; then
+    sed -i s/'UTS_RELEASE=\$(KERNELRELEASE)-ab\$(BUILD_NUMBER)'/'UTS_RELEASE=\$(KERNELRELEASE)'/g ./sources_${JETPACK_VERSION}/kernel/kernel-4.9/Makefile
+    sed -i 's/the-space :=/E =/g' ./sources_${JETPACK_VERSION}/kernel/kernel-4.9/scripts/Kbuild.include
+    sed -i 's/the-space += /the-space = \$E \$E/g' ./sources_${JETPACK_VERSION}/kernel/kernel-4.9/scripts/Kbuild.include
 fi

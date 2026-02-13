@@ -3,15 +3,18 @@
 supported="7.1, 7.0, 6.2.1, 6.2, 6.1, 6.0, 5.1.2, 5.0.2, 4.6.1"
 
 if [[ $1 == "-h" ]]; then
-    echo "setup_workspace.sh JetPack_version"
-    echo "setup_workspace.sh -h"
+    echo "$0 JetPack_version"
+    echo "$0 -h"
     echo "JetPack_version can be $supported"
     exit 1
 fi
 
 version="$1"
-if [[ -z "$version" && -f "jetson_version" ]]; then
-	version="$(cat jetson_version)"
+if [[ -z "$version" ]]; then
+	version="${supported%%,*}"
+	if [[ -f "jetson_version" ]]; then
+		version="$(cat jetson_version)"
+	fi
 fi
 
 export JETPACK_VERSION="$version"
@@ -19,6 +22,7 @@ export REVISION="35.1"
 export L4T_VERSION=jetson_"${REVISION}"
 export KERNEL_DIR="kernel/kernel-5.10"
 export LICENSE=release
+export ARCH=arm64
 
 function version_lt {
     IFS='.' read -r -a v1 <<< "$1"
@@ -30,6 +34,7 @@ function version_lt {
     return 1
 }
 
+echo "JetPack version $version..."
 if [[ "$JETPACK_VERSION" =~ ^7\.[0-1]$ ]]; then
 	if [[ $JETPACK_VERSION == "7.1" ]]; then
 		REVISION="38.4"
@@ -67,6 +72,7 @@ elif [[ $JETPACK_VERSION == "4.6.1" ]]; then
 	REVISION="32.7.1"
 	L4T_VERSION="tegra-l4t-r${REVISION}"
 	LICENSE=T186
+	JETPACK_VERSION="4.x"
 else
 	echo "Wrong JetPack version ($JETPACK_VERSION)! Only $supported supported."
 	exit 1
