@@ -1,9 +1,9 @@
 ---
-name: build-deploy
-description: Build and deploy the RealSense MIPI platform driver for NVIDIA Jetson. Use when the user wants to build the kernel/driver/DTBs for a specific JetPack version, deploy to a Jetson device, or troubleshoot build issues. Triggers on requests mentioning build, compile, deploy, flash, install kernel, or JetPack version numbers (4.6.1, 5.0.2, 5.1.2, 6.0, 6.1, 6.2, 6.2.1).
+name: build
+description: Build the RealSense MIPI platform driver for NVIDIA Jetson. Use when the user wants to build the kernel/driver/DTBs for a specific JetPack version or troubleshoot build issues. Triggers on requests mentioning build, compile, make, or JetPack version numbers (4.6.1, 5.0.2, 5.1.2, 6.0, 6.1, 6.2, 6.2.1).
 ---
 
-# Build & Deploy Skill
+# Build Skill
 
 ## Supported JetPack Versions
 
@@ -15,18 +15,37 @@ Always ask the user which JetPack version to target if not specified.
 
 All commands run from the repository root. The `$VERSION` placeholder below refers to the JetPack version (e.g., `6.2`).
 
-### Step 1: Apply patches (if workspace already set up)
+### Step 1: Ask whether to apply patches
+
+Ask the user whether they need to apply patches or just copy `d4xx.c` and build.
+
+- **Apply patches** — Full reset and re-apply of all patches. Required after a fresh workspace setup, when kernel/DT patches changed, or when the user explicitly asks for it.
+- **Copy d4xx.c only** — Quick path when only the d4xx driver source changed. Skips patch reset/apply and just copies the driver file to the build tree.
+
+#### Option A: Full patch apply
 
 Requires `git config user.name` and `git config user.email` to be set.
 
 Always reset patches before re-applying:
 ```bash
 ./apply_patches.sh $VERSION reset
-```
-
-```bash
 ./apply_patches.sh $VERSION
 ```
+
+#### Option B: Copy d4xx.c only (skip patches)
+
+Copy the driver source directly to the build tree:
+
+- **JP 6.x (Orin):**
+  ```bash
+  cp kernel/realsense/d4xx.c sources_$VERSION/nvidia-oot/drivers/media/i2c/d4xx.c
+  ```
+- **JP 4.x / 5.x (Xavier):**
+  ```bash
+  cp kernel/realsense/d4xx.c sources_$VERSION/kernel/nvidia/drivers/media/i2c/d4xx.c
+  ```
+
+Where `$VERSION` is the actual JetPack version (e.g., `6.2`, `5.1.2`), matching the `sources_*` directory name.
 
 ### Step 2: Build
 
@@ -40,36 +59,11 @@ Flags:
 
 Output directory: `images/$VERSION/` (normalized: `images/6.x/` for JP 6.x, `images/5.x/` for JP 5.x).
 
-For Debian packages:
-```bash
-./build_all_deb.sh [--no-dbg-pkg] $VERSION
-```
-
-### Step 3: Deploy to Jetson
-
-To deploy use this bash command:
-
-```bash
-./scripts/deploy_kernel.sh $VERSION <TARGET_IP> [USERNAME] [REMOTE_PATH]
-```
-
-Defaults: USERNAME=`administrator`, REMOTE_PATH='git.USER.NAME'
-
-The command must have all 3 arguments to perform the full deploy.
-Ask the user to provide username and remote path if not provided.
-Save in mempory for the next deploy command.
-
-Deploy packs build artifacts into `kernel_mod/$VERSION/`, SCPs to the Jetson, runs the on-device install script, then reboots.
-
-Without a TARGET argument, deploy only packages locally (no SCP/reboot).
-
-reboot of the jetson will take about 2-5 minutes. After reboot, the new kernel/modules should be active.
-
 ## Build Architecture Details
 
 ### What gets built per JetPack generation
 
-**JP 6.x (Orin):** Out-of-tree module build. Builds kernel image, NVIDIA OOT modules (nvidia-oot, nvgpu, etc.), device tree overlays (`tegra234-camera-d4xx-overlay*.dtbo`). Sources in `sources_6.x/`.
+**JP 6.x (Orin):** Out-of-tree module build. Builds kernel image, NVIDIA OOT modules (nvidia-oot, nvgpu, etc.), device tree overlays (`tegra234-camera-d4xx-overlay*.dtbo`). Sources in `sources_6.*/`. i.e for JP6.2 sources will be located at `sources_6.2/`
 
 **JP 5.x / 4.6.1 (Xavier):** In-tree kernel build with `tegra_defconfig`. Builds kernel image, DTBs, and modules. Sources in `sources_5.x/` or `sources_4.6.1/`.
 
@@ -85,18 +79,6 @@ Native builds on aarch64 skip toolchain setup. Cross-compilation toolchains are 
 - `kernel/realsense/d4xx.c` → `sources_*/nvidia-oot/drivers/media/i2c/` (JP 6.x) or `sources_*/kernel/nvidia/drivers/media/i2c/` (JP 4/5)
 - `hardware/realsense/tegra234-camera-d4xx-overlay*.dts` → overlay dir (JP 6.x)
 - `hardware/realsense/tegra194-camera-d4xx-*.dtsi` → DT dir (JP 4/5)
-
-### Step 4: Verify deployment
-
-After deploy and reboot, SSH into the Jetson and run:
-
-```bash
-sudo dmesg | grep d4xx          # Check driver probe — expect "d4xx" probe messages with no errors
-ls -l /dev/video*                # Should show 6 video devices per camera (video0–video5)
-v4l2-ctl -d0 --stream-mmap      # Verify streaming works
-```
-
-If `dmesg` shows no d4xx messages or `/dev/video*` devices are missing, the driver did not load — check for patch/build version mismatch or missing DTB overlay.
 
 ## Common Issues
 

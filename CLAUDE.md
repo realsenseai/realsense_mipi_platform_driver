@@ -25,8 +25,6 @@ Full build flow for a given JetPack version (e.g., 6.2):
 
 Build outputs go to `images/<version>/` (e.g., `images/6.x/`).
 
-For Debian packages: `./build_all_deb.sh [--no-dbg-pkg] <version>`
-
 CI runs these three steps for each JetPack version (see `.github/workflows/build-jp*.yml`). CI requires `git config user.email/name` to be set before `apply_patches.sh`.
 
 ### Patch application
