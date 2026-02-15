@@ -16,16 +16,16 @@ index 90f5a90e6..f51bb49b8 100644
  		To compile this driver as a module, choose M here: the module
  		will be called d4xx.
  
-+config VIDEO_D4XX_SERDES
-+	bool "D4XX camera sensor setup with Maxim Serdes"
-+	depends on VIDEO_D4XX
-+        default y
-+	help
-+		This is a Video4Linux2 sensor-level driver for the Intel
-+		D4XX depth camera sensor
-+
-+                This option is for setup with Maxim Serdes.
-+
++#config VIDEO_D4XX_SERDES
++#	bool "D4XX camera sensor setup with Maxim Serdes"
++#	depends on VIDEO_D4XX
++#        default n
++#	help
++#		This is a Video4Linux2 sensor-level driver for the Intel
++#		D4XX depth camera sensor
++#
++#                This option is for setup with Maxim Serdes.
++#
  endmenu
  
  endif
