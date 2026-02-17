@@ -114,37 +114,6 @@
 		};
 	};
 
-	gpio@2200000 {
-		cam0-pwdn {
-			gpio-hog;
-			output-high;
-			status = "okay";
-			gpios = <CAM0_PWDN GPIO_ACTIVE_HIGH>;
-			label = "cam0-pwdn";
-		};
-		cam1-pwdn {
-			gpio-hog;
-			output-high;
-			status = "okay";
-			gpios = <CAM1_PWDN GPIO_ACTIVE_HIGH>;
-			label = "cam1-pwdn";
-		};
-		cam2-pwdn {
-			gpio-hog;
-			output-high;
-			status = "okay";
-			gpios = <CAM2_PWDN GPIO_ACTIVE_HIGH>;
-			label = "cam2-pwdn";
-		};
-		cam3-pwdn {
-			gpio-hog;
-			output-high;
-			status = "okay";
-			gpios = <CAM3_PWDN GPIO_ACTIVE_HIGH>;
-			label = "cam3-pwdn";
-		};
-	};
-
 	i2c@3180000 {
 		status = "ok";
 		clock-frequency = <100000>;
@@ -172,6 +141,7 @@
 					csi-mode = "2x4";
 					max-src = <1>;
 					channel = "a";
+					pwdn-gpios = <&tegra_main_gpio CAM0_PWDN GPIO_ACTIVE_HIGH>;
 				};
 
 				ser_a: max9295_a@40 {
@@ -382,6 +352,7 @@
 					csi-mode = "2x4";
 					max-src = <1>;
 					channel = "b";
+					pwdn-gpios = <&tegra_main_gpio CAM1_PWDN GPIO_ACTIVE_HIGH>;
 				};
 
 				ser_b: max9295_a@40 {
@@ -405,14 +376,14 @@
 
 						port@0 {
 							reg = <0>;
-						ds5_4_out: endpoint {
-							port-index = <2>;
-							bus-width = <2>;
-							remote-endpoint = <&csi_in4>;
-							vc-id = <0>;
+							ds5_4_out: endpoint {
+								port-index = <4>;
+								bus-width = <2>;
+								remote-endpoint = <&csi_in4>;
+								vc-id = <0>;
+							};
 						};
 					};
-				};
 					mode0 {
 						pixel_t = "grey_y16";
 						num_lanes = "2";
@@ -452,14 +423,14 @@
 
 						port@0 {
 							reg = <0>;
-						ds5_5_out: endpoint {
-							port-index = <2>;
-							bus-width = <2>;
-							remote-endpoint = <&csi_in5>;
-							vc-id = <1>;
+							ds5_5_out: endpoint {
+								port-index = <5>;
+								bus-width = <2>;
+								remote-endpoint = <&csi_in5>;
+								vc-id = <1>;
+							};
 						};
 					};
-				};
 					mode0 {
 						pixel_t = "grey_y16";
 						num_lanes = "2";
@@ -499,14 +470,14 @@
 
 						port@0 {
 							reg = <0>;
-						ds5_6_out: endpoint {
-							port-index = <2>;
-							bus-width = <2>;
-							remote-endpoint = <&csi_in6>;
-							vc-id = <2>;
+							ds5_6_out: endpoint {
+								port-index = <6>;
+								bus-width = <2>;
+								remote-endpoint = <&csi_in6>;
+								vc-id = <2>;
+							};
 						};
 					};
-				};
 					/* mode0: Y8, mode1: depth D16 */
 					mode0 {
 						pixel_t = "grey_y16";
@@ -547,14 +518,14 @@
 
 						port@0 {
 							reg = <0>;
-						ds5_7_out: endpoint {
-							port-index = <2>;
-							bus-width = <2>;
-							remote-endpoint = <&csi_in7>;
-							vc-id = <3>;
+							ds5_7_out: endpoint {
+								port-index = <7>;
+								bus-width = <2>;
+								remote-endpoint = <&csi_in7>;
+								vc-id = <3>;
+							};
 						};
 					};
-				};
 					mode0 {
 						pixel_t = "grey_y16";
 						num_lanes = "2";
