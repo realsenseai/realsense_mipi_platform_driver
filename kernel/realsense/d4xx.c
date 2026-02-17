@@ -50,9 +50,6 @@
 #define GMSL_CSI_DT_RAW_8 0x2A
 #define GMSL_CSI_DT_EMBED 0x12
 #endif
-/* Custom formats (known only to the FW) */
-#define GMSL_CSI_DT_CUSTOM_Y8I_16 0x32
-#define GMSL_CSI_DT_CUSTOM_IR_RGB_16 0x2F
 
 //#define DS5_DRIVER_NAME "DS5 RealSense camera driver"
 #define DS5_DRIVER_NAME "d4xx"
@@ -1333,12 +1330,7 @@ static const struct ds5_format ds5_y_formats_40x[] = {
 		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,
 		.n_resolutions = ARRAY_SIZE(d40x_calibration_sizes),
 		.resolutions = d40x_calibration_sizes,
-	}, {
-		.data_type = GMSL_CSI_DT_YUV422_8,	/* YUYV */
-		.mbus_code = MEDIA_BUS_FMT_YUYV8_1X16,
-		.n_resolutions = ARRAY_SIZE(y8_40x_sizes),
-		.resolutions = y8_40x_sizes,
-	}
+	},
 };
 
 static const struct ds5_format ds5_y_formats_41x[] = {
@@ -2023,19 +2015,12 @@ static int ds5_configure(struct ds5 *state)
 	if (state->is_depth && fmt != 0)
 		dt_value = 0x31;
 	else if (state->is_y8 && fmt != 0 &&
-		sensor->config.format->data_type == GMSL_CSI_DT_YUV422_8) {
-		if (sensor->config.format->mbus_code == MEDIA_BUS_FMT_VYUY8_1X16) {
-			dt_value = GMSL_CSI_DT_CUSTOM_Y8I_16;
-		} else if (sensor->config.format->mbus_code == MEDIA_BUS_FMT_YUYV8_1X16) {
-			dt_value = GMSL_CSI_DT_CUSTOM_IR_RGB_16;
-		} else {
-			dev_err(sensor->sd.dev, "%s(): Illegal mbus_code %u for IR sensor\n",
-					__func__, sensor->config.format->mbus_code);
-			return -EINVAL;
-		}
-	} else {
-		dt_value = fmt;
-	}
+		 sensor->config.format->data_type == GMSL_CSI_DT_YUV422_8)
+		ret = ds5_write(state, dt_addr, 0x32);
+	else
+		ret = ds5_write(state, dt_addr, fmt);
+	if (ret < 0)
+		return ret;
 
 	if (sensor->cached_dt_value != dt_value) {
 		ret = ds5_write(state, dt_addr, dt_value);
@@ -6596,4 +6581,4 @@ MODULE_AUTHOR("Guennadi Liakhovetski <guennadi.liakhovetski@intel.com>,\n\
 				Shikun Ding <shikun.ding@intel.com>,\n\
 				Dmitry Perchanov <dmitry.perchanov@intel.com>");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("1.0.2.7");
+MODULE_VERSION("1.0.2.8");
