@@ -69,6 +69,15 @@ export KERNEL_MODULES_OUT=$TEGRA_KERNEL_OUT/modules
 # Check if BUILD_NUMBER is set as it will add a postfix to the kernel name "vermagic" (normally it happens on CI who have BUILD_NUMBER defined)
 [[ -n "${BUILD_NUMBER}" ]] && echo "Warning! You have BUILD_NUMBER set to ${BUILD_NUMBER}, This will affect your vermagic"
 
+# Copy d4xx.c to the appropriate sources directory
+echo "Copying d4xx.c to sources directory..."
+if [[ "$JETPACK_VERSION" == "6.x" ]]; then
+    cp $DEVDIR/kernel/realsense/d4xx.c $SRCS/nvidia-oot/drivers/media/i2c/d4xx.c
+else
+    # For JetPack 5.x and 4.6.1
+    cp $DEVDIR/kernel/realsense/d4xx.c $SRCS/kernel/nvidia/drivers/media/i2c/d4xx.c
+fi
+
 # Build jp6 out-of-tree modules
 # following: 
 # https://docs.nvidia.com/jetson/archives/r36.2/DeveloperGuide/SD/Kernel/KernelCustomization.html#building-the-jetson-linux-kernel
