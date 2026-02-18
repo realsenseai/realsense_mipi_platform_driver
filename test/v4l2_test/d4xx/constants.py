@@ -62,5 +62,7 @@ STREAM_NAMES = {
     STREAM_IMU: "IMU",
 }
 
-# Driver name used in QUERYCAP
+# Driver names used in QUERYCAP
 D4XX_DRIVER_NAME = b"d4xx"
+TEGRA_VIDEO_DRIVER_NAME = b"tegra-video"
+KNOWN_DRIVER_NAMES = {D4XX_DRIVER_NAME, TEGRA_VIDEO_DRIVER_NAME}

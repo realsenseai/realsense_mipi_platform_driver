@@ -173,6 +173,211 @@ class TestRGBStreaming:
         _stream_and_validate(camera.rgb_path, w, h, pixfmt, int(fps))
 
 
+CONCURRENT_MIN_DURATION = 5.0  # seconds
+
+
+def _stream_depth_rgb(camera, width, height, rgb_pixfmt, duration):
+    """Stream depth Z16 + RGB at (width, height) for *duration* seconds.
+
+    Returns (depth_frames, rgb_frames) lists of (v4l2_buffer, data).
+    """
+    depth_dev = V4L2Device(camera.depth_path)
+    rgb_dev = V4L2Device(camera.rgb_path)
+
+    depth_dev.open()
+    rgb_dev.open()
+
+    try:
+        depth_dev.set_format(width, height, ioctls.V4L2_PIX_FMT_Z16)
+        depth_dev.set_parm(30)
+
+        rgb_dev.set_format(width, height, rgb_pixfmt)
+        rgb_dev.set_parm(30)
+
+        depth_stream = StreamContext(depth_dev, buf_count=4)
+        rgb_stream = StreamContext(rgb_dev, buf_count=4)
+
+        depth_stream.__enter__()
+        rgb_stream.__enter__()
+
+        try:
+            depth_frames = []
+            rgb_frames = []
+            per_frame_timeout = 2.0
+            start = time.monotonic()
+
+            while time.monotonic() - start < duration:
+                dbuf, ddata = depth_stream.dequeue(timeout=per_frame_timeout)
+                depth_frames.append((dbuf, ddata))
+                depth_stream.requeue(dbuf)
+
+                rbuf, rdata = rgb_stream.dequeue(timeout=per_frame_timeout)
+                rgb_frames.append((rbuf, rdata))
+                rgb_stream.requeue(rbuf)
+
+            return depth_frames, rgb_frames
+
+        finally:
+            rgb_stream.__exit__(None, None, None)
+            depth_stream.__exit__(None, None, None)
+    finally:
+        rgb_dev.close()
+        depth_dev.close()
+
+
+@pytest.mark.d457
+class TestDepthRGBConcurrent:
+    """Concurrent depth + RGB streaming at every common resolution."""
+
+    def test_depth_rgb_concurrent(self, camera, common_depth_rgb_resolutions,
+                                  resolution):
+        """Stream depth+RGB concurrently at a common resolution for 5+ s."""
+        _, rgb_pixfmt = common_depth_rgb_resolutions
+        width, height = resolution
+
+        depth_frames, rgb_frames = _stream_depth_rgb(
+            camera, width, height, rgb_pixfmt, CONCURRENT_MIN_DURATION,
+        )
+
+        assert len(depth_frames) > 0, "No depth frames"
+        assert len(rgb_frames) > 0, "No RGB frames"
+
+        # Non-empty data
+        nonzero_depth = sum(1 for _, d in depth_frames if len(d) > 0)
+        assert nonzero_depth == len(depth_frames), \
+            f"{len(depth_frames) - nonzero_depth} empty depth frames"
+
+        nonzero_rgb = sum(1 for _, d in rgb_frames if len(d) > 0)
+        assert nonzero_rgb == len(rgb_frames), \
+            f"{len(rgb_frames) - nonzero_rgb} empty RGB frames"
+
+        # Depth sequence monotonic
+        depth_seqs = [buf.sequence for buf, _ in depth_frames]
+        for i in range(1, len(depth_seqs)):
+            assert depth_seqs[i] > depth_seqs[i - 1], \
+                f"Depth seq not monotonic: {depth_seqs[i-1]} -> {depth_seqs[i]}"
+
+        # RGB sequence monotonic
+        rgb_seqs = [buf.sequence for buf, _ in rgb_frames]
+        for i in range(1, len(rgb_seqs)):
+            assert rgb_seqs[i] > rgb_seqs[i - 1], \
+                f"RGB seq not monotonic: {rgb_seqs[i-1]} -> {rgb_seqs[i]}"
+
+
+def _stream_depth_rgb_ir(camera, width, height, rgb_pixfmt, duration):
+    """Stream depth Z16 + RGB + IR GREY at (width, height) for *duration* seconds.
+
+    Returns (depth_frames, rgb_frames, ir_frames) lists of (v4l2_buffer, data).
+    """
+    depth_dev = V4L2Device(camera.depth_path)
+    rgb_dev = V4L2Device(camera.rgb_path)
+    ir_dev = V4L2Device(camera.ir_path)
+
+    depth_dev.open()
+    rgb_dev.open()
+    ir_dev.open()
+
+    try:
+        depth_dev.set_format(width, height, ioctls.V4L2_PIX_FMT_Z16)
+        depth_dev.set_parm(30)
+
+        rgb_dev.set_format(width, height, rgb_pixfmt)
+        rgb_dev.set_parm(30)
+
+        ir_dev.set_format(width, height, ioctls.V4L2_PIX_FMT_GREY)
+        ir_dev.set_parm(30)
+
+        depth_stream = StreamContext(depth_dev, buf_count=4)
+        rgb_stream = StreamContext(rgb_dev, buf_count=4)
+        ir_stream = StreamContext(ir_dev, buf_count=4)
+
+        depth_stream.__enter__()
+        rgb_stream.__enter__()
+        ir_stream.__enter__()
+
+        try:
+            depth_frames = []
+            rgb_frames = []
+            ir_frames = []
+            per_frame_timeout = 2.0
+            start = time.monotonic()
+
+            while time.monotonic() - start < duration:
+                dbuf, ddata = depth_stream.dequeue(timeout=per_frame_timeout)
+                depth_frames.append((dbuf, ddata))
+                depth_stream.requeue(dbuf)
+
+                rbuf, rdata = rgb_stream.dequeue(timeout=per_frame_timeout)
+                rgb_frames.append((rbuf, rdata))
+                rgb_stream.requeue(rbuf)
+
+                ibuf, idata = ir_stream.dequeue(timeout=per_frame_timeout)
+                ir_frames.append((ibuf, idata))
+                ir_stream.requeue(ibuf)
+
+            return depth_frames, rgb_frames, ir_frames
+
+        finally:
+            ir_stream.__exit__(None, None, None)
+            rgb_stream.__exit__(None, None, None)
+            depth_stream.__exit__(None, None, None)
+    finally:
+        ir_dev.close()
+        rgb_dev.close()
+        depth_dev.close()
+
+
+@pytest.mark.d457
+class TestDepthRGBIRConcurrent:
+    """Concurrent depth + RGB + IR streaming at every common resolution."""
+
+    def test_depth_rgb_ir_concurrent(self, camera,
+                                      common_depth_rgb_ir_resolutions,
+                                      tri_resolution):
+        """Stream depth+RGB+IR concurrently at a common resolution for 5+ s."""
+        _, rgb_pixfmt = common_depth_rgb_ir_resolutions
+        width, height = tri_resolution
+
+        depth_frames, rgb_frames, ir_frames = _stream_depth_rgb_ir(
+            camera, width, height, rgb_pixfmt, CONCURRENT_MIN_DURATION,
+        )
+
+        assert len(depth_frames) > 0, "No depth frames"
+        assert len(rgb_frames) > 0, "No RGB frames"
+        assert len(ir_frames) > 0, "No IR frames"
+
+        # Non-empty data
+        nonzero_depth = sum(1 for _, d in depth_frames if len(d) > 0)
+        assert nonzero_depth == len(depth_frames), \
+            f"{len(depth_frames) - nonzero_depth} empty depth frames"
+
+        nonzero_rgb = sum(1 for _, d in rgb_frames if len(d) > 0)
+        assert nonzero_rgb == len(rgb_frames), \
+            f"{len(rgb_frames) - nonzero_rgb} empty RGB frames"
+
+        nonzero_ir = sum(1 for _, d in ir_frames if len(d) > 0)
+        assert nonzero_ir == len(ir_frames), \
+            f"{len(ir_frames) - nonzero_ir} empty IR frames"
+
+        # Depth sequence monotonic
+        depth_seqs = [buf.sequence for buf, _ in depth_frames]
+        for i in range(1, len(depth_seqs)):
+            assert depth_seqs[i] > depth_seqs[i - 1], \
+                f"Depth seq not monotonic: {depth_seqs[i-1]} -> {depth_seqs[i]}"
+
+        # RGB sequence monotonic
+        rgb_seqs = [buf.sequence for buf, _ in rgb_frames]
+        for i in range(1, len(rgb_seqs)):
+            assert rgb_seqs[i] > rgb_seqs[i - 1], \
+                f"RGB seq not monotonic: {rgb_seqs[i-1]} -> {rgb_seqs[i]}"
+
+        # IR sequence monotonic
+        ir_seqs = [buf.sequence for buf, _ in ir_frames]
+        for i in range(1, len(ir_seqs)):
+            assert ir_seqs[i] > ir_seqs[i - 1], \
+                f"IR seq not monotonic: {ir_seqs[i-1]} -> {ir_seqs[i]}"
+
+
 @pytest.mark.d457
 class TestStreamStartStop:
     """Stream start/stop cycling."""
