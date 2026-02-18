@@ -144,8 +144,6 @@
 #define DEF_DEPTH_EXP			33000
 #define DEF_RGB_EXP			1660
 
-#define DS5_FIXED_REG_ADDR 0x1a
-
 enum ds5_mux_pad {
 	DS5_MUX_PAD_EXTERNAL,
 	DS5_MUX_PAD_DEPTH,
