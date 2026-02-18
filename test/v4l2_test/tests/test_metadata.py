@@ -35,11 +35,15 @@ def _capture_depth_with_metadata(camera, width=848, height=480, fps=30):
         depth_dev.set_format(width, height, ioctls.V4L2_PIX_FMT_Z16)
         depth_dev.set_parm(fps)
 
-        # Configure metadata
-        md_dev.set_meta_format(
-            ioctls.V4L2_META_FMT_D4XX,
-            ioctls.V4L2_BUF_TYPE_META_CAPTURE,
-        )
+        # Configure metadata — try D4XX format; tegra-embedded has a fixed
+        # format and rejects S_FMT/G_FMT, so just skip format configuration
+        try:
+            md_dev.set_meta_format(
+                ioctls.V4L2_META_FMT_D4XX,
+                ioctls.V4L2_BUF_TYPE_META_CAPTURE,
+            )
+        except OSError:
+            pass  # tegra-embedded: format is fixed, proceed without setting
 
         timeout = max(5.0, 4.0 * METADATA_FRAMES / fps)
 

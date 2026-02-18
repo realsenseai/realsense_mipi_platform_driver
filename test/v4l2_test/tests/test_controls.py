@@ -1,8 +1,13 @@
 """V4L2 control get/set tests: laser, exposure, gain, AE ROI, calibration."""
 
+import time
+
 import pytest
 
 from ..d4xx import constants as C
+from ..v4l2 import ioctls
+from ..v4l2.device import V4L2Device
+from ..v4l2.stream import StreamContext
 from ..v4l2.controls import (
     read_int_control,
     write_int_control,
@@ -183,6 +188,163 @@ class TestPWM:
         val = read_int_control(depth_device, C.DS5_CAMERA_CID_PWM)
         assert qc.minimum <= val <= qc.maximum, \
             f"PWM {val} outside [{qc.minimum}, {qc.maximum}]"
+
+
+@pytest.mark.d457
+class TestAutoExposure:
+    """Auto-exposure mode switching and manual exposure control."""
+
+    def test_auto_exposure_mode_switch(self, depth_device):
+        """Switch between auto and manual exposure, verify readback."""
+        try:
+            qc = depth_device.query_ctrl(ioctls.V4L2_CID_EXPOSURE_AUTO)
+        except OSError:
+            pytest.skip("auto_exposure control not available")
+
+        original = read_int_control(
+            depth_device, ioctls.V4L2_CID_EXPOSURE_AUTO
+        )
+
+        try:
+            # Switch to manual
+            write_int_control(
+                depth_device,
+                ioctls.V4L2_CID_EXPOSURE_AUTO,
+                ioctls.V4L2_EXPOSURE_MANUAL,
+            )
+            val = read_int_control(
+                depth_device, ioctls.V4L2_CID_EXPOSURE_AUTO
+            )
+            assert val == ioctls.V4L2_EXPOSURE_MANUAL, \
+                f"Expected manual ({ioctls.V4L2_EXPOSURE_MANUAL}), got {val}"
+
+            # Switch to aperture priority (auto)
+            write_int_control(
+                depth_device,
+                ioctls.V4L2_CID_EXPOSURE_AUTO,
+                ioctls.V4L2_EXPOSURE_APERTURE_PRIORITY,
+            )
+            val = read_int_control(
+                depth_device, ioctls.V4L2_CID_EXPOSURE_AUTO
+            )
+            assert val == ioctls.V4L2_EXPOSURE_APERTURE_PRIORITY, \
+                f"Expected aperture priority ({ioctls.V4L2_EXPOSURE_APERTURE_PRIORITY}), got {val}"
+        finally:
+            try:
+                write_int_control(
+                    depth_device, ioctls.V4L2_CID_EXPOSURE_AUTO, original
+                )
+            except OSError:
+                pass
+
+    def test_manual_exposure_set_get(self, depth_device):
+        """In manual mode, set exposure_time_absolute and read back."""
+        try:
+            depth_device.query_ctrl(ioctls.V4L2_CID_EXPOSURE_AUTO)
+        except OSError:
+            pytest.skip("auto_exposure control not available")
+
+        original_mode = read_int_control(
+            depth_device, ioctls.V4L2_CID_EXPOSURE_AUTO
+        )
+
+        try:
+            # Switch to manual mode
+            write_int_control(
+                depth_device,
+                ioctls.V4L2_CID_EXPOSURE_AUTO,
+                ioctls.V4L2_EXPOSURE_MANUAL,
+            )
+
+            # Read current exposure value
+            try:
+                original_exp = read_int_control(
+                    depth_device, ioctls.V4L2_CID_EXPOSURE_ABSOLUTE
+                )
+            except OSError:
+                pytest.skip("exposure_time_absolute not readable")
+
+            # Set two different known-safe values and verify readback.
+            # exposure_time_absolute is a u32 control (range 1-200000 typical).
+            test_values = [1000, 5000]
+            for target in test_values:
+                write_int_control(
+                    depth_device, ioctls.V4L2_CID_EXPOSURE_ABSOLUTE, target
+                )
+                val = read_int_control(
+                    depth_device, ioctls.V4L2_CID_EXPOSURE_ABSOLUTE
+                )
+                assert val == target, \
+                    f"Exposure mismatch: set {target}, got {val}"
+        finally:
+            try:
+                write_int_control(
+                    depth_device, ioctls.V4L2_CID_EXPOSURE_AUTO, original_mode
+                )
+            except OSError:
+                pass
+
+
+@pytest.mark.d457
+class TestHWReset:
+    """Hardware reset via CID_HW_RESET button control.
+
+    Triggers a full camera module reset and verifies the device recovers:
+    1. Read a control to confirm the device is alive
+    2. Trigger hw_reset (button write)
+    3. Close the device (it becomes invalid during reset)
+    4. Poll until the device is accessible again
+    5. Verify the camera is functional: read a control + short stream
+    """
+
+    RESET_POLL_INTERVAL = 0.5  # seconds between recovery polls
+    RESET_TIMEOUT = 15.0       # max seconds to wait for recovery
+
+    def test_hw_reset_recovery(self, camera):
+        """Reset camera hardware and verify it comes back functional."""
+        # 1. Verify device is alive before reset
+        with V4L2Device(camera.depth_path) as dev:
+            try:
+                dev.query_ctrl(C.DS5_CAMERA_CID_HW_RESET)
+            except OSError:
+                pytest.skip("hw_reset control not available")
+
+            cap = dev.query_cap()
+            assert cap.capabilities != 0, "Device not responding before reset"
+
+            # 2. Trigger reset
+            write_int_control(dev, C.DS5_CAMERA_CID_HW_RESET, 1)
+
+        # 3. Device is resetting — wait for it to come back
+        start = time.monotonic()
+        recovered = False
+
+        while time.monotonic() - start < self.RESET_TIMEOUT:
+            time.sleep(self.RESET_POLL_INTERVAL)
+            try:
+                with V4L2Device(camera.depth_path) as dev:
+                    cap = dev.query_cap()
+                    if cap.capabilities != 0:
+                        recovered = True
+                        break
+            except OSError:
+                continue
+
+        assert recovered, \
+            f"Camera did not recover within {self.RESET_TIMEOUT}s after hw_reset"
+
+        # 4. Verify functional: read laser power control
+        with V4L2Device(camera.depth_path) as dev:
+            val = read_int_control(dev, C.DS5_CAMERA_CID_LASER_POWER)
+            assert val in (0, 1), f"Unexpected laser power after reset: {val}"
+
+        # 5. Verify functional: short depth stream
+        with V4L2Device(camera.depth_path) as dev:
+            dev.set_format(848, 480, ioctls.V4L2_PIX_FMT_Z16)
+            dev.set_parm(30)
+            with StreamContext(dev) as stream:
+                frames = stream.capture_frames(10, timeout=5.0)
+                assert len(frames) > 0, "No frames after hw_reset recovery"
 
 
 @pytest.mark.d457

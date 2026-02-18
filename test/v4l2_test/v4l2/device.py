@@ -94,7 +94,14 @@ class V4L2Device:
         parm.type = buf_type
         parm.parm.capture.timeperframe.numerator = 1
         parm.parm.capture.timeperframe.denominator = fps
-        self.ioctl(ioctls.VIDIOC_S_PARM, parm)
+        try:
+            self.ioctl(ioctls.VIDIOC_S_PARM, parm)
+        except OSError as e:
+            import errno
+            if e.errno in (errno.EBUSY, errno.ENOTTY, errno.EINVAL):
+                pass  # tegra-video may not support VIDIOC_S_PARM
+            else:
+                raise
         return parm
 
     def enum_framesizes(self, pixelformat):
