@@ -1,39 +1,34 @@
-From f380ba5028aa71b27cdb62736f6214f947473686 Mon Sep 17 00:00:00 2001
+From 74a30d41e7972e0e9c2d60744cea1b43dd7c3b08 Mon Sep 17 00:00:00 2001
 From: ejgoldik <ehud.joseph.goldik@realsenseai.com>
-Date: Tue, 17 Feb 2026 21:37:30 +0200
+Date: Wed, 18 Feb 2026 11:52:13 +0200
 Subject: [PATCH] Adding max96712 support for D4xx
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- drivers/media/i2c/max96712.c | 322 ++++++++++++++++++++++++++++++++++-
- 1 file changed, 319 insertions(+), 3 deletions(-)
+ drivers/media/i2c/max96712.c | 310 ++++++++++++++++++++++++++++++++++-
+ 1 file changed, 308 insertions(+), 2 deletions(-)
 
 diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
-index 8081385f0..65d6cbd6e 100644
+index 8081385f0..3de1643bc 100644
 --- a/drivers/media/i2c/max96712.c
 +++ b/drivers/media/i2c/max96712.c
-@@ -21,17 +21,65 @@
+@@ -21,17 +21,55 @@
  #include <linux/debugfs.h>
  #include <media/camera_common.h>
  #include <linux/module.h>
--
 +#include <media/max96712.h>
 +#include <linux/of_gpio.h>
-+
+ 
 +/* register specifics */
 +
-+#define MAX96712_REG5_ADDR 0x5
 +#define MAX96712_REG6_ADDR 0x6
-+#define MAX96712_CTRL0_ADDR 0x17
 +#define MAX96712_CTRL1_ADDR 0x18
 +
-+#define MAX96712_BACKTOP24_ADDR 0x417
 +#define MAX96712_BACKTOP25_ADDR 0x418
 +
 +#define MAX96712_MIPI_PHY0_ADDR 0x8A0
 +#define MAX96712_MIPI_PHY2_ADDR 0x8A2
 +#define MAX96712_MIPI_PHY3_ADDR 0x8A3
-+#define MAX96712_MIPI_PHY5_ADDR 0x8A5
 +#define MAX96712_VIDEO_PIPE_SEL_0_ADDR 0xF0
 +#define MAX96712_VIDEO_PIPE_SEL_1_ADDR 0xF1
 +#define MAX96712_VIDEO_PIPE_EN_ADDR 0xF4
@@ -56,12 +51,6 @@ index 8081385f0..65d6cbd6e 100644
 +
 +#define MAX96712_DPLL_0_ADDR 0x1D00
 +
-+#define MAX96712_RLMS_A_RLMS58_ADDR 0x1458
-+#define MAX96712_RLMS_A_RLMS59_ADDR 0x1459
-+#define MAX96712_RLMS_B_RLMS58_ADDR 0x1558
-+#define MAX96712_RLMS_B_RLMS59_ADDR 0x1559
-+
-+
 +/* data defines */
 +#define MAX96712_MAX_PIPES 4
  
@@ -80,7 +69,7 @@ index 8081385f0..65d6cbd6e 100644
  			u16 addr, u8 val)
  {
  	struct i2c_client *i2c_client = NULL;
-@@ -99,6 +147,20 @@ static int max96712_read_reg(struct max96712 *priv,
+@@ -99,6 +137,20 @@ static int max96712_read_reg(struct max96712 *priv,
  	return err;
  }
  
@@ -101,7 +90,7 @@ index 8081385f0..65d6cbd6e 100644
  
  static int max96712_stats_show(struct seq_file *s, void *data)
  {
-@@ -169,7 +231,10 @@ static int max96712_debugfs_init(const char *dir_name,
+@@ -169,7 +221,10 @@ static int max96712_debugfs_init(const char *dir_name,
  	if (np) {
  		err = of_property_read_string(np, "channel", &priv->channel);
  		if (err)
@@ -112,7 +101,7 @@ index 8081385f0..65d6cbd6e 100644
  
  		err = snprintf(dev_name, sizeof(dev_name), "max96712_%s", priv->channel);
  		if (err < 0)
-@@ -216,6 +281,7 @@ static int max96712_probe(struct i2c_client *client,
+@@ -216,6 +271,7 @@ static int max96712_probe(struct i2c_client *client,
  {
  	struct max96712 *priv;
  	int err = 0;
@@ -120,7 +109,7 @@ index 8081385f0..65d6cbd6e 100644
  
  	dev_info(&client->dev, "%s: enter\n", __func__);
  
-@@ -228,10 +294,23 @@ static int max96712_probe(struct i2c_client *client,
+@@ -228,10 +284,23 @@ static int max96712_probe(struct i2c_client *client,
  			"regmap init failed: %ld\n", PTR_ERR(priv->regmap));
  		return -ENODEV;
  	}
@@ -144,7 +133,7 @@ index 8081385f0..65d6cbd6e 100644
  
  	/*set daymode by fault*/
  	dev_info(&client->dev, "%s:  success\n", __func__);
-@@ -243,8 +322,12 @@ static int max96712_probe(struct i2c_client *client,
+@@ -243,8 +312,12 @@ static int max96712_probe(struct i2c_client *client,
  static int
  max96712_remove(struct i2c_client *client)
  {
@@ -157,7 +146,7 @@ index 8081385f0..65d6cbd6e 100644
  		i2c_unregister_device(client);
  		client = NULL;
  	}
-@@ -252,13 +335,245 @@ max96712_remove(struct i2c_client *client)
+@@ -252,13 +325,245 @@ max96712_remove(struct i2c_client *client)
  	return 0;
  }
  
@@ -404,7 +393,7 @@ index 8081385f0..65d6cbd6e 100644
  	{ },
  };
  
-@@ -268,6 +583,7 @@ static struct i2c_driver max96712_i2c_driver = {
+@@ -268,6 +573,7 @@ static struct i2c_driver max96712_i2c_driver = {
  	.driver = {
  		.name = "max96712",
  		.owner = THIS_MODULE,
