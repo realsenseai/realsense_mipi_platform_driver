@@ -103,7 +103,7 @@ else
 fi
 
 # copy Makefile for jp6
-if ! version_lt "$JETPACK_VERSION" "6.x"; then
+if ! version_lt "$JETPACK_VERSION" "6.0"; then
     cp ./nvidia-oot/Makefile "sources_$JETPACK_VERSION/"
     cp ./$KERNEL_DIR/Makefile "sources_$JETPACK_VERSION/kernel/"
 fi

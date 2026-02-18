@@ -61,7 +61,14 @@ SCRIPT_NAME=`basename $0`
 # info about sources.
 # NOTE: *Add only kernel repos here. Add new repos separately below. Keep related repos together*
 # NOTE: nvethrnetrm.git should be listed after "linux-nv-oot.git" due to nesting of sync path
-SOURCE_INFO=$(cat scripts/sources_$JETPACK_VERSION)
+if [[ -f scripts/sources_$JETPACK_VERSION ]]; then
+	SOURCE_INFO=$(cat scripts/sources_$JETPACK_VERSION)
+elif [[ -f scripts/sources_$version ]]; then
+	SOURCE_INFO=$(cat scripts/sources_$version)
+else
+	echo "Sources information file, scripts/sources_$JETPACK_VERSION, is missing!"
+	exit 1
+fi
 
 # exit on error on sync
 # after processing SOURCE_INFO
@@ -147,28 +154,28 @@ function DownloadAndSync {
 	local TAG="$4"
 	local OPT="$5"
 
-	if [ -d "${LDK_SOURCE_DIR}" ]; then
+	if [[ -d "${LDK_SOURCE_DIR}" ]]; then
 		echo "Directory for $WHAT, ${LDK_SOURCE_DIR}, already exists!"
 		if ! git -C $LDK_SOURCE_DIR status 2>&1 >/dev/null; then
 			echo -e "\e[33m...but the directory is not a git repository -- clean it up first\e[0m\n"
 			return 1
 		fi
 		if ! git -C $LDK_SOURCE_DIR fetch $REPO_URL 2>&1 >/dev/null; then
-			echo -e "\e[31m$REPO_URL source sync failed\e[0m"
+			echo -e "\e[33msource sync with ${REPO_URL} failed!\e[0m"
 			return 2
 		fi
 	else
 		echo "Downloading default $WHAT source..."
 
 		if ! git clone -n "$REPO_URL" ${LDK_SOURCE_DIR} 2>&1 >/dev/null; then
-			echo -e "\e[31msource sync with ${REPO_URL} failed!\e[0m"
+			echo -e "\e[33msource sync with ${REPO_URL} failed!\e[0m"
 			return 2
 		fi
 
 		echo "The default $WHAT source is downloaded in: ${LDK_SOURCE_DIR}"
 	fi
 
-	if [ -z "$TAG" ]; then
+	if [[ -z "$TAG" ]]; then
 		echo "Please enter a tag to sync $2 source to"
 		echo -n "(enter nothing to skip): "
 		read TAG
@@ -177,7 +184,7 @@ function DownloadAndSync {
 	fi
 
 	[[ -n "$TAG" ]] &&
-		if [ -n $(git -C $LDK_SOURCE_DIR tag -l "^$TAG\$" 2>&1 >/dev/null) ]; then
+		if [[ -n $(git -C $LDK_SOURCE_DIR tag -l "$TAG") ]]; then
 			echo "Syncing up with tag $TAG..."
 			if git -C $LDK_SOURCE_DIR checkout -b mybranch_$(date +%Y-%m-%d-%s) $TAG 2>&1 >/dev/null; then
 				echo -e "\e[32m$2 source sync'ed to tag $TAG successfully!\e[0m"

@@ -12,8 +12,8 @@ fi
 version="$1"
 if [[ -z "$version" ]]; then
 	version="${supported%%,*}"
-	if [[ -f "jetson_version" ]]; then
-		version="$(cat jetson_version)"
+	if [[ -f "jetpack_version" ]]; then
+		version="$(cat jetpack_version)"
 	fi
 fi
 
@@ -23,6 +23,7 @@ export L4T_VERSION=jetson_"${REVISION}"
 export KERNEL_DIR="kernel/kernel-5.10"
 export LICENSE=release
 export ARCH=arm64
+export version="$version"
 
 function version_lt {
     IFS='.' read -r -a v1 <<< "$1"
@@ -77,4 +78,4 @@ else
 	echo "Wrong JetPack version ($JETPACK_VERSION)! Only $supported supported."
 	exit 1
 fi
-echo "$version" > jetson_version
+echo "$version" > jetpack_version

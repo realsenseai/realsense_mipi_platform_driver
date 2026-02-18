@@ -116,15 +116,16 @@ else
         make KERNEL_DEF_CONFIG=custom_defconfig -C kernel
     else
         # Building the Image with default defconfig
-        dtstree=$SRCS/hardware \
-        make -C kernel
+		make -C kernel
     fi
     make modules
-    ! version_lt "$JETPACK_VERSION" "7.0" || make dtbs
     mkdir -p $TEGRA_KERNEL_OUT/rootfs/boot/dtb
-    cp $SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-p3737-0000+p3701-0000-nv.dtb $TEGRA_KERNEL_OUT/rootfs/boot/dtb/
-    cp $SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-p3737-0000+p3701-0005-nv.dtb $TEGRA_KERNEL_OUT/rootfs/boot/dtb/
-    cp $SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/
+    if version_lt 7.0; then
+		make dtbs
+		cp $SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/
+	else
+		cp $SRCS/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/tegra234-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/
+	fi
     export INSTALL_MOD_PATH=$TEGRA_KERNEL_OUT/rootfs/
     make modules_install
     # iio support
@@ -142,4 +143,3 @@ else
     cp $KERNEL_MODULES_OUT/kernel/drivers/media/usb/uvc/uvcvideo.ko $KERNEL_MODULES_OUT/extra/ || true
     cp $KERNEL_MODULES_OUT/kernel/drivers/media/v4l2-core/videodev.ko $KERNEL_MODULES_OUT/extra/ || true
 fi
-

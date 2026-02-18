@@ -4406,7 +4406,7 @@ static int ds5_mux_get_fmt(struct v4l2_subdev *sd,
 
 /* Video ops */
 static int ds5_mux_g_frame_interval(struct v4l2_subdev *sd,
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10) || LINUX_VERSION_CODE > KERNEL_VERSION(6, 8, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0) || LINUX_VERSION_CODE > KERNEL_VERSION(6, 8, 0)
 		struct v4l2_subdev_state *state,
 #endif
 		struct v4l2_subdev_frame_interval *fi)
@@ -4443,7 +4443,7 @@ static u16 __ds5_probe_framerate(const struct ds5_resolution *res, u16 target)
 }
 
 static int ds5_mux_s_frame_interval(struct v4l2_subdev *sd,
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10) || LINUX_VERSION_CODE > KERNEL_VERSION(6, 8, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0) || LINUX_VERSION_CODE > KERNEL_VERSION(6, 8, 0)
 		struct v4l2_subdev_state *state,
 #endif
 		struct v4l2_subdev_frame_interval *fi)
