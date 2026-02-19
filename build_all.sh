@@ -120,7 +120,7 @@ else
     fi
     make modules
     mkdir -p $TEGRA_KERNEL_OUT/rootfs/boot/dtb
-    if version_lt 7.0; then
+    if version_lt "$JETPACK_VERSION" "7.0"; then
 		make dtbs
 		cp $SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/
 	else

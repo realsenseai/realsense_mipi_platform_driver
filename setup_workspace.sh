@@ -65,7 +65,7 @@ else
     fi
 fi
 
-[[ -d sources_$JETPACK_VERSION ]] && echo -e "In a case you have local changes you may reset them with ./apply_patches.sh reset\n"
+[[ -d sources_$JETPACK_VERSION ]] && echo -e "\e[33mIn a case you have local changes you may reset them with ./apply_patches.sh reset\e[0m\n"
 # Clone L4T kernel source repo
 cd $DEVDIR
 
@@ -96,7 +96,7 @@ if [[ ! -d sources_$JETPACK_VERSION && -f "$TARBALL_PATH" ]]; then
         mv "$EXTRACTED_DIR" "sources_$JETPACK_VERSION"
     fi
 
-    echo "Sources extracted successfully from local cache"
+    echo -e "\e[32mSources extracted successfully from local cache\e[0m"
 else
     echo "Cloning sources from NVIDIA repository..."
     ./scripts/sync-sources.sh -t $L4T_VERSION -d sources_$JETPACK_VERSION -k
