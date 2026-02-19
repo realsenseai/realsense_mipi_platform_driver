@@ -8,15 +8,35 @@
 #include <dt-bindings/gpio/tegra234-gpio.h>
 #include <dt-bindings/tegra234-p3737-0000+p3701-0000.h>
 
-#define CAM0_RST_L	TEGRA234_MAIN_GPIO(H, 3)
+#define CAM0_PWDN	TEGRA234_MAIN_GPIO(H, 6)  //MAX96712_1 PWDN
+//#define CAM1_PWDN	TEGRA234_MAIN_GPIO(H, 3)  //MAX96712_2 PWDN
+//#define CAM2_PWDN	TEGRA234_MAIN_GPIO(AC, 0) //MAX96712_3 PWDN
+//#define CAM3_PWDN	TEGRA234_MAIN_GPIO(AC, 1) //MAX96712_4 PWDN
+#define CAM12V_POC	TEGRA234_MAIN_GPIO(AC, 7)
+
 #define CAMERA_I2C_MUX_BUS(x) (0x1E + x)
+
+
 
 /* camera control gpio definitions */
 / {
-	overlay-name = "Jetson RealSense Camera D4xx with max9296 and tca9548 for Calibration";
+	overlay-name = "Jetson RealSense Camera D4xx with max96712 and tca9546 (fg12-16ch) for Calibration";
 	jetson-header-name = "Jetson AGX CSI Connector";
 	compatible = JETSON_COMPATIBLE;
 
+	fragment@1 {
+		target-path = "/";
+		__overlay__ {
+			vdd_cam12v_poc: regulator-vdd-cam12v-poc {
+					compatible = "regulator-fixed";
+					regulator-name = "vdd-cam12v-poc";
+					regulator-min-microvolt = <12000000>;
+					regulator-max-microvolt = <12000000>;
+					gpio = <&gpio CAM12V_POC GPIO_ACTIVE_HIGH>;
+					enable-active-high;
+			};
+		};
+	};
 	fragment@0 {
 		target-path = "/";
 		__overlay__ {
@@ -177,16 +197,16 @@
 						};
 					};
 				};
+
 				i2c@3180000 {
 					clock-frequency = <100000>;
-					tca9548@72 {
+					tca9546@70 {
 						status = "okay";
-						reg = <0x72>;
-						compatible = "nxp,pca9548";
+						reg = <0x70>;
+						compatible = "nxp,pca9546";
 						#address-cells = <1>;
 						#size-cells = <0>;
 						skip_mux_detect = "yes";
-						vcc-supply = <&vdd_1v8_ls>;
 						/*vcc-pullup-supply = <&battery_reg>;*/
 						force_bus_start = <CAMERA_I2C_MUX_BUS(0)>;
 						vcc_lp = "vcc";
@@ -197,26 +217,20 @@
 							#address-cells = <1>;
 							#size-cells = <0>;
 
-							dser: max9296@48 {
+							dser: max96712@29 {
 								status = "okay";
-								reg = <0x48>;
-								compatible = "maxim,max9296";
+								reg = <0x29>;
+								compatible = "maxim,max96712";
 								csi-mode = "2x4";
 								max-src = <1>;
-								reset-gpios = <&gpio CAM0_RST_L GPIO_ACTIVE_HIGH>;
+								channel = "a";
+								pwdn-gpios = <&gpio CAM0_PWDN GPIO_ACTIVE_HIGH>;
 							};
 
-							ser_prim: max9295_prim@40 {
+							ser_a: max9295_a@40 {
 								status = "okay";
+								compatible = "maxim,max9295";
 								reg = <0x40>;
-								compatible = "maxim,max9295";
-								is-prim-ser;
-							};
-
-							ser_a: max9295_a@42 {
-								status = "okay";
-								compatible = "maxim,max9295";
-								reg = <0x42>;
 								maxim,gmsl-dser-device = <&dser>;
 							};
 
@@ -227,7 +241,7 @@
 								override_reg = <0x1a>;
 								compatible = "intel,d4xx";
 								use_sensor_mode_id = "true";
-								vcc-supply = <&vdd_1v8_ls>;
+								vcc-supply = <&vdd_cam12v_poc>;
 								cam-type = "IMU";
 								nvidia,gmsl-ser-device = <&ser_a>;
 								nvidia,gmsl-dser-device = <&dser>;
@@ -275,7 +289,7 @@
 								override_reg = <0x1a>;
 								compatible = "intel,d4xx";
 								use_sensor_mode_id = "true";
-								vcc-supply = <&vdd_1v8_ls>;
+								vcc-supply = <&vdd_cam12v_poc>;
 								cam-type = "Y8";
 								nvidia,gmsl-ser-device = <&ser_a>;
 								nvidia,gmsl-dser-device = <&dser>;
@@ -324,7 +338,7 @@
 								override_reg = <0x1a>;
 								compatible = "intel,d4xx";
 								use_sensor_mode_id = "true";
-								vcc-supply = <&vdd_1v8_ls>;
+								vcc-supply = <&vdd_cam12v_poc>;
 								cam-type = "RGB";
 								nvidia,gmsl-ser-device = <&ser_a>;
 								nvidia,gmsl-dser-device = <&dser>;
@@ -371,7 +385,7 @@
 								reg = <0x1a>;
 								compatible = "intel,d4xx";
 								use_sensor_mode_id = "true";
-								vcc-supply = <&vdd_1v8_ls>;
+								vcc-supply = <&vdd_cam12v_poc>;
 								cam-type = "Depth";
 								nvidia,gmsl-ser-device = <&ser_a>;
 								nvidia,gmsl-dser-device = <&dser>;

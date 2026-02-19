@@ -1698,6 +1698,7 @@ static int ds5_configure(struct ds5 *state)
 	u16 fmt, md_fmt, vc_id;
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	u16 data_type1, data_type2;
+	bool is_calib = 0;
 #endif
 	u16 dt_addr, md_addr, override_addr, fps_addr, width_addr, height_addr;
 	u16 dt_value = 0;
@@ -1753,7 +1754,8 @@ static int ds5_configure(struct ds5 *state)
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	data_type1 = sensor->config.format->data_type;
-	data_type2 = state->is_imu ? 0x00 : md_fmt;
+	is_calib = (state->is_y8 && (data_type1 == GMSL_CSI_DT_RGB_888));
+	data_type2 = (state->is_imu || is_calib) ? 0x00 : md_fmt;
 
 	vc_id = state->g_ctx.dst_vc;
 	if (!sensor->pipe_configured ||
@@ -1789,7 +1791,7 @@ static int ds5_configure(struct ds5 *state)
 		ret = ds5_setup_pipeline(state, data_type1, data_type2,
 					 sensor->pipe_id, vc_id);
 		// reset data path when switching to Y12I
-		if (state->is_y8 && data_type1 == GMSL_CSI_DT_RGB_888)
+		if (is_calib)
 			state->dser_ops->reset_oneshot(state->dser_dev);
 		if (ret < 0)
 			return ret;
@@ -6039,4 +6041,4 @@ MODULE_AUTHOR("Guennadi Liakhovetski <guennadi.liakhovetski@intel.com>,\n\
 				Shikun Ding <shikun.ding@intel.com>,\n\
 				Dmitry Perchanov <dmitry.perchanov@intel.com>");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("1.0.2.9");
+MODULE_VERSION("1.0.2.10");
