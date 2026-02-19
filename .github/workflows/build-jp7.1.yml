@@ -1,4 +1,4 @@
-name: Build JP 6.2
+name: Build JP 7.1
 
 on:
   push:
