@@ -194,6 +194,7 @@ enum ds5_mux_pad {
 /* I2C retry configuration */
 #define DS5_I2C_RETRY_COUNT	5
 #define DS5_I2C_RETRY_DELAY_US	5000
+#define DS5_I2C_DEAD_THRESHOLD	50 /* consecutive errors before declaring dead */
 
 /* DFU definition section */
 #define DFU_MAGIC_NUMBER "/0x01/0x02/0x03/0x04"
@@ -481,6 +482,9 @@ struct ds5 {
 	struct i2c_client *dser_i2c;
 	const struct dser_interface *dser_ops;
 #endif
+	/* I2C health tracking */
+	atomic_t i2c_consec_errors;
+	bool camera_dead;
 };
 
 struct ds5_counters {
@@ -545,6 +549,9 @@ static int ds5_write(struct ds5 *state, u16 reg, u16 val)
 	int retry;
 	u8 value[2];
 
+	if (state->camera_dead)
+		return -ENODEV;
+
 	value[1] = val >> 8;
 	value[0] = val & 0x00FF;
 
@@ -557,20 +564,31 @@ static int ds5_write(struct ds5 *state, u16 reg, u16 val)
 		if (ret == 0)
 			break;
 		if (retry < DS5_I2C_RETRY_COUNT - 1) {
-			dev_warn(&state->client->dev,
+			dev_dbg(&state->client->dev,
 				"%s(): i2c write retry %d, 0x%04x = 0x%x, err %d\n",
 				__func__, retry + 1, reg, val, ret);
 			usleep_range(DS5_I2C_RETRY_DELAY_US,
 				     DS5_I2C_RETRY_DELAY_US + 500);
 		}
 	}
-	if (ret < 0)
-		dev_err(&state->client->dev,
+	if (ret < 0) {
+		dev_warn_ratelimited(&state->client->dev,
 			"%s(): i2c write failed after %d retries, 0x%04x = 0x%x, err %d\n",
 			__func__, DS5_I2C_RETRY_COUNT, reg, val, ret);
-	else if (state->dfu_dev.dfu_state_flag == DS5_DFU_IDLE)
-		dev_dbg(&state->client->dev, "%s(): i2c write 0x%04x: 0x%x\n",
-			__func__, reg, val);
+		if (atomic_inc_return(&state->i2c_consec_errors) >=
+		    DS5_I2C_DEAD_THRESHOLD) {
+			state->camera_dead = true;
+			dev_err(&state->client->dev,
+				"camera unreachable after %d consecutive I2C errors\n",
+				DS5_I2C_DEAD_THRESHOLD);
+		}
+	} else {
+		atomic_set(&state->i2c_consec_errors, 0);
+		if (state->dfu_dev.dfu_state_flag == DS5_DFU_IDLE)
+			dev_dbg(&state->client->dev,
+				"%s(): i2c write 0x%04x: 0x%x\n",
+				__func__, reg, val);
+	}
 
 	return ret;
 }
@@ -581,26 +599,39 @@ static int ds5_raw_write(struct ds5 *state, u16 reg,
 	int ret;
 	int retry;
 
+	if (state->camera_dead)
+		return -ENODEV;
+
 	for (retry = 0; retry < DS5_I2C_RETRY_COUNT; retry++) {
 		ret = regmap_raw_write(state->regmap, reg, val, val_len);
 		if (ret == 0)
 			break;
 		if (retry < DS5_I2C_RETRY_COUNT - 1) {
-			dev_warn(&state->client->dev,
+			dev_dbg(&state->client->dev,
 				"%s(): i2c raw write retry %d, 0x%04x size(%d), err %d\n",
 				__func__, retry + 1, reg, (int)val_len, ret);
 			usleep_range(DS5_I2C_RETRY_DELAY_US,
 				     DS5_I2C_RETRY_DELAY_US + 500);
 		}
 	}
-	if (ret < 0)
-		dev_err(&state->client->dev,
+	if (ret < 0) {
+		dev_warn_ratelimited(&state->client->dev,
 			"%s(): i2c raw write failed after %d retries, 0x%04x size(%d), err %d\n",
 			__func__, DS5_I2C_RETRY_COUNT, reg, (int)val_len, ret);
-	else if (state->dfu_dev.dfu_state_flag == DS5_DFU_IDLE)
-		dev_dbg(&state->client->dev,
-			"%s(): i2c raw write 0x%04x: %d bytes\n",
-			__func__, reg, (int)val_len);
+		if (atomic_inc_return(&state->i2c_consec_errors) >=
+		    DS5_I2C_DEAD_THRESHOLD) {
+			state->camera_dead = true;
+			dev_err(&state->client->dev,
+				"camera unreachable after %d consecutive I2C errors\n",
+				DS5_I2C_DEAD_THRESHOLD);
+		}
+	} else {
+		atomic_set(&state->i2c_consec_errors, 0);
+		if (state->dfu_dev.dfu_state_flag == DS5_DFU_IDLE)
+			dev_dbg(&state->client->dev,
+				"%s(): i2c raw write 0x%04x: %d bytes\n",
+				__func__, reg, (int)val_len);
+	}
 
 	return ret;
 }
@@ -610,25 +641,39 @@ static int ds5_read(struct ds5 *state, u16 reg, u16 *val)
 	int ret;
 	int retry;
 
+	if (state->camera_dead)
+		return -ENODEV;
+
 	for (retry = 0; retry < DS5_I2C_RETRY_COUNT; retry++) {
 		ret = regmap_raw_read(state->regmap, reg, val, 2);
 		if (ret == 0)
 			break;
 		if (retry < DS5_I2C_RETRY_COUNT - 1) {
-			dev_warn(&state->client->dev,
+			dev_dbg(&state->client->dev,
 				"%s(): i2c read retry %d, 0x%04x, err %d\n",
 				__func__, retry + 1, reg, ret);
 			usleep_range(DS5_I2C_RETRY_DELAY_US,
 				     DS5_I2C_RETRY_DELAY_US + 500);
 		}
 	}
-	if (ret < 0)
-		dev_err(&state->client->dev,
+	if (ret < 0) {
+		dev_warn_ratelimited(&state->client->dev,
 			"%s(): i2c read failed after %d retries, 0x%04x, err %d\n",
 			__func__, DS5_I2C_RETRY_COUNT, reg, ret);
-	else if (state->dfu_dev.dfu_state_flag == DS5_DFU_IDLE)
-		dev_dbg(&state->client->dev, "%s(): i2c read 0x%04x: 0x%x\n",
-			__func__, reg, *val);
+		if (atomic_inc_return(&state->i2c_consec_errors) >=
+		    DS5_I2C_DEAD_THRESHOLD) {
+			state->camera_dead = true;
+			dev_err(&state->client->dev,
+				"camera unreachable after %d consecutive I2C errors\n",
+				DS5_I2C_DEAD_THRESHOLD);
+		}
+	} else {
+		atomic_set(&state->i2c_consec_errors, 0);
+		if (state->dfu_dev.dfu_state_flag == DS5_DFU_IDLE)
+			dev_dbg(&state->client->dev,
+				"%s(): i2c read 0x%04x: 0x%x\n",
+				__func__, reg, *val);
+	}
 
 	return ret;
 }
@@ -638,22 +683,35 @@ static int ds5_raw_read(struct ds5 *state, u16 reg, void *val, size_t val_len)
 	int ret;
 	int retry;
 
+	if (state->camera_dead)
+		return -ENODEV;
+
 	for (retry = 0; retry < DS5_I2C_RETRY_COUNT; retry++) {
 		ret = regmap_raw_read(state->regmap, reg, val, val_len);
 		if (ret == 0)
 			break;
 		if (retry < DS5_I2C_RETRY_COUNT - 1) {
-			dev_warn(&state->client->dev,
+			dev_dbg(&state->client->dev,
 				"%s(): i2c raw read retry %d, 0x%04x size(%d), err %d\n",
 				__func__, retry + 1, reg, (int)val_len, ret);
 			usleep_range(DS5_I2C_RETRY_DELAY_US,
 				     DS5_I2C_RETRY_DELAY_US + 500);
 		}
 	}
-	if (ret < 0)
-		dev_err(&state->client->dev,
+	if (ret < 0) {
+		dev_warn_ratelimited(&state->client->dev,
 			"%s(): i2c raw read failed after %d retries, 0x%04x size(%d), err %d\n",
 			__func__, DS5_I2C_RETRY_COUNT, reg, (int)val_len, ret);
+		if (atomic_inc_return(&state->i2c_consec_errors) >=
+		    DS5_I2C_DEAD_THRESHOLD) {
+			state->camera_dead = true;
+			dev_err(&state->client->dev,
+				"camera unreachable after %d consecutive I2C errors\n",
+				DS5_I2C_DEAD_THRESHOLD);
+		}
+	} else {
+		atomic_set(&state->i2c_consec_errors, 0);
+	}
 
 	return ret;
 }
@@ -2384,12 +2442,43 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 			sensor->pipe_configured = false;
 			sensor->pipe_id = -1;
 		}
+
+		/* Ensure all sensor streaming state is fully reset so
+		 * ds5_configure() does a fresh setup on next stream-on */
+		for (i = 0; i < ARRAY_SIZE(sensors); i++)
+			sensors[i]->streaming = false;
+
 		mutex_unlock(&serdes_lock__);
 
 		dev_info(&state->client->dev,
 			"%s(): Re-initializing SERDES link\n", __func__);
 		state->dser_ops->reset_oneshot(state->dser_dev);
-		msleep(300);
+
+		/*
+		 * Verify GMSL link is re-established by polling I2C.
+		 * reset_oneshot itself sleeps 100ms internally; we add
+		 * settling time and verify the link is actually alive
+		 * rather than blindly sleeping a fixed 300ms.
+		 */
+		msleep(200);
+		for (i = 0; i < 10; i++) {
+			ret = ds5_read(state, DS5_FW_VERSION, &status);
+			if (ret == 0)
+				break;
+			dev_dbg(&state->client->dev,
+				"%s(): GMSL link not ready, retry %d\n",
+				__func__, i);
+			msleep(100);
+		}
+		if (ret < 0) {
+			dev_err(&state->client->dev,
+				"%s(): GMSL link failed to recover after reset_oneshot (%d)\n",
+				__func__, ret);
+			return -EIO;
+		}
+		dev_info(&state->client->dev,
+			"%s(): GMSL link verified after %d ms\n",
+			__func__, 200 + i * 100);
 	}
 #endif
 
@@ -4681,6 +4770,7 @@ restore_s_state:
 		if (state->dser_ops->release_pipe(state->dser_dev, sensor->pipe_id) < 0)
 			dev_warn(&state->client->dev, "release pipe failed\n");
 		sensor->pipe_id = -1;
+		sensor->pipe_configured = false;
 		mutex_unlock(&serdes_lock__);
 	}
 #endif
@@ -5560,20 +5650,21 @@ static int ds5_dfu_device_release(struct inode *inode, struct file *file)
 	struct i2c_adapter *parent = i2c_parent_is_i2c_adapter(
 			state->client->adapter);
 #endif
-	int ret = 0, retry = 10;
+	int ret = 0, retry = 3;
 	mutex_lock(&state->lock);
 	state->dfu_dev.device_open_count--;
 	if (state->dfu_dev.dfu_state_flag != DS5_DFU_RECOVERY)
 		state->dfu_dev.dfu_state_flag = DS5_DFU_IDLE;
-	/* We disable this section as it has no effect when device in operational
-	   mode and has not enough effect when device in recovery mode */
-	// if (state->dfu_dev.dfu_state_flag == DS5_DFU_DONE
-	// 		&& state->dfu_dev.init_v4l_f)
-	// 	ds5_v4l_init(state->client, state);
-	// state->dfu_dev.init_v4l_f = 0;
 	if (state->dfu_dev.dfu_msg)
 		devm_kfree(&state->client->dev, state->dfu_dev.dfu_msg);
 	state->dfu_dev.dfu_msg = NULL;
+
+	/* Skip I2C verification if camera is unreachable */
+	if (state->camera_dead) {
+		mutex_unlock(&state->lock);
+		return 0;
+	}
+
 #ifdef CONFIG_TEGRA_CAMERA_PLATFORM
 	/* get i2c controller and restore bus clock rate */
 	while (parent && i2c_parent_is_i2c_adapter(parent))
@@ -5594,16 +5685,16 @@ static int ds5_dfu_device_release(struct inode *inode, struct file *file)
 		ret = ds5_read(state, DS5_FW_VERSION, &state->fw_version);
 		if (ret)
 			msleep_range(10);
-	} while (retry-- && ret != 0 );
+	} while (retry-- && ret != 0);
 	if (ret) {
-		dev_warn(&state->client->dev,
+		dev_warn_ratelimited(&state->client->dev,
 			"%s(): no communication with d4xx\n", __func__);
 		mutex_unlock(&state->lock);
-		return ret;
+		return 0; /* release must succeed to avoid FD leak */
 	}
 	ret = ds5_read(state, DS5_FW_BUILD, &state->fw_build);
 	mutex_unlock(&state->lock);
-	return ret;
+	return 0;
 };
 
 static const struct file_operations ds5_device_file_ops = {
@@ -5829,6 +5920,8 @@ static int ds5_probe(struct i2c_client *c, const struct i2c_device_id *id)
 		return -ENOMEM;
 
 	mutex_init(&state->lock);
+	atomic_set(&state->i2c_consec_errors, 0);
+	state->camera_dead = false;
 
 	state->client = c;
 	dev_warn(&c->dev, "Probing driver for D4xx\n");
@@ -6073,4 +6166,4 @@ MODULE_AUTHOR("Guennadi Liakhovetski <guennadi.liakhovetski@intel.com>,\n\
 				Shikun Ding <shikun.ding@intel.com>,\n\
 				Dmitry Perchanov <dmitry.perchanov@intel.com>");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("1.0.2.10");
+MODULE_VERSION("1.0.2.12");
