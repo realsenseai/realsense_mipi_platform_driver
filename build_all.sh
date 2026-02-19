@@ -74,7 +74,7 @@ export KERNEL_MODULES_OUT=$TEGRA_KERNEL_OUT/modules
 
 # Copy d4xx.c to the appropriate sources directory
 echo "Copying d4xx.c to sources directory..."
-if version_lt "$JETPACK_VERSION" "6.0" ]]; then
+if version_lt "$JETPACK_VERSION" "6.0" ; then
     # For JetPack 5.x and 4.6.1
     cp $DEVDIR/kernel/realsense/d4xx.c $SRCS/kernel/nvidia/drivers/media/i2c/d4xx.c
 else
