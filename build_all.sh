@@ -116,9 +116,10 @@ else
         make KERNEL_DEF_CONFIG=custom_defconfig -C kernel
     else
         # Building the Image with default defconfig
-		make -C kernel
+	make -C kernel
     fi
-    make modules
+    [[ -f /etc/os-release ]] && eval $(cat /etc/os-release|grep UBUNTU_CODENAME=)
+    make kernel_name=$UBUNTU_CODENAME modules
     mkdir -p $TEGRA_KERNEL_OUT/rootfs/boot/dtb
     if version_lt "$JETPACK_VERSION" "7.0"; then
 		make dtbs
