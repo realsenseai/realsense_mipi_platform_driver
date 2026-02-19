@@ -130,8 +130,6 @@ If you build locally use those commands:
 sudo cp -r ./images/6.2/rootfs/lib/modules/5.15.148-tegra /lib/modules/.
 sudo cp    ./images/6.2/rootfs/boot/tegra234-camera-d4xx-overlay*.dtbo /boot/dev/.
 sudo cp    ./images/6.2/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/dtb/.
-# For production carrier boards (p3701-0005):
-sudo cp    ./images/6.2/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/dtb/.
 sudo cp    ./images/6.2/rootfs/boot/Image /boot/dev/.
 ```
 In case of scp copy from host use this commands:
@@ -140,28 +138,18 @@ tar xf rootfs.tar.gz
 sudo cp -r ./lib/modules/5.15.148-tegra /lib/modules/.
 sudo cp    ./boot/tegra234-camera-d4xx-overlay*.dtbo /boot/dev/.
 sudo cp    ./boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/dtb/.
-# For production carrier boards (p3701-0005):
-sudo cp    ./boot/dtb/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/dtb/.
 sudo cp    ./boot/Image /boot/dev/.
 ```
 3.	Run depmod
 ```
 sudo depmod
 ```
-4.	Update initrd (regenerate kernel modules)
-
-The kernel patches modify the I2C subsystem header (`i2c.h`), which changes the CRC of all exported I2C symbols. The boot initrd contains cached kernel modules that must be regenerated to match the new kernel, otherwise modules like `ucsi_ccg` will fail to load with "disagrees about version of symbol" errors.
-```
-sudo update-initramfs -u -k 5.15.148-tegra
-sudo rm -f /boot/initrd
-sudo ln -s /boot/initrd.img-5.15.148-tegra /boot/initrd
-```
-5. Modify bootloader configuration:
+4. Modify bootloader configuration:
  - open /boot/extlinux/extlinux.conf for editing using your preferred editor
  - Copy existing primary kernel and rename the copy to "dev"
  - Change the "MENU LABEL" to a meaningful label (e.g "development kernel")
  - Change the "LINUX" line to point to the newly copied /boot/**dev**/Image
- - Add the "FDT" line pointing at the newly copied device tree "/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb" (or tegra234-p3737-0000+p3701-0005-nv.dtb for production boards)
+ - Add the "FDT" line pointing at the newly copied device tree "/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb"
  - add the "OVERLAYS" line pointing to the required overlay "tegra234-camera-d4xx-overlay/dual/else>.dtb
  - Select the new label as the default
 
@@ -186,7 +174,7 @@ LABEL dev
     OVERLAYS /boot/dev/tegra234-camera-d4xx-overlay.dtbo
 
 ```
-6. Reboot
+5. reboot
 ```
 sudo reboot
 ```
