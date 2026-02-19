@@ -4,10 +4,8 @@
 The RealSense™ MIPI platform driver enables the user to control and stream RealSense™ 3D MIPI cameras.
 The system shall include:
 * NVIDIA® Jetson™ platform Supported JetPack versions are:
-    - [6.2.1 production release](https://developer.nvidia.com/embedded/jetpack-sdk-621)
-    - [6.2 production release](https://developer.nvidia.com/embedded/jetpack-sdk-62)
-    - [6.1 production release](https://developer.nvidia.com/embedded/jetpack-sdk-61)
-    - [6.0 production release](https://developer.nvidia.com/embedded/jetpack-sdk-60)
+    - 7.1 production release
+    - 7.0 production release
 * RealSense™ De-Serialize board
 * Jetson AGX Orin™ Passive adapter board from [Leopard Imaging® LI-JTX1-SUB-ADPT](https://leopardimaging.com/product/accessories/adapters-carrier-boards/for-nvidia-jetson/li-jtx1-sub-adpt/)
 * RS MIPI camera [D457](https://store.realsenseai.com/buy-intel-realsense-depth-camera-d457.html)
@@ -30,8 +28,6 @@ The system shall include:
 
 Please follow the [instruction](https://docs.nvidia.com/sdk-manager/install-with-sdkm-jetson/index.html) to flash JetPack to the NVIDIA® Jetson AGX Orin™ with NVIDIA® SDK Manager or other methods NVIDIA provides. Make sure the board is ready to use.
 
-
-
 ## Build environment prerequisites
 ```
 sudo apt-get install -y build-essential bc wget flex bison curl libssl-dev xxd tar
@@ -48,7 +44,7 @@ sudo apt-get install -y build-essential bc wget flex bison curl libssl-dev xxd t
 
 Assuming building for 7.1. One can also build for 7.0 just replace the last parameter.
 Build version can be specified only once. It will be written to jetpack_version.txt file and used for later steps.
-You can display the current version cating the file.
+You can display the current version cating the file jetpack_version. It will be show at the beginning of each script.
 ```
 git clone --branch dev --single-branch https://github.com/realsenseai/realsense_mipi_platform_driver.git
 cd realsense_mipi_platform_driver
@@ -61,80 +57,23 @@ Note: dev_dbg() log support will not be enabled by default. If needed, run the `
 ./build_all.sh --dev-dbg
 ```
 
-
-
-## JetPack manual build - cross compile x86-64 (CI deploy)
-
-[NVIDIA® JetPack 6.2: Jetson Linux 36.4.3](https://developer.nvidia.com/embedded/jetson-linux-r3643)
-1. Download Jetson Linux Driver Package - [JetPack 6.2 BSP sources](https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v4.3/release/jetson_linux_r36.4.3_aarch64.tbz2)
-2. Download Toolchain ARM64 compiler - [Bootlin Toolchain gcc 11.3](https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v3.0/toolchain/aarch64--glibc--stable-2022.08-1.tar.bz2)
-3. Apply patches for kernel drivers, nvidia-oot module and tegra devicetree.
-4. Build cross-compile project on host (Build PC) or natively on target (Jetson).
-5. Apply build results to target (Jetson).
-6. Configure target.
-
-```
-# JetPack 6.2
-mkdir -p l4t-gcc/6.x
-cd ./l4t-gcc/6.x
-wget https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v3.0/toolchain/aarch64--glibc--stable-2022.08-1.tar.bz2 -O aarch64--glibc--stable-final.tar.bz2
-tar xf aarch64--glibc--stable-final.tar.bz2 --strip-components 1
-cd ../..
-wget https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v4.3/sources/public_sources.tbz2
-tar xjf public_sources.tbz2
-cd Linux_for_Tegra/source
-tar xjf kernel_src.tbz2
-tar xjf kernel_oot_modules_src.tbz2
-tar xjf nvidia_kernel_display_driver_source.tbz2
-cd ../..
-
-./apply_patches_ext.sh 6.2 Linux_for_Tegra/source
-
-cp ./nvidia-oot/Makefile Linux_for_Tegra/source
-cp ./kernel/kernel-jammy-src/Makefile Linux_for_Tegra/source/kernel
-
-# build kernel, dtb and D457 driver
-./build_all.sh 6.2 ./Linux_for_Tegra/source
-```
-Note: dev_dbg() log support will not be enabled by default. If needed, run the `./build_all.sh` script with `--dev-dbg` option like below.
-```
-./build_all.sh --dev-dbg 6.2 ./Linux_for_Tegra/source
-```
-
-## Archive JetPack 6.x build results (optional)
-Assuming 6.2 (or 6.1) build the kernel version is 5.15.148-tegra. For 6.0 the kernel version is 5.15.136-tegra.
-- kernel image : `images/6.2/rootfs/boot/Image`
-- dtb: `images/6.2/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb`
-- dtb overlay: `images/6.2/rootfs/boot/tegra234-camera-d4xx-overlay.dtbo`
-- dtb dual camera overlay: `images/6.2/rootfs/boot/tegra234-camera-d4xx-overlay-dual.dtbo`
-- kernel modules: `images/6.2/rootfs/lib/modules/5.15.148-tegra`
-
-## Backup JetPack 6.2 boot configuration and drivers (optional)
-```
-echo "Backup boot configuration"
-sudo cp /boot/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/tegra234-p3737-0000+p3701-0000-nv-bkp.dtb
-# Note: If using a production board and not a dev kit copy the relevant dtb file below
-sudo cp /boot/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/tegra234-p3737-0000+p3701-0005-nv-bkp.dtb
-```
-
 ## Install kernel drivers, extra modules and device-tree to Jetson AGX Orin
 
 Following steps required:
 
 1. Copy build artifacts:
-If you build locally use those commands:
+If you build locally (native build on Jetson) use the following bash commands:
 ```
-sudo cp -r ./images/6.2/rootfs/lib/modules/5.15.148-tegra /lib/modules/.
-sudo cp    ./images/6.2/rootfs/boot/tegra234-camera-d4xx-overlay.dtbo /boot/.
-sudo cp    ./images/6.2/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/dtb/.
-sudo cp    ./images/6.2/rootfs/boot/Image /boot/
+sudo cp -r ./images/7.1/rootfs/lib/modules/6.8.12-tegra /lib/modules/
+sudo cp    ./images/7.1/rootfs/boot/tegra234-camera-d4xx-overlay.dtbo /boot/
+sudo cp    ./images/7.1/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/dtb/
+sudo cp    ./images/7.1/rootfs/boot/Image /boot/
 ```
-In case of scp copy from host use this commands:
+In case of crossbuild scp copy from host to Jetson target use the following commands:
 ```
 tar xf rootfs.tar.gz
-sudo cp -r ./lib/modules/5.15.148-tegra /lib/modules/.
+sudo cp -r ./lib/modules/6.8.12-tegra /lib/modules/.
 sudo cp    ./boot/tegra234-camera-d4xx-overlay.dtbo /boot/.
-sudo cp    ./boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/dtb/.
 sudo cp    ./boot/Image /boot/
 ```
 2.	Run  $ `sudo /opt/nvidia/jetson-io/jetson-io.py`, to exit choose save & reboot:
