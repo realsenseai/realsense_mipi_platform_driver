@@ -2248,6 +2248,38 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	int retry;
 	u16 status = 0;
 	bool device_went_down = false;
+	struct ds5_sensor *sensors[] = {
+		&state->depth.sensor,
+		&state->ir.sensor,
+		&state->rgb.sensor,
+		&state->imu.sensor,
+	};
+	int i;
+
+	if (state->dser_dev) {
+		mutex_lock(&serdes_lock__);
+		for (i = 0; i < ARRAY_SIZE(sensors); i++) {
+			struct ds5_sensor *sensor = sensors[i];
+
+			sensor->cached_dt_value = 0xFFFF;
+			sensor->cached_md_value = 0xFFFF;
+			sensor->cached_override_value = 0xFFFF;
+			sensor->cached_fps_value = 0xFFFF;
+			sensor->cached_width_value = 0xFFFF;
+			sensor->cached_height_value = 0xFFFF;
+
+			if (!sensor->pipe_configured) {
+				continue;
+			} else {
+				int release_ret = max9296_release_pipe(state->dser_dev,
+									     sensor->pipe_id);
+				dev_warn(&state->client->dev, "release pipe %d (%d)\n",
+					sensor->pipe_id, release_ret);
+				sensor->pipe_configured = false;
+			}
+		}
+		mutex_unlock(&serdes_lock__);
+	}
 
 	dev_info(&state->client->dev, "%s(): Initiating HW reset with recovery\n",
 		__func__);
