@@ -18,7 +18,7 @@ index c88bbe2..28e505a 100644
  dtbo-y += tegra234-p3767-camera-p3768-imx477-A.dtbo
 +dtbo-y += tegra234-camera-d4xx-overlay.dtbo
 +dtbo-y += tegra234-camera-d4xx-overlay-dual.dtbo
-+dtbo-y += tegra234-camera-d4xx-overlay-max96712-EV.dtbo
++dtbo-y += tegra234-camera-d4xx-overlay-max96712-EVB.dtbo
 +dtbo-y += tegra234-camera-d4xx-overlay-fg12-16ch.dtbo
 +dtbo-y += tegra234-camera-d4xx-overlay-fg12-16ch-dual.dtbo
 +dtbo-y += tegra234-camera-d4xx-overlay-fg12-16ch-quad.dtbo
