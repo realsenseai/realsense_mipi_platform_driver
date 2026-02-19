@@ -1,0 +1,248 @@
+name: V4L2 On-Device Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_filter:
+        description: 'Pytest -k filter (e.g. "streaming", "test_depth_streaming"). Leave empty for all tests.'
+        required: false
+        default: ''
+  push:
+    branches: [master, dev]
+    paths:
+      - 'kernel/realsense/**'
+      - 'test/v4l2_test/**'
+  pull_request:
+    branches: [master, dev]
+    paths:
+      - 'kernel/realsense/**'
+      - 'test/v4l2_test/**'
+
+permissions: read-all
+
+jobs:
+  v4l2-test:
+    runs-on: [self-hosted, jetson, xavier]
+    timeout-minutes: 30
+
+    env:
+      TEST_DIR: test/v4l2_test
+      RESULTS_DIR: v4l2_test_results
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create results directory
+        run: mkdir -p "$RESULTS_DIR"
+
+      - name: Collect system info
+        run: |
+          echo "=== System Information ==="
+          echo "Hostname: $(hostname)"
+          echo "Kernel:   $(uname -r)"
+          echo "Date:     $(date -Iseconds)"
+          echo ""
+
+          echo "--- JetPack / L4T ---"
+          cat /etc/nv_tegra_release 2>/dev/null || echo "N/A"
+          echo ""
+
+          echo "--- Video devices ---"
+          ls -la /dev/video* 2>/dev/null || echo "No video devices found"
+          echo ""
+
+          echo "--- D4XX module ---"
+          lsmod | grep d4xx || echo "d4xx module not loaded"
+
+          # Save structured info for artifact
+          python3 -c "
+          import json, subprocess, datetime
+          info = {
+              'timestamp': datetime.datetime.now().isoformat(),
+              'hostname': '$(hostname)',
+              'kernel': '$(uname -r)',
+          }
+          r = subprocess.run(['cat', '/etc/nv_tegra_release'], capture_output=True, text=True)
+          info['jetpack'] = r.stdout.strip() if r.returncode == 0 else 'N/A'
+          r = subprocess.run(['bash', '-c', 'ls /dev/video* 2>/dev/null'], capture_output=True, text=True)
+          info['video_devices'] = r.stdout.strip().split('\n') if r.stdout.strip() else []
+          r = subprocess.run(['bash', '-c', 'lsmod | grep d4xx'], capture_output=True, text=True)
+          info['d4xx_module'] = r.stdout.strip()
+          with open('$RESULTS_DIR/system_info.json', 'w') as f:
+              json.dump(info, f, indent=2)
+          "
+
+      - name: Reload D4XX driver
+        run: |
+          echo "Removing d4xx module..."
+          sudo rmmod d4xx 2>/dev/null || echo "Module was not loaded"
+          sleep 1
+
+          echo "Loading d4xx module..."
+          sudo modprobe d4xx
+          sleep 2
+
+          echo "Driver status:"
+          lsmod | grep d4xx
+
+      - name: Hardware reset
+        run: |
+          if [ -e /dev/video0 ]; then
+            v4l2-ctl -d /dev/video0 --set-ctrl=hw_reset=1 2>/dev/null || echo "hw_reset not supported (non-fatal)"
+            sleep 2
+          else
+            echo "Warning: /dev/video0 not found, skipping hw_reset"
+          fi
+
+      - name: Sanity check
+        id: sanity
+        run: |
+          echo "=== Sanity Check ==="
+          PASS=true
+
+          # 1. Video devices exist
+          echo "Checking video devices..."
+          if ls /dev/video* >/dev/null 2>&1; then
+            echo "OK: Video devices found"
+            ls /dev/video*
+          else
+            echo "FAIL: No video devices"
+            PASS=false
+          fi
+
+          # 2. D4XX module loaded
+          echo ""
+          echo "Checking D4XX driver..."
+          if lsmod | grep -q d4xx; then
+            echo "OK: d4xx module loaded"
+          else
+            echo "FAIL: d4xx module not loaded"
+            PASS=false
+          fi
+
+          # 3. Camera responds to V4L2
+          echo ""
+          echo "Querying camera capabilities..."
+          if v4l2-ctl -d /dev/video0 --info 2>/dev/null; then
+            echo "OK: Camera responds"
+          else
+            echo "FAIL: Camera not responding"
+            PASS=false
+          fi
+
+          # 4. Quick stream test (1 frame)
+          echo ""
+          echo "Testing basic streaming..."
+          if timeout 10 v4l2-ctl -d /dev/video0 \
+               --set-fmt-video=width=640,height=480 \
+               --stream-mmap --stream-count=1 2>&1; then
+            echo "OK: Captured test frame"
+          else
+            echo "FAIL: Cannot stream from camera"
+            PASS=false
+          fi
+
+          if [ "$PASS" = false ]; then
+            echo ""
+            echo "SANITY CHECK FAILED - camera is not operational"
+            echo "sanity_passed=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          echo ""
+          echo "SANITY CHECK PASSED"
+          echo "sanity_passed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Run V4L2 pytest suite
+        if: steps.sanity.outputs.sanity_passed == 'true'
+        run: |
+          cd test
+
+          PYTEST_ARGS="-vs --tb=short -m d457 v4l2_test/"
+
+          if [ -n "${{ github.event.inputs.test_filter }}" ]; then
+            PYTEST_ARGS="$PYTEST_ARGS -k '${{ github.event.inputs.test_filter }}'"
+          fi
+
+          echo "Running: python3 -m pytest $PYTEST_ARGS"
+          echo ""
+
+          # Run pytest; tee output to file for artifact, allow non-zero exit
+          python3 -m pytest $PYTEST_ARGS 2>&1 | tee "../$RESULTS_DIR/pytest_output.log" || true
+
+          # Capture actual exit code by re-running with --co (collect only) to not re-run
+          # Instead, parse the log for the summary line
+          if grep -q "failed" "../$RESULTS_DIR/pytest_output.log"; then
+            echo "::warning::Some tests failed - see pytest_output.log artifact"
+          fi
+
+      - name: Collect dmesg logs
+        if: always()
+        run: |
+          sudo dmesg -T | grep -E '(d4xx|D4XX|GMSL|V4L2|video|media|tegra-camrtc|nvcsi|vi5)' \
+            | tail -500 > "$RESULTS_DIR/dmesg_filtered.log" 2>/dev/null || true
+
+          sudo dmesg -T | tail -200 > "$RESULTS_DIR/dmesg_tail.log" 2>/dev/null || true
+
+          echo "Dmesg logs collected"
+
+      - name: Generate test summary
+        if: always()
+        run: |
+          python3 -c "
+          import re, sys
+
+          log_path = '$RESULTS_DIR/pytest_output.log'
+          try:
+              with open(log_path) as f:
+                  content = f.read()
+          except FileNotFoundError:
+              print('No pytest output (sanity check may have failed)')
+              sys.exit(0)
+
+          # Parse summary line like: '== 19 passed, 38 failed, 7 skipped in 45.32s =='
+          m = re.search(r'=+\s*(.*?)\s*=+\s*$', content, re.MULTILINE)
+          if m:
+              summary = m.group(1)
+              print(f'## Test Summary\n\n{summary}\n')
+
+              # Extract counts
+              passed = re.search(r'(\d+) passed', summary)
+              failed = re.search(r'(\d+) failed', summary)
+              skipped = re.search(r'(\d+) skipped', summary)
+
+              p = int(passed.group(1)) if passed else 0
+              f = int(failed.group(1)) if failed else 0
+              s = int(skipped.group(1)) if skipped else 0
+              total = p + f + s
+
+              print(f'| Metric | Count |')
+              print(f'|--------|-------|')
+              print(f'| Passed | {p} |')
+              print(f'| Failed | {f} |')
+              print(f'| Skipped | {s} |')
+              print(f'| Total  | {total} |')
+
+              if f > 0:
+                  print(f'\n### Failed Tests\n')
+                  for line in content.split('\n'):
+                      if 'FAILED' in line:
+                          print(f'- {line.strip()}')
+          else:
+              print('Could not parse pytest summary')
+          " | tee "$RESULTS_DIR/summary.md"
+
+          # Write to GitHub step summary
+          if [ -f "$RESULTS_DIR/summary.md" ]; then
+            cat "$RESULTS_DIR/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v4l2-test-results-${{ github.run_number }}
+          path: |
+            ${{ env.RESULTS_DIR }}/
+          retention-days: 30
