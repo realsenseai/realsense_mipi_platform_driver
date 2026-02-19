@@ -4770,6 +4770,7 @@ restore_s_state:
 		if (state->dser_ops->release_pipe(state->dser_dev, sensor->pipe_id) < 0)
 			dev_warn(&state->client->dev, "release pipe failed\n");
 		sensor->pipe_id = -1;
+		sensor->pipe_configured = false;
 		mutex_unlock(&serdes_lock__);
 	}
 #endif
