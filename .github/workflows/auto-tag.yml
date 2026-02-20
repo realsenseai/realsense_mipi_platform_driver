@@ -1,0 +1,143 @@
+name: Auto-Tag Daily Version Bump
+
+on:
+  schedule:
+    - cron: '0 14 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bump-version:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout dev
+      uses: actions/checkout@v4
+      with:
+        ref: dev
+        fetch-depth: 0
+
+    - name: Branch guard
+      run: |
+        branch=$(git rev-parse --abbrev-ref HEAD)
+        if [ "$branch" != "dev" ]; then
+          echo "::error::Expected branch 'dev', got '$branch'"
+          exit 1
+        fi
+
+    - name: Find latest tag
+      id: latest_tag
+      run: |
+        tag=$(git tag --merged HEAD --sort=-v:refname | grep -E '^v[0-9]+\.' | head -1)
+        if [ -z "$tag" ]; then
+          echo "::error::No version tags found on dev. Create an initial tag manually (e.g., git tag -a v1.0.2.10 -m 'Initial tag')."
+          exit 1
+        fi
+        echo "tag=$tag" >> "$GITHUB_OUTPUT"
+        echo "Found latest tag: $tag"
+
+    - name: Check for meaningful changes
+      id: changes
+      run: |
+        tag="${{ steps.latest_tag.outputs.tag }}"
+        changed=$(git diff --name-only "$tag"..HEAD)
+
+        if [ -z "$changed" ]; then
+          echo "No changes since $tag"
+          echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # Filter out ignored paths
+        meaningful=$(echo "$changed" | grep -v -E '^(\.claude/|\.github/|test/|docs/)' || true)
+
+        if [ -z "$meaningful" ]; then
+          echo "Only ignored-folder changes since $tag:"
+          echo "$changed"
+          echo "has_changes=false" >> "$GITHUB_OUTPUT"
+        else
+          echo "Meaningful changes since $tag:"
+          echo "$meaningful"
+          echo "has_changes=true" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Parse current version
+      if: steps.changes.outputs.has_changes == 'true'
+      id: version
+      run: |
+        current=$(grep -oP 'MODULE_VERSION\("\K[^"]+' kernel/realsense/d4xx.c)
+        if [ -z "$current" ]; then
+          echo "::error::Could not parse MODULE_VERSION from d4xx.c"
+          exit 1
+        fi
+        echo "current=$current" >> "$GITHUB_OUTPUT"
+        echo "Current version: $current"
+
+    - name: Increment build number
+      if: steps.changes.outputs.has_changes == 'true'
+      id: bump
+      run: |
+        current="${{ steps.version.outputs.current }}"
+        IFS='.' read -r major minor patch build <<< "$current"
+        new_build=$((build + 1))
+        new_version="${major}.${minor}.${patch}.${new_build}"
+        echo "new_version=$new_version" >> "$GITHUB_OUTPUT"
+        echo "new_tag=v${new_version}" >> "$GITHUB_OUTPUT"
+        echo "Bumping: $current -> $new_version"
+
+    - name: Update d4xx.c
+      if: steps.changes.outputs.has_changes == 'true'
+      run: |
+        current="${{ steps.version.outputs.current }}"
+        new_version="${{ steps.bump.outputs.new_version }}"
+        sed -i "s/MODULE_VERSION(\"${current}\")/MODULE_VERSION(\"${new_version}\")/" kernel/realsense/d4xx.c
+
+        # Verify the update
+        updated=$(grep -oP 'MODULE_VERSION\("\K[^"]+' kernel/realsense/d4xx.c)
+        if [ "$updated" != "$new_version" ]; then
+          echo "::error::VERSION update failed. Expected '$new_version', got '$updated'"
+          exit 1
+        fi
+        echo "d4xx.c updated to $new_version"
+
+    - name: Commit and tag
+      if: steps.changes.outputs.has_changes == 'true'
+      run: |
+        new_version="${{ steps.bump.outputs.new_version }}"
+        new_tag="${{ steps.bump.outputs.new_tag }}"
+
+        git config user.email "builder@example.com"
+        git config user.name "builder"
+        git add kernel/realsense/d4xx.c
+        git commit -m "Bump version to ${new_version}"
+        git tag -a "$new_tag" -m "Version ${new_version}"
+
+    - name: Push commit
+      if: steps.changes.outputs.has_changes == 'true'
+      run: git push origin dev
+
+    - name: Push tag
+      if: steps.changes.outputs.has_changes == 'true'
+      run: git push origin "${{ steps.bump.outputs.new_tag }}"
+
+    - name: Summary
+      run: |
+        if [ "${{ steps.changes.outputs.has_changes }}" == "true" ]; then
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+        ## Version Bump Completed
+
+        | | |
+        |---|---|
+        | **Previous tag** | \`${{ steps.latest_tag.outputs.tag }}\` |
+        | **New version** | \`${{ steps.bump.outputs.new_version }}\` |
+        | **New tag** | \`${{ steps.bump.outputs.new_tag }}\` |
+        EOF
+        else
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+        ## No Version Bump Needed
+
+        No meaningful changes since \`${{ steps.latest_tag.outputs.tag }}\`. Skipped.
+        EOF
+        fi
