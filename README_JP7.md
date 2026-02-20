@@ -34,6 +34,7 @@ sudo apt-get install -y build-essential bc wget flex bison curl libssl-dev xxd t
 ```
 ## Build NVIDIA® kernel drivers, dtb and D457 driver
 
+These are descriptiver steps. Bash commands to be issued follow:
 1. Clone [realsense_mipi_platform_driver](https://github.com/realsenseai/realsense_mipi_platform_driver.git) repo.
 2. Checkout dev branch.
 3. The developers can set up build environment, ARM64 compiler, kernel sources and NVIDIA's Jetson git repositories by using the setup script.
