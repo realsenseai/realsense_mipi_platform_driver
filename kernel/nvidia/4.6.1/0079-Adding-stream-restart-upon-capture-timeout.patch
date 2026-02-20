@@ -5,8 +5,8 @@ Subject: [PATCH] Adding stream restart upon capture timeout
 
 Ehud J. Goldik <ehud.joseph.goldik@realsenseai.com>
 ---
- .../media/platform/tegra/camera/vi/vi5_fops.c | 25 ++++++++++++++++++-
- 1 file changed, 24 insertions(+), 1 deletion(-)
+ .../media/platform/tegra/camera/vi/vi5_fops.c | 28 +++++++++++++++++++-
+ 1 file changed, 27 insertions(+), 1 deletion(-)
 
 diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
 index 6d6e1777e..67dc5179b 100644
@@ -45,9 +45,12 @@ index 6d6e1777e..67dc5179b 100644
 +					"uncorr_err: request timed out after %d ms - attempting restart\n",
  					CAPTURE_TIMEOUT_MS);
 +				err = vi5_attempt_restart_stream(chan);
-+				if (err != 0) {
++				if (err == -EIO) {
 +					dev_err(vi->dev,
-+						"uncorr_err: Restart failed\n");
++						"uncorr_err: Stream restart permanently disabled after repeated failures\n");
++				} else if (err != 0) {
++					dev_err(vi->dev,
++						"uncorr_err: Restart failed (%d)\n", err);
 +				}
  			} else {
  				dev_err(vi->dev, "uncorr_err: request err %d\n", err);

@@ -411,6 +411,7 @@ struct ds5_sensor {
 	u16 pipe_data_type2;
 	u32 pipe_vc_id;
 	bool pipe_configured;
+	int start_fail_count;	/* consecutive s_stream(1) failures */
 	u16 cached_dt_value;
 	u16 cached_md_value;
 	u16 cached_override_value;
@@ -4627,11 +4628,34 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 				mutex_unlock(&serdes_lock__);
 #endif
 			}
-			ret = -EAGAIN;
+			/*
+			 * Track consecutive start failures. After a threshold,
+			 * escalate from -EAGAIN (retry) to -EIO (hard error) to
+			 * stop the VI engine from looping indefinitely on restart
+			 * attempts that will never succeed.
+			 */
+			if (++sensor->start_fail_count >= 5) {
+				dev_err(&state->client->dev,
+					"stream %d: %d consecutive start failures — aborting restart loop\n",
+					stream_id, sensor->start_fail_count);
+				ret = -EIO;
+			} else {
+				ret = -EAGAIN;
+			}
 			goto restore_s_state;
 		} else {
+			sensor->start_fail_count = 0;
 			dev_warn(&state->client->dev, "stream %d started after %dms\n",
 				stream_id, i * DS5_START_POLL_TIME);
+			/*
+			 * Allow the first GMSL frame to arrive before the VI
+			 * engine starts capturing. Without this settling time
+			 * the VI correctable-error handler fires on frame 0,
+			 * attempts NVCSI stream close/reopen, and encounters a
+			 * NULL VI channel — a cascade that can stall the capture
+			 * pipeline indefinitely under rapid start/stop cycling.
+			 */
+			msleep(100);
 		}
 	} else { // off
 		ret = ds5_write(state, DS5_START_STOP_STREAM,
@@ -4726,6 +4750,14 @@ restore_s_state:
 		sensor->pipe_id = -1;
 		mutex_unlock(&serdes_lock__);
 	}
+	/*
+	 * Always clear pipe_configured on start failure so the next s_stream(1)
+	 * call re-allocates a valid pipe. Leaving it set with pipe_id=-1 causes
+	 * ds5_configure() to skip allocation and stream with an invalid pipe,
+	 * creating an infinite uncorr_err retry loop in the VI capture engine.
+	 */
+	if (on)
+		sensor->pipe_configured = false;
 #endif
 
 	ds5_read(state, config_status_base, &status);
