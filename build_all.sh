@@ -128,6 +128,7 @@ else
 		cp $SRCS/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/tegra234-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/
 	fi
     export INSTALL_MOD_PATH=$TEGRA_KERNEL_OUT/rootfs/
+    make -C kernel install
     make modules_install
     # iio support
     KERNELVERSION=$(cat $KERNEL_HEADERS/include/config/kernel.release)
