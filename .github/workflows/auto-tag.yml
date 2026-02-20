@@ -52,7 +52,7 @@ jobs:
         fi
 
         # Filter out ignored paths
-        meaningful=$(echo "$changed" | grep -v -E '^(\.claude/|\.github/|test/|docs/)' || true)
+        meaningful=$(echo "$changed" | grep -v -E '^(\.claude/|\.github/|test/|docs/|scripts/|CLAUDE\.md$|\.gitignore$)' || true)
 
         if [ -z "$meaningful" ]; then
           echo "Only ignored-folder changes since $tag:"
