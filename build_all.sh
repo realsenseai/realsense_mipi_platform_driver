@@ -125,7 +125,8 @@ else
 		make dtbs
 		cp $SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/
 	else
-		cp $SRCS/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/tegra234-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/
+		cp $SRCS/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/tegra234-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/ 2>/dev/null || true
+		cp $SRCS/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/tegra264-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/ 2>/dev/null || true
 	fi
     export INSTALL_MOD_PATH=$TEGRA_KERNEL_OUT/rootfs/
     make -C kernel install
