@@ -1,0 +1,172 @@
+name: Static Analysis
+
+on:
+  pull_request:
+    paths:
+      - 'kernel/realsense/**'
+  push:
+    branches: [master, dev]
+    paths:
+      - 'kernel/realsense/**'
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  cppcheck:
+    name: cppcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cppcheck
+        run: sudo apt-get update && sudo apt-get install -y cppcheck
+
+      - name: Run cppcheck
+        run: |
+          cppcheck \
+            --enable=warning,performance,portability \
+            --suppress=missingIncludeSystem \
+            --suppress=missingInclude \
+            --force \
+            --inline-suppr \
+            --template='[{severity}] {file}:{line}: {message} [{id}]' \
+            kernel/realsense/ 2>&1 | tee cppcheck_output.txt
+
+          # Generate summary
+          TOTAL=$(grep -cE '^\[(error|warning|performance|portability)\]' cppcheck_output.txt || true)
+          echo "## cppcheck Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Found **${TOTAL}** finding(s) in \`kernel/realsense/\`." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "$TOTAL" -gt 0 ]; then
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat cppcheck_output.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cppcheck-results
+          path: cppcheck_output.txt
+
+  sparse-smatch:
+    name: Sparse & Smatch
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies and Sparse
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential bc wget flex bison curl libssl-dev xxd \
+            sparse \
+            libsqlite3-dev libxml2-dev llvm pkg-config
+
+      - name: Build and install Smatch
+        run: |
+          git clone --depth=1 https://github.com/error27/smatch.git /tmp/smatch
+          cd /tmp/smatch
+          make -j$(nproc)
+          sudo make PREFIX=/usr install
+          smatch --version
+
+      - name: Setup workspace
+        run: yes | ./setup_workspace.sh 6.2
+
+      - name: Apply patches
+        run: |
+          git config --global user.email "builder@example.com"
+          git config --global user.name "builder"
+          ./apply_patches.sh 6.2
+
+      - name: Build kernel and modules
+        run: ./build_all.sh 6.2
+
+      - name: Run Sparse on d4xx
+        run: |
+          DEVDIR=${{ github.workspace }}
+          SRCS=$DEVDIR/sources_6.2
+          export CROSS_COMPILE=$DEVDIR/l4t-gcc/6.x/bin/aarch64-buildroot-linux-gnu-
+          KERNEL_HEADERS=$SRCS/kernel/kernel-jammy-src
+
+          # Delete d4xx.o to force recompilation — Sparse (C=1) only checks recompiled files
+          rm -f $SRCS/nvidia-oot/drivers/media/i2c/d4xx.o
+
+          make -j$(nproc) ARCH=arm64 C=1 \
+            -C $KERNEL_HEADERS \
+            M=$SRCS/nvidia-oot \
+            CONFIG_TEGRA_OOT_MODULE=m \
+            srctree.nvidia-oot=$SRCS/nvidia-oot \
+            srctree.hwpm=$SRCS/hwpm \
+            srctree.nvconftest=$SRCS/out/nvidia-conftest \
+            KBUILD_EXTRA_SYMBOLS=$SRCS/hwpm/drivers/tegra/hwpm/Module.symvers \
+            modules 2>&1 | tee $DEVDIR/sparse_raw.txt || true
+
+          grep -i "d4xx" $DEVDIR/sparse_raw.txt > $DEVDIR/sparse_output.txt || true
+
+      - name: Run Smatch on d4xx
+        run: |
+          DEVDIR=${{ github.workspace }}
+          SRCS=$DEVDIR/sources_6.2
+          export CROSS_COMPILE=$DEVDIR/l4t-gcc/6.x/bin/aarch64-buildroot-linux-gnu-
+          KERNEL_HEADERS=$SRCS/kernel/kernel-jammy-src
+
+          rm -f $SRCS/nvidia-oot/drivers/media/i2c/d4xx.o
+
+          make -j$(nproc) ARCH=arm64 C=1 CHECK="smatch -p=kernel" \
+            -C $KERNEL_HEADERS \
+            M=$SRCS/nvidia-oot \
+            CONFIG_TEGRA_OOT_MODULE=m \
+            srctree.nvidia-oot=$SRCS/nvidia-oot \
+            srctree.hwpm=$SRCS/hwpm \
+            srctree.nvconftest=$SRCS/out/nvidia-conftest \
+            KBUILD_EXTRA_SYMBOLS=$SRCS/hwpm/drivers/tegra/hwpm/Module.symvers \
+            modules 2>&1 | tee $DEVDIR/smatch_raw.txt || true
+
+          grep -i "d4xx" $DEVDIR/smatch_raw.txt > $DEVDIR/smatch_output.txt || true
+
+      - name: Generate summary
+        if: always()
+        run: |
+          echo "## Sparse & Smatch Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          SPARSE_COUNT=0
+          SMATCH_COUNT=0
+          [ -s sparse_output.txt ] && SPARSE_COUNT=$(wc -l < sparse_output.txt)
+          [ -s smatch_output.txt ] && SMATCH_COUNT=$(wc -l < smatch_output.txt)
+
+          echo "| Tool | Findings |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|----------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Sparse | ${SPARSE_COUNT} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Smatch | ${SMATCH_COUNT} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          for TOOL in sparse smatch; do
+            FILE="${TOOL}_output.txt"
+            if [ -s "$FILE" ]; then
+              LABEL=$(echo "$TOOL" | sed 's/./\U&/')
+              echo "### $LABEL Findings" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              head -100 "$FILE" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sparse-smatch-results
+          path: |
+            sparse_output.txt
+            smatch_output.txt
+            sparse_raw.txt
+            smatch_raw.txt
