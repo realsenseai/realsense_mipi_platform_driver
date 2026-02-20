@@ -1,37 +1,38 @@
 #!/bin/bash
 set -e
 
-# Copyright (c) 2012-2021 NVIDIA CORPORATION.  All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2012-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions
-# are met:
-#  * Redistributions of source code must retain the above copyright
-#    notice, this list of conditions and the following disclaimer.
-#  * Redistributions in binary form must reproduce the above copyright
-#    notice, this list of conditions and the following disclaimer in the
-#    documentation and/or other materials provided with the distribution.
-#  * Neither the name of NVIDIA CORPORATION nor the names of its
-#    contributors may be used to endorse or promote products derived
-#    from this software without specific prior written permission.
+# modification, are permitted provided that the following conditions are met:
 #
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
-# EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-# PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
-# CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-# EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-# PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-# PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
-# OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# 1. Redistributions of source code must retain the above copyright notice, this
+# list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+# this list of conditions and the following disclaimer in the documentation
+# and/or other materials provided with the distribution.
+#
+# 3. Neither the name of the copyright holder nor the names of its
+# contributors may be used to endorse or promote products derived from
+# this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 #
 # This script sync's NVIDIA's version of
 # 1. the kernel source
-# 2. the u-boot source
 # from nv-tegra, NVIDIA's public git repository.
 # The script also provides opportunities to the sync to a specific tag
 # so that the binaries shipped with a release can be replicated.
@@ -41,13 +42,12 @@ set -e
 # ./source_sync.sh
 # Use the -t <TAG> option to provide the TAG to be used to sync all the sources.
 # Use the -k <TAG> option to download only the kernel and device tree repos and optionally sync to TAG
-# Use the -u <TAG> option to download only the u-boot repo and optionally sync to TAG
 # For detailed usage information run with -h option.
 #
 
 
 # verify that git is installed
-if ! which git > /dev/null  ; then
+if  ! which git > /dev/null  ; then
   echo "ERROR: git is not installed. If your linux distro is 10.04 or later,"
   echo "git can be installed by 'sudo apt-get install git-core'."
   exit 1
@@ -60,32 +60,17 @@ LDK_DIR="${LDK_DIR}/sources"
 SCRIPT_NAME=`basename $0`
 # info about sources.
 # NOTE: *Add only kernel repos here. Add new repos separately below. Keep related repos together*
-SOURCE_INFO="
-k:kernel/kernel-4.9:nv-tegra.nvidia.com/linux-4.9.git:
-k:kernel/nvgpu:nv-tegra.nvidia.com/linux-nvgpu.git:
-k:kernel/nvidia:nv-tegra.nvidia.com/linux-nvidia.git:
-k:hardware/nvidia/soc/t18x:nv-tegra.nvidia.com/device/hardware/nvidia/soc/t18x.git:
-k:hardware/nvidia/platform/tegra/common:nv-tegra.nvidia.com/device/hardware/nvidia/platform/tegra/common.git:
-k:hardware/nvidia/platform/t18x/common:nv-tegra.nvidia.com/device/hardware/nvidia/platform/t18x/common.git:
-k:hardware/nvidia/platform/t18x/quill:nv-tegra.nvidia.com/device/hardware/nvidia/platform/t18x/quill.git:
-k:hardware/nvidia/platform/t18x/lanai:nv-tegra.nvidia.com/device/hardware/nvidia/platform/t18x/lanai.git:
-k:hardware/nvidia/soc/t210:nv-tegra.nvidia.com/device/hardware/nvidia/soc/t210.git:
-k:hardware/nvidia/platform/t210/common:nv-tegra.nvidia.com/device/hardware/nvidia/platform/t210/common.git:
-k:hardware/nvidia/platform/t210/jetson:nv-tegra.nvidia.com/device/hardware/nvidia/platform/t210/jetson.git:
-k:hardware/nvidia/platform/t210/porg:nv-tegra.nvidia.com/device/hardware/nvidia/platform/t210/porg.git:
-k:hardware/nvidia/platform/t210/batuu/kernel-dts:nv-tegra.nvidia.com/device/hardware/nvidia/platform/t210/batuu-dts.git:
-k:hardware/nvidia/soc/t19x:nv-tegra.nvidia.com/device/hardware/nvidia/soc/t19x.git:
-k:hardware/nvidia/platform/t19x/common:nv-tegra.nvidia.com/device/hardware/nvidia/platform/t19x/common.git:
-k:hardware/nvidia/platform/t19x/galen/kernel-dts:nv-tegra.nvidia.com/device/hardware/nvidia/platform/t19x/stardust-dts.git:
-k:hardware/nvidia/platform/t19x/jakku/kernel-dts:nv-tegra.nvidia.com/device/hardware/nvidia/platform/t19x/jakku-dts.git:
-k:hardware/nvidia/platform/t19x/mccoy/kernel-dts:nv-tegra.nvidia.com/device/hardware/nvidia/platform/t19x/mccoy-dts.git:
-k:hardware/nvidia/platform/t19x/galen-industrial-dts/kernel-dts:nv-tegra.nvidia.com/device/hardware/nvidia/platform/t19x/galen-industrial-dts.git:
-k:hardware/nvidia/soc/tegra:nv-tegra.nvidia.com/device/hardware/nvidia/soc/tegra.git:
-"
-SOURCE_INFO+="
-u:u-boot:nv-tegra.nvidia.com/3rdparty/u-boot.git:
-"
+# NOTE: nvethrnetrm.git should be listed after "linux-nv-oot.git" due to nesting of sync path
+if [[ -f scripts/sources_$JETPACK_VERSION ]]; then
+	SOURCE_INFO=$(cat scripts/sources_$JETPACK_VERSION)
+elif [[ -f scripts/sources_$version ]]; then
+	SOURCE_INFO=$(cat scripts/sources_$version)
+else
+	echo "Sources information file, scripts/sources_$JETPACK_VERSION, is missing!"
+	exit 1
+fi
 
+# exit on error on sync
 # after processing SOURCE_INFO
 NSOURCES=0
 declare -a SOURCE_INFO_PROCESSED
@@ -102,7 +87,7 @@ function Usages {
 
 	echo "Use: $1 [options]"
 	echo "Available general options are,"
-	echo "     -h     :     help"
+	echo "     -h : help"
 	echo "     -d [DIR] : root of source is DIR"
 	echo "     -t [TAG] : git tag that will be used to sync all the sources"
 	echo ""
@@ -169,29 +154,28 @@ function DownloadAndSync {
 	local TAG="$4"
 	local OPT="$5"
 
-	if [ -d "${LDK_SOURCE_DIR}" ]; then
+	if [[ -d "${LDK_SOURCE_DIR}" ]]; then
 		echo "Directory for $WHAT, ${LDK_SOURCE_DIR}, already exists!"
 		if ! git -C $LDK_SOURCE_DIR status 2>&1 >/dev/null; then
-			echo "But the directory is not a git repository -- clean it up first"
-			echo ""
+			echo -e "\e[33m...but the directory is not a git repository -- clean it up first\e[0m\n"
 			return 1
 		fi
-		if ! git -C $LDK_SOURCE_DIR fetch --all 2>&1 >/dev/null; then
-			echo "$2 source sync failed"
+		if ! git -C $LDK_SOURCE_DIR fetch $REPO_URL 2>&1 >/dev/null; then
+			echo -e "\e[33msource sync with ${REPO_URL} failed!\e[0m"
 			return 2
 		fi
 	else
 		echo "Downloading default $WHAT source..."
 
 		if ! git clone -n "$REPO_URL" ${LDK_SOURCE_DIR} 2>&1 >/dev/null; then
-			echo "$2 source sync failed"
-			return 3
+			echo -e "\e[33msource sync with ${REPO_URL} failed!\e[0m"
+			return 2
 		fi
 
 		echo "The default $WHAT source is downloaded in: ${LDK_SOURCE_DIR}"
 	fi
 
-	if [ -z "$TAG" ]; then
+	if [[ -z "$TAG" ]]; then
 		echo "Please enter a tag to sync $2 source to"
 		echo -n "(enter nothing to skip): "
 		read TAG
@@ -199,24 +183,19 @@ function DownloadAndSync {
 		UpdateTags $OPT $TAG
 	fi
 
-	if [[ -n "$TAG" ]]; then
-		if [ -n $(git -C $LDK_SOURCE_DIR tag -l "^$TAG\$") ]; then
+	[[ -n "$TAG" ]] &&
+		if [[ -n $(git -C $LDK_SOURCE_DIR tag -l "$TAG") ]]; then
 			echo "Syncing up with tag $TAG..."
-			if git -C $LDK_SOURCE_DIR checkout -b mybranch_$(date +%Y-%m-%d-%s) $TAG; then
-				echo "$2 source sync'ed to tag $TAG successfully!"
+			if git -C $LDK_SOURCE_DIR checkout -b mybranch_$(date +%Y-%m-%d-%s) $TAG 2>&1 >/dev/null; then
+				echo -e "\e[32m$2 source sync'ed to tag $TAG successfully!\e[0m"
 			else
-				echo "$2 could not sync to tag $TAG!"
-				echo
+				echo -e "\e[31m$2 could not sync to tag $TAG!\e[0m\n"
 				return 4
 			fi
 		else
-			echo "Couldn't find tag $TAG"
-			echo "$2 source sync to tag $TAG failed!"
-			echo
+                        echo -e "\e[31mCouldn't find tag $TAG. $2 source sync to tag $TAG failed!\e[0m"
 			return 5
 		fi
-	fi
-	echo
 }
 
 # prepare processing ....
@@ -304,6 +283,11 @@ while getopts "$GETOPT" opt; do
 done
 shift $((OPTIND-1))
 
+PROTOCOL="git:/"
+if [[ -f protocol ]]; then
+	PROTOCOL=$(cat protocol)
+fi
+
 for ((i=0; i < NSOURCES; i++)); do
 	OPT=$(echo "${SOURCE_INFO_PROCESSED[i]}" | cut -f 1 -d ':')
 	WHAT=$(echo "${SOURCE_INFO_PROCESSED[i]}" | cut -f 2 -d ':')
@@ -312,13 +296,20 @@ for ((i=0; i < NSOURCES; i++)); do
 	DNLOAD=$(echo "${SOURCE_INFO_PROCESSED[i]}" | cut -f 5 -d ':')
 
 	if [ $DALL -eq 1 -o "x${DNLOAD}" == "xy" ]; then
-		if DownloadAndSync "$WHAT" "${LDK_DIR}/${WHAT}" "git://${REPO}" "${TAG}" "${OPT}"; then
-			true
+		if DownloadAndSync "$WHAT" "${LDK_DIR}/${WHAT}" "$PROTOCOL/gitlab.com/nvidia/${REPO}" "${TAG}" "${OPT}"; then
+			echo $PROTOCOL > protocol
 		else
-			if [[ $? == 3 ]]; then
+			if [[ $? == 2 ]]; then
+				PROTOCOL="https:/"
 				echo "Trying https protocol"
-				DownloadAndSync "$WHAT" "${LDK_DIR}/${WHAT}" "https://${REPO}" "${TAG}" "${OPT}"
+				if DownloadAndSync "${WHAT}" "${LDK_DIR}/${WHAT}" "${PROTOCOL}/gitlab.com/nvidia/${REPO}" "${TAG}" "${OPT}"; then
+					echo $PROTOCOL > protocol
+				else
+					echo -e "\e[31m${WHAT} source sync with both git and https protocol failed!\e[0m\n"
+					exit 2
+				fi
 			else
+				echo -e "\e[31m${WHAT} source sync failed with!\e[0m\n"
 				exit 1
 			fi
 		fi

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 
-KERNEL_SRC_DIR ?= kernel-jammy-src
+KERNEL_SRC_DIR ?= kernel-noble-src
 KERNEL_DEF_CONFIG ?= defconfig
 
 MAKEFILE_DIR := $(abspath $(shell dirname $(lastword $(MAKEFILE_LIST))))

@@ -1,0 +1,11 @@
+Index: kernel-noble-src/arch/arm64/boot/dts/nvidia/Makefile
+===================================================================
+--- kernel-noble-src.orig/arch/arm64/boot/dts/nvidia/Makefile
++++ kernel-noble-src/arch/arm64/boot/dts/nvidia/Makefile
+@@ -30,3 +30,6 @@ dtb-$(CONFIG_ARCH_TEGRA_234_SOC) += tegr
+ dtb-$(CONFIG_ARCH_TEGRA_234_SOC) += tegra234-p3740-0002+p3701-0008.dtb
+ dtb-$(CONFIG_ARCH_TEGRA_234_SOC) += tegra234-p3768-0000+p3767-0000.dtb
+ dtb-$(CONFIG_ARCH_TEGRA_234_SOC) += tegra234-p3768-0000+p3767-0005.dtb
++
++dtb-$(CONFIG_ARCH_TEGRA_234_SOC) += tegra234-camera-d4xx-overlay.dtbo
++dtb-$(CONFIG_ARCH_TEGRA_234_SOC) += tegra234-camera-d4xx-overlay-dual.dtbo
