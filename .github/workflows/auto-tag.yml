@@ -18,6 +18,7 @@ jobs:
       with:
         ref: dev
         fetch-depth: 0
+        token: ${{ secrets.PAT_TOKEN }}
 
     - name: Branch guard
       run: |
