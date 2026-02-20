@@ -412,6 +412,7 @@ struct ds5_sensor {
 	u16 pipe_data_type1;
 	u16 pipe_data_type2;
 	u32 pipe_vc_id;
+	int start_fail_count;	/* consecutive s_stream(1) failures */
 	u16 cached_dt_value;
 	u16 cached_md_value;
 	u16 cached_override_value;
@@ -4660,6 +4661,18 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 				(on ? DS5_STREAM_STOP : DS5_STREAM_START) | stream_id);
 		}
 		ret = -EAGAIN;
+		/*
+		 * Track consecutive start failures. After a threshold,
+		 * escalate from -EAGAIN (retry) to -EIO (hard error) to
+		 * stop the VI engine from looping indefinitely on restart
+		 * attempts that will never succeed.
+		 */
+		if (on && ++sensor->start_fail_count >= 5) {
+			dev_err(&state->client->dev,
+				"stream %d: %d consecutive start failures — aborting restart loop\n",
+				stream_id, sensor->start_fail_count);
+			ret = -EIO;
+		}
 	#ifdef CONFIG_VIDEO_D4XX_SERDES
 		if (on && sensor->pipe_id >= 0) {
 			mutex_lock(&serdes_lock__);
@@ -4676,6 +4689,19 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		}
 	#endif
 		sensor->streaming = restore_val;
+	}
+	else if (on)
+	{
+		sensor->start_fail_count = 0;
+		/*
+		 * Allow the first GMSL frame to arrive before the VI engine
+		 * starts capturing. Without this settling time the VI
+		 * correctable-error handler fires on frame 0, attempts NVCSI
+		 * stream close/reopen, and encounters a NULL VI channel — a
+		 * cascade that can stall the capture pipeline indefinitely
+		 * under rapid start/stop cycling.
+		 */
+		msleep(100);
 	}
 	else if (!on)
 	{
