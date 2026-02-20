@@ -1,0 +1,83 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Edit",
+      "Write",
+      "NotebookEdit",
+      "WebFetch",
+      "WebSearch",
+
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git show*)",
+      "Bash(git branch*)",
+      "Bash(git fetch*)",
+      "Bash(git rebase*)",
+      "Bash(git apply*)",
+      "Bash(git worktree*)",
+      "Bash(git show-branch*)",
+      "Bash(git tag*)",
+      "Bash(git stash*)",
+      "Bash(git checkout*)",
+      "Bash(git add*)",
+      "Bash(git commit*)",
+      "Bash(git rev-parse*)",
+      "Bash(git merge-base*)",
+      "Bash(gh *)",
+
+      "Bash(./setup_workspace.sh*)",
+      "Bash(./apply_patches.sh*)",
+      "Bash(./build_all.sh*)",
+      "Bash(make *)",
+
+      "Bash(./scripts/deploy_kernel*)",
+      "Bash(ssh *)",
+      "Bash(sshpass *)",
+      "Bash(scp *)",
+
+      "Bash(python3 *)",
+      "Bash(pytest *)",
+      "Bash(python3 test/*)",
+
+      "Bash(cppcheck *)",
+
+      "Bash(ls *)",
+      "Bash(find *)",
+      "Bash(grep *)",
+      "Bash(cat *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(wc *)",
+      "Bash(diff *)",
+      "Bash(file *)",
+      "Bash(realpath *)",
+      "Bash(nproc*)",
+      "Bash(which *)",
+      "Bash(tee *)",
+      "Bash(mkdir *)",
+      "Bash(cp *)",
+      "Bash(mv *)",
+      "Bash(ln *)",
+      "Bash(tar *)",
+      "Bash(wget *)",
+      "Bash(curl *)",
+
+      "Bash(v4l2-ctl *)",
+      "Bash(media-ctl *)",
+      "Bash(lsmod*)",
+      "Bash(dmesg*)",
+      "Bash(sudo dmesg*)",
+      "Bash(uname *)"
+    ],
+    "deny": [
+      "Bash(git push --force*)",
+      "Bash(git reset --hard*)",
+      "Bash(git clean -f*)",
+      "Bash(rm -rf /*)"
+    ]
+  }
+}
