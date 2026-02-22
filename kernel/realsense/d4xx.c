@@ -185,6 +185,8 @@ enum ds5_mux_pad {
 
 #define CSI2_MAX_VIRTUAL_CHANNELS	4
 
+#define PIPE_NOT_CONFIGURED	-1
+
 #define DFU_WAIT_RET_LEN 6
 
 #define DS5_START_POLL_TIME	10
@@ -1757,7 +1759,7 @@ static int ds5_configure(struct ds5 *state)
 	data_type2 = (state->is_imu || is_calib) ? 0x00 : md_fmt;
 
 	vc_id = state->g_ctx.dst_vc;
-	if (-1 == sensor->pipe_id ||
+    if (PIPE_NOT_CONFIGURED == sensor->pipe_id ||
 		sensor->pipe_data_type1 != data_type1 ||
 		sensor->pipe_data_type2 != data_type2 ||
 		sensor->pipe_vc_id != vc_id) {
@@ -2277,7 +2279,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 				int release_ret = max9296_release_pipe(state->dser_dev, sensor->pipe_id);
 				dev_warn(&state->client->dev, "release pipe %d (%d)\n",
 					sensor->pipe_id, release_ret);
-				sensor->pipe_id = -1;
+				sensor->pipe_id = PIPE_NOT_CONFIGURED;
 			}
 		}
 		mutex_unlock(&serdes_lock__);
@@ -3973,7 +3975,7 @@ static int ds5_sensor_init(struct i2c_client *c, struct ds5 *state,
 	struct d4xx_pdata *dpdata = c->dev.platform_data;
 	char suffix = dpdata->suffix;
 #endif
-	sensor->pipe_id = -1;
+	sensor->pipe_id = PIPE_NOT_CONFIGURED;
 	v4l2_i2c_subdev_init(sd, c, ops);
 	// See tegracam_v4l2.c tegracam_v4l2subdev_register()
 	// Set owner to NULL so we can unload the driver module
@@ -4605,7 +4607,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			mutex_lock(&serdes_lock__);
 			if (state->dser_ops->release_pipe(state->dser_dev, sensor->pipe_id) < 0)
 				dev_warn(&state->client->dev, "release pipe failed\n");
-			sensor->pipe_id = -1;
+			sensor->pipe_id = PIPE_NOT_CONFIGURED;
 			mutex_unlock(&serdes_lock__);
 		}
 	#endif
