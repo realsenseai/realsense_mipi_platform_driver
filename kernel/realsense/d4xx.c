@@ -1677,9 +1677,9 @@ static int ds5_setup_pipeline(struct ds5 *state, u8 data_type1, u8 data_type2,
 			      int pipe_id, u32 vc_id)
 {
 	int ret = 0;
-	dev_warn(&state->client->dev,
-			 "set pipe %d, data_type1: 0x%x, data_type2: 0x%x, vc_id: %u\n",
-			 pipe_id, data_type1, data_type2, vc_id);
+	dev_dbg(&state->client->dev,
+			"set pipe %d, data_type1: 0x%x, data_type2: 0x%x, vc_id: %u\n",
+			pipe_id, data_type1, data_type2, vc_id);
 	ret |= max9295_set_pipe(state->ser_dev, pipe_id,
 				data_type1, data_type2, vc_id);
 	ret |= state->dser_ops->set_pipe(state->dser_dev, pipe_id,
@@ -1760,9 +1760,9 @@ static int ds5_configure(struct ds5 *state)
 
 	vc_id = state->g_ctx.dst_vc;
     if (PIPE_NOT_CONFIGURED == sensor->pipe_id ||
-		sensor->pipe_data_type1 != data_type1 ||
-		sensor->pipe_data_type2 != data_type2 ||
-		sensor->pipe_vc_id != vc_id) {
+			sensor->pipe_data_type1 != data_type1 ||
+			sensor->pipe_data_type2 != data_type2 ||
+			sensor->pipe_vc_id != vc_id) {
 		/* Release old pipe only if it changed and was valid */
 		if (sensor->pipe_id >= 0) {
 			mutex_lock(&serdes_lock__);
@@ -1783,8 +1783,7 @@ static int ds5_configure(struct ds5 *state)
 		mutex_unlock(&serdes_lock__);
 		if (sensor->pipe_id < 0) {
 			dev_err(&state->client->dev, "No free pipe in %s\n",state->dser_ops->name);
-			ret = -(ENOSR);
-			return ret;
+			return -ENOSR;
 		}
 		ret = ds5_setup_pipeline(state, data_type1, data_type2,
 					 sensor->pipe_id, vc_id);
@@ -1793,14 +1792,14 @@ static int ds5_configure(struct ds5 *state)
 			state->dser_ops->reset_oneshot(state->dser_dev);
 		if (ret < 0)
 			return ret;
-		dev_warn(&state->client->dev,
+		dev_dbg(&state->client->dev,
 				"pipe %d new  (dt1=0x%x dt2=0x%x vc=%u)\n",
 				sensor->pipe_id, data_type1, data_type2, vc_id);
 		sensor->pipe_data_type1 = data_type1;
 		sensor->pipe_data_type2 = data_type2;
 		sensor->pipe_vc_id = vc_id;
 	} else {
-		dev_warn(&state->client->dev,
+		dev_dbg(&state->client->dev,
 				"pipe %d already configured (dt1=0x%x dt2=0x%x vc=%u)\n",
 				sensor->pipe_id, data_type1, data_type2, vc_id);
 	}
@@ -4496,13 +4495,23 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	vc_id = state->g_ctx.dst_vc;
 #endif
 #endif
-	dev_warn(&state->client->dev, "s_stream for stream %s, vc:%d, SENSOR=%s on = %d\n",
+	dev_dbg(&state->client->dev, "s_stream for stream %s, vc:%d, SENSOR=%s on = %d\n",
 			sensor->sd.name, vc_id, ds5_get_sensor_name(state), on);
+
+	if (on) {
+		stream_cmd = (DS5_STREAM_START | stream_id);
+		expected_streaming_state = DS5_STREAM_STREAMING;
+		status = 0;
+	} else {
+		stream_cmd = (DS5_STREAM_STOP | stream_id);
+		expected_streaming_state = DS5_STREAM_IDLE;
+		status = DS5_STATUS_STREAMING;
+	}
 
 	/* Verify stream is in the expected state before issuing command */
 	ts = jiffies;
-	for (timeout = ts + msecs_to_jiffies(DS5_START_MAX_TIME);
-			time_before(jiffies, timeout); msleep_range(i*DS5_START_POLL_TIME))
+	for (timeout = ts + msecs_to_jiffies(DS5_START_MAX_TIME), i = 0;
+			time_before(jiffies, timeout); i++, msleep_range(i*DS5_START_POLL_TIME))
 	{
 		ret = ds5_read(state, config_status_base, &status);
 		if ((ret >= 0) && (on == !(status & DS5_STATUS_STREAMING))) {
@@ -4511,7 +4520,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	}
 	if (on == !(status & DS5_STATUS_STREAMING))
 	{
-		dev_warn(&state->client->dev,
+		dev_dbg(&state->client->dev,
 			"stream %d in expected state, toggling to %d (status: 0x%04x) %dms\n",
 			stream_id, on, status, jiffies_to_msecs(jiffies - ts));
 	} else {
@@ -4523,27 +4532,20 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 
 	restore_val = sensor->streaming;
 	sensor->streaming = on;
-	if (on) {
-		stream_cmd = (DS5_STREAM_START | stream_id);
-		expected_streaming_state = DS5_STREAM_STREAMING;
-	} else {
-		stream_cmd = (DS5_STREAM_STOP | stream_id);
-		expected_streaming_state = DS5_STREAM_IDLE;
-	}
-	streaming = ~expected_streaming_state; /* force initial toggle */
 
 	/*
 	 * Execute command, poll state (retry if necessary) and poll completion.
 	 * For start, also confirm config status is valid and not rejected by FW, otherwise retry.
 	 */
 	ts = jiffies;
+	streaming = ~expected_streaming_state; /* force initial toggle */
 	for (timeout = ts + msecs_to_jiffies(DS5_START_MAX_TIME), i = 0;
 			time_before(jiffies, timeout); i++, msleep_range(i*DS5_START_POLL_TIME))
 	{
 		if (!ds5_config_done) {
 			ret = ds5_configure(state);
 			if (ret < 0) {
-				dev_err(&state->client->dev, "stream %d config failed on retry %d\n",
+				dev_warn(&state->client->dev, "stream %d config failed, retry %d\n",
 					stream_id, i);
 				continue;
 			}
@@ -4553,7 +4555,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		if (streaming != expected_streaming_state) {
 			ret = ds5_write(state, DS5_START_STOP_STREAM, stream_cmd);
 			if (ret < 0) {
-				dev_err(&state->client->dev, "stream %d cmd 0x%x write failed on retry %d\n",
+				dev_warn(&state->client->dev, "stream %d cmd 0x%x write failed, retry %d\n",
 					stream_id, stream_cmd, i);
 				continue;
 			}
@@ -4576,7 +4578,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 								DS5_STATUS_INVALID_RES |
 								DS5_STATUS_INVALID_FPS)))
 		{
-			dev_err(&state->client->dev,
+			dev_warn(&state->client->dev,
 				"stream %d config rejected, status 0x%04x, retry %u\n", stream_id, status, i);
 			ds5_config_done = false;
 			ds5_config_cache_clear(sensor);
@@ -4585,7 +4587,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 
 		if (!on == !(status & DS5_STATUS_STREAMING))
 		{
-			dev_warn(&state->client->dev,
+			dev_dbg(&state->client->dev,
 				"stream %d toggle ok to %d in %dms, retries %d\n",
 				stream_id, on, jiffies_to_msecs(jiffies - ts), i);
 			break;
@@ -4615,31 +4617,18 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	}
 	else if (!on)
 	{
-#ifdef CONFIG_VIDEO_D4XX_SERDES
 		mutex_lock(&serdes_lock__);
-		// reset data path when Y12I streaming is done
+		if (state->dser_ops->release_pipe(state->dser_dev, sensor->pipe_id) < 0)
+			dev_warn(&state->client->dev, "release pipe failed\n");
+		else
+			sensor->pipe_id = PIPE_NOT_CONFIGURED;
 		if (state->is_y8 &&
 			state->ir.sensor.config.format->data_type ==
 			GMSL_CSI_DT_RGB_888) {
 			state->dser_ops->reset_oneshot(state->dser_dev);
 		}
-#ifndef CONFIG_TEGRA_CAMERA_PLATFORM
-		// reset for IPU6
-		streaming = 0;
-		for (i = 0; i < ARRAY_SIZE(d4xx_set_sub_stream); i++) {
-			if (d4xx_set_sub_stream[i]) {
-				streaming = 1;
-				break;
-			}
-		}
-		if (!streaming) {
-			dev_warn(&state->client->dev, "deserializer reset oneshot\n");
-				state->dser_ops->reset_oneshot(state->dser_dev);
-		}
-#endif
 		mutex_unlock(&serdes_lock__);
-#else
-#endif
+		msleep_range(100);
 	}
 	return ret;
 }
@@ -5413,30 +5402,30 @@ static void ds5_adjust_sync_mode_control(struct i2c_client *client, struct ds5 *
 	switch (dev_type) {
 	case DS5_DEVICE_TYPE_D41X:
 		/* D41X does not support sync mode */
-		dev_info(&client->dev, "%s(): D41X does not support sync mode\n", __func__);
+		dev_dbg(&client->dev, "%s(): D41X does not support sync mode\n", __func__);
 		__v4l2_ctrl_modify_range(state->ctrls.sync_mode, 0, 0, 0, 0);
 		break;
 	case DS5_DEVICE_TYPE_D40X:
 		/* D401 only supports modes 0 (Default) and 2 (Slave) */
 		__v4l2_ctrl_modify_range(state->ctrls.sync_mode, 0, 2, 0, 0);
 		state->ctrls.sync_mode->qmenu = sync_mode_menu_d401;
-		dev_info(&client->dev, "%s(): D401 sync mode: 0 (Default), 2 (Slave)\n", __func__);
+		dev_dbg(&client->dev, "%s(): D401 sync mode: 0 (Default), 2 (Slave)\n", __func__);
 		break;
 	case DS5_DEVICE_TYPE_D43X:
 		/* D430 GMSL supports all 6 sync modes (0-5) */
 		__v4l2_ctrl_modify_range(state->ctrls.sync_mode, 0, 5, 0, 0);
 		state->ctrls.sync_mode->qmenu = sync_mode_menu_full;
-		dev_info(&client->dev, "%s(): D430 GMSL sync mode: all modes 0-5 supported\n", __func__);
+		dev_dbg(&client->dev, "%s(): D430 GMSL sync mode: all modes 0-5 supported\n", __func__);
 		break;
 	case DS5_DEVICE_TYPE_D45X:
 		/* D450 supports all 6 sync modes (0-5) */
 		__v4l2_ctrl_modify_range(state->ctrls.sync_mode, 0, 5, 0, 0);
 		state->ctrls.sync_mode->qmenu = sync_mode_menu_full;
-		dev_info(&client->dev, "%s(): D450 sync mode: all modes 0-5 supported\n", __func__);
+		dev_dbg(&client->dev, "%s(): D450 sync mode: all modes 0-5 supported\n", __func__);
 		break;
 	case DS5_DEVICE_TYPE_D46X:
 		/* D46X does not support sync mode */
-		dev_info(&client->dev, "%s(): D46X does not support sync mode\n", __func__);
+		dev_dbg(&client->dev, "%s(): D46X does not support sync mode\n", __func__);
 		__v4l2_ctrl_modify_range(state->ctrls.sync_mode, 0, 0, 0, 0);
 		break;
 	default:
