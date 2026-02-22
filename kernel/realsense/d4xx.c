@@ -188,7 +188,7 @@ enum ds5_mux_pad {
 #define DFU_WAIT_RET_LEN 6
 
 #define DS5_START_POLL_TIME	10
-#define DS5_START_MAX_TIME	700
+#define DS5_START_MAX_TIME	2000
 #define DS5_START_MAX_COUNT	(DS5_START_MAX_TIME / DS5_START_POLL_TIME)
 
 /* I2C retry configuration */
@@ -409,7 +409,6 @@ struct ds5_sensor {
 	u16 pipe_data_type1;
 	u16 pipe_data_type2;
 	u32 pipe_vc_id;
-	bool pipe_configured;
 	u16 cached_dt_value;
 	u16 cached_md_value;
 	u16 cached_override_value;
@@ -1758,7 +1757,7 @@ static int ds5_configure(struct ds5 *state)
 	data_type2 = (state->is_imu || is_calib) ? 0x00 : md_fmt;
 
 	vc_id = state->g_ctx.dst_vc;
-	if (!sensor->pipe_configured ||
+	if (-1 == sensor->pipe_id ||
 		sensor->pipe_data_type1 != data_type1 ||
 		sensor->pipe_data_type2 != data_type2 ||
 		sensor->pipe_vc_id != vc_id) {
@@ -1768,25 +1767,22 @@ static int ds5_configure(struct ds5 *state)
 			ret = state->dser_ops->release_pipe(state->dser_dev, sensor->pipe_id);
 			mutex_unlock(&serdes_lock__);
 			dev_warn(&state->client->dev, "release pipe %d (%d)\n", sensor->pipe_id, ret);
-			sensor->pipe_id = -1;
 		}
+		/*
+		* Serialize SERDES pipe allocation and configuration
+		* across all d4xx instances sharing the same GMSL link.
+		* Without this, concurrent pipe setups race on the shared
+		* Serializer/Deserializer hardware, causing I2C NACKs (-121) that
+		* take down the entire bus.
+		*/
+		mutex_lock(&serdes_lock__);
+		sensor->pipe_id =
+			state->dser_ops->get_available_pipe_id(state->dser_dev, (int)state->g_ctx.dst_vc);
+		mutex_unlock(&serdes_lock__);
 		if (sensor->pipe_id < 0) {
-			/*
-			* Serialize SERDES pipe allocation and configuration
-			* across all d4xx instances sharing the same GMSL link.
-			* Without this, concurrent pipe setups race on the shared
-			* Serializer/Deserializer hardware, causing I2C NACKs (-121) that
-			* take down the entire bus.
-			*/
-			mutex_lock(&serdes_lock__);
-			sensor->pipe_id =
-				state->dser_ops->get_available_pipe_id(state->dser_dev, (int)state->g_ctx.dst_vc);
-			mutex_unlock(&serdes_lock__);
-			if (sensor->pipe_id < 0) {
-				dev_err(&state->client->dev, "No free pipe in %s\n",state->dser_ops->name);
-				ret = -(ENOSR);
-				return ret;
-			}
+			dev_err(&state->client->dev, "No free pipe in %s\n",state->dser_ops->name);
+			ret = -(ENOSR);
+			return ret;
 		}
 		ret = ds5_setup_pipeline(state, data_type1, data_type2,
 					 sensor->pipe_id, vc_id);
@@ -1795,7 +1791,6 @@ static int ds5_configure(struct ds5 *state)
 			state->dser_ops->reset_oneshot(state->dser_dev);
 		if (ret < 0)
 			return ret;
-		sensor->pipe_configured = true;
 		dev_warn(&state->client->dev,
 				"pipe %d new  (dt1=0x%x dt2=0x%x vc=%u)\n",
 				sensor->pipe_id, data_type1, data_type2, vc_id);
@@ -2233,6 +2228,16 @@ static int ds5_set_calibration_data(struct ds5 *state,
 #define DS5_HW_RESET_STATUS_READY	0xDEAD
 #define DS5_HW_RESET_DFU_MAGIC_LSW	0x0201  /* Lower 16 bits of 0x04030201 */
 
+static void ds5_config_cache_clear(struct ds5_sensor *sensor)
+{
+	sensor->cached_dt_value = 0xFFFF;
+	sensor->cached_md_value = 0xFFFF;
+	sensor->cached_override_value = 0xFFFF;
+	sensor->cached_fps_value = 0xFFFF;
+	sensor->cached_width_value = 0xFFFF;
+	sensor->cached_height_value = 0xFFFF;
+}
+
 /*
  * ds5_hw_reset_with_recovery - Perform hardware reset with GMSL recovery
  * @state: Driver state structure
@@ -2258,26 +2263,21 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	};
 	int i;
 
-	if (state->dser_dev) {
+	if (state->dser_dev)
+	{
 		mutex_lock(&serdes_lock__);
-		for (i = 0; i < ARRAY_SIZE(sensors); i++) {
+		for (i = 0; i < ARRAY_SIZE(sensors); i++)
+		{
 			struct ds5_sensor *sensor = sensors[i];
 
-			sensor->cached_dt_value = 0xFFFF;
-			sensor->cached_md_value = 0xFFFF;
-			sensor->cached_override_value = 0xFFFF;
-			sensor->cached_fps_value = 0xFFFF;
-			sensor->cached_width_value = 0xFFFF;
-			sensor->cached_height_value = 0xFFFF;
+			ds5_config_cache_clear(sensor);
 
-			if (!sensor->pipe_configured) {
-				continue;
-			} else {
-				int release_ret = max9296_release_pipe(state->dser_dev,
-									     sensor->pipe_id);
+			if (sensor->pipe_id >= 0)
+			{
+				int release_ret = max9296_release_pipe(state->dser_dev, sensor->pipe_id);
 				dev_warn(&state->client->dev, "release pipe %d (%d)\n",
 					sensor->pipe_id, release_ret);
-				sensor->pipe_configured = false;
+				sensor->pipe_id = -1;
 			}
 		}
 		mutex_unlock(&serdes_lock__);
@@ -2359,33 +2359,6 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	/* 4. Re-initialize SERDES link if available */
 	if (state->dser_dev) {
-		struct ds5_sensor *sensors[] = {
-			&state->depth.sensor,
-			&state->ir.sensor,
-			&state->rgb.sensor,
-			&state->imu.sensor,
-		};
-		int i;
-
-		mutex_lock(&serdes_lock__);
-		for (i = 0; i < ARRAY_SIZE(sensors); i++) {
-			struct ds5_sensor *sensor = sensors[i];
-
-			if (!sensor->pipe_configured)
-				continue;
-
-			if (sensor->pipe_id >= 0) {
-				int release_ret = state->dser_ops->release_pipe(state->dser_dev,
-									     sensor->pipe_id);
-				dev_warn(&state->client->dev, "release pipe %d (%d)\n",
-					sensor->pipe_id, release_ret);
-			}
-
-			sensor->pipe_configured = false;
-			sensor->pipe_id = -1;
-		}
-		mutex_unlock(&serdes_lock__);
-
 		dev_info(&state->client->dev,
 			"%s(): Re-initializing SERDES link\n", __func__);
 		state->dser_ops->reset_oneshot(state->dser_dev);
@@ -4482,10 +4455,13 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	u16 streaming, status;
 	int ret = 0;
 	unsigned int i = 0;
+	unsigned long timeout, ts;
 	int restore_val = 0;
+	u16 stream_cmd;
 	u16 config_status_base, stream_status_base, stream_id, vc_id;
 	struct ds5_sensor *sensor = state->mux.last_set;
 	u16 expected_streaming_state;
+	bool ds5_config_done = !on;
 
 	// spare duplicate calls
 	if (sensor->streaming == on)
@@ -4518,124 +4494,125 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	vc_id = state->g_ctx.dst_vc;
 #endif
 #endif
-	dev_dbg(&state->client->dev, "s_stream for stream %s, vc:%d, SENSOR=%s on = %d\n",
+	dev_warn(&state->client->dev, "s_stream for stream %s, vc:%d, SENSOR=%s on = %d\n",
 			sensor->sd.name, vc_id, ds5_get_sensor_name(state), on);
 
 	/* Verify stream is in the expected state before issuing command */
-	expected_streaming_state = (on) ? DS5_STREAM_IDLE : DS5_STREAM_STREAMING;
-	for (i = 0; i < DS5_START_MAX_COUNT; i++) {
-		ret = ds5_read(state, stream_status_base, &streaming);
-		if (ret < 0) {
-			msleep_range(DS5_START_POLL_TIME);
-			continue;
-		}
-		if (streaming == expected_streaming_state)
+	ts = jiffies;
+	for (timeout = ts + msecs_to_jiffies(DS5_START_MAX_TIME);
+			time_before(jiffies, timeout); msleep_range(i*DS5_START_POLL_TIME))
+	{
+		ret = ds5_read(state, config_status_base, &status);
+		if ((ret >= 0) && (on == !(status & DS5_STATUS_STREAMING))) {
 			break;
-		msleep_range(DS5_START_POLL_TIME);
+		}
 	}
-	if (i >= DS5_START_MAX_COUNT) {
+	if (on == !(status & DS5_STATUS_STREAMING))
+	{
 		dev_warn(&state->client->dev,
-			"Ds5 stream %d in %d state already (status: 0x%04x), return busy\n",
-			stream_id, expected_streaming_state, streaming);
-		return -EBUSY;
+			"stream %d in expected state, toggling to %d (status: 0x%04x) %dms\n",
+			stream_id, on, status, jiffies_to_msecs(jiffies - ts));
 	} else {
 		dev_warn(&state->client->dev,
-			"Ds5 stream %d in expected state %d before s_stream (status: 0x%04x)\n",
-			stream_id, expected_streaming_state, streaming);
+			"stream %d in %d state already (status: 0x%04x) %dms, return busy\n",
+			stream_id, on, status, jiffies_to_msecs(jiffies - ts));
+		return -EBUSY;
 	}
 
 	restore_val = sensor->streaming;
 	sensor->streaming = on;
-
 	if (on) {
-		ret = ds5_configure(state);
-#ifdef CONFIG_VIDEO_D4XX_SERDES
-		mutex_unlock(&serdes_lock__);
-#endif
-		if (ret)
-			goto restore_s_state;
+		stream_cmd = (DS5_STREAM_START | stream_id);
+		expected_streaming_state = DS5_STREAM_STREAMING;
+	} else {
+		stream_cmd = (DS5_STREAM_STOP | stream_id);
+		expected_streaming_state = DS5_STREAM_IDLE;
+	}
+	streaming = ~expected_streaming_state; /* force initial toggle */
 
-		ret = ds5_write(state, DS5_START_STOP_STREAM,
-				DS5_STREAM_START | stream_id);
-		if (ret < 0)
-			goto restore_s_state;
+	/*
+	 * Execute command, poll state (retry if necessary) and poll completion.
+	 * For start, also confirm config status is valid and not rejected by FW, otherwise retry.
+	 */
+	ts = jiffies;
+	for (timeout = ts + msecs_to_jiffies(DS5_START_MAX_TIME), i = 0;
+			time_before(jiffies, timeout); i++, msleep_range(i*DS5_START_POLL_TIME))
+	{
+		if (!ds5_config_done) {
+			ret = ds5_configure(state);
+			if (ret < 0) {
+				dev_err(&state->client->dev, "stream %d config failed on retry %d\n",
+					stream_id, i);
+				continue;
+			}
+			ds5_config_done = true;
+		}
 
-		// check command and stream status on DS5, with retries
-		for (i = 0; i < DS5_START_MAX_COUNT; i++, msleep_range(DS5_START_POLL_TIME)) {
+		if (streaming != expected_streaming_state) {
+			ret = ds5_write(state, DS5_START_STOP_STREAM, stream_cmd);
+			if (ret < 0) {
+				dev_err(&state->client->dev, "stream %d cmd 0x%x write failed on retry %d\n",
+					stream_id, stream_cmd, i);
+				continue;
+			}
 			ret = ds5_read(state, stream_status_base, &streaming);
 			if (ret < 0) {
-				continue;
-			}
-			ret = ds5_read(state, config_status_base, &status);
-			if (ret < 0) {
-				continue;
-			}
-			if (streaming != DS5_STREAM_STREAMING) {
-				ds5_write(state, DS5_START_STOP_STREAM,	DS5_STREAM_START | stream_id);
-				continue;
-			}
-			if (status & DS5_STATUS_STREAMING) {
-				break;
-			} else if (status & (DS5_STATUS_INVALID_DT |
-						DS5_STATUS_INVALID_RES |
-						DS5_STATUS_INVALID_FPS)) {
-				dev_err(&state->client->dev,
-					"start: FW rejected config, status 0x%04x\n", status);
-				/* Fail fast on firmware config errors */
-				break;
-			}
-		}
-
-		if (!(status & DS5_STATUS_STREAMING)) {
-			dev_err(&state->client->dev,
-				"start streaming failed after retry %d, status 0x%04x stream 0x%04x %d\n",
-				i, status, stream_id, streaming);
-			if (streaming == DS5_STREAM_STREAMING) {
-				ret = ds5_write(state, DS5_START_STOP_STREAM, DS5_STREAM_STOP | stream_id);
-			}
-			ret = -EAGAIN;
-			goto restore_s_state;
-		} else {
-			dev_warn(&state->client->dev, "stream %d started after %dms\n",
-				stream_id, i * DS5_START_POLL_TIME);
-		}
-	} else { // off
-		ret = ds5_write(state, DS5_START_STOP_STREAM,
-				DS5_STREAM_STOP | stream_id);
-		if (ret < 0)
-			goto restore_s_state;
-
-		/*
-		 * Wait for firmware to confirm stream has actually stopped.
-		 * Without this, a rapid stop/start cycle (e.g. resolution
-		 * change) can reconfigure the SERDES pipeline while the
-		 * firmware is still tearing down the previous stream,
-		 * corrupting GMSL link state and causing I2C NACKs (-121).
-		 */
-		for (i = 0; i < DS5_START_MAX_COUNT; i++, msleep_range(DS5_START_POLL_TIME)) {
-			ret = ds5_read(state, config_status_base, &status);
-			if (ret < 0) {
 				dev_warn(&state->client->dev,
-					"stop: i2c read failed (%d), retry %u\n", ret, i);
-				continue;
+					"stream %d status i2c read failed (%d), retry %u\n", stream_id, ret, i);
 			}
-			if (!(status & DS5_STATUS_STREAMING)) {
-				dev_warn(&state->client->dev,
-					"stream %d stopped after %dms\n", stream_id, i * DS5_START_POLL_TIME);
-				break;
-			}
+			continue;
 		}
 
-		if (i == DS5_START_MAX_COUNT) {
+		ret = ds5_read(state, config_status_base, &status);
+		if (ret < 0) {
 			dev_warn(&state->client->dev,
-				"stop streaming timeout, stream %d status: 0x%04x\n", stream_id, streaming);
+				"stream %d config status i2c read failed (%d), retry %u\n", stream_id, ret, i);
+			continue;
 		}
 
-		/* Reset ret to 0 — stop polling is best-effort,
-		 * we still proceed with SERDES cleanup below.
-		 */
-		ret = 0;
+		if (on && (status & (DS5_STATUS_INVALID_DT |
+								DS5_STATUS_INVALID_RES |
+								DS5_STATUS_INVALID_FPS)))
+		{
+			dev_err(&state->client->dev,
+				"stream %d config rejected, status 0x%04x, retry %u\n", stream_id, status, i);
+			ds5_config_done = false;
+			ds5_config_cache_clear(sensor);
+			continue;
+		}
 
+		if (!on == !(status & DS5_STATUS_STREAMING))
+		{
+			dev_warn(&state->client->dev,
+				"stream %d toggle ok to %d in %dms, retries %d\n",
+				stream_id, on, jiffies_to_msecs(jiffies - ts), i);
+			break;
+		}
+	}
+
+	if (on == !(status & DS5_STATUS_STREAMING))
+	{
+		dev_warn(&state->client->dev,
+			"stream %d toggle to %d timeout in %dms, retries %d\n",
+			stream_id, on, jiffies_to_msecs(jiffies - ts), i);
+		if (streaming == expected_streaming_state) { /* try to toggle stream back on timeout  */
+			ds5_write(state, DS5_START_STOP_STREAM,
+				(on ? DS5_STREAM_STOP : DS5_STREAM_START) | stream_id);
+		}
+		ret = -EAGAIN;
+	#ifdef CONFIG_VIDEO_D4XX_SERDES
+		if (on && sensor->pipe_id >= 0) {
+			mutex_lock(&serdes_lock__);
+			if (state->dser_ops->release_pipe(state->dser_dev, sensor->pipe_id) < 0)
+				dev_warn(&state->client->dev, "release pipe failed\n");
+			sensor->pipe_id = -1;
+			mutex_unlock(&serdes_lock__);
+		}
+	#endif
+		sensor->streaming = restore_val;
+	}
+	else if (!on)
+	{
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 		mutex_lock(&serdes_lock__);
 		// reset data path when Y12I streaming is done
@@ -4662,36 +4639,6 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 #else
 #endif
 	}
-
-	ds5_read(state, config_status_base, &status);
-	ds5_read(state, stream_status_base, &streaming);
-	dev_dbg(&state->client->dev,
-			"%s %s, stream_status 0x%x:%x, config_status 0x%x:%x ret=%d\n",
-			ds5_get_sensor_name(state),
-			(on)?"START":"STOP",
-			stream_status_base, streaming,
-			config_status_base, status, ret);
-
-	return ret;
-
-restore_s_state:
-#ifdef CONFIG_VIDEO_D4XX_SERDES
-	if (on && sensor->pipe_id >= 0) {
-		mutex_lock(&serdes_lock__);
-		if (state->dser_ops->release_pipe(state->dser_dev, sensor->pipe_id) < 0)
-			dev_warn(&state->client->dev, "release pipe failed\n");
-		sensor->pipe_id = -1;
-		mutex_unlock(&serdes_lock__);
-	}
-#endif
-
-	ds5_read(state, config_status_base, &status);
-	dev_err(&state->client->dev,
-			"%s stream toggle failed! %x status 0x%04x\n",
-			ds5_get_sensor_name(state), restore_val, status);
-
-	sensor->streaming = restore_val;
-
 	return ret;
 }
 
