@@ -477,6 +477,9 @@ struct ds5 {
 	int reset_gen;
 	u16 fw_version;
 	u16 fw_build;
+	bool removing;    /* set to true during ds5_remove() to fence off I2C/sysfs ops */
+	bool own_ser_i2c; /* true if this driver instance created the serializer I2C client */
+	bool own_dser_i2c; /* true if this driver instance created the deserializer I2C client */
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	struct gmsl_link_ctx g_ctx;
 	struct device *ser_dev;
@@ -1796,8 +1799,8 @@ static int ds5_configure(struct ds5 *state)
 		}
 		ret = ds5_setup_pipeline(state, data_type1, data_type2,
 					 sensor->pipe_id, vc_id);
-		// reset data path when switching to Y12I
-		if (is_calib)
+		/* reset data path when switching to Y12I, but not during teardown */
+		if (is_calib && !READ_ONCE(state->removing))
 			state->dser_ops->reset_oneshot(state->dser_dev);
 		if (ret < 0)
 			return ret;
@@ -3610,6 +3613,7 @@ static int ds5_board_setup(struct ds5 *state)
 
 	i2c_info_ser.addr = pdata->subdev_info[0].ser_alias; //0x42, 0x44, 0x62, 0x64
 	state->ser_i2c = i2c_new_client_device(adapter, &i2c_info_ser);
+	state->own_ser_i2c = (state->ser_i2c != NULL);
 
 	i2c_info_des.addr = pdata->subdev_info[0].board_info.addr; //0x48, 0x4a, 0x68, 0x6a
 
@@ -3623,6 +3627,7 @@ static int ds5_board_setup(struct ds5 *state)
 				dev_info(dev, "MAX9296 AGGREGATION found device on 0x%x\n", i2c_info_des.addr);
 				state->dser_i2c = serdes_inited[i]->dser_i2c;
 				state->aggregated = 1;
+				state->own_dser_i2c = false; /* shared with aggregated peer */
 			}
 		}
 	}
@@ -3633,8 +3638,10 @@ static int ds5_board_setup(struct ds5 *state)
 		bus, pdata->subdev_info[0].board_info.addr, //48
 		bus, pdata->subdev_info[0].ser_alias); //42
 
-	if (!state->dser_i2c)
+	if (!state->dser_i2c) {
 		state->dser_i2c = i2c_new_client_device(adapter, &i2c_info_des);
+		state->own_dser_i2c = (state->dser_i2c != NULL);
+	}
 
 	if (state->ser_i2c == NULL) {
 		err = -EPROBE_DEFER;
@@ -4069,8 +4076,13 @@ e_sd:
 
 static void ds5_sensor_remove(struct ds5_sensor *sensor)
 {
-	v4l2_device_unregister_subdev(&sensor->sd);
+	/* Free ctrl_handler before unregistering subdev */
+	if (sensor->sd.ctrl_handler) {
+		v4l2_ctrl_handler_free(sensor->sd.ctrl_handler);
+		sensor->sd.ctrl_handler = NULL;
+	}
 
+	v4l2_device_unregister_subdev(&sensor->sd);
 	media_entity_cleanup(&sensor->sd.entity);
 }
 
@@ -5669,16 +5681,29 @@ static int ds5_chrdev_remove(struct ds5 *state)
 {
 	struct class **ds5_class = &state->dfu_dev.ds5_class;
 	dev_t *dev_num = &state->client->dev.devt;
-	if (!ds5_class) {
+
+	if (!ds5_class || !*ds5_class)
 		return 0;
-	}
+
 	dev_dbg(&state->client->dev, "%s()\n", __func__);
-	unregister_chrdev_region(*dev_num, 1);
+
+	/* Remove /dev node */
 	device_destroy(*ds5_class, *dev_num);
+
+	/* Delete cdev (mirrors cdev_add in ds5_chrdev_init) */
+	cdev_del(&state->dfu_dev.ds5_cdev);
+
+	/* Release device number range */
+	unregister_chrdev_region(*dev_num, 1);
+
+	/* Destroy class only when the last user goes away */
 	if (atomic_dec_and_test(&primary_chardev)) {
-		dev_warn(&state->client->dev, "%s() class_destroy\n", __func__);
+		dev_dbg(&state->client->dev, "%s() class_destroy\n", __func__);
 		class_destroy(*ds5_class);
+		*ds5_class = NULL;
+		g_ds5_class = NULL;
 	}
+
 	return 0;
 }
 
@@ -5690,6 +5715,9 @@ static ssize_t ds5_fw_ver_show(struct device *dev,
 	struct i2c_client *c = to_i2c_client(dev);
 	struct ds5 *state = container_of(i2c_get_clientdata(c),
 			struct ds5, mux.sd.subdev);
+
+	if (state && READ_ONCE(state->removing))
+		return scnprintf(buf, PAGE_SIZE, "removing\n");
 
 	ds5_read(state, DS5_FW_VERSION, &state->fw_version);
 	ds5_read(state, DS5_FW_BUILD, &state->fw_build);
@@ -5729,6 +5757,10 @@ static ssize_t ds5_read_reg_show(struct device *dev,
 			struct ds5, mux.sd.subdev);
 	struct dev_ds5_reg_attribute *ds5_rw_attr = container_of(attr,
 			struct dev_ds5_reg_attribute, attr);
+
+	if (state && READ_ONCE(state->removing))
+		return scnprintf(buf, PAGE_SIZE, "removing\n");
+
 	if (ds5_rw_attr->valid != 1)
 		return -EINVAL;
 	ds5_read(state, ds5_rw_attr->reg, &rbuf);
@@ -5748,8 +5780,15 @@ static ssize_t ds5_read_reg_store(struct device *dev,
 {
 	struct dev_ds5_reg_attribute *ds5_rw_attr = container_of(attr,
 			struct dev_ds5_reg_attribute, attr);
+	struct i2c_client *c = to_i2c_client(dev);
+	struct ds5 *state = container_of(i2c_get_clientdata(c),
+			struct ds5, mux.sd.subdev);
 	int rc = -1;
 	u32 reg;
+
+	if (state && READ_ONCE(state->removing))
+		return -EBUSY;
+
 	ds5_rw_attr->valid = 0;
 	/* Decode input */
 	rc = sscanf(buf, "0x%04x", &reg);
@@ -5778,6 +5817,10 @@ static ssize_t ds5_write_reg_store(struct device *dev,
 	int rc = -1;
 	u32 reg, w_val = 0;
 	u16 val = -1;
+
+	if (state && READ_ONCE(state->removing))
+		return -EBUSY;
+
 	/* Decode input */
 	rc = sscanf(buf, "0x%04x 0x%04x", &reg, &w_val);
 	if (rc != 2)
@@ -5992,15 +6035,26 @@ static int ds5_remove(struct i2c_client *c)
 	int i, ret;
 #endif
 	struct ds5 *state = container_of(i2c_get_clientdata(c), struct ds5, mux.sd.subdev);
-	if (state && !state->mux.sd.subdev.v4l2_dev) {
+
+	if (state && !state->mux.sd.subdev.v4l2_dev)
 		state = i2c_get_clientdata(c);
-	}
+
+	if (!state)
+		return 0;
+
+	/* Signal all sysfs/I2C callbacks to stop immediately */
+	WRITE_ONCE(state->removing, true);
+
+	/* Remove sysfs group early to stop incoming sysfs callbacks */
+#ifdef CONFIG_SYSFS
+	sysfs_remove_group(&c->dev.kobj, &ds5_attr_group);
+#endif
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	for (i = 0; i < MAX_DEV_NUM; i++) {
 		if (serdes_inited[i] && serdes_inited[i] == state) {
-			serdes_inited[i] = NULL;
 			mutex_lock(&serdes_lock__);
+			serdes_inited[i] = NULL;
 
 			ret = max9295_reset_control(state->ser_dev);
 			if (ret)
@@ -6027,31 +6081,30 @@ static int ds5_remove(struct i2c_client *c)
 			break;
 		}
 	}
-	if (state->ser_i2c)
+
+	/* Only unregister I2C clients that this driver instance created */
+	if (state->ser_i2c && state->own_ser_i2c)
 		i2c_unregister_device(state->ser_i2c);
-	if (state->dser_i2c)
+	if (state->dser_i2c && state->own_dser_i2c)
 		i2c_unregister_device(state->dser_i2c);
 #endif
 #ifndef CONFIG_TEGRA_CAMERA_PLATFORM
 	state->is_depth = 1;
 #endif
-	dev_info(&c->dev, "D4XX remove %s\n",
-			ds5_get_sensor_name(state));
+	dev_info(&c->dev, "D4XX remove %s\n", ds5_get_sensor_name(state));
+
+	/* Tear down the V4L2/media graph */
+	if (state->dfu_dev.dfu_state_flag != DS5_DFU_RECOVERY &&
+	    state->mux.sd.subdev.v4l2_dev)
+		ds5_mux_remove(state);
+
+	/* Remove DFU character device */
+	if (state->is_depth && state->dfu_dev.ds5_class)
+		ds5_chrdev_remove(state);
+
+	/* Disable power regulator last */
 	if (state->vcc)
 		regulator_disable(state->vcc);
-//	gpio_free(state->pwdn_gpio);
-
-	if (state->dfu_dev.dfu_state_flag != DS5_DFU_RECOVERY && \
-		 state->mux.sd.subdev.v4l2_dev) {
-#ifdef CONFIG_SYSFS
-		sysfs_remove_group(&c->dev.kobj, &ds5_attr_group);
-#endif
-		ds5_mux_remove(state);
-	}
-
-	if (state->is_depth && state->dfu_dev.ds5_class) {
-		ds5_chrdev_remove(state);
-	}
 
 	return 0;
 }
