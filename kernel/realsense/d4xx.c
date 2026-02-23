@@ -192,6 +192,7 @@ enum ds5_mux_pad {
 #define DS5_START_POLL_TIME	10
 #define DS5_START_MAX_TIME	2000
 #define DS5_START_MAX_COUNT	(DS5_START_MAX_TIME / DS5_START_POLL_TIME)
+#define MAX_DS5_CONFIG_RETRIES	5
 
 /* I2C retry configuration */
 #define DS5_I2C_RETRY_COUNT	5
@@ -1807,19 +1808,16 @@ static int ds5_configure(struct ds5 *state)
 
 	fmt = sensor->streaming ? sensor->config.format->data_type : 0;
 
-	/*
-	 * Set depth stream Z16 data type as 0x31
-	 * Set IR stream Y8I data type as 0x32
+	/* Determine desired data-type (special cases for depth/IR), then write
+	 * it only when it differs from cached value. This avoids overwriting a
+	 * correct DT with 0 (which caused INVALID_DT on subsequent attempts).
 	 */
+	dt_value = fmt;
 	if (state->is_depth && fmt != 0)
 		dt_value = 0x31;
 	else if (state->is_y8 && fmt != 0 &&
 		 sensor->config.format->data_type == GMSL_CSI_DT_YUV422_8)
-		ret = ds5_write(state, dt_addr, 0x32);
-	else
-		ret = ds5_write(state, dt_addr, fmt);
-	if (ret < 0)
-		return ret;
+		dt_value = 0x32;
 
 	if (sensor->cached_dt_value != dt_value) {
 		ret = ds5_write(state, dt_addr, dt_value);
@@ -4455,14 +4453,14 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	struct ds5 *state = container_of(sd, struct ds5, mux.sd.subdev);
 	u16 streaming, status;
 	int ret = 0;
-	unsigned int i = 0;
+	unsigned int i = 0, ds5_config_retries = MAX_DS5_CONFIG_RETRIES;
 	unsigned long timeout, ts;
 	int restore_val = 0;
 	u16 stream_cmd;
 	u16 config_status_base, stream_status_base, stream_id, vc_id;
 	struct ds5_sensor *sensor = state->mux.last_set;
 	u16 expected_streaming_state;
-	bool ds5_config_done = !on;
+	bool ds5_config_done = !on; /* for stop, skip config */
 
 	// spare duplicate calls
 	if (sensor->streaming == on)
@@ -4580,8 +4578,15 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		{
 			dev_warn(&state->client->dev,
 				"stream %d config rejected, status 0x%04x, retry %u\n", stream_id, status, i);
-			ds5_config_done = false;
-			ds5_config_cache_clear(sensor);
+			if (ds5_config_retries > 0) {
+				ds5_config_retries--;
+				ds5_config_done = false;
+				ds5_config_cache_clear(sensor);
+			} else {
+				dev_warn(&state->client->dev,
+					"stream %d config failed after %d retries, aborting\n", stream_id, i);
+				break;
+			}
 			continue;
 		}
 
@@ -4603,32 +4608,37 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			ds5_write(state, DS5_START_STOP_STREAM,
 				(on ? DS5_STREAM_STOP : DS5_STREAM_START) | stream_id);
 		}
-		ret = -EAGAIN;
-	#ifdef CONFIG_VIDEO_D4XX_SERDES
+#ifdef CONFIG_VIDEO_D4XX_SERDES
 		if (on && sensor->pipe_id >= 0) {
 			mutex_lock(&serdes_lock__);
-			if (state->dser_ops->release_pipe(state->dser_dev, sensor->pipe_id) < 0)
-				dev_warn(&state->client->dev, "release pipe failed\n");
-			sensor->pipe_id = PIPE_NOT_CONFIGURED;
+			ret = state->dser_ops->release_pipe(state->dser_dev, sensor->pipe_id);
 			mutex_unlock(&serdes_lock__);
+			if (ret < 0) {
+				dev_warn(&state->client->dev, "release pipe failed\n");
+			} else {
+				sensor->pipe_id = PIPE_NOT_CONFIGURED;
+			}
 		}
-	#endif
+#endif
 		sensor->streaming = restore_val;
+		ret = -EAGAIN;
 	}
 	else if (!on)
 	{
+#ifdef CONFIG_VIDEO_D4XX_SERDES
 		mutex_lock(&serdes_lock__);
 		if (state->dser_ops->release_pipe(state->dser_dev, sensor->pipe_id) < 0)
 			dev_warn(&state->client->dev, "release pipe failed\n");
 		else
 			sensor->pipe_id = PIPE_NOT_CONFIGURED;
-		if (state->is_y8 &&
-			state->ir.sensor.config.format->data_type ==
-			GMSL_CSI_DT_RGB_888) {
+		if (state->is_y8
+			&& (state->ir.sensor.config.format->data_type == GMSL_CSI_DT_RGB_888))
+		{
 			state->dser_ops->reset_oneshot(state->dser_dev);
 		}
 		mutex_unlock(&serdes_lock__);
 		msleep_range(100);
+#endif
 	}
 	return ret;
 }
