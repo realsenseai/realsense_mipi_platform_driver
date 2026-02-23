@@ -4622,9 +4622,13 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			dev_warn(&state->client->dev, "release pipe failed\n");
 		else
 			sensor->pipe_id = PIPE_NOT_CONFIGURED;
-		state->dser_ops->reset_oneshot(state->dser_dev);
+		if (state->is_y8 &&
+			state->ir.sensor.config.format->data_type ==
+			GMSL_CSI_DT_RGB_888) {
+			state->dser_ops->reset_oneshot(state->dser_dev);
+		}
 		mutex_unlock(&serdes_lock__);
-		msleep_range(1000);
+		msleep_range(100);
 	}
 	return ret;
 }
@@ -6007,4 +6011,4 @@ MODULE_AUTHOR("Guennadi Liakhovetski <guennadi.liakhovetski@intel.com>,\n\
 				Shikun Ding <shikun.ding@intel.com>,\n\
 				Dmitry Perchanov <dmitry.perchanov@intel.com>");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("1.0.2.12");
+MODULE_VERSION("1.0.2.13");
