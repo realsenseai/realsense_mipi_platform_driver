@@ -120,7 +120,7 @@ if [[ "$ACTION" = "apply" ]]; then
                 cp "sources_${JETPACK_VERSION}/$KERNEL_DIR/3rdparty/canonical/linux-noble/include/dt-bindings/gpio/tegra264-gpio.h" \
                     "sources_${JETPACK_VERSION}/$KERNEL_DIR/include/dt-bindings/gpio/" 2>/dev/null || true
             fi
-            for dts in hardware/realsense/tegra234-camera-d4xx-overlay*.dts hardware/realsense/tegra264-camera-d4xx-overlay*.dts; do
+            for dts in hardware/realsense/tegra264-camera-d4xx-overlay*.dts; do
                     # need to add o to file extension to meet kernel DT make rules
                     [ -f "$dts" ] && cp $dts "sources_${JETPACK_VERSION}/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/$(basename ${dts})o"
             done
