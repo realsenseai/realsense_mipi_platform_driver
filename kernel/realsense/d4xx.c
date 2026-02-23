@@ -472,6 +472,7 @@ struct ds5 {
 	struct regulator *vcc;
 	const struct ds5_variant *variant;
 	int is_depth, is_y8, is_rgb, is_imu;
+	bool metadata_enabled;
 	int aggregated;
 	u16 fw_version;
 	u16 fw_build;
@@ -1718,7 +1719,6 @@ static int ds5_configure(struct ds5 *state)
 		fps_addr = DS5_DEPTH_FPS;
 		width_addr = DS5_DEPTH_RES_WIDTH;
 		height_addr = DS5_DEPTH_RES_HEIGHT;
-		md_fmt = GMSL_CSI_DT_EMBED;
 		vc_id = 0;
 	} else if (state->is_rgb) {
 		sensor = &state->rgb.sensor;
@@ -1728,7 +1728,6 @@ static int ds5_configure(struct ds5 *state)
 		fps_addr = DS5_RGB_FPS;
 		width_addr = DS5_RGB_RES_WIDTH;
 		height_addr = DS5_RGB_RES_HEIGHT;
-		md_fmt = GMSL_CSI_DT_EMBED;
 		vc_id = 1;
 	} else if (state->is_y8) {
 		sensor = &state->ir.sensor;
@@ -1738,7 +1737,6 @@ static int ds5_configure(struct ds5 *state)
 		fps_addr = DS5_IR_FPS;
 		width_addr = DS5_IR_RES_WIDTH;
 		height_addr = DS5_IR_RES_HEIGHT;
-		md_fmt = GMSL_CSI_DT_EMBED;
 		vc_id = 2;
 	} else if (state->is_imu) {
 		sensor = &state->imu.sensor;
@@ -1748,16 +1746,17 @@ static int ds5_configure(struct ds5 *state)
 		fps_addr = DS5_IMU_FPS;
 		width_addr = DS5_IMU_RES_WIDTH;
 		height_addr = DS5_IMU_RES_HEIGHT;
-		md_fmt = 0x0;
 		vc_id = 3;
 	} else {
 		return -EINVAL;
 	}
 
+	md_fmt = (state->metadata_enabled) ? GMSL_CSI_DT_EMBED : 0x00;
+
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	data_type1 = sensor->config.format->data_type;
+	data_type2 = md_fmt;
 	is_calib = (state->is_y8 && (data_type1 == GMSL_CSI_DT_RGB_888));
-	data_type2 = (state->is_imu || is_calib) ? 0x00 : md_fmt;
 
 	vc_id = state->g_ctx.dst_vc;
     if (PIPE_NOT_CONFIGURED == sensor->pipe_id ||
@@ -5772,6 +5771,7 @@ static int ds5_probe(struct i2c_client *c, const struct i2c_device_id *id)
 #ifdef CONFIG_OF
 	const char *str;
 	uint32_t override_addr = 0;
+	struct device_node *mode0_node;
 #endif
 	if (!state)
 		return -ENOMEM;
@@ -5847,6 +5847,26 @@ static int ds5_probe(struct i2c_client *c, const struct i2c_device_id *id)
 	if (!ret && !strncmp(str, "IMU", strlen("IMU"))) {
 		state->is_imu = 1;
 	}
+
+	mode0_node = of_get_child_by_name(state->client->dev.of_node, "mode0");
+	if (mode0_node) {
+		ret = of_property_read_string(mode0_node, "embedded_metadata_height", &str);
+		if (!ret && !strncmp(str, "1", 1)) {
+				state->metadata_enabled = 1;
+		} else {
+				state->metadata_enabled = 0;
+		}
+		of_node_put(mode0_node);
+	} else {
+		dev_err(&state->client->dev, "No mode0 provided\n");
+		goto e_regulator;
+	}
+
+	if (ret < 0) {
+		dev_err(&state->client->dev, "No embedded_metadata_height provided\n");
+		goto e_regulator;
+	}
+	dev_dbg(&state->client->dev, "metadata_enabled = %d\n", state->metadata_enabled);
 #else
 	state->is_depth = 1;
 #endif
