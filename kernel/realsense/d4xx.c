@@ -676,8 +676,6 @@ static const u16 ds5_framerates[] = {5, 30};
 
 static const u16 ds5_framerate_30 = 30;
 static const u16 ds5_framerate_25 = 25;
-static const u16 ds5_framerate_15_30[] = {15, 30};
-static const u16 ds5_framerate_15_25[] = {15, 25};
 static const u16 ds5_depth_framerate_to_30[] = {5, 15, 30};
 static const u16 ds5_framerate_to_30[] = {5, 10, 15, 30};
 static const u16 ds5_framerate_to_60[] = {5, 15, 30, 60};
@@ -687,47 +685,42 @@ static const u16 ds5_41x_framerate_to_30[] = {6, 15, 30};
 static const u16 ds5_41x_framerate_to_60_no_15[] = {6, 30, 60};
 static const u16 ds5_41x_framerate_to_60[] = {6, 15, 30, 60};
 static const u16 ds5_41x_framerate_to_90[] = {6, 15, 30, 60, 90};
-static const u16 ds5_framerate_100[] = {100};
-static const u16 ds5_framerate_90[] = {90};
+static const u16 ds5_framerate_15_25[] = {15, 25};
+static const u16 ds5_framerate_15_30[] = {15, 30};
+static const u16 ds5_framerate_15_60[] = {15, 30, 60};
+static const u16 ds5_framerate_15_90[] = {15, 30, 60, 90};
 static const u16 ds5_imu_framerates[] = {50, 100, 200, 400};
+static const u16 ds5_framerate_90[] = {90};
+static const u16 ds5_framerate_100[] = {100};
+
+/* Helper macro to define resolution entries concisely. */
+#define DS5_RES(w, h, fr) \
+    { .width = (w), .height = (h), .framerates = (fr), .n_framerates = ARRAY_SIZE(fr) },
+
+#define D401_COMMON_RES	\
+	DS5_RES(1280, 720, ds5_framerate_15_30)\
+	DS5_RES(848, 480, ds5_framerate_15_60)\
+	DS5_RES(640, 480, ds5_framerate_15_60)\
+	DS5_RES(640, 360, ds5_framerate_15_90)\
+	DS5_RES(480, 270, ds5_framerate_15_90)\
+	DS5_RES(424, 240, ds5_framerate_15_90)\
 
 static const struct ds5_resolution d40x_depth_sizes[] = {
-	{
-		.width = 1280,
-		.height = 720,
-		.framerates = ds5_depth_framerate_to_30,
-		.n_framerates = ARRAY_SIZE(ds5_depth_framerate_to_30),
-	}, {
-		.width =  848,
-		.height = 480,
-		.framerates = ds5_framerate_to_90,
-		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
-	}, {
-		.width =  640,
-		.height = 480,
-		.framerates = ds5_framerate_to_90,
-		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
-	}, {
-		.width =  640,
-		.height = 360,
-		.framerates = ds5_framerate_to_90,
-		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
-	}, {
-		.width =  480,
-		.height = 270,
-		.framerates = ds5_framerate_to_90,
-		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
-	}, {
-		.width =  424,
-		.height = 240,
-		.framerates = ds5_framerate_to_90,
-		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
-	}, {
-		.width =  256,
-		.height = 144,
-		.framerates = ds5_framerate_90,
-		.n_framerates = ARRAY_SIZE(ds5_framerate_90),
-	},
+	D401_COMMON_RES
+	DS5_RES(256, 144, ds5_framerate_15_90)
+};
+
+static const struct ds5_resolution d40x_y8_sizes[] = {
+	D401_COMMON_RES
+};
+
+static const struct ds5_resolution d40x_rgb_sizes[] = {
+	DS5_RES(1280, 800, ds5_framerate_15_30)
+	D401_COMMON_RES
+};
+
+static const struct ds5_resolution d40x_calibration_sizes[] = {
+	DS5_RES(1288, 808, ds5_framerate_15_25)
 };
 
 static const struct ds5_resolution d41x_depth_sizes[] = {
@@ -864,40 +857,6 @@ static const struct ds5_resolution y8_sizes[] = {
 		.framerates = ds5_framerate_to_90,
 		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
 	}
-};
-
-static const struct ds5_resolution y8_40x_sizes[] = {
-	{
-		.width = 1280,
-		.height = 720,
-		.framerates = ds5_depth_framerate_to_30,
-		.n_framerates = ARRAY_SIZE(ds5_depth_framerate_to_30),
-	}, {
-		.width =  848,
-		.height = 480,
-		.framerates = ds5_framerate_to_90,
-		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
-	}, {
-		.width =  640,
-		.height = 480,
-		.framerates = ds5_framerate_to_90,
-		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
-	}, {
-		.width =  640,
-		.height = 360,
-		.framerates = ds5_framerate_to_90,
-		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
-	}, {
-		.width =  480,
-		.height = 270,
-		.framerates = ds5_framerate_to_90,
-		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
-	}, {
-		.width =  424,
-		.height = 240,
-		.framerates = ds5_framerate_to_90,
-		.n_framerates = ARRAY_SIZE(ds5_framerate_to_90),
-	},
 };
 
 static const struct ds5_resolution y8_41x_sizes[] = {
@@ -1073,15 +1032,6 @@ static const struct ds5_resolution ds5_size_w10 = {
 	.n_framerates = 1,
 };
 
-static const struct ds5_resolution d40x_calibration_sizes[] = {
-	{
-		.width =  1288,
-		.height = 808,
-		.framerates = ds5_framerate_15_25,
-		.n_framerates = ARRAY_SIZE(ds5_framerate_15_25),
-	},
-};
-
 static const struct ds5_resolution d41x_calibration_sizes[] = {
 	{
 		.width =  1920,
@@ -1245,13 +1195,13 @@ static const struct ds5_format ds5_y_formats_40x[] = {
 		/* First format: default */
 		.data_type = GMSL_CSI_DT_RAW_8,	/* Y8 */
 		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
-		.n_resolutions = ARRAY_SIZE(y8_40x_sizes),
-		.resolutions = y8_40x_sizes,
+		.n_resolutions = ARRAY_SIZE(d40x_y8_sizes),
+		.resolutions = d40x_y8_sizes,
 	}, {
 		.data_type = GMSL_CSI_DT_YUV422_8,	/* Y8I */
 		.mbus_code = MEDIA_BUS_FMT_VYUY8_1X16,
-		.n_resolutions = ARRAY_SIZE(y8_40x_sizes),
-		.resolutions = y8_40x_sizes,
+		.n_resolutions = ARRAY_SIZE(d40x_y8_sizes),
+		.resolutions = d40x_y8_sizes,
 	}, {
 		.data_type = GMSL_CSI_DT_RGB_888,	/* Y12I, 24-bit Calibration */
 		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,
@@ -1305,6 +1255,13 @@ static const struct ds5_format ds5_41x_rgb_format = {
 	.mbus_code = MEDIA_BUS_FMT_YUYV8_1X16,
 	.n_resolutions = ARRAY_SIZE(ds5_41x_rgb_sizes),
 	.resolutions = ds5_41x_rgb_sizes,
+};
+
+static const struct ds5_format ds5_40x_rgb_format = {
+	.data_type = GMSL_CSI_DT_YUV422_8,	/* UYVY */
+	.mbus_code = MEDIA_BUS_FMT_YUYV8_1X16,
+	.n_resolutions = ARRAY_SIZE(d40x_rgb_sizes),
+	.resolutions = d40x_rgb_sizes,
 };
 
 static const struct ds5_format ds5_rlt_rgb_format = {
@@ -4986,6 +4943,9 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
 		break;
 	case DS5_DEVICE_TYPE_D40X:
+		sensor->formats = &ds5_40x_rgb_format;
+		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
+		break;
 	case DS5_DEVICE_TYPE_D45X:
 		sensor->formats = &ds5_rlt_rgb_format;
 		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
