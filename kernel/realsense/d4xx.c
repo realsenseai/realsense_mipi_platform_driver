@@ -474,6 +474,7 @@ struct ds5 {
 	int is_depth, is_y8, is_rgb, is_imu;
 	bool metadata_enabled;
 	int aggregated;
+	int reset_gen;
 	u16 fw_version;
 	u16 fw_build;
 #ifdef CONFIG_VIDEO_D4XX_SERDES
@@ -491,6 +492,8 @@ struct ds5_counters {
 	unsigned int n_fmt;
 	unsigned int n_ctrl;
 };
+
+static atomic_t ds5_reset_gen = ATOMIC_INIT(0);
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 static DEFINE_MUTEX(serdes_lock__);
@@ -1652,9 +1655,41 @@ static int ds5_setup_pipeline(struct ds5 *state, u8 data_type1, u8 data_type2,
 }
 #endif
 
+static void ds5_config_cache_clear(struct ds5_sensor *sensor)
+{
+	sensor->cached_dt_value = 0xFFFF;
+	sensor->cached_md_value = 0xFFFF;
+	sensor->cached_override_value = 0xFFFF;
+	sensor->cached_fps_value = 0xFFFF;
+	sensor->cached_width_value = 0xFFFF;
+	sensor->cached_height_value = 0xFFFF;
+}
+
+static void ds5_invalidate_state_cache(struct ds5 *state)
+{
+	struct ds5_sensor *sensors[] = {
+		&state->depth.sensor,
+		&state->ir.sensor,
+		&state->rgb.sensor,
+		&state->imu.sensor,
+	};
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(sensors); i++) {
+		struct ds5_sensor *sensor = sensors[i];
+
+		ds5_config_cache_clear(sensor);
+		sensor->pipe_id = PIPE_NOT_CONFIGURED;
+		sensor->pipe_data_type1 = 0;
+		sensor->pipe_data_type2 = 0;
+		sensor->pipe_vc_id = 0;
+	}
+}
+
 static int ds5_configure(struct ds5 *state)
 {
 	struct ds5_sensor *sensor;
+	int current_reset_gen;
 	u16 fmt, md_fmt, vc_id;
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	u16 data_type1, data_type2;
@@ -1667,6 +1702,12 @@ static int ds5_configure(struct ds5 *state)
 	u16 width_value = 0;
 	u16 height_value = 0;
 	int ret;
+
+	current_reset_gen = atomic_read(&ds5_reset_gen);
+	if (state->reset_gen != current_reset_gen) {
+		ds5_invalidate_state_cache(state);
+		state->reset_gen = current_reset_gen;
+	}
 
 	if (state->is_depth) {
 		sensor = &state->depth.sensor;
@@ -1774,6 +1815,9 @@ static int ds5_configure(struct ds5 *state)
 	else if (state->is_y8 && fmt != 0 &&
 		 sensor->config.format->data_type == GMSL_CSI_DT_YUV422_8)
 		dt_value = 0x32;
+
+	dev_dbg(&state->client->dev, "sensor %p: dt_value=0x%x, cached_dt_value=0x%x, cached_fps_value=%u, framerate=%u\n",
+			sensor, dt_value, sensor->cached_dt_value, sensor->cached_fps_value, sensor->config.framerate);
 
 	if (sensor->cached_dt_value != dt_value) {
 		ret = ds5_write(state, dt_addr, dt_value);
@@ -2183,16 +2227,6 @@ static int ds5_set_calibration_data(struct ds5 *state,
 #define DS5_HW_RESET_STATUS_READY	0xDEAD
 #define DS5_HW_RESET_DFU_MAGIC_LSW	0x0201  /* Lower 16 bits of 0x04030201 */
 
-static void ds5_config_cache_clear(struct ds5_sensor *sensor)
-{
-	sensor->cached_dt_value = 0xFFFF;
-	sensor->cached_md_value = 0xFFFF;
-	sensor->cached_override_value = 0xFFFF;
-	sensor->cached_fps_value = 0xFFFF;
-	sensor->cached_width_value = 0xFFFF;
-	sensor->cached_height_value = 0xFFFF;
-}
-
 /*
  * ds5_hw_reset_with_recovery - Perform hardware reset with GMSL recovery
  * @state: Driver state structure
@@ -2255,6 +2289,8 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 			__func__, ret);
 		return ret;
 	}
+	atomic_inc(&ds5_reset_gen);
+	state->reset_gen = atomic_read(&ds5_reset_gen);
 
 	dev_info(&state->client->dev, "%s(): HW reset command sent, waiting for device...\n",
 		__func__);
@@ -5739,6 +5775,7 @@ static int ds5_probe(struct i2c_client *c, const struct i2c_device_id *id)
 	mutex_init(&state->lock);
 
 	state->client = c;
+	state->reset_gen = atomic_read(&ds5_reset_gen);
 	dev_warn(&c->dev, "Probing driver for D4xx\n");
 #ifdef CONFIG_OF
 	ret = of_property_read_u32(c->dev.of_node, "override_reg", &override_addr);
