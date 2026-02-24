@@ -1,7 +1,22 @@
 From ce6faaedef68204e8b132bf44a0e4d2432dfb7ad Mon Sep 17 00:00:00 2001
 From: Arun-Prasad-V <arun.prasad.v@intel.com>
 Date: Mon, 4 Nov 2024 12:52:39 +0530
-Subject: [PATCH] Support for dynamic change of i2c bus-clk-rate
+Subject: [PATCH] i2c: tegra: add runtime bus clock rate adjustment
+
+Allow the I2C bus clock rate to be changed at runtime without requiring
+device-tree changes or driver re-probe.  The rate is stored in
+i2c_adapter.bus_clk_rate and propagated to the hardware on the next
+transfer when the Tegra I2C driver detects the value has changed.
+
+A sysfs attribute is exposed at
+  /sys/bus/i2c/devices/i2c-N/bus_clk_rate
+so user space or other kernel modules can read and set the rate.  Two
+exported helpers, i2c_set_adapter_bus_clk_rate() and
+i2c_get_adapter_bus_clk_rate(), provide a locked accessor interface.
+
+This is useful for cameras like the RealSense D4XX that require a higher
+I2C clock rate during DFU (device firmware upgrade) than during normal
+operation.
 
 Signed-off-by: Arun Prasad V <arun.prasad.v@intel.com>
 ---
@@ -17,7 +32,7 @@ index cd50436e5734..4269343266c2 100644
 @@ -1484,6 +1484,37 @@ static int tegra_i2c_xfer_msg(struct tegra_i2c_dev *i2c_dev,
  	return 0;
  }
- 
+
 +static int tegra_i2c_change_clock_rate(struct tegra_i2c_dev *i2c_dev)
 +{
 +	u32 val;
@@ -46,7 +61,7 @@ index cd50436e5734..4269343266c2 100644
 +	if (err)
 +		return err;
 +
-+	return err;
++	return 0;
 +}
 +
  static int tegra_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[],
@@ -55,26 +70,26 @@ index cd50436e5734..4269343266c2 100644
 @@ -1497,6 +1528,16 @@ static int tegra_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[],
  		return ret;
  	}
- 
+
 +	if (adap->bus_clk_rate != i2c_dev->bus_clk_rate) {
 +		i2c_dev->bus_clk_rate = adap->bus_clk_rate;
-+		 ret = tegra_i2c_change_clock_rate(i2c_dev);
-+		 if (ret) {
-+			 dev_err(i2c_dev->dev,
-+					 "failed changing clock rate: %d\n", ret);
-+			 return ret;
-+		 }
++		ret = tegra_i2c_change_clock_rate(i2c_dev);
++		if (ret) {
++			dev_err(i2c_dev->dev,
++				"failed changing clock rate: %d\n", ret);
++			return ret;
++		}
 +	}
 +
  	for (i = 0; i < num; i++) {
  		enum msg_end_type end_type = MSG_END_STOP;
- 
+
 @@ -1957,6 +1998,7 @@ static int tegra_i2c_probe(struct platform_device *pdev)
  	i2c_dev->adapter.class = I2C_CLASS_DEPRECATED;
  	i2c_dev->adapter.algo = &tegra_i2c_algo;
  	i2c_dev->adapter.nr = pdev->id;
 +	i2c_dev->adapter.bus_clk_rate = i2c_dev->bus_clk_rate;
- 
+
  	if (i2c_dev->hw->supports_bus_clear)
  		i2c_dev->adapter.bus_recovery_info = &tegra_i2c_recovery_info;
 diff --git a/drivers/i2c/i2c-core-base.c b/drivers/i2c/i2c-core-base.c
@@ -84,13 +99,13 @@ index c232535ca8f4..2edd24973cca 100644
 @@ -1285,10 +1285,33 @@ delete_device_store(struct device *dev, struct device_attribute *attr,
  static DEVICE_ATTR_IGNORE_LOCKDEP(delete_device, S_IWUSR, NULL,
  				  delete_device_store);
- 
+
 +static ssize_t show_bus_clk_rate(struct device *dev,
 +		struct device_attribute *attr, char *buf)
 +{
 +	struct i2c_adapter *adap = to_i2c_adapter(dev);
 +
-+	return sprintf(buf, "%ld\n", adap->bus_clk_rate);
++	return sysfs_emit(buf, "%lu\n", adap->bus_clk_rate);
 +}
 +
 +static ssize_t set_bus_clk_rate(struct device *dev,
@@ -98,10 +113,10 @@ index c232535ca8f4..2edd24973cca 100644
 +{
 +	struct i2c_adapter *adap = to_i2c_adapter(dev);
 +	char *p = (char *)buf;
-+	int bus_clk_rate;
++	unsigned long bus_clk_rate;
 +
 +	bus_clk_rate = memparse(p, &p);
-+	dev_info(dev, "Setting clock rate %d on next transfer\n", bus_clk_rate);
++	dev_dbg(dev, "Setting clock rate %lu on next transfer\n", bus_clk_rate);
 +	adap->bus_clk_rate = bus_clk_rate;
 +	return count;
 +}
@@ -118,8 +133,8 @@ index c232535ca8f4..2edd24973cca 100644
 @@ -1401,6 +1424,28 @@ static int i2c_setup_host_notify_irq_domain(struct i2c_adapter *adap)
  	return 0;
  }
- 
-+int i2c_set_adapter_bus_clk_rate(struct i2c_adapter *adap, int bus_rate)
+
++int i2c_set_adapter_bus_clk_rate(struct i2c_adapter *adap, unsigned long bus_rate)
 +{
 +	i2c_lock_bus(adap, I2C_LOCK_ROOT_ADAPTER);
 +	adap->bus_clk_rate = bus_rate;
@@ -129,9 +144,9 @@ index c232535ca8f4..2edd24973cca 100644
 +}
 +EXPORT_SYMBOL_GPL(i2c_set_adapter_bus_clk_rate);
 +
-+int i2c_get_adapter_bus_clk_rate(struct i2c_adapter *adap)
++unsigned long i2c_get_adapter_bus_clk_rate(struct i2c_adapter *adap)
 +{
-+	int bus_clk_rate;
++	unsigned long bus_clk_rate;
 +
 +	i2c_lock_bus(adap, I2C_LOCK_ROOT_ADAPTER);
 +	bus_clk_rate = adap->bus_clk_rate;
@@ -151,22 +166,22 @@ index 2ce3efbe9198..9d876ad6373c 100644
 @@ -131,6 +131,10 @@ int i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num);
  /* Unlocked flavor */
  int __i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num);
- 
+
 +/* Change bus clock rate for i2c adapter */
-+extern int i2c_set_adapter_bus_clk_rate(struct i2c_adapter *adap, int bus_rate);
-+extern int i2c_get_adapter_bus_clk_rate(struct i2c_adapter *adap);
++int i2c_set_adapter_bus_clk_rate(struct i2c_adapter *adap, unsigned long bus_rate);
++unsigned long i2c_get_adapter_bus_clk_rate(struct i2c_adapter *adap);
 +
  /* This is the very generalized SMBus access routine. You probably do not
     want to use this, though; one of the functions below may be much easier,
     and probably just as fast.
 @@ -737,6 +741,7 @@ struct i2c_adapter {
  	const struct i2c_adapter_quirks *quirks;
- 
+
  	struct irq_domain *host_notify_domain;
 +	unsigned long bus_clk_rate;
  	struct regulator *bus_regulator;
  };
  #define to_i2c_adapter(d) container_of(d, struct i2c_adapter, dev)
--- 
+--
 2.34.1
 

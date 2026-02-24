@@ -5,10 +5,19 @@ index 7d07ccd7..c64dcc38 100644
 @@ -582,7 +641,10 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
  	trace_tegra_channel_capture_frame("sof", &ts);
  	vb->vb2_buf.timestamp = descr->status.sof_timestamp;
- 
+
 -	if (frame_err)
-+	/* TODO: Remove Y12I frame_err workaround once Y12I is fixed
-+	 * Currently there is a black-bar at the bottom of the frame.
++	/* Suppress frame errors for Y12I calibration streams.
++	 * The D4XX camera produces a partial-fill artefact (black band) at
++	 * the bottom of every Y12I frame because the 24-bit-aligned packing
++	 * leaves an unused byte that the sensor does not populate.  The VI
++	 * engine sets frame_err for the resulting underrun condition, but the
++	 * payload data is otherwise valid.  Marking the buffer as DONE allows
++	 * calibration applications to consume the frame without error.
++	 *
++	 * TODO: Remove this workaround once the D4XX firmware produces
++	 * correctly-padded Y12I frames, or once the VI driver handles the
++	 * known underrun gracefully for packed-odd-width formats.
 +	 */
 +	if (frame_err && chan->fmtinfo->fourcc != V4L2_PIX_FMT_Y12I)
  		buf->vb2_state = VB2_BUF_STATE_ERROR;

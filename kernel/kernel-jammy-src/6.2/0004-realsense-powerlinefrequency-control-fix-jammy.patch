@@ -1,7 +1,13 @@
 From 1e4a8437c9caee068f53cbaae00d1d76a8db21e5 Mon Sep 17 00:00:00 2001
 From: Dmitry Perchanov <dmitry.perchanov@intel.com>
 Date: Wed, 24 May 2023 19:52:05 +0300
-Subject: [PATCH] Bug fix for inclomplete PowerLineFrequency enumeration map
+Subject: [PATCH] media: uvcvideo: add "Auto" entry to power line frequency
+ control
+
+The UVC PowerLineFrequency control supports four states: Disabled,
+50 Hz, 60 Hz, and Auto.  The kernel's static menu table was missing the
+Auto entry (value 3), causing cameras that advertise Auto support to
+expose an incomplete control list.
 
 Signed-off-by: Dmitry Perchanov <dmitry.perchanov@intel.com>
 ---
