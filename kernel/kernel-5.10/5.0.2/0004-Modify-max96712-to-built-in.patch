@@ -1,0 +1,26 @@
+From 2a299ad69f26386124b01acb1f71636a91b160fc Mon Sep 17 00:00:00 2001
+From: ejgoldik <ehud.joseph.goldik@realsenseai.com>
+Date: Tue, 24 Feb 2026 11:06:10 +0200
+Subject: [PATCH] Modify max96712 to built-in
+
+Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
+---
+ arch/arm64/configs/defconfig | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm64/configs/defconfig b/arch/arm64/configs/defconfig
+index 285c64888db1..10da08646946 100644
+--- a/arch/arm64/configs/defconfig
++++ b/arch/arm64/configs/defconfig
+@@ -894,7 +894,7 @@ CONFIG_I2C_IOEXPANDER_SER_MAX9295=y
+ CONFIG_I2C_IOEXPANDER_DESER_MAX9296=y
+ CONFIG_NV_VIDEO_IMX390=y
+ CONFIG_VIDEO_D4XX=m
+-CONFIG_NV_DESER_MAX96712=m
++CONFIG_NV_DESER_MAX96712=y
+ CONFIG_NV_VIDEO_AR0234=m
+ # CONFIG_CXD2880_SPI_DRV is not set
+ CONFIG_MEDIA_TUNER_SIMPLE=y
+-- 
+2.43.0
+

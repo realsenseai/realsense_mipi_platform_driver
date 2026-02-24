@@ -1,0 +1,26 @@
+From 6441423e4043723d54e033fcd3304f2d1449c98f Mon Sep 17 00:00:00 2001
+From: ejgoldik <ehud.joseph.goldik@realsenseai.com>
+Date: Tue, 24 Feb 2026 11:42:41 +0200
+Subject: [PATCH] Modify max96712 to built-in
+
+Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
+---
+ arch/arm64/configs/defconfig | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm64/configs/defconfig b/arch/arm64/configs/defconfig
+index 54069a4773ac..69100c25b753 100644
+--- a/arch/arm64/configs/defconfig
++++ b/arch/arm64/configs/defconfig
+@@ -901,7 +901,7 @@ CONFIG_I2C_IOEXPANDER_SER_MAX9295=y
+ CONFIG_I2C_IOEXPANDER_DESER_MAX9296=y
+ CONFIG_NV_VIDEO_IMX390=y
+ CONFIG_VIDEO_D4XX=m
+-CONFIG_NV_DESER_MAX96712=m
++CONFIG_NV_DESER_MAX96712=y
+ CONFIG_NV_VIDEO_AR0234=m
+ CONFIG_NV_VIDEO_HAWK_OWL=m
+ CONFIG_NV_VIRTUAL_I2C_MUX=m
+-- 
+2.43.0
+
