@@ -2109,6 +2109,214 @@ static struct ds5 *ds5_ctrl_resolve_state(struct v4l2_ctrl_handler *handler,
 	}
 }
 
+/* ERB (EEPROM Read Block): read a region from EEPROM via HWM */
+static int ds5_ctrl_erb(struct ds5 *state, struct v4l2_ctrl *ctrl)
+{
+	u16 offset, size, len;
+	struct hwm_cmd *erb_cmd;
+	int ret;
+
+	offset = *(ctrl->p_new.p_u8) << 8;
+	offset |= *(ctrl->p_new.p_u8 + 1);
+	size = *(ctrl->p_new.p_u8 + 2) << 8;
+	size |= *(ctrl->p_new.p_u8 + 3);
+
+	dev_dbg(&state->client->dev, "%s(): offset %x, size: %x\n",
+					__func__, offset, size);
+	if (size > DS5_HWMC_BUFFER_SIZE)
+		return -EINVAL;
+
+	len = sizeof(struct hwm_cmd) + size;
+	erb_cmd = kzalloc(len, GFP_KERNEL);
+	if (!erb_cmd) {
+		dev_err(&state->client->dev,
+			"%s(): Can't allocate memory for 0x%x\n",
+			__func__, ctrl->id);
+		return -ENOMEM;
+	}
+	memcpy(erb_cmd, &erb, sizeof(struct hwm_cmd));
+	erb_cmd->param1 = offset;
+	erb_cmd->param2 = size;
+	ret = ds5_send_hwmc(state, sizeof(struct hwm_cmd), erb_cmd);
+	if (!ret)
+		ret = ds5_get_hwmc(state, erb_cmd->Data, len, &size);
+	if (ret) {
+		dev_err(&state->client->dev,
+			"%s(): ERB cmd failed, ret: %d,"
+			"requested size: %d, actual size: %d\n",
+			__func__, ret, erb_cmd->param2, size);
+		kfree(erb_cmd);
+		return -EAGAIN;
+	}
+
+	/* Actual size returned from FW */
+	*(ctrl->p_new.p_u8 + 2) = (size & 0xFF00) >> 8;
+	*(ctrl->p_new.p_u8 + 3) = (size & 0x00FF);
+
+	memcpy(ctrl->p_new.p_u8 + 4, erb_cmd->Data + 4, size - 4);
+	dev_dbg(&state->client->dev, "%s(): 0x%x 0x%x 0x%x 0x%x \n",
+		__func__,
+		*(ctrl->p_new.p_u8),
+		*(ctrl->p_new.p_u8+1),
+		*(ctrl->p_new.p_u8+2),
+		*(ctrl->p_new.p_u8+3));
+	kfree(erb_cmd);
+	return 0;
+}
+
+/* EWB (EEPROM Write Block): write a region to EEPROM via HWM */
+static int ds5_ctrl_ewb(struct ds5 *state, struct v4l2_ctrl *ctrl)
+{
+	u16 offset, size;
+	struct hwm_cmd *ewb_cmd;
+	int ret;
+
+	offset = *((u8 *)ctrl->p_new.p_u8) << 8;
+	offset |= *((u8 *)ctrl->p_new.p_u8 + 1);
+	size = *((u8 *)ctrl->p_new.p_u8 + 2) << 8;
+	size |= *((u8 *)ctrl->p_new.p_u8 + 3);
+
+	dev_dbg(&state->client->dev, "%s():0x%x 0x%x 0x%x 0x%x\n",
+			__func__,
+			*((u8 *)ctrl->p_new.p_u8),
+			*((u8 *)ctrl->p_new.p_u8 + 1),
+			*((u8 *)ctrl->p_new.p_u8 + 2),
+			*((u8 *)ctrl->p_new.p_u8 + 3));
+
+	ewb_cmd = kzalloc(sizeof(struct hwm_cmd) + size, GFP_KERNEL);
+	if (!ewb_cmd) {
+		dev_err(&state->client->dev,
+			"%s(): Can't allocate memory for 0x%x\n",
+			__func__, ctrl->id);
+		return -ENOMEM;
+	}
+	memcpy(ewb_cmd, &ewb, sizeof(ewb));
+	ewb_cmd->header = 0x14 + size;
+	ewb_cmd->param1 = offset; /* start index */
+	ewb_cmd->param2 = size; /* size */
+	if (size > DS5_HWMC_BUFFER_SIZE) {
+		kfree(ewb_cmd);
+		return -EINVAL;
+	}
+	memcpy(ewb_cmd->Data, (u8 *)ctrl->p_new.p_u8 + 4, size);
+	ret = ds5_send_hwmc(state, sizeof(struct hwm_cmd) + size, ewb_cmd);
+	if (!ret)
+		ret = ds5_get_hwmc_status(state);
+	if (ret) {
+		dev_err(&state->client->dev,
+			"%s(): EWB cmd failed, ret: %d,"
+			"requested size: %d, actual size: %d\n",
+			__func__, ret, ewb_cmd->param2, size);
+		kfree(ewb_cmd);
+		return -EAGAIN;
+	}
+
+	kfree(ewb_cmd);
+	return 0;
+}
+
+/* Read FW log via HWM command */
+static int ds5_ctrl_get_log(struct ds5 *state, struct v4l2_ctrl *ctrl)
+{
+	u16 log_prepare[] = {0x0014, 0xcdab, 0x000f, 0x0000, 0x0400, 0x0000,
+			0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000};
+	u16 execute_cmd = 0x0001;
+	unsigned int i;
+	u32 data;
+	int ret;
+
+	ret = ds5_raw_write(state, DS5_HWMC_DATA,
+			log_prepare, sizeof(log_prepare));
+	if (ret < 0)
+		return ret;
+
+	ret = ds5_raw_write(state, DS5_HWMC_EXEC,
+			&execute_cmd, sizeof(execute_cmd));
+	if (ret < 0)
+		return ret;
+
+	for (i = 0; i < DS5_MAX_LOG_POLL; i++) {
+		ret = ds5_raw_read(state, DS5_HWMC_STATUS,
+				&data, sizeof(data));
+		dev_dbg(&state->client->dev, "%s(): log ready 0x%x\n",
+			 __func__, data);
+		if (ret < 0)
+			return ret;
+		if (!data)
+			break;
+		msleep_range(5);
+	}
+
+	ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN, &data, sizeof(data));
+	dev_dbg(&state->client->dev, "%s(): log size 0x%x\n", __func__, data);
+	if (ret < 0)
+		return ret;
+	if (!data)
+		return 0;
+	if (data > 1024)
+		return -ENOBUFS;
+
+	return ds5_raw_read(state, DS5_HWMC_DATA, ctrl->p_new.p_u8, data);
+}
+
+/* Read AE ROI via HWM command */
+static int ds5_ctrl_get_ae_roi(struct ds5 *state, struct v4l2_ctrl *ctrl)
+{
+	u16 len = sizeof(struct hwm_cmd) + 12;
+	u16 dataLen = 0;
+	struct hwm_cmd *ae_roi_cmd;
+	int ret;
+
+	ae_roi_cmd = kzalloc(len, GFP_KERNEL);
+	if (!ae_roi_cmd) {
+		dev_err(&state->client->dev,
+			"%s(): Can't allocate memory for 0x%x\n",
+			__func__, ctrl->id);
+		return -ENOMEM;
+	}
+	memcpy(ae_roi_cmd, &get_ae_roi, sizeof(struct hwm_cmd));
+	ret = ds5_send_hwmc(state, sizeof(struct hwm_cmd), ae_roi_cmd);
+	if (ret) {
+		kfree(ae_roi_cmd);
+		return ret;
+	}
+	ret = ds5_get_hwmc(state, ae_roi_cmd->Data, len, &dataLen);
+	if (!ret && dataLen <= ctrl->dims[0])
+		memcpy(ctrl->p_new.p_u16, ae_roi_cmd->Data + 4, 8);
+	kfree(ae_roi_cmd);
+	return ret;
+}
+
+/* Read AE setpoint via HWM command */
+static int ds5_ctrl_get_ae_setpoint(struct ds5 *state, struct v4l2_ctrl *ctrl)
+{
+	u16 len = sizeof(struct hwm_cmd) + 8;
+	u16 dataLen = 0;
+	struct hwm_cmd *ae_setpoint_cmd;
+	int ret;
+
+	ae_setpoint_cmd = kzalloc(len, GFP_KERNEL);
+	if (!ae_setpoint_cmd) {
+		dev_err(&state->client->dev,
+			"%s(): Can't allocate memory for 0x%x\n",
+			__func__, ctrl->id);
+		return -ENOMEM;
+	}
+	memcpy(ae_setpoint_cmd, &get_ae_setpoint, sizeof(struct hwm_cmd));
+	ret = ds5_send_hwmc(state, sizeof(struct hwm_cmd), ae_setpoint_cmd);
+	if (ret) {
+		kfree(ae_setpoint_cmd);
+		return ret;
+	}
+	ret = ds5_get_hwmc(state, ae_setpoint_cmd->Data, len, &dataLen);
+	if (!ret)
+		memcpy(ctrl->p_new.p_s32, ae_setpoint_cmd->Data + 4, 4);
+	dev_dbg(&state->client->dev, "%s(): len: %d, 0x%x\n",
+		__func__, dataLen, *(ctrl->p_new.p_s32));
+	kfree(ae_setpoint_cmd);
+	return ret;
+}
+
 static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 {
 	struct ds5_sensor *sensor = (struct ds5_sensor *)ctrl->priv;
@@ -2203,115 +2411,12 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 		}
 		break;
 	case DS5_CAMERA_CID_ERB:
-		if (ctrl->p_new.p_u8) {
-			u16 offset = 0;
-			u16 size = 0;
-			u16 len = 0;
-			struct hwm_cmd *erb_cmd;
-
-			offset = *(ctrl->p_new.p_u8) << 8;
-			offset |= *(ctrl->p_new.p_u8 + 1);
-			size = *(ctrl->p_new.p_u8 + 2) << 8;
-			size |= *(ctrl->p_new.p_u8 + 3);
-
-			dev_dbg(&state->client->dev, "%s(): offset %x, size: %x\n",
-							__func__, offset, size);
-			if (size > DS5_HWMC_BUFFER_SIZE) {
-				ret = -EINVAL;
-				break;
-			}
-			len = sizeof(struct hwm_cmd) + size;
-			erb_cmd = kzalloc(len, GFP_KERNEL);
-			if (!erb_cmd) {
-				dev_err(&state->client->dev,
-					"%s(): Can't allocate memory for 0x%x\n",
-					__func__, ctrl->id);
-				ret = -ENOMEM;
-				break;
-			}
-			memcpy(erb_cmd, &erb, sizeof(struct hwm_cmd));
-			erb_cmd->param1 = offset;
-			erb_cmd->param2 = size;
-			ret = ds5_send_hwmc(state, sizeof(struct hwm_cmd), erb_cmd);
-			if (!ret)
-				ret = ds5_get_hwmc(state, erb_cmd->Data, len, &size);
-			if (ret) {
-				dev_err(&state->client->dev,
-					"%s(): ERB cmd failed, ret: %d,"
-					"requested size: %d, actual size: %d\n",
-					__func__, ret, erb_cmd->param2, size);
-				kfree(erb_cmd);
-				ret = -EAGAIN;
-				break;
-			}
-
-			/* Actual size returned from FW */
-			*(ctrl->p_new.p_u8 + 2) = (size & 0xFF00) >> 8;
-			*(ctrl->p_new.p_u8 + 3) = (size & 0x00FF);
-
-			memcpy(ctrl->p_new.p_u8 + 4, erb_cmd->Data + 4, size - 4);
-			dev_dbg(&state->client->dev, "%s(): 0x%x 0x%x 0x%x 0x%x \n",
-				__func__,
-				*(ctrl->p_new.p_u8),
-				*(ctrl->p_new.p_u8+1),
-				*(ctrl->p_new.p_u8+2),
-				*(ctrl->p_new.p_u8+3));
-			kfree(erb_cmd);
-		}
+		if (ctrl->p_new.p_u8)
+			ret = ds5_ctrl_erb(state, ctrl);
 		break;
 	case DS5_CAMERA_CID_EWB:
-		if (ctrl->p_new.p_u8) {
-			u16 offset = 0;
-			u16 size = 0;
-			struct hwm_cmd *ewb_cmd;
-
-			offset = *((u8 *)ctrl->p_new.p_u8) << 8;
-			offset |= *((u8 *)ctrl->p_new.p_u8 + 1);
-			size = *((u8 *)ctrl->p_new.p_u8 + 2) << 8;
-			size |= *((u8 *)ctrl->p_new.p_u8 + 3);
-
-			dev_dbg(&state->client->dev, "%s():0x%x 0x%x 0x%x 0x%x\n",
-					__func__,
-					*((u8 *)ctrl->p_new.p_u8),
-					*((u8 *)ctrl->p_new.p_u8 + 1),
-					*((u8 *)ctrl->p_new.p_u8 + 2),
-					*((u8 *)ctrl->p_new.p_u8 + 3));
-
-			ewb_cmd = kzalloc(
-					sizeof(struct hwm_cmd) + size,
-					GFP_KERNEL);
-			if (!ewb_cmd) {
-				dev_err(&state->client->dev,
-					"%s(): Can't allocate memory for 0x%x\n",
-					__func__, ctrl->id);
-				ret = -ENOMEM;
-				break;
-			}
-			memcpy(ewb_cmd, &ewb, sizeof(ewb));
-			ewb_cmd->header = 0x14 + size;
-			ewb_cmd->param1 = offset; /* start index */
-			ewb_cmd->param2 = size; /* size */
-			if (size > DS5_HWMC_BUFFER_SIZE) {
-				kfree(ewb_cmd);
-				ret = -EINVAL;
-				break;
-			}
-			memcpy(ewb_cmd->Data, (u8 *)ctrl->p_new.p_u8 + 4, size);
-			ret = ds5_send_hwmc(state, sizeof(struct hwm_cmd) + size, ewb_cmd);
-			if (!ret)
-				ret = ds5_get_hwmc_status(state);
-			if (ret) {
-				dev_err(&state->client->dev,
-					"%s(): EWB cmd failed, ret: %d,"
-					"requested size: %d, actual size: %d\n",
-					__func__, ret, ewb_cmd->param2, size);
-				kfree(ewb_cmd);
-				ret = -EAGAIN;
-				break;
-			}
-
-			kfree(ewb_cmd);
-		}
+		if (ctrl->p_new.p_u8)
+			ret = ds5_ctrl_ewb(state, ctrl);
 		break;
 	case DS5_CAMERA_CID_HWMC:
 		if (ctrl->p_new.p_u8) {
@@ -2455,10 +2560,6 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 {
 	struct ds5_sensor *sensor = (struct ds5_sensor *)ctrl->priv;
 	struct ds5 *state = ds5_ctrl_resolve_state(ctrl->handler, sensor);
-	u16 log_prepare[] = {0x0014, 0xcdab, 0x000f, 0x0000, 0x0400, 0x0000,
-			0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000};
-	u16 execute_cmd = 0x0001;
-	unsigned int i;
 	u32 data;
 	int ret = 0;
 	u16 base;
@@ -2529,48 +2630,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 
 	case DS5_CAMERA_CID_LOG:
-		/*
-		 * TODO: wrap HWMonitor command into a helper:
-		 *   1. prepare and send command
-		 *   2. execute command
-		 *   3. wait for completion
-		 */
-		ret = ds5_raw_write(state, DS5_HWMC_DATA,
-				log_prepare, sizeof(log_prepare));
-		if (ret < 0)
-			break;
-
-		ret = ds5_raw_write(state, DS5_HWMC_EXEC,
-				&execute_cmd, sizeof(execute_cmd));
-		if (ret < 0)
-			break;
-
-		for (i = 0; i < DS5_MAX_LOG_POLL; i++) {
-			ret = ds5_raw_read(state, DS5_HWMC_STATUS,
-					&data, sizeof(data));
-			dev_dbg(&state->client->dev, "%s(): log ready 0x%x\n",
-				 __func__, data);
-			if (ret < 0)
-				break;
-			if (!data)
-				break;
-			msleep_range(5);
-		}
-		if (ret < 0)
-			break;
-
-		ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN, &data, sizeof(data));
-		dev_dbg(&state->client->dev, "%s(): log size 0x%x\n", __func__, data);
-		if (ret < 0)
-			break;
-		if (!data)
-			break;
-		if (data > 1024) {
-			ret = -ENOBUFS;
-			break;
-		}
-		ret = ds5_raw_read(state, DS5_HWMC_DATA,
-				ctrl->p_new.p_u8, data);
+		ret = ds5_ctrl_get_log(state, ctrl);
 		break;
 	case DS5_CAMERA_DEPTH_CALIBRATION_TABLE_GET:
 		ret = ds5_get_calibration_data(state, DEPTH_CALIBRATION_ID,
@@ -2590,56 +2650,12 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		ret = ds5_gvd(state, ctrl->p_new.p_u8);
 		break;
 	case DS5_CAMERA_CID_AE_ROI_GET:
-		if (ctrl->p_new.p_u16) {
-			u16 len = sizeof(struct hwm_cmd) + 12;
-			u16 dataLen = 0;
-			struct hwm_cmd *ae_roi_cmd;
-			ae_roi_cmd = kzalloc(len, GFP_KERNEL);
-			if (!ae_roi_cmd) {
-				dev_err(&state->client->dev,
-					"%s(): Can't allocate memory for 0x%x\n",
-					__func__, ctrl->id);
-				ret = -ENOMEM;
-				break;
-			}
-			memcpy(ae_roi_cmd, &get_ae_roi, sizeof(struct hwm_cmd));
-			ret = ds5_send_hwmc(state, sizeof(struct hwm_cmd), ae_roi_cmd);
-			if (ret) {
-				kfree(ae_roi_cmd);
-				break;
-			}
-			ret = ds5_get_hwmc(state, ae_roi_cmd->Data, len, &dataLen);
-			if (!ret && dataLen <= ctrl->dims[0])
-				memcpy(ctrl->p_new.p_u16, ae_roi_cmd->Data + 4, 8);
-			kfree(ae_roi_cmd);
-		}
+		if (ctrl->p_new.p_u16)
+			ret = ds5_ctrl_get_ae_roi(state, ctrl);
 		break;
 	case DS5_CAMERA_CID_AE_SETPOINT_GET:
-	if (ctrl->p_new.p_s32) {
-		u16 len = sizeof(struct hwm_cmd) + 8;
-		u16 dataLen = 0;
-		struct hwm_cmd *ae_setpoint_cmd;
-		ae_setpoint_cmd = kzalloc(len, GFP_KERNEL);
-		if (!ae_setpoint_cmd) {
-			dev_err(&state->client->dev,
-					"%s(): Can't allocate memory for 0x%x\n",
-					__func__, ctrl->id);
-			ret = -ENOMEM;
-			break;
-		}
-		memcpy(ae_setpoint_cmd, &get_ae_setpoint, sizeof(struct hwm_cmd));
-		ret = ds5_send_hwmc(state, sizeof(struct hwm_cmd), ae_setpoint_cmd);
-		if (ret) {
-			kfree(ae_setpoint_cmd);
-			break;
-		}
-		ret = ds5_get_hwmc(state, ae_setpoint_cmd->Data, len, &dataLen);
-		if (!ret)
-			memcpy(ctrl->p_new.p_s32, ae_setpoint_cmd->Data + 4, 4);
-		dev_dbg(&state->client->dev, "%s(): len: %d, 0x%x\n",
-			__func__, dataLen, *(ctrl->p_new.p_s32));
-		kfree(ae_setpoint_cmd);
-		}
+		if (ctrl->p_new.p_s32)
+			ret = ds5_ctrl_get_ae_setpoint(state, ctrl);
 		break;
 	case DS5_CAMERA_CID_HWMC_RW:
 		if (ctrl->p_new.p_u8) {
