@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * ds5.c - Intel(R) RealSense(TM) D4XX camera driver
+ * d4xx.c - Intel(R) RealSense(TM) D4XX camera driver
  *
  * Copyright (c) 2017-2023, INTEL CORPORATION.  All rights reserved.
  *
@@ -74,6 +74,10 @@ struct dser_interface {
 #define GMSL_CSI_DT_RAW_8 0x2A
 #define GMSL_CSI_DT_EMBED 0x12
 #endif
+
+/* ================================================================
+ * Register Addresses and Driver Constants
+ * ================================================================ */
 
 #define DS5_DRIVER_NAME "d4xx"
 #define DS5_DRIVER_NAME_AWG "d4xx-awg"
@@ -193,6 +197,10 @@ struct dser_interface {
 #define MAX_RGB_EXP			10000
 #define DEF_DEPTH_EXP			33000
 #define DEF_RGB_EXP			1660
+
+/* ================================================================
+ * Data Types and Structures
+ * ================================================================ */
 
 enum ds5_mux_pad {
 	DS5_MUX_PAD_EXTERNAL,
@@ -598,6 +606,10 @@ static inline void msleep_range(unsigned int delay_base)
 #endif
 #endif
 
+/* ================================================================
+ * I2C Register Access (with retry)
+ * ================================================================ */
+
 static int ds5_write(struct ds5 *state, u16 reg, u16 val)
 {
 	int ret;
@@ -717,14 +729,15 @@ static int ds5_raw_read(struct ds5 *state, u16 reg, void *val, size_t val_len)
 	return ret;
 }
 
-/* Pad ops */
+/* ================================================================
+ * Resolution Tables and Format Definitions
+ * ================================================================ */
 
 /*
  * FIXME: D16 width must be doubled, because an 8-bit format is used. Check how
  * the Tegra driver propagates resolutions and formats.
  */
 
-/* TODO: keep 6 till 5 is supported by FW */
 static const u16 ds5_framerates[] = {5, 30};
 
 #define DS5_FRAMERATE_DEFAULT_IDX 1
@@ -1694,6 +1707,10 @@ static int ds5_hw_set_exposure(struct ds5 *state, u32 base, s32 val)
 
 	return ret;
 }
+
+/* ================================================================
+ * Custom V4L2 Control IDs and HW Monitor (HWMC)
+ * ================================================================ */
 
 #define DS5_MAX_LOG_WAIT 200
 #define DS5_MAX_LOG_SLEEP 10
@@ -4622,6 +4639,10 @@ static const struct regmap_config ds5_regmap_config = {
 	.val_format_endian = REGMAP_ENDIAN_NATIVE,
 };
 
+/* ================================================================
+ * DFU (Device Firmware Update) Operations
+ * ================================================================ */
+
 static int ds5_dfu_wait_for_status(struct ds5 *state)
 {
 	int i, ret = 0;
@@ -5303,6 +5324,10 @@ static const struct attribute_group ds5_attr_group = {
 };
 #endif
 
+/* ================================================================
+ * I2C Driver Probe and Remove
+ * ================================================================ */
+
 static int ds5_probe(struct i2c_client *c, const struct i2c_device_id *id)
 {
 	struct ds5 *state = devm_kzalloc(&c->dev, sizeof(*state), GFP_KERNEL);
@@ -5553,6 +5578,10 @@ static const struct of_device_id d4xx_of_match[] = {
 	{ },
 };
 MODULE_DEVICE_TABLE(of, d4xx_of_match);
+
+/* ================================================================
+ * Module Registration
+ * ================================================================ */
 
 static struct i2c_driver ds5_i2c_driver = {
 	.driver = {
