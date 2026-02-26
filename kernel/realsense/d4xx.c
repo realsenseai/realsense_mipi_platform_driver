@@ -494,6 +494,7 @@ struct ds5_counters {
 };
 
 static atomic_t ds5_reset_gen = ATOMIC_INIT(0);
+static atomic_t ds5_probe_reset_once = ATOMIC_INIT(0);
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 static DEFINE_MUTEX(serdes_lock__);
@@ -702,12 +703,12 @@ static const u16 ds5_framerate_100[] = {100};
     { .width = (w), .height = (h), .framerates = (fr), .n_framerates = ARRAY_SIZE(fr) },
 
 #define D401_COMMON_RES	\
-	DS5_RES(1280, 720, ds5_framerate_15_30)\
-	DS5_RES(848, 480, ds5_framerate_15_60)\
-	DS5_RES(640, 480, ds5_framerate_15_60)\
-	DS5_RES(640, 360, ds5_framerate_15_60)\
-	DS5_RES(480, 270, ds5_framerate_15_60)\
-	DS5_RES(424, 240, ds5_framerate_15_60)\
+	DS5_RES(1280, 720, ds5_framerate_to_30)\
+	DS5_RES(848, 480, ds5_framerate_to_60)\
+	DS5_RES(640, 480, ds5_framerate_to_60)\
+	DS5_RES(640, 360, ds5_framerate_to_60)\
+	DS5_RES(480, 270, ds5_framerate_to_60)\
+	DS5_RES(424, 240, ds5_framerate_to_60)\
 
 static const struct ds5_resolution d40x_depth_sizes[] = {
 	D401_COMMON_RES
@@ -1664,25 +1665,33 @@ static void ds5_config_cache_clear(struct ds5_sensor *sensor)
 	sensor->cached_height_value = 0xFFFF;
 }
 
-static void ds5_invalidate_state_cache(struct ds5 *state)
+static struct ds5_sensor *ds5_get_active_sensor(struct ds5 *state)
 {
-	struct ds5_sensor *sensors[] = {
-		&state->depth.sensor,
-		&state->ir.sensor,
-		&state->rgb.sensor,
-		&state->imu.sensor,
-	};
-	int i;
+	if (state->is_depth)
+		return &state->depth.sensor;
+	if (state->is_rgb)
+		return &state->rgb.sensor;
+	if (state->is_y8)
+		return &state->ir.sensor;
+	if (state->is_imu)
+		return &state->imu.sensor;
+	return NULL;
+}
 
-	for (i = 0; i < ARRAY_SIZE(sensors); i++) {
-		struct ds5_sensor *sensor = sensors[i];
-
-		ds5_config_cache_clear(sensor);
-		sensor->pipe_id = PIPE_NOT_CONFIGURED;
-		sensor->pipe_data_type1 = 0;
-		sensor->pipe_data_type2 = 0;
-		sensor->pipe_vc_id = 0;
+static void ds5_invalidate_sensor(struct ds5 *state, struct ds5_sensor *sensor)
+{
+	ds5_config_cache_clear(sensor);
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	if (sensor->pipe_id >= 0 && state->dser_dev) {
+		mutex_lock(&serdes_lock__);
+		state->dser_ops->release_pipe(state->dser_dev, sensor->pipe_id);
+		mutex_unlock(&serdes_lock__);
 	}
+#endif
+	sensor->pipe_id = PIPE_NOT_CONFIGURED;
+	sensor->pipe_data_type1 = 0;
+	sensor->pipe_data_type2 = 0;
+	sensor->pipe_vc_id = 0;
 }
 
 static int ds5_configure(struct ds5 *state)
@@ -1704,7 +1713,10 @@ static int ds5_configure(struct ds5 *state)
 
 	current_reset_gen = atomic_read(&ds5_reset_gen);
 	if (state->reset_gen != current_reset_gen) {
-		ds5_invalidate_state_cache(state);
+		struct ds5_sensor *active = ds5_get_active_sensor(state);
+
+		if (active)
+			ds5_invalidate_sensor(state, active);
 		state->reset_gen = current_reset_gen;
 	}
 
@@ -2243,6 +2255,13 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	int retry;
 	u16 status = 0;
 	bool device_went_down = false;
+
+	dev_info(&state->client->dev, "%s(): Initiating HW reset with recovery\n",
+		__func__);
+
+	/* Invalidate cached sensor configs and release SERDES pipes before reset, since reset will clear device state but not driver state.
+	    This ensures we don't try to reuse stale configs or pipes after reset. */
+	/* TBD: Open for single instance architecture and remove ds5_invalidate_sensor multi instance solution
 	struct ds5_sensor *sensors[] = {
 		&state->depth.sensor,
 		&state->ir.sensor,
@@ -2270,9 +2289,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 		}
 		mutex_unlock(&serdes_lock__);
 	}
-
-	dev_info(&state->client->dev, "%s(): Initiating HW reset with recovery\n",
-		__func__);
+	*/
 
 	/* 1. Send HW reset command */
 	ret = ds5_raw_write(state, DS5_HWMC_DATA, &cmd_hw_reset, sizeof(cmd_hw_reset));
@@ -2289,7 +2306,6 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 		return ret;
 	}
 	atomic_inc(&ds5_reset_gen);
-	state->reset_gen = atomic_read(&ds5_reset_gen);
 
 	dev_info(&state->client->dev, "%s(): HW reset command sent, waiting for device...\n",
 		__func__);
@@ -5871,6 +5887,17 @@ static int ds5_probe(struct i2c_client *c, const struct i2c_device_id *id)
 		ret = ds5_chrdev_init(c, state);
 		if (ret < 0)
 			goto e_regulator;
+	}
+
+	if (atomic_cmpxchg(&ds5_probe_reset_once, 0, 1) == 0) {
+		dev_info(&c->dev, "%s(): first probe instance, running HW reset recovery\n",
+			__func__);
+		ret = ds5_hw_reset_with_recovery(state);
+		if (ret < 0) {
+			dev_err(&c->dev, "%s(): probe HW reset recovery failed: %d\n",
+				__func__, ret);
+			goto e_chardev;
+		}
 	}
 
 	ret = ds5_read(state, 0x5020, &rec_state);
