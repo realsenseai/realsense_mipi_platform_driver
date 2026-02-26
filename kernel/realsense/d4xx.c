@@ -2067,7 +2067,7 @@ static int ds5_ctrl_set_calibration(struct ds5 *state,
 	if (*((u8 *)ctrl->p_new.p + 2) != table_id)
 		return 0;
 
-	calib_cmd = devm_kzalloc(&state->client->dev,
+	calib_cmd = kzalloc(
 				 sizeof(struct hwm_cmd) + data_size, GFP_KERNEL);
 	if (!calib_cmd)
 		return -ENOMEM;
@@ -2078,7 +2078,7 @@ static int ds5_ctrl_set_calibration(struct ds5 *state,
 	memcpy(calib_cmd->Data, (u8 *)ctrl->p_new.p, data_size);
 	ret = ds5_set_calibration_data(state, calib_cmd,
 				       sizeof(struct hwm_cmd) + data_size);
-	devm_kfree(&state->client->dev, calib_cmd);
+	kfree(calib_cmd);
 	return ret;
 }
 
@@ -2178,7 +2178,7 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			struct hwm_cmd *ae_setpoint_cmd;
 			dev_dbg(&state->client->dev, "%s():0x%x \n",
 				__func__, *(ctrl->p_new.p_s32));
-			ae_setpoint_cmd = devm_kzalloc(&state->client->dev,
+			ae_setpoint_cmd = kzalloc(
 					sizeof(struct hwm_cmd) + 4, GFP_KERNEL);
 			if (!ae_setpoint_cmd) {
 				dev_err(&state->client->dev,
@@ -2193,7 +2193,7 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 					ae_setpoint_cmd);
 			if (!ret)
 				ret = ds5_get_hwmc_status(state);
-			devm_kfree(&state->client->dev, ae_setpoint_cmd);
+			kfree(ae_setpoint_cmd);
 		}
 		break;
 	case DS5_CAMERA_CID_ERB:
@@ -2215,7 +2215,7 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 				break;
 			}
 			len = sizeof(struct hwm_cmd) + size;
-			erb_cmd = devm_kzalloc(&state->client->dev,	len, GFP_KERNEL);
+			erb_cmd = kzalloc(len, GFP_KERNEL);
 			if (!erb_cmd) {
 				dev_err(&state->client->dev,
 					"%s(): Can't allocate memory for 0x%x\n",
@@ -2234,7 +2234,7 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 					"%s(): ERB cmd failed, ret: %d,"
 					"requested size: %d, actual size: %d\n",
 					__func__, ret, erb_cmd->param2, size);
-				devm_kfree(&state->client->dev, erb_cmd);
+				kfree(erb_cmd);
 				ret = -EAGAIN;
 				break;
 			}
@@ -2250,7 +2250,7 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 				*(ctrl->p_new.p_u8+1),
 				*(ctrl->p_new.p_u8+2),
 				*(ctrl->p_new.p_u8+3));
-			devm_kfree(&state->client->dev, erb_cmd);
+			kfree(erb_cmd);
 		}
 		break;
 	case DS5_CAMERA_CID_EWB:
@@ -2271,7 +2271,7 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 					*((u8 *)ctrl->p_new.p_u8 + 2),
 					*((u8 *)ctrl->p_new.p_u8 + 3));
 
-			ewb_cmd = devm_kzalloc(&state->client->dev,
+			ewb_cmd = kzalloc(
 					sizeof(struct hwm_cmd) + size,
 					GFP_KERNEL);
 			if (!ewb_cmd) {
@@ -2286,7 +2286,7 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			ewb_cmd->param1 = offset; /* start index */
 			ewb_cmd->param2 = size; /* size */
 			if (size > DS5_HWMC_BUFFER_SIZE) {
-				devm_kfree(&state->client->dev, ewb_cmd);
+				kfree(ewb_cmd);
 				ret = -EINVAL;
 				break;
 			}
@@ -2299,12 +2299,12 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 					"%s(): EWB cmd failed, ret: %d,"
 					"requested size: %d, actual size: %d\n",
 					__func__, ret, ewb_cmd->param2, size);
-				devm_kfree(&state->client->dev, ewb_cmd);
+				kfree(ewb_cmd);
 				ret = -EAGAIN;
 				break;
 			}
 
-			devm_kfree(&state->client->dev, ewb_cmd);
+			kfree(ewb_cmd);
 		}
 		break;
 	case DS5_CAMERA_CID_HWMC:
@@ -2376,7 +2376,7 @@ static int ds5_get_calibration_data(struct ds5 *state, enum table_id id,
 	u16 status = 2;
 	u16 table_length;
 
-	cmd = devm_kzalloc(&state->client->dev,
+	cmd = kzalloc(
 			sizeof(struct hwm_cmd) + length + 4, GFP_KERNEL);
 	if (!cmd) {
 		dev_err(&state->client->dev, "%s(): Can't allocate memory\n", __func__);
@@ -2397,7 +2397,7 @@ static int ds5_get_calibration_data(struct ds5 *state, enum table_id id,
 		dev_err(&state->client->dev,
 				"%s(): Failed to get calibration table %d, fw error: %x\n",
 				__func__, id, status);
-		devm_kfree(&state->client->dev, cmd);
+		kfree(cmd);
 		return status;
 	}
 
@@ -2410,7 +2410,7 @@ static int ds5_get_calibration_data(struct ds5 *state, enum table_id id,
 
 	/* first 4 bytes are opcode HWM, not part of calibration table */
 	memcpy(table, cmd->Data + 4, length);
-	devm_kfree(&state->client->dev, cmd);
+	kfree(cmd);
 	return 0;
 }
 
@@ -2608,7 +2608,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			u16 len = sizeof(struct hwm_cmd) + 12;
 			u16 dataLen = 0;
 			struct hwm_cmd *ae_roi_cmd;
-			ae_roi_cmd = devm_kzalloc(&state->client->dev, len, GFP_KERNEL);
+			ae_roi_cmd = kzalloc(len, GFP_KERNEL);
 			if (!ae_roi_cmd) {
 				dev_err(&state->client->dev,
 					"%s(): Can't allocate memory for 0x%x\n",
@@ -2619,13 +2619,13 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			memcpy(ae_roi_cmd, &get_ae_roi, sizeof(struct hwm_cmd));
 			ret = ds5_send_hwmc(state, sizeof(struct hwm_cmd), ae_roi_cmd);
 			if (ret) {
-				devm_kfree(&state->client->dev, ae_roi_cmd);
+				kfree(ae_roi_cmd);
 				break;
 			}
 			ret = ds5_get_hwmc(state, ae_roi_cmd->Data, len, &dataLen);
 			if (!ret && dataLen <= ctrl->dims[0])
 				memcpy(ctrl->p_new.p_u16, ae_roi_cmd->Data + 4, 8);
-			devm_kfree(&state->client->dev, ae_roi_cmd);
+			kfree(ae_roi_cmd);
 		}
 		break;
 	case DS5_CAMERA_CID_AE_SETPOINT_GET:
@@ -2633,7 +2633,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		u16 len = sizeof(struct hwm_cmd) + 8;
 		u16 dataLen = 0;
 		struct hwm_cmd *ae_setpoint_cmd;
-		ae_setpoint_cmd = devm_kzalloc(&state->client->dev,	len, GFP_KERNEL);
+		ae_setpoint_cmd = kzalloc(len, GFP_KERNEL);
 		if (!ae_setpoint_cmd) {
 			dev_err(&state->client->dev,
 					"%s(): Can't allocate memory for 0x%x\n",
@@ -2644,7 +2644,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		memcpy(ae_setpoint_cmd, &get_ae_setpoint, sizeof(struct hwm_cmd));
 		ret = ds5_send_hwmc(state, sizeof(struct hwm_cmd), ae_setpoint_cmd);
 		if (ret) {
-			devm_kfree(&state->client->dev, ae_setpoint_cmd);
+			kfree(ae_setpoint_cmd);
 			break;
 		}
 		ret = ds5_get_hwmc(state, ae_setpoint_cmd->Data, len, &dataLen);
@@ -2652,7 +2652,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			memcpy(ctrl->p_new.p_s32, ae_setpoint_cmd->Data + 4, 4);
 		dev_dbg(&state->client->dev, "%s(): len: %d, 0x%x\n",
 			__func__, dataLen, *(ctrl->p_new.p_s32));
-		devm_kfree(&state->client->dev, ae_setpoint_cmd);
+		kfree(ae_setpoint_cmd);
 		}
 		break;
 	case DS5_CAMERA_CID_HWMC_RW:
