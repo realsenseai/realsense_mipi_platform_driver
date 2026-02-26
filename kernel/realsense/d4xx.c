@@ -570,6 +570,25 @@ static const struct dser_interface max96712_interface = {
 #define ds5_from_depth_sd(sd) container_of(sd, struct ds5, depth.sd)
 #define ds5_from_ir_sd(sd) container_of(sd, struct ds5, ir.sd)
 #define ds5_from_rgb_sd(sd) container_of(sd, struct ds5, rgb.sd)
+
+/*
+ * Kernel version compatibility macros.
+ * Centralize version-dependent API differences to avoid scattered ifdefs.
+ */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
+typedef struct v4l2_subdev_pad_config ds5_v4l2_pad_state;
+#else
+typedef struct v4l2_subdev_state ds5_v4l2_pad_state;
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 20, 0)
+#define ds5_ctrl_add_handler(hdl, add, filter) \
+	v4l2_ctrl_add_handler(hdl, add, filter)
+#else
+#define ds5_ctrl_add_handler(hdl, add, filter) \
+	v4l2_ctrl_add_handler(hdl, add, filter, true)
+#endif
+
 #if LINUX_VERSION_CODE > KERNEL_VERSION(5, 15, 136)
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 148)
 static inline void msleep_range(unsigned int delay_base)
@@ -1106,11 +1125,7 @@ static void ds5_sensor_format_init(struct ds5_sensor *sensor)
 
 /* No locking needed for enumeration methods */
 static int ds5_sensor_enum_mbus_code(struct v4l2_subdev *sd,
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
-				     struct v4l2_subdev_pad_config *cfg,
-#else
-				     struct v4l2_subdev_state *v4l2_state,
-#endif
+				     ds5_v4l2_pad_state *v4l2_state,
 				     struct v4l2_subdev_mbus_code_enum *mce)
 {
 	struct ds5_sensor *sensor = container_of(sd, struct ds5_sensor, sd);
@@ -1129,11 +1144,7 @@ static int ds5_sensor_enum_mbus_code(struct v4l2_subdev *sd,
 }
 
 static int ds5_sensor_enum_frame_size(struct v4l2_subdev *sd,
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
-				     struct v4l2_subdev_pad_config *cfg,
-#else
-				     struct v4l2_subdev_state *v4l2_state,
-#endif
+				     ds5_v4l2_pad_state *v4l2_state,
 				      struct v4l2_subdev_frame_size_enum *fse)
 {
 	struct ds5_sensor *sensor = container_of(sd, struct ds5_sensor, sd);
@@ -1161,11 +1172,7 @@ static int ds5_sensor_enum_frame_size(struct v4l2_subdev *sd,
 }
 
 static int ds5_sensor_enum_frame_interval(struct v4l2_subdev *sd,
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
-				     struct v4l2_subdev_pad_config *cfg,
-#else
-				     struct v4l2_subdev_state *v4l2_state,
-#endif
+				     ds5_v4l2_pad_state *v4l2_state,
 					  struct v4l2_subdev_frame_interval_enum *fie)
 {
 	struct ds5_sensor *sensor = container_of(sd, struct ds5_sensor, sd);
@@ -1197,11 +1204,7 @@ static int ds5_sensor_enum_frame_interval(struct v4l2_subdev *sd,
 }
 
 static int ds5_sensor_get_fmt(struct v4l2_subdev *sd,
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
-				     struct v4l2_subdev_pad_config *cfg,
-#else
-				     struct v4l2_subdev_state *v4l2_state,
-#endif
+				     ds5_v4l2_pad_state *v4l2_state,
 			      struct v4l2_subdev_format *fmt)
 {
 	struct ds5_sensor *sensor = container_of(sd, struct ds5_sensor, sd);
@@ -1213,11 +1216,7 @@ static int ds5_sensor_get_fmt(struct v4l2_subdev *sd,
 	mutex_lock(&state->lock);
 
 	if (fmt->which == V4L2_SUBDEV_FORMAT_TRY)
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
-		fmt->format = *v4l2_subdev_get_try_format(sd, cfg, fmt->pad);
-#else
 		fmt->format = *v4l2_subdev_get_try_format(sd, v4l2_state, fmt->pad);
-#endif
 	else
 		fmt->format = sensor->format;
 
@@ -1291,11 +1290,7 @@ static const struct ds5_format *ds5_sensor_find_format(
 #define MIPI_CSI2_TYPE_USER_DEF(i)	(0x30 + (i) - 1)
 
 static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
-				     struct v4l2_subdev_pad_config *cfg,
-#else
-				     struct v4l2_subdev_state *v4l2_state,
-#endif
+				ds5_v4l2_pad_state *v4l2_state,
 				struct v4l2_subdev_format *fmt)
 {
 	struct v4l2_mbus_framefmt *mf;
@@ -1314,14 +1309,8 @@ static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 	sensor->config.format = ds5_sensor_find_format(sensor, mf,
 						&sensor->config.resolution);
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
-	if (cfg && fmt->which == V4L2_SUBDEV_FORMAT_TRY)
-		*v4l2_subdev_get_try_format(&sensor->sd, cfg, fmt->pad) = *mf;
-#else
 	if (v4l2_state && fmt->which == V4L2_SUBDEV_FORMAT_TRY)
 		*v4l2_subdev_get_try_format(&sensor->sd, v4l2_state, fmt->pad) = *mf;
-#endif
-
 	else
 		sensor->format = *mf;
 
@@ -1332,20 +1321,12 @@ static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 }
 
 static int ds5_sensor_set_fmt(struct v4l2_subdev *sd,
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
-				     struct v4l2_subdev_pad_config *cfg,
-#else
-				     struct v4l2_subdev_state *v4l2_state,
-#endif
+			      ds5_v4l2_pad_state *v4l2_state,
 			      struct v4l2_subdev_format *fmt)
 {
 	struct ds5_sensor *sensor = container_of(sd, struct ds5_sensor, sd);
 	struct ds5 *state = v4l2_get_subdevdata(sd);
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
-	return __ds5_sensor_set_fmt(state, sensor, cfg, fmt);
-#else
 	return __ds5_sensor_set_fmt(state, sensor, v4l2_state, fmt);
-#endif
 }
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
@@ -3732,11 +3713,7 @@ static int ds5_imu_init(struct i2c_client *c, struct ds5 *state)
 
 /* No locking needed */
 static int ds5_mux_enum_mbus_code(struct v4l2_subdev *sd,
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
-				     struct v4l2_subdev_pad_config *cfg,
-#else
-				     struct v4l2_subdev_state *v4l2_state,
-#endif
+				     ds5_v4l2_pad_state *v4l2_state,
 				  struct v4l2_subdev_mbus_code_enum *mce)
 {
 	struct ds5 *state = container_of(sd, struct ds5, mux.sd.subdev);
@@ -3790,11 +3767,7 @@ static int ds5_mux_enum_mbus_code(struct v4l2_subdev *sd,
 	if (state->is_imu)
 		remote_sd = &state->imu.sensor.sd;
 	/* Locks internally */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
-	ret = ds5_sensor_enum_mbus_code(remote_sd, cfg, &tmp);
-#else
 	ret = ds5_sensor_enum_mbus_code(remote_sd, v4l2_state, &tmp);
-#endif
 	if (!ret)
 		mce->code = tmp.code;
 
@@ -3815,11 +3788,7 @@ static int ds5_state_to_pad(struct ds5 *state) {
 
 /* No locking needed */
 static int ds5_mux_enum_frame_size(struct v4l2_subdev *sd,
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
-				     struct v4l2_subdev_pad_config *cfg,
-#else
-				     struct v4l2_subdev_state *v4l2_state,
-#endif
+				     ds5_v4l2_pad_state *v4l2_state,
 				   struct v4l2_subdev_frame_size_enum *fse)
 {
 	struct ds5 *state = container_of(sd, struct ds5, mux.sd.subdev);
@@ -3875,11 +3844,7 @@ static int ds5_mux_enum_frame_size(struct v4l2_subdev *sd,
 
 /* No locking needed */
 static int ds5_mux_enum_frame_interval(struct v4l2_subdev *sd,
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
-				     struct v4l2_subdev_pad_config *cfg,
-#else
-				     struct v4l2_subdev_state *v4l2_state,
-#endif
+				     ds5_v4l2_pad_state *v4l2_state,
 				     struct v4l2_subdev_frame_interval_enum *fie)
 {
 	struct ds5 *state = container_of(sd, struct ds5, mux.sd.subdev);
@@ -3940,11 +3905,7 @@ static int ds5_mux_enum_frame_interval(struct v4l2_subdev *sd,
 
 /* No locking needed */
 static int ds5_mux_set_fmt(struct v4l2_subdev *sd,
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
-		struct v4l2_subdev_pad_config *cfg,
-#else
-		struct v4l2_subdev_state *v4l2_state,
-#endif
+		ds5_v4l2_pad_state *v4l2_state,
 		struct v4l2_subdev_format *fmt)
 {
 	struct ds5 *state = container_of(sd, struct ds5, mux.sd.subdev);
@@ -3984,11 +3945,7 @@ static int ds5_mux_set_fmt(struct v4l2_subdev *sd,
 	tmp.pad = 0;
 
 	/* Locks internally */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
-	ret = ds5_sensor_set_fmt(remote_sd, cfg, &tmp);
-#else
 	ret = ds5_sensor_set_fmt(remote_sd, v4l2_state, &tmp);
-#endif
 	if (!ret) {
 		*fmt = tmp;
 		fmt->pad = pad;
@@ -3998,11 +3955,7 @@ static int ds5_mux_set_fmt(struct v4l2_subdev *sd,
 
 /* No locking needed */
 static int ds5_mux_get_fmt(struct v4l2_subdev *sd,
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
-				     struct v4l2_subdev_pad_config *cfg,
-#else
-				     struct v4l2_subdev_state *v4l2_state,
-#endif
+				     ds5_v4l2_pad_state *v4l2_state,
 			   struct v4l2_subdev_format *fmt)
 {
 	struct ds5 *state = container_of(sd, struct ds5, mux.sd.subdev);
@@ -4039,11 +3992,7 @@ static int ds5_mux_get_fmt(struct v4l2_subdev *sd,
 		fmt->format.width, fmt->format.height, fmt->format.code,
 		fmt->format.field, fmt->format.colorspace);
 	/* Locks internally */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
-	ret = ds5_sensor_get_fmt(remote_sd, cfg, &tmp);
-#else
 	ret = ds5_sensor_get_fmt(remote_sd, v4l2_state, &tmp);
-#endif
 	if (!ret) {
 		*fmt = tmp;
 		fmt->pad = pad;
@@ -4488,33 +4437,18 @@ static int ds5_mux_init(struct i2c_client *c, struct ds5 *state)
 
 #ifdef CONFIG_TEGRA_CAMERA_PLATFORM
 	if (state->is_depth) {
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 20, 0)
-		v4l2_ctrl_add_handler(&state->ctrls.handler,
+		ds5_ctrl_add_handler(&state->ctrls.handler,
 					&state->ctrls.handler_depth, NULL);
-#else
-		v4l2_ctrl_add_handler(&state->ctrls.handler,
-					&state->ctrls.handler_depth, NULL, true);
-#endif
 		state->mux.last_set = &state->depth.sensor;
 	}
 	else if (state->is_rgb) {
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 20, 0)
-		v4l2_ctrl_add_handler(&state->ctrls.handler,
+		ds5_ctrl_add_handler(&state->ctrls.handler,
 					&state->ctrls.handler_rgb, NULL);
-#else
-		v4l2_ctrl_add_handler(&state->ctrls.handler,
-					&state->ctrls.handler_rgb, NULL, true);
-#endif
 		state->mux.last_set = &state->rgb.sensor;
 	}
 	else if (state->is_y8) {
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 20, 0)
-		v4l2_ctrl_add_handler(&state->ctrls.handler,
+		ds5_ctrl_add_handler(&state->ctrls.handler,
 					&state->ctrls.handler_y8, NULL);
-#else
-		v4l2_ctrl_add_handler(&state->ctrls.handler,
-					&state->ctrls.handler_y8, NULL, true);
-#endif
 		state->mux.last_set = &state->ir.sensor;
 	}
 	else
