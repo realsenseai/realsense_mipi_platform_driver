@@ -169,6 +169,26 @@ struct dser_interface {
 #define DS5_RECOVERY_STATE_REG		0x5020
 #define DS5_RECOVERY_STATE_VALUE	0x201
 
+/* DFU registers */
+#define DS5_DFU_STATUS_REG		0x5000
+#define DS5_DFU_CMD_REG			0x5008
+#define DS5_DFU_RESP_LEN_REG		0x5004
+#define DS5_DFU_DETACH_REG		0x500c
+#define DS5_DFU_RESET_REG		0x5010
+#define DS5_DFU_DATA_REG		0x4a00
+#define DS5_DFU_DNLOAD_DONE_REG		0x4a04
+#define DS5_DFU_RESP_DATA_REG		0x4e00
+
+/* DFU commands */
+#define DS5_DFU_CMD_GET_STATE		0x0003
+#define DS5_DFU_CMD_UPLOAD		0x0002
+
+/* Auto-exposure firmware value for RGB sensor */
+#define DS5_AE_RGB_AUTO_VALUE		8
+
+/* HW Monitor header size (bytes) */
+#define DS5_HW_MONITOR_HEADER_SIZE	4
+
 #define MAX_DEPTH_EXP			200000
 #define MAX_RGB_EXP			10000
 #define DEF_DEPTH_EXP			33000
@@ -1649,7 +1669,7 @@ static int ds5_hw_set_auto_exposure(struct ds5 *state, u32 base, s32 val)
 	 * exposure_auto_controls numbers, in drivers/media/usb/uvc/uvc_ctrl.c.
 	 */
 	if (state->is_rgb && val == V4L2_EXPOSURE_APERTURE_PRIORITY)
-		val = 8;
+		val = DS5_AE_RGB_AUTO_VALUE;
 
 	/*
 	 * In firmware depth auto exposure on: 1, off: 0.
@@ -2661,8 +2681,8 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			u16 bufLen = ctrl->dims[0];
 			ret = ds5_get_hwmc(state, data,	bufLen, &dataLen);
 			/* This is needed for librealsense, to align there code with UVC,
-		 	 * last word is length - 4 bytes header length */
-			dataLen -= 4;
+		 	 * last word is length - header length */
+			dataLen -= DS5_HW_MONITOR_HEADER_SIZE;
 			data[bufLen - 4] = (unsigned char)(dataLen & 0x00FF);
 			data[bufLen - 3] = (unsigned char)((dataLen & 0xFF00) >> 8);
 			data[bufLen - 2] = 0;
@@ -4742,7 +4762,7 @@ static int ds5_dfu_switch_to_dfu(struct ds5 *state)
 	/*Wait for DFU fw to boot*/
 	do {
 		msleep_range(DS5_START_POLL_TIME*10);
-		ret = ds5_read(state, 0x5000, &status);
+		ret = ds5_read(state, DS5_DFU_STATUS_REG, &status);
 	} while (ret && i--);
 	return ret;
 };
@@ -4756,9 +4776,9 @@ static int ds5_dfu_wait_for_get_dfu_status(struct ds5 *state,
 	unsigned int dfu_wr_wait_msec = 0;
 
 	do {
-		ds5_write_with_check(state, 0x5008, 0x0003); /* Get Write state */
+		ds5_write_with_check(state, DS5_DFU_CMD_REG, DS5_DFU_CMD_GET_STATE);
 		do {
-			ds5_read_with_check(state, 0x5000, &status);
+			ds5_read_with_check(state, DS5_DFU_STATUS_REG, &status);
 			if (status == 0x0001) {
 				dev_err(&state->client->dev,
 						"%s(): Write status error I2C_STATUS_ERROR(1)\n",
@@ -4770,13 +4790,13 @@ static int ds5_dfu_wait_for_get_dfu_status(struct ds5 *state,
 
 		} while (status);
 
-		ds5_read_with_check(state, 0x5004, &dfu_state_len);
+		ds5_read_with_check(state, DS5_DFU_RESP_LEN_REG, &dfu_state_len);
 		if (dfu_state_len != DFU_WAIT_RET_LEN) {
 			dev_err(&state->client->dev,
 					"%s(): Wrong answer len (%d)\n", __func__, dfu_state_len);
 			return -EINVAL;
 		}
-		ds5_raw_read_with_check(state, 0x4e00, &dfu_asw_buf, DFU_WAIT_RET_LEN);
+		ds5_raw_read_with_check(state, DS5_DFU_RESP_DATA_REG, &dfu_asw_buf, DFU_WAIT_RET_LEN);
 		if (dfu_asw_buf[0]) {
 			dev_err(&state->client->dev,
 					"%s(): Wrong dfu_status (%d)\n", __func__, dfu_asw_buf[0]);
@@ -4801,14 +4821,14 @@ static int ds5_dfu_get_dev_info(struct ds5 *state, struct __fw_status *buf)
 	int ret = 0;
 	u16 len = 0;
 
-	ret = ds5_write(state, 0x5008, 0x0002); /* Upload DFU cmd */
+	ret = ds5_write(state, DS5_DFU_CMD_REG, DS5_DFU_CMD_UPLOAD);
 	if (!ret)
 		ret = ds5_dfu_wait_for_status(state);
 	if (!ret)
-		ds5_read_with_check(state, 0x5004, &len);
+		ds5_read_with_check(state, DS5_DFU_RESP_LEN_REG, &len);
 	/*Sanity check*/
 	if (len == sizeof(struct __fw_status)) {
-		ds5_raw_read_with_check(state, 0x4e00, buf, len);
+		ds5_raw_read_with_check(state, DS5_DFU_RESP_DATA_REG, buf, len);
 	} else {
 		dev_err(&state->client->dev,
 				"%s(): Wrong state size (%d)\n",
@@ -4823,7 +4843,7 @@ static int ds5_dfu_detach(struct ds5 *state)
 	int ret;
 	struct __fw_status buf = {0};
 
-	ds5_write_with_check(state, 0x500c, 0x00);
+	ds5_write_with_check(state, DS5_DFU_DETACH_REG, 0x00);
 	ret = ds5_dfu_wait_for_get_dfu_status(state, dfuIDLE);
 	if (!ret)
 		ret = ds5_dfu_get_dev_info(state, &buf);
@@ -4922,7 +4942,7 @@ static ssize_t ds5_dfu_device_write(struct file *flip,
 				ret = -EFAULT;
 				goto dfu_write_error;
 			}
-			ret = ds5_raw_write(state, 0x4a00,
+			ret = ds5_raw_write(state, DS5_DFU_DATA_REG,
 					state->dfu_dev.dfu_msg, DFU_BLOCK_SIZE);
 			if (ret < 0)
 				goto dfu_write_error;
@@ -4936,12 +4956,12 @@ static ssize_t ds5_dfu_device_write(struct file *flip,
 				goto dfu_write_error;
 		}
 		if (dfu_part_blocks) {
-			ret = ds5_raw_write(state, 0x4a00,
+			ret = ds5_raw_write(state, DS5_DFU_DATA_REG,
 					state->dfu_dev.dfu_msg, dfu_part_blocks);
 			if (!ret)
 				ret = ds5_dfu_wait_for_get_dfu_status(state, dfuDNLOAD_IDLE);
 			if (!ret)
-				ret = ds5_write(state, 0x4a04, 0x00); /*Download complete */
+				ret = ds5_write(state, DS5_DFU_DNLOAD_DONE_REG, 0x00);
 			if (!ret)
 				ret = ds5_dfu_wait_for_get_dfu_status(state, dfuMANIFEST);
 			if (ret < 0)
@@ -4966,7 +4986,7 @@ static ssize_t ds5_dfu_device_write(struct file *flip,
 dfu_write_error:
 	state->dfu_dev.dfu_state_flag = DS5_DFU_ERROR;
 	/* Reset DFU device to IDLE states */
-	if (!ds5_write(state, 0x5010, 0x0))
+	if (!ds5_write(state, DS5_DFU_RESET_REG, 0x0))
 		state->dfu_dev.dfu_state_flag = DS5_DFU_IDLE;
 	mutex_unlock(&state->lock);
 	return ret;
