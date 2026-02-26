@@ -680,8 +680,6 @@ static int ds5_raw_read(struct ds5 *state, u16 reg, void *val, size_t val_len)
 
 /* Pad ops */
 
-static const u16 ds5_default_framerate = 30;
-
 /*
  * FIXME: D16 width must be doubled, because an 8-bit format is used. Check how
  * the Tegra driver propagates resolutions and formats.
@@ -693,7 +691,6 @@ static const u16 ds5_framerates[] = {5, 30};
 #define DS5_FRAMERATE_DEFAULT_IDX 1
 
 static const u16 ds5_framerate_30 = 30;
-static const u16 ds5_framerate_25 = 25;
 static const u16 ds5_depth_framerate_to_30[] = {5, 15, 30};
 static const u16 ds5_framerate_to_30[] = {5, 10, 15, 30};
 static const u16 ds5_framerate_to_60[] = {5, 15, 30, 60};
@@ -706,7 +703,6 @@ static const u16 ds5_41x_framerate_to_90[] = {6, 15, 30, 60, 90};
 static const u16 ds5_framerate_15_25[] = {15, 25};
 static const u16 ds5_framerate_15_30[] = {15, 30};
 static const u16 ds5_framerate_15_60[] = {15, 30, 60};
-static const u16 ds5_framerate_15_90[] = {15, 30, 60, 90};
 static const u16 ds5_imu_framerates[] = {50, 100, 200, 400};
 static const u16 ds5_framerate_90[] = {90};
 static const u16 ds5_framerate_100[] = {100};
@@ -1637,22 +1633,7 @@ static const struct v4l2_subdev_video_ops ds5_sensor_video_ops = {
 	.s_stream		= ds5_sensor_s_stream,
 };
 
-static const struct v4l2_subdev_ops ds5_depth_subdev_ops = {
-	.pad = &ds5_sensor_pad_ops,
-	.video = &ds5_sensor_video_ops,
-};
-
-static const struct v4l2_subdev_ops ds5_ir_subdev_ops = {
-	.pad = &ds5_sensor_pad_ops,
-	.video = &ds5_sensor_video_ops,
-};
-
-static const struct v4l2_subdev_ops ds5_rgb_subdev_ops = {
-	.pad = &ds5_sensor_pad_ops,
-	.video = &ds5_sensor_video_ops,
-};
-
-static const struct v4l2_subdev_ops ds5_imu_subdev_ops = {
+static const struct v4l2_subdev_ops ds5_sensor_subdev_ops = {
 	.pad = &ds5_sensor_pad_ops,
 	.video = &ds5_sensor_video_ops,
 };
@@ -1717,7 +1698,6 @@ static int ds5_hw_set_exposure(struct ds5 *state, u32 base, s32 val)
 #define DS5_MAX_LOG_SLEEP 10
 #define DS5_MAX_LOG_POLL (DS5_MAX_LOG_WAIT / DS5_MAX_LOG_SLEEP)
 
-/* TODO: why to use DS5_DEPTH_Y_STREAMS_DT? */
 #define DS5_CAMERA_CID_BASE	(V4L2_CTRL_CLASS_CAMERA | DS5_DEPTH_STREAM_DT)
 
 #define DS5_CAMERA_CID_LOG			(DS5_CAMERA_CID_BASE+0)
@@ -3706,28 +3686,28 @@ static int ds5_depth_init(struct i2c_client *c, struct ds5 *state)
 	/* Which mux pad we're connecting to */
 	state->depth.sensor.mux_pad = DS5_MUX_PAD_DEPTH;
 	return ds5_sensor_init(c, state, &state->depth.sensor,
-		       &ds5_depth_subdev_ops, "depth");
+		       &ds5_sensor_subdev_ops, "depth");
 }
 
 static int ds5_ir_init(struct i2c_client *c, struct ds5 *state)
 {
 	state->ir.sensor.mux_pad = DS5_MUX_PAD_IR;
 	return ds5_sensor_init(c, state, &state->ir.sensor,
-		       &ds5_ir_subdev_ops, "ir");
+		       &ds5_sensor_subdev_ops, "ir");
 }
 
 static int ds5_rgb_init(struct i2c_client *c, struct ds5 *state)
 {
 	state->rgb.sensor.mux_pad = DS5_MUX_PAD_RGB;
 	return ds5_sensor_init(c, state, &state->rgb.sensor,
-		       &ds5_rgb_subdev_ops, "rgb");
+		       &ds5_sensor_subdev_ops, "rgb");
 }
 
 static int ds5_imu_init(struct i2c_client *c, struct ds5 *state)
 {
 	state->imu.sensor.mux_pad = DS5_MUX_PAD_IMU;
 	return ds5_sensor_init(c, state, &state->imu.sensor,
-		       &ds5_imu_subdev_ops, "imu");
+		       &ds5_sensor_subdev_ops, "imu");
 }
 
 /* No locking needed */
@@ -5158,12 +5138,7 @@ static int ds5_dfu_device_release(struct inode *inode, struct file *file)
 	state->dfu_dev.device_open_count--;
 	if (state->dfu_dev.dfu_state_flag != DS5_DFU_RECOVERY)
 		state->dfu_dev.dfu_state_flag = DS5_DFU_IDLE;
-	/* We disable this section as it has no effect when device in operational
-	   mode and has not enough effect when device in recovery mode */
-	// if (state->dfu_dev.dfu_state_flag == DS5_DFU_DONE
-	// 		&& state->dfu_dev.init_v4l_f)
-	// 	ds5_v4l_init(state->client, state);
-	// state->dfu_dev.init_v4l_f = 0;
+
 	if (state->dfu_dev.dfu_msg)
 		devm_kfree(&state->client->dev, state->dfu_dev.dfu_msg);
 	state->dfu_dev.dfu_msg = NULL;
