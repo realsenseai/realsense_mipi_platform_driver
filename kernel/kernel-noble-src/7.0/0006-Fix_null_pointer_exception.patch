@@ -1,0 +1,13 @@
+Index: kernel-noble-src/drivers/media/v4l2-core/v4l2-subdev.c
+===================================================================
+--- kernel-noble-src.orig/drivers/media/v4l2-core/v4l2-subdev.c
++++ kernel-noble-src/drivers/media/v4l2-core/v4l2-subdev.c
+@@ -1568,7 +1568,7 @@ __v4l2_subdev_state_get_format(struct v4
+ 		if (stream)
+ 			return NULL;
+ 
+-		if (pad >= state->sd->entity.num_pads)
++		if (state->sd && pad >= state->sd->entity.num_pads)
+ 			return NULL;
+ 
+ 		return &state->pads[pad].format;

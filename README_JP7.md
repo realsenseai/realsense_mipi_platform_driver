@@ -66,7 +66,7 @@ Following steps required:
 If you build locally (native build on Jetson) use the following bash commands:
 ```
 sudo cp -r ./images/7.1/rootfs/lib/modules/6.8.12-tegra /lib/modules/
-sudo cp    ./images/7.1/rootfs/boot/tegra264-camera-d4xx-overlay.dtbo /boot/
+sudo cp    ./images/7.1/rootfs/boot/tegra264-camera-d4xx-overlay-Advantech.dtbo /boot/
 sudo cp    ./images/7.1/rootfs/boot/Image /boot/dev/
 ```
 In case of crossbuild on host prepare a tarball to ssh copy to Jetson target.
@@ -79,7 +79,7 @@ Log in into Jetson target, extract the tarball and install extracted files:
 ```
 tar xf rootfs.tar.gz
 sudo cp -r ./lib/modules/6.8.12-tegra /lib/modules/
-sudo cp    ./boot/tegra264-camera-d4xx-overlay.dtbo /boot/
+sudo cp    ./boot/tegra264-camera-d4xx-overlay-Advantech.dtbo /boot/
 sudo cp    ./boot/Image /boot/dev/
 ```
 2.	Run  $ `sudo /opt/nvidia/jetson-io/jetson-io.py`, to exit choose save & reboot:

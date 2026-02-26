@@ -1629,9 +1629,9 @@ static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 	int ret = 0;
 	//unsigned r;
 
-	dev_dbg(sensor->sd.dev, "%s(): state %p, "
-		"sensor %p, fmt %p, fmt->format %p\n",
-		__func__, state, sensor, fmt,  &fmt->format);
+	dev_info(sensor->sd.dev, "%s(): state %p, "
+		"sensor %p, fmt %p, fmt->format %p, pad %i\n",
+		__func__, state, sensor, fmt,  &fmt->format, fmt->pad);
 
 	mf = &fmt->format;
 
@@ -1677,11 +1677,11 @@ static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 
 static int ds5_sensor_set_fmt(struct v4l2_subdev *sd,
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
-				     struct v4l2_subdev_pad_config *cfg,
+		struct v4l2_subdev_pad_config *cfg,
 #else
-				     struct v4l2_subdev_state *v4l2_state,
+		struct v4l2_subdev_state *v4l2_state,
 #endif
-			      struct v4l2_subdev_format *fmt)
+		struct v4l2_subdev_format *fmt)
 {
 	struct ds5_sensor *sensor = container_of(sd, struct ds5_sensor, sd);
 	struct ds5 *state = v4l2_get_subdevdata(sd);
@@ -4320,13 +4320,19 @@ static int ds5_mux_set_fmt(struct v4l2_subdev *sd,
 		struct v4l2_subdev_format *fmt)
 {
 	struct ds5 *state = container_of(sd, struct ds5, mux.sd.subdev);
-	struct v4l2_subdev_format tmp = *fmt;
+	struct v4l2_subdev_format tmp;
 	struct v4l2_subdev *remote_sd;
-	u32 pad = fmt->pad;
+	u32 pad;
 	int ret = 0;
-	pad = ds5_state_to_pad(state);
 
-	dev_dbg(sd->dev, "%s(): pad: %x %x: %ux%u\n",
+	if (!state) return -EINVAL;
+	if (!fmt) return -EINVAL;
+
+	pad = ds5_state_to_pad(state);
+	pad = fmt->pad;
+	tmp = *fmt;
+
+	dev_dbg(sd->dev, "%s: pad: %x %x: %ux%u\n",
 			__func__, pad, fmt->format.code,
 			fmt->format.width, fmt->format.height);
 
@@ -4371,19 +4377,27 @@ static int ds5_mux_set_fmt(struct v4l2_subdev *sd,
 /* No locking needed */
 static int ds5_mux_get_fmt(struct v4l2_subdev *sd,
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
-				     struct v4l2_subdev_pad_config *cfg,
+		struct v4l2_subdev_pad_config *cfg,
 #else
-				     struct v4l2_subdev_state *v4l2_state,
+		struct v4l2_subdev_state *v4l2_state,
 #endif
-			   struct v4l2_subdev_format *fmt)
+		struct v4l2_subdev_format *fmt)
 {
 	struct ds5 *state = container_of(sd, struct ds5, mux.sd.subdev);
-	struct v4l2_subdev_format tmp = *fmt;
+	struct v4l2_subdev_format tmp;
 	struct v4l2_subdev *remote_sd;
-	u32 pad = fmt->pad;
+	u32 pad;
 	int ret = 0;
-	struct ds5_sensor *sensor = state->mux.last_set;
+	struct ds5_sensor *sensor;
+
+	if (!state) return -EINVAL;
+	if (!fmt) return -EINVAL;
+
+	sensor = state->mux.last_set;
+	tmp = *fmt;
 	pad = ds5_state_to_pad(state);
+	pad = fmt->pad;
+
 	sensor = state->mux.last_set;
 	dev_dbg(sd->dev, "%s(): %u %s %p\n", __func__, pad, ds5_get_sensor_name(state), state->mux.last_set);
 

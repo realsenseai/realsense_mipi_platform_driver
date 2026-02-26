@@ -1,0 +1,16 @@
+Index: a/drivers/video/tegra/camera/tegra_camera_platform.c
+===================================================================
+--- a/drivers/video/tegra/camera/tegra_camera_platform.c
++++ b/drivers/video/tegra/camera/tegra_camera_platform.c
+@@ -698,6 +698,11 @@ int tegra_camera_update_clknbw(void *pri
+ 	struct tegra_camera_info *info;
+ 	int ret = 0;
+ 
++	if (!tegra_camera_misc.parent) {
++		pr_info("driver not enabled, cannot update clknbw\n");
++		return -ENODEV;
++	}
++
+ 	info = dev_get_drvdata(tegra_camera_misc.parent);
+ 	if (!info)
+ 		return -EINVAL;
