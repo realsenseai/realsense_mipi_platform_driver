@@ -703,12 +703,12 @@ static const u16 ds5_framerate_100[] = {100};
     { .width = (w), .height = (h), .framerates = (fr), .n_framerates = ARRAY_SIZE(fr) },
 
 #define D401_COMMON_RES	\
-	DS5_RES(1280, 720, ds5_framerate_15_30)\
-	DS5_RES(848, 480, ds5_framerate_15_60)\
-	DS5_RES(640, 480, ds5_framerate_15_60)\
-	DS5_RES(640, 360, ds5_framerate_15_60)\
-	DS5_RES(480, 270, ds5_framerate_15_60)\
-	DS5_RES(424, 240, ds5_framerate_15_60)\
+	DS5_RES(1280, 720, ds5_framerate_to_30)\
+	DS5_RES(848, 480, ds5_framerate_to_60)\
+	DS5_RES(640, 480, ds5_framerate_to_60)\
+	DS5_RES(640, 360, ds5_framerate_to_60)\
+	DS5_RES(480, 270, ds5_framerate_to_60)\
+	DS5_RES(424, 240, ds5_framerate_to_60)\
 
 static const struct ds5_resolution d40x_depth_sizes[] = {
 	D401_COMMON_RES
