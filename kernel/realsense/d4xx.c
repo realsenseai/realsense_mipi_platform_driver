@@ -2082,35 +2082,41 @@ static int ds5_ctrl_set_calibration(struct ds5 *state,
 	return ret;
 }
 
+/*
+ * Resolve the correct ds5 state from a control handler.
+ * Each sensor subdev has its own control handler; this maps
+ * from the sensor's mux_pad to the correct container_of offset.
+ */
+static struct ds5 *ds5_ctrl_resolve_state(struct v4l2_ctrl_handler *handler,
+					  struct ds5_sensor *sensor)
+{
+	struct ds5 *state = container_of(handler, struct ds5, ctrls.handler);
+
+	if (!sensor)
+		return state;
+
+	switch (sensor->mux_pad) {
+	case DS5_MUX_PAD_DEPTH:
+		return container_of(handler, struct ds5, ctrls.handler_depth);
+	case DS5_MUX_PAD_RGB:
+		return container_of(handler, struct ds5, ctrls.handler_rgb);
+	case DS5_MUX_PAD_IR:
+		return container_of(handler, struct ds5, ctrls.handler_y8);
+	case DS5_MUX_PAD_IMU:
+		return container_of(handler, struct ds5, ctrls.handler_imu);
+	default:
+		return state;
+	}
+}
+
 static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 {
-	struct ds5 *state = container_of(ctrl->handler, struct ds5,
-					 ctrls.handler);
-	struct v4l2_subdev *sd = &state->mux.sd.subdev;
 	struct ds5_sensor *sensor = (struct ds5_sensor *)ctrl->priv;
+	struct ds5 *state = ds5_ctrl_resolve_state(ctrl->handler, sensor);
+	struct v4l2_subdev *sd = &state->mux.sd.subdev;
 	int ret = -EINVAL;
 	u16 base = DS5_DEPTH_CONTROL_BASE;
 
-	if (sensor) {
-		switch (sensor->mux_pad) {
-		case DS5_MUX_PAD_DEPTH:
-			state = container_of(ctrl->handler, struct ds5, ctrls.handler_depth);
-			break;
-		case DS5_MUX_PAD_RGB:
-			state = container_of(ctrl->handler, struct ds5, ctrls.handler_rgb);
-			break;
-		case DS5_MUX_PAD_IR:
-			state = container_of(ctrl->handler, struct ds5, ctrls.handler_y8);
-			break;
-		case DS5_MUX_PAD_IMU:
-			state = container_of(ctrl->handler, struct ds5, ctrls.handler_imu);
-			break;
-		default:
-			break;
-		}
-	}
-
-	sd = &state->mux.sd.subdev;
 	v4l2_dbg(3, 1, sd, "ctrl: %s, value: %d\n", ctrl->name, ctrl->val);
 	dev_dbg(&state->client->dev, "%s(): %s - ctrl: %s, value: %d\n",
 		__func__, ds5_get_sensor_name(state), ctrl->name, ctrl->val);
@@ -2447,36 +2453,16 @@ static int ds5_gvd(struct ds5 *state, unsigned char *data)
 
 static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 {
-	struct ds5 *state = container_of(ctrl->handler, struct ds5,
-			ctrls.handler);
+	struct ds5_sensor *sensor = (struct ds5_sensor *)ctrl->priv;
+	struct ds5 *state = ds5_ctrl_resolve_state(ctrl->handler, sensor);
 	u16 log_prepare[] = {0x0014, 0xcdab, 0x000f, 0x0000, 0x0400, 0x0000,
 			0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000};
 	u16 execute_cmd = 0x0001;
 	unsigned int i;
 	u32 data;
 	int ret = 0;
-	struct ds5_sensor *sensor = (struct ds5_sensor *)ctrl->priv;
-	u16 base = (state->is_rgb) ? DS5_RGB_CONTROL_BASE : DS5_DEPTH_CONTROL_BASE;
+	u16 base;
 	u16 reg;
-
-	if (sensor) {
-		switch (sensor->mux_pad) {
-		case DS5_MUX_PAD_DEPTH:
-			state = container_of(ctrl->handler, struct ds5, ctrls.handler_depth);
-			break;
-		case DS5_MUX_PAD_RGB:
-			state = container_of(ctrl->handler, struct ds5, ctrls.handler_rgb);
-			break;
-		case DS5_MUX_PAD_IR:
-			state = container_of(ctrl->handler, struct ds5, ctrls.handler_y8);
-			break;
-		case DS5_MUX_PAD_IMU:
-			state = container_of(ctrl->handler, struct ds5, ctrls.handler_imu);
-			break;
-		default:
-			break;
-		}
-	}
 
 	mutex_lock(&state->lock);
 
@@ -3711,6 +3697,26 @@ static int ds5_imu_init(struct i2c_client *c, struct ds5 *state)
 		       &ds5_sensor_subdev_ops, "imu");
 }
 
+/*
+ * Map a mux pad to the corresponding sensor's v4l2_subdev.
+ * Returns NULL for unknown/invalid pads.
+ */
+static struct v4l2_subdev *ds5_get_sensor_sd(struct ds5 *state, u32 pad)
+{
+	switch (pad) {
+	case DS5_MUX_PAD_DEPTH:
+		return &state->depth.sensor.sd;
+	case DS5_MUX_PAD_RGB:
+		return &state->rgb.sensor.sd;
+	case DS5_MUX_PAD_IR:
+		return &state->ir.sensor.sd;
+	case DS5_MUX_PAD_IMU:
+		return &state->imu.sensor.sd;
+	default:
+		return NULL;
+	}
+}
+
 /* No locking needed */
 static int ds5_mux_enum_mbus_code(struct v4l2_subdev *sd,
 				     ds5_v4l2_pad_state *v4l2_state,
@@ -3722,20 +3728,13 @@ static int ds5_mux_enum_mbus_code(struct v4l2_subdev *sd,
 	int ret;
 
 	dev_dbg(&state->client->dev, "%s(): %s \n", __func__, sd->name);
-	switch (mce->pad) {
-	case DS5_MUX_PAD_IR:
-		remote_sd = &state->ir.sensor.sd;
-		break;
-	case DS5_MUX_PAD_DEPTH:
-		remote_sd = &state->depth.sensor.sd;
-		break;
-	case DS5_MUX_PAD_RGB:
-		remote_sd = &state->rgb.sensor.sd;
-		break;
-	case DS5_MUX_PAD_IMU:
-		remote_sd = &state->imu.sensor.sd;
-		break;
-	case DS5_MUX_PAD_EXTERNAL:
+
+	remote_sd = ds5_get_sensor_sd(state, mce->pad);
+	if (!remote_sd) {
+		/* Handle DS5_MUX_PAD_EXTERNAL specially */
+		if (mce->pad != DS5_MUX_PAD_EXTERNAL)
+			return -EINVAL;
+
 		if (mce->index >= state->ir.sensor.n_formats +
 				state->depth.sensor.n_formats)
 			return -EINVAL;
@@ -3751,13 +3750,10 @@ static int ds5_mux_enum_mbus_code(struct v4l2_subdev *sd,
 			tmp.index = mce->index - state->ir.sensor.n_formats;
 			remote_sd = &state->depth.sensor.sd;
 		}
-
-		break;
-	default:
-		return -EINVAL;
 	}
 
 	tmp.pad = 0;
+	/* Override with active sensor if is_* flags are set */
 	if (state->is_rgb)
 		remote_sd = &state->rgb.sensor.sd;
 	if (state->is_depth)
@@ -3800,20 +3796,10 @@ static int ds5_mux_enum_frame_size(struct v4l2_subdev *sd,
 	tmp.pad = 0;
 	pad = ds5_state_to_pad(state);
 
-	switch (pad) {
-	case DS5_MUX_PAD_IR:
-		remote_sd = &state->ir.sensor.sd;
-		break;
-	case DS5_MUX_PAD_DEPTH:
-		remote_sd = &state->depth.sensor.sd;
-		break;
-	case DS5_MUX_PAD_RGB:
-		remote_sd = &state->rgb.sensor.sd;
-		break;
-	case DS5_MUX_PAD_IMU:
-		remote_sd = &state->imu.sensor.sd;
-		break;
-	case DS5_MUX_PAD_EXTERNAL:
+	remote_sd = ds5_get_sensor_sd(state, pad);
+	if (!remote_sd) {
+		if (pad != DS5_MUX_PAD_EXTERNAL)
+			return -EINVAL;
 		/*
 		 * Assume, that different sensors don't support the same formats
 		 * Try the Depth sensor first, then the Motion Tracker
@@ -3827,9 +3813,6 @@ static int ds5_mux_enum_frame_size(struct v4l2_subdev *sd,
 		}
 
 		remote_sd = &state->ir.sensor.sd;
-		break;
-	default:
-		return -EINVAL;
 	}
 
 	/* Locks internally */
@@ -3861,20 +3844,10 @@ static int ds5_mux_enum_frame_interval(struct v4l2_subdev *sd,
 
 	pad = ds5_state_to_pad(state);
 
-	switch (pad) {
-	case DS5_MUX_PAD_IR:
-		remote_sd = &state->ir.sensor.sd;
-		break;
-	case DS5_MUX_PAD_DEPTH:
-		remote_sd = &state->depth.sensor.sd;
-		break;
-	case DS5_MUX_PAD_RGB:
-		remote_sd = &state->rgb.sensor.sd;
-		break;
-	case DS5_MUX_PAD_IMU:
-		remote_sd = &state->imu.sensor.sd;
-		break;
-	case DS5_MUX_PAD_EXTERNAL:
+	remote_sd = ds5_get_sensor_sd(state, pad);
+	if (!remote_sd) {
+		if (pad != DS5_MUX_PAD_EXTERNAL)
+			return -EINVAL;
 		/* Similar to ds5_mux_enum_frame_size() above */
 		if (state->is_rgb)
 			remote_sd = &state->rgb.sensor.sd;
@@ -3888,9 +3861,6 @@ static int ds5_mux_enum_frame_interval(struct v4l2_subdev *sd,
 		}
 
 		remote_sd = &state->ir.sensor.sd;
-		break;
-	default:
-		return -EINVAL;
 	}
 
 	/* Locks internally */
@@ -3919,27 +3889,14 @@ static int ds5_mux_set_fmt(struct v4l2_subdev *sd,
 			__func__, pad, fmt->format.code,
 			fmt->format.width, fmt->format.height);
 
-	switch (pad) {
-	case DS5_MUX_PAD_IR:
-		remote_sd = &state->ir.sensor.sd;
-		break;
-	case DS5_MUX_PAD_DEPTH:
-		remote_sd = &state->depth.sensor.sd;
-		break;
-	case DS5_MUX_PAD_RGB:
-		remote_sd = &state->rgb.sensor.sd;
-		break;
-	case DS5_MUX_PAD_IMU:
-		remote_sd = &state->imu.sensor.sd;
-		break;
-	case DS5_MUX_PAD_EXTERNAL:
+	remote_sd = ds5_get_sensor_sd(state, pad);
+	if (!remote_sd) {
+		if (pad != DS5_MUX_PAD_EXTERNAL)
+			return -EINVAL;
 		if (state->is_rgb)
 			remote_sd = &state->rgb.sensor.sd;
 		else
 			remote_sd = &state->mux.last_set->sd;
-		break;
-	default:
-		return -EINVAL;
 	}
 
 	tmp.pad = 0;
@@ -3963,28 +3920,15 @@ static int ds5_mux_get_fmt(struct v4l2_subdev *sd,
 	struct v4l2_subdev *remote_sd;
 	u32 pad = fmt->pad;
 	int ret = 0;
-	struct ds5_sensor *sensor = state->mux.last_set;
+
 	pad = ds5_state_to_pad(state);
 	dev_dbg(sd->dev, "%s(): %u %s %p\n", __func__, pad, ds5_get_sensor_name(state), state->mux.last_set);
 
-	switch (pad) {
-	case DS5_MUX_PAD_IR:
-		remote_sd = &state->ir.sensor.sd;
-		break;
-	case DS5_MUX_PAD_DEPTH:
-		remote_sd = &state->depth.sensor.sd;
-		break;
-	case DS5_MUX_PAD_EXTERNAL:
+	remote_sd = ds5_get_sensor_sd(state, pad);
+	if (!remote_sd) {
+		if (pad != DS5_MUX_PAD_EXTERNAL)
+			return -EINVAL;
 		remote_sd = &state->mux.last_set->sd;
-		break;
-	case DS5_MUX_PAD_RGB:
-		remote_sd = &state->rgb.sensor.sd;
-		break;
-	case DS5_MUX_PAD_IMU:
-		remote_sd = &state->imu.sensor.sd;
-		break;
-	default:
-		return -EINVAL;
 	}
 
 	dev_dbg(sd->dev, "%s(): fmt->pad:%d, sensor->mux_pad:%u size:%d-%d, code:0x%x field:%d, color:%d\n",
