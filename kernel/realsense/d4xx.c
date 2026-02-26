@@ -703,12 +703,12 @@ static const u16 ds5_framerate_100[] = {100};
     { .width = (w), .height = (h), .framerates = (fr), .n_framerates = ARRAY_SIZE(fr) },
 
 #define D401_COMMON_RES	\
-	DS5_RES(1280, 720, ds5_framerate_to_30)\
-	DS5_RES(848, 480, ds5_framerate_to_60)\
-	DS5_RES(640, 480, ds5_framerate_to_60)\
-	DS5_RES(640, 360, ds5_framerate_to_60)\
-	DS5_RES(480, 270, ds5_framerate_to_60)\
-	DS5_RES(424, 240, ds5_framerate_to_60)\
+	DS5_RES(1280, 720, ds5_framerate_15_30)\
+	DS5_RES(848, 480, ds5_framerate_15_60)\
+	DS5_RES(640, 480, ds5_framerate_15_60)\
+	DS5_RES(640, 360, ds5_framerate_15_60)\
+	DS5_RES(480, 270, ds5_framerate_15_60)\
+	DS5_RES(424, 240, ds5_framerate_15_60)\
 
 static const struct ds5_resolution d40x_depth_sizes[] = {
 	D401_COMMON_RES
@@ -2385,6 +2385,35 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 		dev_err(&state->client->dev,
 			"%s(): Failed to read firmware build: %d\n", __func__, ret);
 		return ret;
+	}
+
+	/* 6. Wait for device type register to be populated.
+	 * After HW reset the firmware sets status to 0xDEAD before fully
+	 * initializing configuration registers (DS5_DEVICE_TYPE, stream DT,
+	 * resolution, etc.).  If ds5_fixed_configuration() reads device type
+	 * as 0 it falls into the default switch case and selects D46X format
+	 * arrays (2 depth resolutions) instead of the correct tables per SKU
+	 * Poll until the register returns a known valid value or timeout.
+	 */
+	{
+		u16 dev_type = 0;
+
+		for (retry = 0; retry < DS5_HW_RESET_MAX_RETRIES; retry++) {
+			ret = ds5_read(state, DS5_DEVICE_TYPE, &dev_type);
+			if (ret == 0 && dev_type != 0) {
+				dev_dbg(&state->client->dev,
+					"%s(): Device type 0x%x ready after %d ms\n",
+					__func__, dev_type,
+					(retry + 1) * DS5_HW_RESET_POLL_INTERVAL_MS);
+				break;
+			}
+			msleep(DS5_HW_RESET_POLL_INTERVAL_MS);
+		}
+
+		if (retry >= DS5_HW_RESET_MAX_RETRIES)
+			dev_warn(&state->client->dev,
+				"%s(): Device type register not ready (0x%x) after %d ms, formats may be wrong\n",
+				__func__, dev_type, DS5_HW_RESET_TIMEOUT_MS);
 	}
 
 	dev_info(&state->client->dev,
