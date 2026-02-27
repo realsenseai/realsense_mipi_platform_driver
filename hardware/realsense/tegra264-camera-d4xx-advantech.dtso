@@ -65,7 +65,69 @@
 					};
 				};
 			};
-
+			tegra-camera-platform {
+				compatible = "nvidia,tegra-camera-platform";
+				status = "okay";
+				num_csi_lanes = <4>;
+				max_lane_speed = <1500000>;
+				min_bits_per_pixel = <8>;
+				vi_peak_byte_per_pixel = <2>;
+				vi_bw_margin_pct = <25>;
+				max_pixel_rate = <160000>;
+				isp_peak_byte_per_pixel = <5>;
+				isp_bw_margin_pct = <25>;
+				modules {
+					status = "okay";
+					module0 {
+						status = "okay";
+						badge = "d4xx_Y8";
+						position = "left";
+						orientation = "1";
+						drivernode0 {
+							status = "okay";
+							pcl_id = "v4l2_sensor";
+							devname = "DS5 mux 9-001a";
+							proc-device-tree = "/proc/device-tree/bus@0/i2c@810c6a0000/ds5@1c";
+						};
+					};
+					module1 {
+						status = "okay";
+						badge = "d4xx_depth";
+						position = "left";
+						orientation = "1";
+						drivernode0 {
+							status = "okay";
+							pcl_id = "v4l2_sensor";
+							devname = "DS5 mux 9-001a";
+							proc-device-tree = "/proc/device-tree/bus@0/i2c@810c6a0000/ds5@1a";
+						};
+					};
+					module2 {
+						status = "okay";
+						badge = "d4xx_imu";
+						position = "left";
+						orientation = "1";
+						drivernode0 {
+							status = "okay";
+							pcl_id = "v4l2_sensor";
+							devname = "DS5 mux 9-001a";
+							proc-device-tree = "/proc/device-tree/bus@0/i2c@810c6a0000/ds5@1d";
+						};
+					};
+					module3 {
+						status = "okay";
+						badge = "d4xx_rgb";
+						position = "left";
+						orientation = "1";
+						drivernode0 {
+							status = "okay";
+							pcl_id = "v4l2_sensor";
+							devname = "DS5 mux 9-001a";
+							proc-device-tree = "/proc/device-tree/bus@0/i2c@810c6a0000/ds5@1b";
+						};
+					};
+				};
+			};
 			bus@0 {
 				host1x@8181200000 {
 					nvcsi@8188000000 {

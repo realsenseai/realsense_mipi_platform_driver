@@ -7,4 +7,4 @@ Index: kernel-noble-src/arch/arm64/boot/dts/nvidia/Makefile
  dtb-$(CONFIG_ARCH_TEGRA_234_SOC) += tegra234-p3768-0000+p3767-0000.dtb
  dtb-$(CONFIG_ARCH_TEGRA_234_SOC) += tegra234-p3768-0000+p3767-0005.dtb
 +
-+dtb-$(CONFIG_ARCH_TEGRA_264_SOC) += tegra264-camera-d4xx-overlay-Advantech.dtbo
++dtb-$(CONFIG_ARCH_TEGRA_264_SOC) += tegra264-camera-d4xx-advantech.dtbo

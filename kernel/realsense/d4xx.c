@@ -1952,7 +1952,7 @@ static int ds5_sensor_s_stream(struct v4l2_subdev *sd, int on)
 {
 	struct ds5_sensor *sensor = container_of(sd, struct ds5_sensor, sd);
 
-	dev_dbg(sensor->sd.dev, "%s(): sensor: name=%s state=%d\n",
+	dev_info(sensor->sd.dev, "[WOJTEK] %s: sensor: name=%s state=%d\n",
 		__func__, sensor->sd.name, on);
 
 	sensor->streaming = on;
@@ -4517,6 +4517,8 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	u16 expected_streaming_state;
 	bool ds5_config_done = !on;
 
+	dev_info(sensor->sd.dev, "[WOJTEK] %s: sensor: %d\n", __func__, on);
+	dev_info(sd->dev, "[WOJTEK] %s: sd\n", __func__);
 	// spare duplicate calls
 	if (sensor->streaming == on)
 		return 0;
@@ -6077,6 +6079,7 @@ MODULE_DEVICE_TABLE(of, d4xx_of_match);
 static struct i2c_driver ds5_i2c_driver = {
 	.driver = {
 		.owner = THIS_MODULE,
+		.of_match_table = of_match_ptr(d4xx_of_match),
 		.name = DS5_DRIVER_NAME
 	},
 	.probe		= ds5_probe,

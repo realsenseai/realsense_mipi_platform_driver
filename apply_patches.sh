@@ -74,7 +74,7 @@ apply_external_patches() {
         fi
 	echo -e "\e[33m$(ls -Ld ${PWD}/$2/$1)\e[0m"
         ls -Lw1 "${PWD}/$2/$1"
-        git -C "sources_${JETPACK_VERSION}/$2" apply "${PWD}/$2/$1"/*
+        git -C "sources_${JETPACK_VERSION}/$2" apply --reject --verbose "${PWD}/$2/$1"/*
     elif [[ "$ACTION" = "reset" ]]; then
         if ! git -C "sources_${JETPACK_VERSION}/$2" diff --quiet || ! git -C "sources_${JETPACK_VERSION}/$2" diff --cached --quiet; then
             read -p "Repo sources_${JETPACK_VERSION}/$2 has changes that will be hard reset. Continue (y/N)? " confirm
@@ -120,10 +120,7 @@ if [[ "$ACTION" = "apply" ]]; then
                 cp "sources_${JETPACK_VERSION}/$KERNEL_DIR/3rdparty/canonical/linux-noble/include/dt-bindings/gpio/tegra264-gpio.h" \
                     "sources_${JETPACK_VERSION}/$KERNEL_DIR/include/dt-bindings/gpio/" 2>/dev/null || true
             fi
-            for dts in hardware/realsense/tegra264-camera-d4xx-overlay*.dts; do
-                    # need to add o to file extension to meet kernel DT make rules
-                    [[ -f "$dts" ]] && cp $dts "sources_${JETPACK_VERSION}/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/$(basename ${dts})o"
-            done
+            cp hardware/realsense/tegra264-camera-d4xx-*.dtso "sources_${JETPACK_VERSION}/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/"
         fi
     fi
 
