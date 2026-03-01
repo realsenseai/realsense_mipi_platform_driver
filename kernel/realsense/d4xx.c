@@ -2332,37 +2332,59 @@ static int ds5_hw_reset_serdes_recovery(struct ds5 *state)
 		"%s(): Phase 1 failed (I2C err %d), checking siblings before deser reset\n",
 		__func__, ret);
 
+	/*
+	 * In the D4XX architecture each physical camera has 4 driver instances
+	 * (Depth, RGB, IR, IMU) sharing the same ser_dev.  A "true sibling" is
+	 * a different physical camera on the same deserializer: same dser_dev
+	 * but different ser_dev.
+	 *
+	 * Same-camera instances are always safe to reset together since they
+	 * share the same camera ASIC — the HW reset already killed them all.
+	 */
 	for (i = 0; i < MAX_DEV_NUM; i++) {
 		struct ds5 *sib = serdes_inited[i];
+		bool sib_streaming;
 
-		if (!sib || sib == state || sib->dser_dev != state->dser_dev)
+		if (!sib || sib == state)
 			continue;
 
-		/* Check if sibling can still communicate over I2C */
-		if (ds5_read(sib, DS5_FW_VERSION, &tmp) == 0) {
-			/* Check if sibling has any active stream */
-			if (sib->depth.sensor.streaming ||
-			    sib->ir.sensor.streaming ||
-			    sib->rgb.sensor.streaming ||
-			    sib->imu.sensor.streaming) {
-				sibling_alive = true;
-				dev_warn(&state->client->dev,
-					"%s(): sibling %s alive & streaming, skipping deser reset\n",
-					__func__, dev_name(&sib->client->dev));
-				break;
-			}
+		/* Skip instances of the SAME physical camera (same serializer) */
+		if (sib->ser_dev == state->ser_dev)
+			continue;
+
+		/* Only check cameras on the same deserializer (true siblings) */
+		if (sib->dser_dev != state->dser_dev)
+			continue;
+
+		/* True sibling — check if its I2C link is alive */
+		if (ds5_read(sib, DS5_FW_VERSION, &tmp) != 0)
+			continue;
+
+		/* Check only the sensor type this instance actually manages */
+		sib_streaming = (sib->is_depth && sib->depth.sensor.streaming) ||
+				(sib->is_rgb  && sib->rgb.sensor.streaming) ||
+				(sib->is_y8   && sib->ir.sensor.streaming) ||
+				(sib->is_imu  && sib->imu.sensor.streaming);
+
+		if (sib_streaming) {
+			sibling_alive = true;
+			dev_warn(&state->client->dev,
+				"%s(): true sibling %s alive & streaming, skipping deser reset\n",
+				__func__, dev_name(&sib->client->dev));
+			break;
 		}
 	}
 
 	if (sibling_alive) {
 		dev_err(&state->client->dev,
-			"%s(): GMSL link broken but sibling streaming — cannot reset deserializer. "
-			"Manual recovery (driver reload / camera power cycle) may be needed.\n",
+			"%s(): GMSL link broken but sibling camera streaming — "
+			"cannot reset deserializer. Manual recovery "
+			"(driver reload / camera power cycle) may be needed.\n",
 			__func__);
 		return -EIO;
 	}
 
-	/* All siblings dead or none exist — safe to reset entire deserializer */
+	/* All true siblings dead or none streaming — safe to reset entire deserializer */
 	dev_info(&state->client->dev,
 		"%s(): Phase 2 - performing full deserializer reset\n", __func__);
 
@@ -2412,25 +2434,31 @@ static int ds5_hw_reset_serdes_recovery(struct ds5 *state)
 	dev_info(&state->client->dev,
 		"%s(): Phase 2 succeeded, full deser recovery complete\n", __func__);
 
-	/* Invalidate all sibling cameras so they re-configure on next stream start */
+	/* Invalidate all cameras on this deserializer so they re-configure
+	 * on next stream start.  This covers both same-camera peer instances
+	 * (same ser_dev) and true sibling cameras (different ser_dev).
+	 */
 	for (i = 0; i < MAX_DEV_NUM; i++) {
 		struct ds5 *sib = serdes_inited[i];
+		struct ds5_sensor *active;
 
-		if (!sib || sib == state || sib->dser_dev != state->dser_dev)
+		if (!sib || sib == state)
+			continue;
+		if (sib->dser_dev != state->dser_dev)
 			continue;
 
-		ds5_invalidate_sensor(sib, &sib->depth.sensor);
-		ds5_invalidate_sensor(sib, &sib->ir.sensor);
-		ds5_invalidate_sensor(sib, &sib->rgb.sensor);
-		ds5_invalidate_sensor(sib, &sib->imu.sensor);
-		sib->depth.sensor.streaming = false;
-		sib->ir.sensor.streaming = false;
-		sib->rgb.sensor.streaming = false;
-		sib->imu.sensor.streaming = false;
+		/* Invalidate only the sensor type this instance manages */
+		active = ds5_get_active_sensor(sib);
+		if (active) {
+			ds5_invalidate_sensor(sib, active);
+			active->streaming = false;
+		}
 
 		dev_warn(&state->client->dev,
-			"%s(): invalidated sibling %s after deser reset\n",
-			__func__, dev_name(&sib->client->dev));
+			"%s(): invalidated %s %s after deser reset\n",
+			__func__,
+			(sib->ser_dev == state->ser_dev) ? "same-cam" : "sibling",
+			dev_name(&sib->client->dev));
 	}
 
 	return 0;
@@ -2453,73 +2481,116 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 {
 	int ret;
 	int retry;
-	int i;
+	int __maybe_unused i;
 	u16 status = 0;
 	bool device_went_down = false;
-	struct ds5_sensor *sensors[] = {
-		&state->depth.sensor,
-		&state->ir.sensor,
-		&state->rgb.sensor,
-		&state->imu.sensor,
-	};
-	static const u16 stream_ids[] = {
-		DS5_STREAM_DEPTH,
-		DS5_STREAM_IR,
-		DS5_STREAM_RGB,
-		DS5_STREAM_IMU,
-	};
 
 	dev_info(&state->client->dev, "%s(): Initiating HW reset with recovery\n",
 		__func__);
 
 	/* 1. Stop active streams on the device before reset.
 	 *    This ensures FW and SERDES are in a clean state.
+	 *
+	 *    In the D4XX architecture each physical camera has 4 driver
+	 *    instances (Depth, RGB, IR, IMU) sharing the same ser_dev.
+	 *    HW reset kills all streams on the camera ASIC, so we must
+	 *    stop and invalidate all peer instances of the same camera.
 	 */
-	for (i = 0; i < ARRAY_SIZE(sensors); i++) {
-		if (sensors[i]->streaming) {
+	{
+		struct ds5_sensor *active = ds5_get_active_sensor(state);
+
+		if (active && active->streaming) {
+			u16 sid = state->is_depth ? DS5_STREAM_DEPTH :
+				  state->is_rgb   ? DS5_STREAM_RGB :
+				  state->is_y8    ? DS5_STREAM_IR :
+						    DS5_STREAM_IMU;
 			dev_info(&state->client->dev,
-				"%s(): stopping active stream %d before reset\n",
-				__func__, stream_ids[i]);
+				"%s(): stopping own stream %d before reset\n",
+				__func__, sid);
 			ds5_write(state, DS5_START_STOP_STREAM,
-				DS5_STREAM_STOP | stream_ids[i]);
+				DS5_STREAM_STOP | sid);
 		}
 	}
 
-	/* 2. Invalidate all sensor state and release SERDES pipes.
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	/* Stop streams on peer instances of the same physical camera */
+	for (i = 0; i < MAX_DEV_NUM; i++) {
+		struct ds5 *peer = serdes_inited[i];
+		struct ds5_sensor *peer_active;
+
+		if (!peer || peer == state)
+			continue;
+		if (peer->ser_dev != state->ser_dev)
+			continue;
+
+		peer_active = ds5_get_active_sensor(peer);
+		if (peer_active && peer_active->streaming) {
+			u16 sid = peer->is_depth ? DS5_STREAM_DEPTH :
+				  peer->is_rgb   ? DS5_STREAM_RGB :
+				  peer->is_y8    ? DS5_STREAM_IR :
+						    DS5_STREAM_IMU;
+			dev_info(&state->client->dev,
+				"%s(): stopping peer %s stream %d before reset\n",
+				__func__, dev_name(&peer->client->dev), sid);
+			ds5_write(peer, DS5_START_STOP_STREAM,
+				DS5_STREAM_STOP | sid);
+		}
+	}
+#endif
+
+	/* 2. Invalidate sensor state and release SERDES pipes.
 	 *    After HW reset the device loses all configuration, so driver
 	 *    state must be brought in sync.  Clear streaming flags so that
 	 *    ds5_mux_s_stream() won't silently skip the next stream-start.
+	 *    Covers this instance AND all peer instances of the same camera.
 	 */
+	{
+		struct ds5_sensor *active = ds5_get_active_sensor(state);
+
+		if (active) {
+			ds5_config_cache_clear(active);
+			active->streaming = false;
 #ifdef CONFIG_VIDEO_D4XX_SERDES
-	if (state->dser_dev) {
-		mutex_lock(&serdes_lock__);
-		for (i = 0; i < ARRAY_SIZE(sensors); i++) {
-			struct ds5_sensor *sensor = sensors[i];
+			if (active->pipe_id >= 0 && state->dser_dev) {
+				int release_ret;
 
-			ds5_config_cache_clear(sensor);
-			sensor->streaming = false;
-
-			if (sensor->pipe_id >= 0) {
-				int release_ret = state->dser_ops->release_pipe(
-					state->dser_dev, sensor->pipe_id);
+				mutex_lock(&serdes_lock__);
+				release_ret = state->dser_ops->release_pipe(
+					state->dser_dev, active->pipe_id);
+				mutex_unlock(&serdes_lock__);
 				dev_info(&state->client->dev,
 					"%s(): released pipe %d (%d)\n",
-					__func__, sensor->pipe_id, release_ret);
-				sensor->pipe_id = PIPE_NOT_CONFIGURED;
+					__func__, active->pipe_id, release_ret);
+				active->pipe_id = PIPE_NOT_CONFIGURED;
 			}
-			sensor->pipe_data_type1 = 0;
-			sensor->pipe_data_type2 = 0;
-			sensor->pipe_vc_id = 0;
-		}
-		mutex_unlock(&serdes_lock__);
-	} else
+			active->pipe_data_type1 = 0;
+			active->pipe_data_type2 = 0;
+			active->pipe_vc_id = 0;
 #endif
-	{
-		for (i = 0; i < ARRAY_SIZE(sensors); i++) {
-			ds5_config_cache_clear(sensors[i]);
-			sensors[i]->streaming = false;
 		}
 	}
+
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	/* Invalidate peer instances of the same physical camera */
+	for (i = 0; i < MAX_DEV_NUM; i++) {
+		struct ds5 *peer = serdes_inited[i];
+		struct ds5_sensor *peer_active;
+
+		if (!peer || peer == state)
+			continue;
+		if (peer->ser_dev != state->ser_dev)
+			continue;
+
+		peer_active = ds5_get_active_sensor(peer);
+		if (peer_active) {
+			ds5_invalidate_sensor(peer, peer_active);
+			peer_active->streaming = false;
+			dev_info(&state->client->dev,
+				"%s(): invalidated peer %s\n",
+				__func__, dev_name(&peer->client->dev));
+		}
+	}
+#endif
 
 	/* 3. Send HW reset command */
 	ret = ds5_raw_write(state, DS5_HWMC_DATA, &cmd_hw_reset, sizeof(cmd_hw_reset));
