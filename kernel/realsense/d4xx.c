@@ -484,6 +484,7 @@ struct ds5 {
 	struct i2c_client *ser_i2c;
 	struct i2c_client *dser_i2c;
 	const struct dser_interface *dser_ops;
+	bool serdes_primary; /* true for the instance that ran SERDES setup */
 #endif
 };
 
@@ -3857,11 +3858,30 @@ static int ds5_board_setup(struct ds5 *state)
 	state->g_ctx.s_dev = dev;
 
 	for (i = 0; i < MAX_DEV_NUM; i++) {
+		if (serdes_inited[i] && serdes_inited[i]->ser_dev == state->ser_dev) {
+			/* Same camera, different stream instance.
+			 * Register in serdes_inited[] so peer iteration
+			 * can find it, but return -ENOTSUPP to skip
+			 * duplicate SERDES setup.
+			 */
+			int j;
+
+			for (j = i + 1; j < MAX_DEV_NUM; j++) {
+				if (!serdes_inited[j]) {
+					serdes_inited[j] = state;
+					dev_info(dev, "registered peer instance in serdes_inited[%d]\n", j);
+					return -ENOTSUPP;
+				}
+			}
+			dev_err(dev, "cannot register more than %d D4XX instances\n", MAX_DEV_NUM);
+			return -ENOTSUPP;
+		}
+	}
+	/* First instance of a new camera */
+	for (i = 0; i < MAX_DEV_NUM; i++) {
 		if (!serdes_inited[i]) {
 			serdes_inited[i] = state;
 			return 0;
-		} else if (serdes_inited[i]->ser_dev == state->ser_dev) {
-			return -ENOTSUPP;
 		}
 	}
 	err = -EINVAL;
@@ -4004,11 +4024,24 @@ static int ds5_board_setup(struct ds5 *state)
 	state->g_ctx.s_dev = dev;
 
 	for (i = 0; i < MAX_DEV_NUM; i++) {
+		if (serdes_inited[i] && serdes_inited[i]->ser_dev == state->ser_dev) {
+			int j;
+
+			for (j = i + 1; j < MAX_DEV_NUM; j++) {
+				if (!serdes_inited[j]) {
+					serdes_inited[j] = state;
+					dev_info(dev, "registered peer instance in serdes_inited[%d]\n", j);
+					return -ENOTSUPP;
+				}
+			}
+			dev_err(dev, "cannot register more than %d D4XX instances\n", MAX_DEV_NUM);
+			return -ENOTSUPP;
+		}
+	}
+	for (i = 0; i < MAX_DEV_NUM; i++) {
 		if (!serdes_inited[i]) {
 			serdes_inited[i] = state;
 			return 0;
-		} else if (serdes_inited[i]->ser_dev == state->ser_dev) {
-			return -ENOTSUPP;
 		}
 	}
 	err = -EINVAL;
@@ -4070,11 +4103,17 @@ static int ds5_serdes_setup(struct ds5 *state)
 
 	ret = ds5_board_setup(state);
 	if (ret) {
-		if (ret == -ENOTSUPP)
+		if (ret == -ENOTSUPP) {
+			/* Peer instance of already-initialized camera.
+			 * Registered in serdes_inited[] but skips SERDES setup.
+			 */
+			state->serdes_primary = false;
 			return 0;
+		}
 		dev_err(&c->dev, "board setup failed\n");
 		return ret;
 	}
+	state->serdes_primary = true;
 
 	/* Pair sensor to serializer dev */
 	ret = max9295_sdev_pair(state->ser_dev, &state->g_ctx);
@@ -4858,10 +4897,17 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			"stream %d in expected state, toggling to %d (status: 0x%04x) %dms\n",
 			stream_id, on, status, jiffies_to_msecs(jiffies - ts));
 	} else {
+		/* After HW reset the FW reboots and all streams return to
+		 * idle.  If VI error recovery tries to stop a stream that
+		 * is already stopped (or start one already started), treat
+		 * it as a no-op so the upper layer can proceed with
+		 * restart instead of getting stuck in an EBUSY loop.
+		 */
 		dev_warn(&state->client->dev,
-			"stream %d in %d state already (status: 0x%04x) %dms, return busy\n",
+			"stream %d in %d state already (status: 0x%04x) %dms, treating as no-op\n",
 			stream_id, on, status, jiffies_to_msecs(jiffies - ts));
-		return -EBUSY;
+		sensor->streaming = on;
+		return 0;
 	}
 
 	restore_val = sensor->streaming;
@@ -6303,6 +6349,14 @@ static int ds5_remove(struct i2c_client *c)
 	for (i = 0; i < MAX_DEV_NUM; i++) {
 		if (serdes_inited[i] && serdes_inited[i] == state) {
 			serdes_inited[i] = NULL;
+
+			/* Only the primary instance (the one that did SERDES
+			 * setup) should tear down the serializer/deserializer.
+			 * Peer instances just unregister from the array.
+			 */
+			if (!state->serdes_primary)
+				break;
+
 			mutex_lock(&serdes_lock__);
 
 			ret = max9295_reset_control(state->ser_dev);
