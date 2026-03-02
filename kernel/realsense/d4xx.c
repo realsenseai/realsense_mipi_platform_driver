@@ -2484,7 +2484,6 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	int retry;
 	int __maybe_unused i;
 	u16 status = 0;
-	bool device_went_down = false;
 
 	dev_info(&state->client->dev, "%s(): Initiating HW reset with recovery\n",
 		__func__);
