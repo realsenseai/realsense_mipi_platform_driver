@@ -548,6 +548,8 @@ static inline atomic_t *ds5_get_reset_gen(struct ds5 *state)
 #define MAX_DEV_NUM 24
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 static struct ds5 *serdes_inited[MAX_DEV_NUM];
+/* Protects all reads and writes of serdes_inited[] */
+static DEFINE_MUTEX(serdes_inited_lock);
 
 /* MAX9296 deserializer interface implementation */
 static const struct dser_interface max9296_interface = {
@@ -2341,7 +2343,12 @@ static int ds5_hw_reset_serdes_recovery(struct ds5 *state)
 	 *
 	 * Same-camera instances are always safe to reset together since they
 	 * share the same camera ASIC — the HW reset already killed them all.
+	 *
+	 * serdes_inited_lock is held for the entire loop so that entries
+	 * cannot be NULL'd by a concurrent ds5_remove() between the NULL
+	 * check and the pointer dereference (use-after-free prevention).
 	 */
+	mutex_lock(&serdes_inited_lock);
 	for (i = 0; i < MAX_DEV_NUM; i++) {
 		struct ds5 *sib = serdes_inited[i];
 		bool sib_streaming;
@@ -2375,6 +2382,7 @@ static int ds5_hw_reset_serdes_recovery(struct ds5 *state)
 			break;
 		}
 	}
+	mutex_unlock(&serdes_inited_lock);
 
 	if (sibling_alive) {
 		dev_err(&state->client->dev,
@@ -2439,6 +2447,7 @@ static int ds5_hw_reset_serdes_recovery(struct ds5 *state)
 	 * on next stream start.  This covers both same-camera peer instances
 	 * (same ser_dev) and true sibling cameras (different ser_dev).
 	 */
+	mutex_lock(&serdes_inited_lock);
 	for (i = 0; i < MAX_DEV_NUM; i++) {
 		struct ds5 *sib = serdes_inited[i];
 		struct ds5_sensor *active;
@@ -2461,6 +2470,7 @@ static int ds5_hw_reset_serdes_recovery(struct ds5 *state)
 			(sib->ser_dev == state->ser_dev) ? "same-cam" : "sibling",
 			dev_name(&sib->client->dev));
 	}
+	mutex_unlock(&serdes_inited_lock);
 
 	return 0;
 }
@@ -2514,6 +2524,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	/* Stop streams on peer instances of the same physical camera */
+	mutex_lock(&serdes_inited_lock);
 	for (i = 0; i < MAX_DEV_NUM; i++) {
 		struct ds5 *peer = serdes_inited[i];
 		struct ds5_sensor *peer_active;
@@ -2536,6 +2547,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 				DS5_STREAM_STOP | sid);
 		}
 	}
+	mutex_unlock(&serdes_inited_lock);
 #endif
 
 	/* 2. Invalidate sensor state and release SERDES pipes.
@@ -2572,6 +2584,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	/* Invalidate peer instances of the same physical camera */
+	mutex_lock(&serdes_inited_lock);
 	for (i = 0; i < MAX_DEV_NUM; i++) {
 		struct ds5 *peer = serdes_inited[i];
 		struct ds5_sensor *peer_active;
@@ -2590,6 +2603,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 				__func__, dev_name(&peer->client->dev));
 		}
 	}
+	mutex_unlock(&serdes_inited_lock);
 #endif
 
 	/* 3. Send HW reset command */
@@ -3856,6 +3870,7 @@ static int ds5_board_setup(struct ds5 *state)
 	state->g_ctx.num_csi_lanes = value;
 	state->g_ctx.s_dev = dev;
 
+	mutex_lock(&serdes_inited_lock);
 	for (i = 0; i < MAX_DEV_NUM; i++) {
 		if (serdes_inited[i] && serdes_inited[i]->ser_dev == state->ser_dev) {
 			/* Same camera, different stream instance.
@@ -3869,22 +3884,29 @@ static int ds5_board_setup(struct ds5 *state)
 				if (!serdes_inited[j]) {
 					serdes_inited[j] = state;
 					dev_info(dev, "registered peer instance in serdes_inited[%d]\n", j);
-					return -ENOTSUPP;
+					err = -ENOTSUPP;
+					goto unlock_and_return;
 				}
 			}
 			dev_err(dev, "cannot register more than %d D4XX instances\n", MAX_DEV_NUM);
-			return -ENOTSUPP;
+			err = -ENOTSUPP;
+			goto unlock_and_return;
 		}
 	}
 	/* First instance of a new camera */
 	for (i = 0; i < MAX_DEV_NUM; i++) {
 		if (!serdes_inited[i]) {
 			serdes_inited[i] = state;
-			return 0;
+			err = 0;
+			goto unlock_and_return;
 		}
 	}
 	err = -EINVAL;
 	dev_err(dev, "cannot handle more than %d D457 cameras\n", MAX_DEV_NUM);
+
+unlock_and_return:
+	mutex_unlock(&serdes_inited_lock);
+	return err;
 
 error:
 	return err;
@@ -3933,6 +3955,7 @@ static int ds5_board_setup(struct ds5 *state)
 	i2c_info_des.addr = pdata->subdev_info[0].board_info.addr; //0x48, 0x4a, 0x68, 0x6a
 
 	/* look for already registered max9296, use same context if found */
+	mutex_lock(&serdes_inited_lock);
 	for (i = 0; i < MAX_DEV_NUM; i++) {
 		if (serdes_inited[i] && serdes_inited[i]->dser_i2c) {
 			dev_info(dev, "MAX9296 found device on %d@0x%x\n",
@@ -3945,6 +3968,7 @@ static int ds5_board_setup(struct ds5 *state)
 			}
 		}
 	}
+	mutex_unlock(&serdes_inited_lock);
 	if (state->aggregated)
 		suffix += 4;
 	dev_info(dev, "Init SerDes %c on %d@0x%x<->%d@0x%x\n",
@@ -4022,6 +4046,7 @@ static int ds5_board_setup(struct ds5 *state)
 	state->g_ctx.num_csi_lanes = 2;
 	state->g_ctx.s_dev = dev;
 
+	mutex_lock(&serdes_inited_lock);
 	for (i = 0; i < MAX_DEV_NUM; i++) {
 		if (serdes_inited[i] && serdes_inited[i]->ser_dev == state->ser_dev) {
 			int j;
@@ -4030,21 +4055,28 @@ static int ds5_board_setup(struct ds5 *state)
 				if (!serdes_inited[j]) {
 					serdes_inited[j] = state;
 					dev_info(dev, "registered peer instance in serdes_inited[%d]\n", j);
-					return -ENOTSUPP;
+					err = -ENOTSUPP;
+					goto unlock_and_return;
 				}
 			}
 			dev_err(dev, "cannot register more than %d D4XX instances\n", MAX_DEV_NUM);
-			return -ENOTSUPP;
+			err = -ENOTSUPP;
+			goto unlock_and_return;
 		}
 	}
 	for (i = 0; i < MAX_DEV_NUM; i++) {
 		if (!serdes_inited[i]) {
 			serdes_inited[i] = state;
-			return 0;
+			err = 0;
+			goto unlock_and_return;
 		}
 	}
 	err = -EINVAL;
 	dev_err(dev, "cannot handle more than %d D457 cameras\n", MAX_DEV_NUM);
+
+unlock_and_return:
+	mutex_unlock(&serdes_inited_lock);
+	return err;
 
 error:
 	return err;
@@ -6373,9 +6405,11 @@ static int ds5_remove(struct i2c_client *c)
 	}
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
+	mutex_lock(&serdes_inited_lock);
 	for (i = 0; i < MAX_DEV_NUM; i++) {
 		if (serdes_inited[i] && serdes_inited[i] == state) {
 			serdes_inited[i] = NULL;
+			mutex_unlock(&serdes_inited_lock);
 
 			/* Only the primary instance (the one that did SERDES
 			 * setup) should tear down the serializer/deserializer.
@@ -6411,6 +6445,8 @@ static int ds5_remove(struct i2c_client *c)
 			break;
 		}
 	}
+	if (i == MAX_DEV_NUM)
+		mutex_unlock(&serdes_inited_lock);
 	if (state->ser_i2c)
 		i2c_unregister_device(state->ser_i2c);
 	if (state->dser_i2c)
