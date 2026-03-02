@@ -517,20 +517,31 @@ static struct dser_reset_gen dser_reset_gens[MAX_DSER_NUM];
 static atomic_t *ds5_get_reset_gen(struct ds5 *state)
 {
 	int i;
+	int free_idx = -1;
+	atomic_t *gen = &ds5_reset_gen;
 
 	if (state->dser_dev) {
+		mutex_lock(&serdes_lock__);
 		for (i = 0; i < MAX_DSER_NUM; i++) {
-			if (dser_reset_gens[i].dser_dev == state->dser_dev)
-				return &dser_reset_gens[i].gen;
-			if (!dser_reset_gens[i].dser_dev) {
-				dser_reset_gens[i].dser_dev = state->dser_dev;
-				atomic_set(&dser_reset_gens[i].gen, 0);
-				return &dser_reset_gens[i].gen;
+			if (dser_reset_gens[i].dser_dev == state->dser_dev) {
+				gen = &dser_reset_gens[i].gen;
+				goto out_unlock;
 			}
+			if (!dser_reset_gens[i].dser_dev && free_idx < 0)
+				free_idx = i;
 		}
+
+		if (free_idx >= 0) {
+			dser_reset_gens[free_idx].dser_dev = state->dser_dev;
+			atomic_set(&dser_reset_gens[free_idx].gen, 0);
+			gen = &dser_reset_gens[free_idx].gen;
+		}
+out_unlock:
+		mutex_unlock(&serdes_lock__);
 	}
+
 	/* Fallback: table full or no deserializer */
-	return &ds5_reset_gen;
+	return gen;
 }
 #else
 static inline atomic_t *ds5_get_reset_gen(struct ds5 *state)
@@ -2292,9 +2303,9 @@ static int ds5_set_calibration_data(struct ds5 *state,
  * ds5_hw_reset_serdes_recovery - Tiered SERDES recovery after HW reset.
  *
  * Phase 1: Re-init serializer only (per-camera, non-disruptive).
- * Phase 2: If I2C still fails, check whether all sibling cameras on the
- *          same deserializer are also dead.  Only then perform a full
- *          deserializer reset_oneshot (chip-wide, disruptive).
+ * Phase 2: If I2C still fails, perform a full deserializer reset_oneshot
+ *          (chip-wide, disruptive) only when no sibling camera on the same
+ *          deserializer is currently reachable over I2C and streaming.
  *
  * Returns 0 on success, negative errno on failure.
  */
@@ -2484,7 +2495,6 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	int retry;
 	int __maybe_unused i;
 	u16 status = 0;
-	bool device_went_down = false;
 
 	dev_info(&state->client->dev, "%s(): Initiating HW reset with recovery\n",
 		__func__);
@@ -2623,7 +2633,6 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 
 		if (ret < 0) {
 			/* I2C failed - device is resetting (expected during reset) */
-			device_went_down = true;
 			dev_dbg(&state->client->dev,
 				"%s(): Device not responding (resetting), retry %d\n",
 				__func__, retry);
@@ -3874,7 +3883,7 @@ static int ds5_board_setup(struct ds5 *state)
 				}
 			}
 			dev_err(dev, "cannot register more than %d D4XX instances\n", MAX_DEV_NUM);
-			return -ENOTSUPP;
+			return -ENOSPC;
 		}
 	}
 	/* First instance of a new camera */
@@ -4035,7 +4044,7 @@ static int ds5_board_setup(struct ds5 *state)
 				}
 			}
 			dev_err(dev, "cannot register more than %d D4XX instances\n", MAX_DEV_NUM);
-			return -ENOTSUPP;
+			return -ENOSPC;
 		}
 	}
 	for (i = 0; i < MAX_DEV_NUM; i++) {
@@ -6414,7 +6423,7 @@ static int ds5_remove(struct i2c_client *c)
 	}
 	if (state->ser_i2c)
 		i2c_unregister_device(state->ser_i2c);
-	if (state->dser_i2c)
+	if (state->dser_i2c && !state->aggregated)
 		i2c_unregister_device(state->dser_i2c);
 #endif
 #ifndef CONFIG_TEGRA_CAMERA_PLATFORM
