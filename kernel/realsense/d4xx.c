@@ -4906,6 +4906,22 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			"stream %d in %d state already (status: 0x%04x) %dms, treating as no-op\n",
 			stream_id, on, status, jiffies_to_msecs(jiffies - ts));
 		sensor->streaming = on;
+		if (!on) {
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+			mutex_lock(&serdes_lock__);
+			if (state->dser_ops->release_pipe(state->dser_dev, sensor->pipe_id) < 0)
+				dev_warn(&state->client->dev, "release pipe failed\n");
+			else
+				sensor->pipe_id = PIPE_NOT_CONFIGURED;
+			if (state->is_y8
+				&& (state->ir.sensor.config.format->data_type == GMSL_CSI_DT_RGB_888))
+			{
+				state->dser_ops->reset_oneshot(state->dser_dev);
+			}
+			mutex_unlock(&serdes_lock__);
+			msleep_range(100);
+#endif
+		}
 		return 0;
 	}
 
