@@ -2292,9 +2292,9 @@ static int ds5_set_calibration_data(struct ds5 *state,
  * ds5_hw_reset_serdes_recovery - Tiered SERDES recovery after HW reset.
  *
  * Phase 1: Re-init serializer only (per-camera, non-disruptive).
- * Phase 2: If I2C still fails, check whether all sibling cameras on the
- *          same deserializer are also dead.  Only then perform a full
- *          deserializer reset_oneshot (chip-wide, disruptive).
+ * Phase 2: If I2C still fails, perform a full deserializer reset_oneshot
+ *          (chip-wide, disruptive) only when no sibling camera on the same
+ *          deserializer is currently reachable over I2C and streaming.
  *
  * Returns 0 on success, negative errno on failure.
  */
