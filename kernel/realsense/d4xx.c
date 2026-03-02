@@ -6270,15 +6270,43 @@ static int ds5_probe(struct i2c_client *c, const struct i2c_device_id *id)
 	if (atomic_cmpxchg(&ds5_probe_reset_once, 0, 1) == 0) {
 		dev_info(&c->dev, "%s(): first probe instance, running HW reset recovery\n",
 			__func__);
+
+		/* Initialize sensor pipe_ids to PIPE_NOT_CONFIGURED before
+		 * hw_reset_with_recovery, otherwise the kzalloc default of 0
+		 * causes a spurious release_pipe(0) in step 2.
+		 */
+		state->depth.sensor.pipe_id = PIPE_NOT_CONFIGURED;
+		state->ir.sensor.pipe_id = PIPE_NOT_CONFIGURED;
+		state->rgb.sensor.pipe_id = PIPE_NOT_CONFIGURED;
+		state->imu.sensor.pipe_id = PIPE_NOT_CONFIGURED;
+
 		ret = ds5_hw_reset_with_recovery(state);
 		if (ret < 0) {
 			dev_err(&c->dev, "%s(): probe HW reset recovery failed: %d\n",
 				__func__, ret);
 			goto e_chardev;
 		}
+
+		/* Allow the camera firmware to fully stabilize after HW reset
+		 * before subsequent driver instances attempt I2C communication.
+		 * Without this delay, the D457's FW may be briefly unresponsive
+		 * during a post-reset initialization phase, causing later probe
+		 * instances (especially the 4th/IMU) to fail I2C checks.
+		 */
+		msleep(100);
 	}
 
-	ret = ds5_read(state, 0x5020, &rec_state);
+	/* Verify communication with retries and delay.
+	 * After HW reset (done by the first probe instance), the camera
+	 * firmware may still be initializing and briefly NAK I2C requests.
+	 * Use the same retry pattern as the initial communication check.
+	 */
+	retry = 10;
+	do {
+		ret = ds5_read(state, 0x5020, &rec_state);
+		if (ret < 0)
+			msleep(50);
+	} while (retry-- && ret < 0);
 	if (ret < 0) {
 		dev_err(&c->dev, "%s(): cannot communicate with D4XX: %d\n",
 				__func__, ret);
