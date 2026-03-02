@@ -3865,8 +3865,8 @@ static int ds5_board_setup(struct ds5 *state)
 			 */
 			int j;
 
-			for (j = i + 1; j < MAX_DEV_NUM; j++) {
-				if (!serdes_inited[j]) {
+			for (j = 0; j < MAX_DEV_NUM; j++) {
+				if (j != i && !serdes_inited[j]) {
 					serdes_inited[j] = state;
 					dev_info(dev, "registered peer instance in serdes_inited[%d]\n", j);
 					return -ENOTSUPP;
@@ -4026,8 +4026,8 @@ static int ds5_board_setup(struct ds5 *state)
 		if (serdes_inited[i] && serdes_inited[i]->ser_dev == state->ser_dev) {
 			int j;
 
-			for (j = i + 1; j < MAX_DEV_NUM; j++) {
-				if (!serdes_inited[j]) {
+			for (j = 0; j < MAX_DEV_NUM; j++) {
+				if (j != i && !serdes_inited[j]) {
 					serdes_inited[j] = state;
 					dev_info(dev, "registered peer instance in serdes_inited[%d]\n", j);
 					return -ENOTSUPP;
