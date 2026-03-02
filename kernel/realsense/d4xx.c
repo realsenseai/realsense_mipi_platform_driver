@@ -6411,10 +6411,12 @@ static int ds5_remove(struct i2c_client *c)
 			break;
 		}
 	}
-	if (state->ser_i2c)
-		i2c_unregister_device(state->ser_i2c);
-	if (state->dser_i2c)
-		i2c_unregister_device(state->dser_i2c);
+	if (state->serdes_primary) {
+		if (state->ser_i2c)
+			i2c_unregister_device(state->ser_i2c);
+		if (state->dser_i2c && !state->aggregated)
+			i2c_unregister_device(state->dser_i2c);
+	}
 #endif
 #ifndef CONFIG_TEGRA_CAMERA_PLATFORM
 	state->is_depth = 1;
