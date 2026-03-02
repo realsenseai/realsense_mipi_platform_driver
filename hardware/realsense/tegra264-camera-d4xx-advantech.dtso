@@ -2,12 +2,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2018-2023, INTEL CORPORATION.  All rights reserved.
 
 /dts-v1/;
-/plugin/;
+/plugin/
 
 #include <dt-bindings/gpio/tegra264-gpio.h>
 
 /* camera control gpio definitions */
-/ {
+{
 	overlay-name = "Jetson RealSense Camera D4xx with max96712 for Thor";
 	jetson-header-name = "Jetson AGX CSI Connector";
 	compatible = "nvidia,p4071-0000+p3834-0008", "nvidia,p3834-0008", "nvidia,tegra264";
@@ -36,7 +36,7 @@
 						d4xx_vi_in1: endpoint {
 							status = "okay";
 							vc-id = <1>;
-							port-index = <0>;
+							port-index = <1>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out1>;
 						};
@@ -47,7 +47,7 @@
 						d4xx_vi_in2: endpoint {
 							status = "okay";
 							vc-id = <2>;
-							port-index = <0>;
+							port-index = <2>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out2>;
 						};
@@ -58,7 +58,7 @@
 						d4xx_vi_in3: endpoint {
 							status = "okay";
 							vc-id = <3>;
-							port-index = <0>;
+							port-index = <3>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out3>;
 						};
@@ -167,7 +167,7 @@
 									reg = <0>;
 									d4xx_csi_in1: endpoint@2 {
 										status = "okay";
-										port-index = <0>;
+										port-index = <1>;
 										bus-width = <2>;
 										remote-endpoint = <&ds5_1_out>;
 									};
@@ -192,7 +192,7 @@
 									reg = <0>;
 									d4xx_csi_in2: endpoint@4 {
 										status = "okay";
-										port-index = <0>;
+										port-index = <2>;
 										bus-width = <2>;
 										remote-endpoint = <&ds5_2_out>;
 									};
@@ -217,7 +217,7 @@
 									reg = <0>;
 									d4xx_csi_in3: endpoint@6 {
 										status = "okay";
-										port-index = <0>;
+										port-index = <3>;
 										bus-width = <2>;
 										remote-endpoint = <&ds5_3_out>;
 									};
@@ -284,14 +284,14 @@
 							csi_pixel_bit_depth = "16";
 							active_w = "640";
 							active_h = "480";
-							tegra_sinterface = "serial_b";
+							tegra_sinterface = "serial_d";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "0";
 						};
 						gmsl-link {
-							src-csi-port = "b";
+							src-csi-port = "d";
 							dst-csi-port = "a";
 							serdes-csi-link = "a";
 							csi-mode = "1x4";
@@ -332,14 +332,14 @@
 							csi_pixel_bit_depth = "16";
 							active_w = "1280";
 							active_h = "720";
-							tegra_sinterface = "serial_b";
+							tegra_sinterface = "serial_c";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "1";
 						};
 						gmsl-link {
-							src-csi-port = "b";
+							src-csi-port = "c";
 							dst-csi-port = "a";
 							serdes-csi-link = "a";
 							csi-mode = "1x4";
@@ -379,7 +379,7 @@
 							csi_pixel_bit_depth = "16";
 							active_w = "1920";
 							active_h = "1080";
-							tegra_sinterface = "serial_e";
+							tegra_sinterface = "serial_b";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
 							line_length = "1280"; /* 2200 */
@@ -432,7 +432,7 @@
 							embedded_metadata_height = "1";
 						};
 						gmsl-link {
-							src-csi-port = "b";
+							src-csi-port = "a";
 							dst-csi-port = "a";
 							serdes-csi-link = "a";
 							csi-mode = "1x4";
