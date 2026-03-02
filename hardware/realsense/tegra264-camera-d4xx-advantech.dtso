@@ -68,7 +68,7 @@
 			tegra-camera-platform {
 				compatible = "nvidia,tegra-camera-platform";
 				status = "okay";
-				num_csi_lanes = <4>;
+				num_csi_lanes = <2>;
 				max_lane_speed = <1500000>;
 				min_bits_per_pixel = <8>;
 				vi_peak_byte_per_pixel = <2>;
@@ -86,7 +86,7 @@
 						drivernode0 {
 							status = "okay";
 							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 9-001a";
+							devname = "d4xx 9-001c";
 							proc-device-tree = "/proc/device-tree/bus@0/i2c@810c6a0000/ds5@1c";
 						};
 					};
@@ -98,7 +98,7 @@
 						drivernode0 {
 							status = "okay";
 							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 9-001a";
+							devname = "d4xx 9-001a";
 							proc-device-tree = "/proc/device-tree/bus@0/i2c@810c6a0000/ds5@1a";
 						};
 					};
@@ -110,7 +110,7 @@
 						drivernode0 {
 							status = "okay";
 							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 9-001a";
+							devname = "DS5 mux 9-001d";
 							proc-device-tree = "/proc/device-tree/bus@0/i2c@810c6a0000/ds5@1d";
 						};
 					};
@@ -122,7 +122,7 @@
 						drivernode0 {
 							status = "okay";
 							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 9-001a";
+							devname = "d4xx 9-001b";
 							proc-device-tree = "/proc/device-tree/bus@0/i2c@810c6a0000/ds5@1b";
 						};
 					};

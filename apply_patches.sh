@@ -74,7 +74,7 @@ apply_external_patches() {
         fi
 	echo -e "\e[33m$(ls -Ld ${PWD}/$2/$1)\e[0m"
         ls -Lw1 "${PWD}/$2/$1"
-        git -C "sources_${JETPACK_VERSION}/$2" apply --reject --verbose "${PWD}/$2/$1"/*
+        git -C "sources_${JETPACK_VERSION}/$2" apply "${PWD}/$2/$1"/*
     elif [[ "$ACTION" = "reset" ]]; then
         if ! git -C "sources_${JETPACK_VERSION}/$2" diff --quiet || ! git -C "sources_${JETPACK_VERSION}/$2" diff --cached --quiet; then
             read -p "Repo sources_${JETPACK_VERSION}/$2 has changes that will be hard reset. Continue (y/N)? " confirm

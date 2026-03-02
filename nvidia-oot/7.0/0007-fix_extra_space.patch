@@ -1,0 +1,13 @@
+diff --git a/drivers/video/tegra/camera/tegra_camera_platform.c b/drivers/video/tegra/camera/tegra_camera_platform.c
+index ef53a248..0d329b9b 100644
+--- a/drivers/video/tegra/camera/tegra_camera_platform.c
++++ b/drivers/video/tegra/camera/tegra_camera_platform.c
+@@ -68,7 +68,7 @@ static const struct of_device_id tegra_camera_of_ids[] = {
+ 	{ .compatible = "nvidia,tegra-camera-platform" },
+ 	{ },
+ };
+-MODULE_DEVICE_TABLE(of, tegra_camera_of_ids);
++MODULE_DEVICE_TABLE(of,tegra_camera_of_ids);
+ 
+ static struct miscdevice tegra_camera_misc;
+ 
