@@ -497,6 +497,14 @@ struct ds5_counters {
 static atomic_t ds5_reset_gen = ATOMIC_INIT(0);
 static atomic_t ds5_probe_reset_once = ATOMIC_INIT(0);
 
+/* Cached device type from HW reset Step 8.
+ * During probe the first instance resets the camera, causing DS5_DEVICE_TYPE
+ * to temporarily return 0.  Step 8 polls until the register is valid and
+ * stores the result here so that all four probe instances (and any post-reset
+ * code path) can use the confirmed value even if the register read returns 0.
+ */
+static u16 ds5_cached_device_type;
+
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 static DEFINE_MUTEX(serdes_lock__);
 
@@ -2720,10 +2728,11 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 		for (retry = 0; retry < DS5_HW_RESET_MAX_RETRIES; retry++) {
 			ret = ds5_read(state, DS5_DEVICE_TYPE, &dev_type);
 			if (ret == 0 && dev_type != 0) {
-				dev_dbg(&state->client->dev,
+				dev_info(&state->client->dev,
 					"%s(): Device type 0x%x ready after %d ms\n",
 					__func__, dev_type,
 					(retry + 1) * DS5_HW_RESET_POLL_INTERVAL_MS);
+				ds5_cached_device_type = dev_type;
 				break;
 			}
 			msleep(DS5_HW_RESET_POLL_INTERVAL_MS);
@@ -5390,6 +5399,16 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	if (ret < 0)
 		return ret;
 
+	/* After HW reset the FW may not have populated DS5_DEVICE_TYPE yet.
+	 * Use the cached value confirmed by Step 8 in hw_reset_with_recovery.
+	 */
+	if (dev_type == 0 && ds5_cached_device_type != 0) {
+		dev_info(&client->dev,
+			"%s(): device type register returned 0, using cached type 0x%x\n",
+			__func__, ds5_cached_device_type);
+		dev_type = ds5_cached_device_type;
+	}
+
 	dev_dbg(&client->dev, "%s(): cfg0 %x %ux%u cfg0_md %x %ux%u\n", __func__,
 		 cfg0, dw, dh, cfg0_md, yw, yh);
 
@@ -5414,7 +5433,10 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 		sensor->formats = ds5_depth_formats_d46x;
 		break;
 	default:
-		sensor->formats = ds5_depth_formats_d46x;
+		dev_warn(&client->dev,
+			"%s(): unknown device type 0x%x, using D43X format tables\n",
+			__func__, dev_type);
+		sensor->formats = ds5_depth_formats_d43x;
 	}
 	sensor->n_formats = 1;
 	sensor->mux_pad = DS5_MUX_PAD_DEPTH;
@@ -5875,6 +5897,13 @@ static void ds5_adjust_sync_mode_control(struct i2c_client *client, struct ds5 *
 	if (ret < 0) {
 		dev_warn(&client->dev, "%s(): Failed to read device type\n", __func__);
 		return;
+	}
+
+	if (dev_type == 0 && ds5_cached_device_type != 0) {
+		dev_info(&client->dev,
+			"%s(): device type register returned 0, using cached type 0x%x\n",
+			__func__, ds5_cached_device_type);
+		dev_type = ds5_cached_device_type;
 	}
 
 	switch (dev_type) {
