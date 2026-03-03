@@ -2177,7 +2177,12 @@ static int ds5_get_hwmc_status(struct ds5 *state)
 		if (retries != 100)
 			msleep_range(1);
 		ret = ds5_read(state, DS5_HWMC_STATUS, &status);
-	} while (!ret && retries-- && status == DS5_HWMC_STATUS_WIP);
+		if (ret) {
+			dev_dbg(&state->client->dev,
+				"%s(): I2C read failed (%d), retries left: %d\n",
+				__func__, ret, retries);
+		}
+	} while (retries-- && (ret || status == DS5_HWMC_STATUS_WIP));
 	dev_dbg(&state->client->dev,
 			"%s(): ret: 0x%x, status: 0x%x\n",
 			__func__, ret, status);
@@ -2730,6 +2735,75 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 				__func__, dev_type, DS5_HW_RESET_TIMEOUT_MS);
 	}
 
+	/* 9. Verify HWMC subsystem is ready to accept commands.
+	 * After HW reset the FW reports 0xDEAD and populates device type
+	 * before the HWM command processor is fully initialized.  If
+	 * userspace queries GVD/HWMC immediately after we return, the
+	 * I2C reads NAK (EREMOTEIO) or return stale status (WIP/ERR),
+	 * which can crash RS Viewer.  Send a lightweight GVD command and
+	 * poll HWMC_STATUS until it completes successfully.
+	 */
+	{
+		struct hwm_cmd hwmc_probe;
+		u16 hwmc_status = DS5_HWMC_STATUS_WIP;
+		int hwmc_ret;
+
+		memcpy(&hwmc_probe, &gvd, sizeof(gvd));
+
+		for (retry = 0; retry < DS5_HW_RESET_MAX_RETRIES; retry++) {
+			hwmc_ret = ds5_raw_write(state, DS5_HWMC_DATA,
+						 &hwmc_probe, sizeof(hwmc_probe));
+			if (hwmc_ret) {
+				dev_dbg(&state->client->dev,
+					"%s(): HWMC probe write failed (%d), retry %d\n",
+					__func__, hwmc_ret, retry);
+				msleep(DS5_HW_RESET_POLL_INTERVAL_MS);
+				continue;
+			}
+
+			hwmc_ret = ds5_write(state, DS5_HWMC_EXEC, 0x01);
+			if (hwmc_ret) {
+				dev_dbg(&state->client->dev,
+					"%s(): HWMC probe exec failed (%d), retry %d\n",
+					__func__, hwmc_ret, retry);
+				msleep(DS5_HW_RESET_POLL_INTERVAL_MS);
+				continue;
+			}
+
+			/* Poll status — allow both I2C and WIP retries */
+			{
+				int poll;
+
+				for (poll = 0; poll < 100; poll++) {
+					msleep_range(5);
+					hwmc_ret = ds5_read(state, DS5_HWMC_STATUS,
+							     &hwmc_status);
+					if (hwmc_ret == 0 &&
+					    hwmc_status == DS5_HWMC_STATUS_OK)
+						break;
+				}
+			}
+
+			if (hwmc_ret == 0 && hwmc_status == DS5_HWMC_STATUS_OK) {
+				dev_info(&state->client->dev,
+					"%s(): HWMC ready after %d ms\n",
+					__func__,
+					(retry + 1) * DS5_HW_RESET_POLL_INTERVAL_MS);
+				break;
+			}
+
+			dev_dbg(&state->client->dev,
+				"%s(): HWMC not ready (status: 0x%x, ret: %d), retry %d\n",
+				__func__, hwmc_status, hwmc_ret, retry);
+			msleep(DS5_HW_RESET_POLL_INTERVAL_MS);
+		}
+
+		if (retry >= DS5_HW_RESET_MAX_RETRIES)
+			dev_warn(&state->client->dev,
+				"%s(): HWMC subsystem not ready after %d ms, userspace queries may fail\n",
+				__func__, DS5_HW_RESET_TIMEOUT_MS);
+	}
+
 	dev_info(&state->client->dev,
 		"%s(): HW reset complete. Firmware: %d.%d.%d.%d\n",
 		__func__,
@@ -3126,24 +3200,24 @@ static int ds5_gvd(struct ds5 *state, unsigned char *data)
 	struct hwm_cmd cmd;
 	int ret = -1;
 	u16 length = 0;
-	u16 status = 2;
-	u8 retries = 3;
+	u16 status = DS5_HWMC_STATUS_WIP;
+	u8 retries = 20;
 
 	memcpy(&cmd, &gvd, sizeof(gvd));
 	ds5_raw_write_with_check(state, DS5_HWMC_DATA, &cmd, sizeof(cmd)); /* Write command data */
 	ds5_write_with_check(state, DS5_HWMC_EXEC, 0x01); /* execute cmd */
 	do {
-		if (retries != 3)
-			msleep_range(10);
+		if (retries != 20)
+			msleep_range(50);
 
 		ret = ds5_read(state, DS5_HWMC_STATUS, &status);
-	} while (ret && retries-- && status != 0);
+	} while ((ret || status == DS5_HWMC_STATUS_WIP) && retries--);
 
-	if (ret || status != 0) {
+	if (ret || status != DS5_HWMC_STATUS_OK) {
 		dev_err(&state->client->dev,
-				"%s(): Failed to read GVD, HWM cmd status: %x\n",
-				__func__, status);
-		return status;
+				"%s(): Failed to read GVD, HWM cmd status: %x, ret: %d\n",
+				__func__, status, ret);
+		return -EIO;
 	}
 
 	ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN, &length, sizeof(length)); /* Read response length */
