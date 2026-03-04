@@ -4,3 +4,4 @@
 /sources_*
 /.claude/skills/v4l2-test/v4l2-test_results
 **__pycache__
+/test.logs
