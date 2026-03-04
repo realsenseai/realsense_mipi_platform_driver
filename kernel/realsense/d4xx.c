@@ -497,6 +497,12 @@ struct ds5_counters {
 static atomic_t ds5_reset_gen = ATOMIC_INIT(0);
 static atomic_t ds5_probe_reset_once = ATOMIC_INIT(0);
 
+/* Timestamp (jiffies) of last completed HW reset.
+ * Used to enforce DS5_HW_RESET_COOLDOWN_MS between consecutive resets
+ * and prevent GMSL link degradation from rapid reset cycles.
+ */
+static unsigned long ds5_last_reset_jiffies;
+
 /* Cached device type from HW reset Step 8.
  * During probe the first instance resets the camera, causing DS5_DEVICE_TYPE
  * to temporarily return 0.  Step 8 polls until the register is valid and
@@ -2303,6 +2309,22 @@ static int ds5_set_calibration_data(struct ds5 *state,
 #define DS5_HW_RESET_TIMEOUT_MS		10000
 #define DS5_HW_RESET_MAX_RETRIES	(DS5_HW_RESET_TIMEOUT_MS / DS5_HW_RESET_POLL_INTERVAL_MS)
 
+/* Post-reset I2C stability verification (Step 10).
+ * After FW reports ready and HWMC passes, verify the I2C link is
+ * *sustained* — some camera SKUs (D401) have a secondary FW init phase
+ * that briefly drops I2C ~65ms after the initial checks pass.
+ */
+#define DS5_HW_RESET_STABILITY_READS	3	/* consecutive successful reads */
+#define DS5_HW_RESET_STABILITY_INTERVAL_MS 200	/* between each check */
+#define DS5_HW_RESET_STABILITY_TIMEOUT_MS 3000	/* max wait for stable link */
+
+/* Minimum interval between consecutive HW resets (ms).
+ * Rapid back-to-back resets degrade the GMSL link because each
+ * serializer re-init (Phase 1) conflicts with the camera FW's own
+ * I2C bus reconfiguration after reboot.
+ */
+#define DS5_HW_RESET_COOLDOWN_MS	5000
+
 /*
  * Register 0x5020 status values (from firmware):
  * - 0xDEAD: Device in normal UVC mode (ready) - ICT returns error for unhandled cmd
@@ -2314,16 +2336,21 @@ static int ds5_set_calibration_data(struct ds5 *state,
 
 /*
  * ds5_hw_reset_serdes_recovery - Tiered SERDES recovery after HW reset.
+ * @state: Driver state
+ * @force_phase2: When true, skip Phase 1 and go straight to Phase 2
+ *                (full deserializer reset).  Used by Step 10 when the
+ *                I2C link is unstable despite Phase 1 having passed.
  *
  * Phase 1: Re-init serializer only (per-camera, non-disruptive).
- * Phase 2: If I2C still fails, perform a full deserializer reset_oneshot
- *          (chip-wide, disruptive) only when no sibling camera on the same
- *          deserializer is currently reachable over I2C and streaming.
+ * Phase 2: If I2C still fails (or force_phase2), perform a full deserializer
+ *          reset_oneshot (chip-wide, disruptive) only when no sibling camera
+ *          on the same deserializer is currently reachable over I2C and
+ *          streaming.
  *
  * Returns 0 on success, negative errno on failure.
  */
 #ifdef CONFIG_VIDEO_D4XX_SERDES
-static int ds5_hw_reset_serdes_recovery(struct ds5 *state)
+static int ds5_hw_reset_serdes_recovery(struct ds5 *state, bool force_phase2)
 {
 	int ret;
 	int i;
@@ -2333,29 +2360,35 @@ static int ds5_hw_reset_serdes_recovery(struct ds5 *state)
 	if (!state->ser_dev || !state->dser_dev)
 		return 0;
 
-	/* Phase 1 — serializer-only re-init (per-camera, safe) */
-	dev_info(&state->client->dev,
-		"%s(): Phase 1 - re-initializing serializer\n", __func__);
-	ret = max9295_init_settings(state->ser_dev);
-	if (ret < 0)
-		dev_warn(&state->client->dev,
-			"%s(): serializer init_settings failed: %d\n",
-			__func__, ret);
-
-	msleep(100);
-
-	/* Verify I2C link to camera is working */
-	ret = ds5_read(state, DS5_FW_VERSION, &tmp);
-	if (ret == 0) {
+	if (!force_phase2) {
+		/* Phase 1 — serializer-only re-init (per-camera, safe) */
 		dev_info(&state->client->dev,
-			"%s(): Phase 1 succeeded, I2C link OK\n", __func__);
-		return 0;
-	}
+			"%s(): Phase 1 - re-initializing serializer\n", __func__);
+		ret = max9295_init_settings(state->ser_dev);
+		if (ret < 0)
+			dev_warn(&state->client->dev,
+				"%s(): serializer init_settings failed: %d\n",
+				__func__, ret);
 
-	/* Phase 2 — I2C still broken; consider full deserializer reset */
-	dev_warn(&state->client->dev,
-		"%s(): Phase 1 failed (I2C err %d), checking siblings before deser reset\n",
-		__func__, ret);
+		msleep(100);
+
+		/* Verify I2C link to camera is working */
+		ret = ds5_read(state, DS5_FW_VERSION, &tmp);
+		if (ret == 0) {
+			dev_info(&state->client->dev,
+				"%s(): Phase 1 succeeded, I2C link OK\n", __func__);
+			return 0;
+		}
+
+		/* Phase 2 — I2C still broken; consider full deserializer reset */
+		dev_warn(&state->client->dev,
+			"%s(): Phase 1 failed (I2C err %d), checking siblings before deser reset\n",
+			__func__, ret);
+	} else {
+		dev_info(&state->client->dev,
+			"%s(): Phase 2 forced (I2C link unstable after Phase 1), checking siblings\n",
+			__func__);
+	}
 
 	/*
 	 * In the D4XX architecture each physical camera has 4 driver instances
@@ -2511,6 +2544,28 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 
 	dev_info(&state->client->dev, "%s(): Initiating HW reset with recovery\n",
 		__func__);
+
+	/* 0. Reset cooldown — prevent rapid consecutive resets.
+	 *    Repeated HW reset + Phase-1 serializer re-init without letting
+	 *    the camera FW finish its post-boot I2C bus reconfiguration
+	 *    progressively degrades the GMSL link until even SERDES pipe
+	 *    setup fails.  Enforce a minimum interval between resets.
+	 *    Skip check on the very first reset (ds5_last_reset_jiffies == 0).
+	 */
+	if (ds5_last_reset_jiffies) {
+		unsigned long elapsed = jiffies - ds5_last_reset_jiffies;
+		unsigned long cooldown = msecs_to_jiffies(DS5_HW_RESET_COOLDOWN_MS);
+
+		if (time_before(jiffies, ds5_last_reset_jiffies + cooldown)) {
+			unsigned long remaining = cooldown - elapsed;
+
+			dev_info(&state->client->dev,
+				"%s(): Reset cooldown — last reset %u ms ago, waiting %u ms\n",
+				__func__, jiffies_to_msecs(elapsed),
+				jiffies_to_msecs(remaining));
+			msleep(jiffies_to_msecs(remaining));
+		}
+	}
 
 	/* 1. Stop active streams on the device before reset.
 	 *    This ensures FW and SERDES are in a clean state.
@@ -2691,7 +2746,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	 *    Phase 1: serializer-only re-init (per-camera, non-disruptive).
 	 *    Phase 2: full deserializer reset only if ALL siblings are also dead.
 	 */
-	ret = ds5_hw_reset_serdes_recovery(state);
+	ret = ds5_hw_reset_serdes_recovery(state, false);
 	if (ret < 0) {
 		dev_err(&state->client->dev,
 			"%s(): SERDES recovery failed: %d\n", __func__, ret);
@@ -2813,11 +2868,104 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 				__func__, DS5_HW_RESET_TIMEOUT_MS);
 	}
 
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	/* 10. Post-reset I2C stability verification.
+	 *     Some camera SKUs (notably D401 with FW 5.17.x) have a secondary
+	 *     FW initialization phase that briefly drops the I2C bus ~65ms after
+	 *     the initial readiness checks (Steps 7-9) pass.  If we return now,
+	 *     userspace HWMC queries NAK, the viewer triggers another reset,
+	 *     and repeated rapid resets degrade the GMSL link until SERDES pipe
+	 *     setup fails and the device is unrecoverable without a host reboot.
+	 *
+	 *     Verify I2C stability by performing DS5_HW_RESET_STABILITY_READS
+	 *     consecutive successful reads spaced DS5_HW_RESET_STABILITY_INTERVAL_MS
+	 *     apart.  If the link drops mid-verification, reset the counter and
+	 *     keep waiting (up to DS5_HW_RESET_STABILITY_TIMEOUT_MS).  If it
+	 *     remains unstable, escalate to Phase 2 (full deserializer reset).
+	 */
+	{
+		int stable_count = 0;
+		unsigned long stab_ts = jiffies;
+		unsigned long stab_timeout =
+			stab_ts + msecs_to_jiffies(DS5_HW_RESET_STABILITY_TIMEOUT_MS);
+		u16 stab_val = 0;
+
+		while (time_before(jiffies, stab_timeout)) {
+			msleep(DS5_HW_RESET_STABILITY_INTERVAL_MS);
+
+			ret = ds5_read(state, DS5_FW_VERSION, &stab_val);
+			if (ret == 0 && stab_val != 0) {
+				stable_count++;
+				if (stable_count >= DS5_HW_RESET_STABILITY_READS) {
+					dev_info(&state->client->dev,
+						"%s(): I2C link stable after %d ms (%d consecutive reads OK)\n",
+						__func__,
+						jiffies_to_msecs(jiffies - stab_ts),
+						stable_count);
+					break;
+				}
+			} else {
+				if (stable_count > 0)
+					dev_warn(&state->client->dev,
+						"%s(): I2C stability check failed after %d OK reads (ret=%d, val=0x%x), resetting counter\n",
+						__func__, stable_count, ret, stab_val);
+				stable_count = 0;
+			}
+		}
+
+		if (stable_count < DS5_HW_RESET_STABILITY_READS) {
+			/* I2C link is unstable — escalate to Phase 2 (full deser reset) */
+			dev_warn(&state->client->dev,
+				"%s(): I2C link unstable after %d ms, escalating to Phase 2 SERDES recovery\n",
+				__func__,
+				jiffies_to_msecs(jiffies - stab_ts));
+
+			ret = ds5_hw_reset_serdes_recovery(state, true);
+			if (ret < 0) {
+				dev_err(&state->client->dev,
+					"%s(): Phase 2 escalation failed: %d\n",
+					__func__, ret);
+				/* Continue anyway — the device might still be partially usable */
+			} else {
+				/* Re-verify stability after Phase 2 */
+				stable_count = 0;
+				stab_ts = jiffies;
+				stab_timeout = stab_ts + msecs_to_jiffies(
+					DS5_HW_RESET_STABILITY_TIMEOUT_MS);
+
+				while (time_before(jiffies, stab_timeout)) {
+					msleep(DS5_HW_RESET_STABILITY_INTERVAL_MS);
+					ret = ds5_read(state, DS5_FW_VERSION, &stab_val);
+					if (ret == 0 && stab_val != 0) {
+						stable_count++;
+						if (stable_count >= DS5_HW_RESET_STABILITY_READS) {
+							dev_info(&state->client->dev,
+								"%s(): I2C link stable after Phase 2 (%d ms)\n",
+								__func__,
+								jiffies_to_msecs(jiffies - stab_ts));
+							break;
+						}
+					} else {
+						stable_count = 0;
+					}
+				}
+
+				if (stable_count < DS5_HW_RESET_STABILITY_READS)
+					dev_warn(&state->client->dev,
+						"%s(): I2C still unstable after Phase 2, proceeding anyway\n",
+						__func__);
+			}
+		}
+	}
+#endif
+
 	dev_info(&state->client->dev,
 		"%s(): HW reset complete. Firmware: %d.%d.%d.%d\n",
 		__func__,
 		(state->fw_version >> 8) & 0xff, state->fw_version & 0xff,
 		(state->fw_build >> 8) & 0xff, state->fw_build & 0xff);
+
+	ds5_last_reset_jiffies = jiffies;
 
 	return 0;
 }
