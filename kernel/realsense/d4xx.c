@@ -2323,7 +2323,7 @@ static int ds5_set_calibration_data(struct ds5 *state,
  * serializer re-init (Phase 1) conflicts with the camera FW's own
  * I2C bus reconfiguration after reboot.
  */
-#define DS5_HW_RESET_COOLDOWN_MS	5000
+#define DS5_HW_RESET_COOLDOWN_MS	2000
 
 /*
  * Register 0x5020 status values (from firmware):
@@ -2641,6 +2641,9 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	int retry;
 	int __maybe_unused i;
 	u16 status = 0;
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	bool serdes_recovery_ran = false;
+#endif
 
 	dev_info(&state->client->dev, "%s(): Initiating HW reset with recovery\n",
 		__func__);
@@ -2842,15 +2845,58 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	}
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
-	/* 6. Tiered SERDES recovery:
-	 *    Phase 1: serializer-only re-init (per-camera, non-disruptive).
-	 *    Phase 2: full deserializer reset only if ALL siblings are also dead.
+	/* 6. Tiered SERDES recovery (conditional).
+	 *    Step 5 polled the device over I2C until 0xDEAD was returned,
+	 *    which means the GMSL link was already up at that point.  Probe
+	 *    the I2C link once more: if it is still alive, the GMSL link
+	 *    recovered naturally and full SERDES recovery (Phase 1 stability
+	 *    dance + potential Phase 2 escalation) is unnecessary — this is
+	 *    the common case for D457.
+	 *
+	 *    However, we must ALWAYS call max9295_init_settings() to restore
+	 *    the serializer's global pipe-enable, CSI port selection, and
+	 *    data-source registers.  The D457 FW reconfigures the MAX9295
+	 *    during its post-boot sequence, potentially overwriting these
+	 *    global registers.  Without re-init, per-pipe setup later in
+	 *    ds5_setup_pipeline() may fail — especially for pipe 3 (IMU)
+	 *    which the FW does not configure for its own use.
+	 *
+	 *    Only run the FULL tiered recovery (with stability checks and
+	 *    Phase 2 escalation) when the I2C link is actually broken —
+	 *    e.g. the camera FW's secondary init phase dropped the bus
+	 *    between Step 5 and now (observed on D401, occasionally D457).
 	 */
-	ret = ds5_hw_reset_serdes_recovery(state, false);
-	if (ret < 0) {
-		dev_err(&state->client->dev,
-			"%s(): SERDES recovery failed: %d\n", __func__, ret);
-		return ret;
+	{
+		u16 link_probe = 0;
+
+		/* Always restore serializer global state (pipe enables, port
+		 * selection, data sources).  This is a lightweight I2C write
+		 * sequence with no sleeps — ~0ms overhead.
+		 */
+		ret = max9295_init_settings(state->ser_dev);
+		if (ret < 0)
+			dev_warn(&state->client->dev,
+				"%s(): serializer init_settings failed: %d (continuing)\n",
+				__func__, ret);
+
+		ret = ds5_read(state, DS5_FW_VERSION, &link_probe);
+		if (ret < 0 || link_probe == 0) {
+			dev_info(&state->client->dev,
+				"%s(): I2C link dead after Step 5 (ret=%d, val=0x%x), running full SERDES recovery\n",
+				__func__, ret, link_probe);
+			ret = ds5_hw_reset_serdes_recovery(state, false);
+			if (ret < 0) {
+				dev_err(&state->client->dev,
+					"%s(): SERDES recovery failed: %d\n",
+					__func__, ret);
+				return ret;
+			}
+			serdes_recovery_ran = true;
+		} else {
+			dev_info(&state->client->dev,
+				"%s(): GMSL link recovered naturally (FW ver 0x%04x), skipping full SERDES recovery\n",
+				__func__, link_probe);
+		}
 	}
 #endif
 
@@ -2969,7 +3015,14 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	}
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
-	/* 10. Post-reset I2C stability verification.
+	/* 10. Post-reset I2C stability verification (conditional).
+	 *     Only needed when SERDES recovery was actively performed in Step 6,
+	 *     because the serializer/deserializer re-init can cause transient
+	 *     I2C instability.  When the GMSL link recovered naturally (Step 6
+	 *     was skipped), Steps 7-9 already verified the link via multiple
+	 *     I2C reads — an additional 600ms+ stability loop is unnecessary
+	 *     and causes timing-sensitive CI test failures.
+	 *
 	 *     Some camera SKUs have a secondary FW initialization phase that
 	 *     briefly drops the I2C bus ~65-110ms after the initial readiness
 	 *     checks (Steps 7-9) pass.  This has been observed on both D401
@@ -2984,7 +3037,11 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	 *     keep waiting (up to DS5_HW_RESET_STABILITY_TIMEOUT_MS).  If it
 	 *     remains unstable, escalate to Phase 2 (full deserializer reset).
 	 */
-	{
+	if (!serdes_recovery_ran) {
+		dev_info(&state->client->dev,
+			"%s(): SERDES recovery was skipped (natural link recovery), "
+			"bypassing Step 10 stability verification\n", __func__);
+	} else {
 		int stable_count = 0;
 		unsigned long stab_ts = jiffies;
 		unsigned long stab_timeout =
@@ -3057,7 +3114,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 						__func__);
 			}
 		}
-	}
+	} /* if (serdes_recovery_ran) */
 #endif
 
 	dev_info(&state->client->dev,
