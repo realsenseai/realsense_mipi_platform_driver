@@ -3775,12 +3775,20 @@ static int ds5_serdes_setup(struct ds5 *state)
 		return ret;
 	}
 
+	dev_info(&c->dev, "serdes_setup: g_ctx sdev_reg=0x%x sdev_def=0x%x "
+		"st_vc=%d dst_vc=%d src_csi=%d dst_csi=%d num_lanes=%d csi_mode=%d\n",
+		state->g_ctx.sdev_reg, state->g_ctx.sdev_def,
+		state->g_ctx.st_vc, state->g_ctx.dst_vc,
+		state->g_ctx.src_csi_port, state->g_ctx.dst_csi_port,
+		state->g_ctx.num_csi_lanes, state->g_ctx.csi_mode);
+
 	/* Pair sensor to serializer dev */
 	ret = max9295_sdev_pair(state->ser_dev, &state->g_ctx);
 	if (ret) {
 		dev_err(&c->dev, "gmsl ser pairing failed\n");
 		return ret;
 	}
+	dev_info(&c->dev, "serdes_setup: max9295_sdev_pair ok\n");
 
 	/* Register sensor to deserializer dev */
 	ret = state->dser_ops->sdev_register(state->dser_dev, &state->g_ctx);
@@ -3794,6 +3802,7 @@ static int ds5_serdes_setup(struct ds5 *state)
 		dev_err(&c->dev, "%s gmsl serdes setup failed\n", __func__);
 		return ret;
 	}
+	dev_info(&c->dev, "serdes_setup: gmsl_serdes_setup ok\n");
 
 	ret = max9295_init_settings(state->ser_dev);
 	if (ret) {
@@ -3801,6 +3810,7 @@ static int ds5_serdes_setup(struct ds5 *state)
 			__func__);
 		return ret;
 	}
+	dev_info(&c->dev, "serdes_setup: max9295_init_settings ok\n");
 
 	ret = state->dser_ops->init_settings(state->dser_dev);
 	if (ret) {
@@ -3808,6 +3818,8 @@ static int ds5_serdes_setup(struct ds5 *state)
 			__func__, state->dser_ops->name);
 		return ret;
 	}
+	dev_info(&c->dev, "serdes_setup: %s init_settings ok\n",
+		state->dser_ops->name);
 
 	return ret;
 }

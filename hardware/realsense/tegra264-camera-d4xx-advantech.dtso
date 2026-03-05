@@ -288,7 +288,7 @@
 							csi_pixel_bit_depth = "16";
 							active_w = "640";
 							active_h = "480";
-							tegra_sinterface = "serial_a";
+							tegra_sinterface = "serial_b";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
 							line_length = "800"; /* 2200 */
@@ -336,7 +336,7 @@
 							csi_pixel_bit_depth = "16";
 							active_w = "1280";
 							active_h = "720";
-							tegra_sinterface = "serial_a";
+							tegra_sinterface = "serial_b";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
 							line_length = "1650"; /* 2200 */
@@ -383,7 +383,7 @@
 							csi_pixel_bit_depth = "16";
 							active_w = "1920";
 							active_h = "1080";
-							tegra_sinterface = "serial_a";
+							tegra_sinterface = "serial_e";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
 							line_length = "2200"; /* 2200 */
