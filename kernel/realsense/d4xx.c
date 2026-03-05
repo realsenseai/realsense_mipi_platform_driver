@@ -1756,14 +1756,13 @@ static struct ds5_sensor *ds5_get_active_sensor(struct ds5 *state)
 static void ds5_invalidate_sensor(struct ds5 *state, struct ds5_sensor *sensor)
 {
 	ds5_config_cache_clear(sensor);
-#ifdef CONFIG_VIDEO_D4XX_SERDES
-	if (sensor->pipe_id >= 0 && state->dser_dev) {
-		mutex_lock(&serdes_lock__);
-		state->dser_ops->release_pipe(state->dser_dev, sensor->pipe_id);
-		mutex_unlock(&serdes_lock__);
-	}
-#endif
-	sensor->pipe_id = PIPE_NOT_CONFIGURED;
+	/* Do NOT release SERDES pipes or clear pipe_id here.
+	 * Preserve the existing pipe_id so that ds5_configure() can
+	 * release-then-reallocate the pipe at stream-start time, when
+	 * the camera FW has finished its post-boot serializer init.
+	 * Clearing pipe_data_type forces ds5_configure() to enter the
+	 * re-allocation path (data_type mismatch triggers pipe setup).
+	 */
 	sensor->pipe_data_type1 = 0;
 	sensor->pipe_data_type2 = 0;
 	sensor->pipe_vc_id = 0;
@@ -2720,11 +2719,18 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	}
 #endif
 
-	/* 2. Invalidate sensor state and release SERDES pipes.
+	/* 2. Invalidate sensor state (defer SERDES pipe release).
 	 *    After HW reset the device loses all configuration, so driver
 	 *    state must be brought in sync.  Clear streaming flags so that
 	 *    ds5_mux_s_stream() won't silently skip the next stream-start.
 	 *    Covers this instance AND all peer instances of the same camera.
+	 *
+	 *    Do NOT release SERDES pipes here — the D457 FW is still
+	 *    reconfiguring the MAX9295 serializer after reporting 0xDEAD.
+	 *    Releasing + re-allocating pipes now would race with FW init.
+	 *    Instead, clear pipe_data_type to force ds5_configure() to
+	 *    release-then-reallocate at stream-start time, when the FW
+	 *    has long finished its init (matching v1.0.1.33 behavior).
 	 */
 	{
 		struct ds5_sensor *active = ds5_get_active_sensor(state);
@@ -2733,18 +2739,6 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 			ds5_config_cache_clear(active);
 			active->streaming = false;
 #ifdef CONFIG_VIDEO_D4XX_SERDES
-			if (active->pipe_id >= 0 && state->dser_dev) {
-				int release_ret;
-
-				mutex_lock(&serdes_lock__);
-				release_ret = state->dser_ops->release_pipe(
-					state->dser_dev, active->pipe_id);
-				mutex_unlock(&serdes_lock__);
-				dev_info(&state->client->dev,
-					"%s(): released pipe %d (%d)\n",
-					__func__, active->pipe_id, release_ret);
-				active->pipe_id = PIPE_NOT_CONFIGURED;
-			}
 			active->pipe_data_type1 = 0;
 			active->pipe_data_type2 = 0;
 			active->pipe_vc_id = 0;
@@ -2845,39 +2839,28 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	}
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
-	/* 6. Tiered SERDES recovery (conditional).
+	/* 6. SERDES recovery (conditional).
 	 *    Step 5 polled the device over I2C until 0xDEAD was returned,
-	 *    which means the GMSL link was already up at that point.  Probe
-	 *    the I2C link once more: if it is still alive, the GMSL link
-	 *    recovered naturally and full SERDES recovery (Phase 1 stability
-	 *    dance + potential Phase 2 escalation) is unnecessary — this is
-	 *    the common case for D457.
+	 *    which means the GMSL link is up.  Probe once more: if the
+	 *    link is still alive, the GMSL link recovered naturally — no
+	 *    SERDES intervention needed (the common case for D457).
 	 *
-	 *    However, we must ALWAYS call max9295_init_settings() to restore
-	 *    the serializer's global pipe-enable, CSI port selection, and
-	 *    data-source registers.  The D457 FW reconfigures the MAX9295
-	 *    during its post-boot sequence, potentially overwriting these
-	 *    global registers.  Without re-init, per-pipe setup later in
-	 *    ds5_setup_pipeline() may fail — especially for pipe 3 (IMU)
-	 *    which the FW does not configure for its own use.
+	 *    Do NOT call max9295_init_settings() on the light path.
+	 *    The D457 FW continues reconfiguring the MAX9295 serializer
+	 *    for ~50-100ms after reporting 0xDEAD.  Calling init_settings
+	 *    now gets overwritten by the FW's ongoing init.  Instead,
+	 *    let the FW finish naturally; ds5_setup_pipeline() will write
+	 *    per-pipe settings at stream-start time (seconds later) on
+	 *    top of the FW's stable final state.  This matches v1.0.1.33
+	 *    behavior where HW reset was fire-and-forget with zero SERDES
+	 *    intervention and all CI tests passed.
 	 *
-	 *    Only run the FULL tiered recovery (with stability checks and
-	 *    Phase 2 escalation) when the I2C link is actually broken —
-	 *    e.g. the camera FW's secondary init phase dropped the bus
-	 *    between Step 5 and now (observed on D401, occasionally D457).
+	 *    Only run full tiered recovery (including init_settings +
+	 *    stability checks + Phase 2 escalation) when the I2C link
+	 *    is actually broken.
 	 */
 	{
 		u16 link_probe = 0;
-
-		/* Always restore serializer global state (pipe enables, port
-		 * selection, data sources).  This is a lightweight I2C write
-		 * sequence with no sleeps — ~0ms overhead.
-		 */
-		ret = max9295_init_settings(state->ser_dev);
-		if (ret < 0)
-			dev_warn(&state->client->dev,
-				"%s(): serializer init_settings failed: %d (continuing)\n",
-				__func__, ret);
 
 		ret = ds5_read(state, DS5_FW_VERSION, &link_probe);
 		if (ret < 0 || link_probe == 0) {
@@ -2894,7 +2877,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 			serdes_recovery_ran = true;
 		} else {
 			dev_info(&state->client->dev,
-				"%s(): GMSL link recovered naturally (FW ver 0x%04x), skipping full SERDES recovery\n",
+				"%s(): GMSL link recovered naturally (FW ver 0x%04x), no SERDES intervention needed\n",
 				__func__, link_probe);
 		}
 	}
