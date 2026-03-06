@@ -2843,17 +2843,21 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	 *    Step 5 polled the device over I2C until 0xDEAD was returned,
 	 *    which means the GMSL link is up.  Probe once more: if the
 	 *    link is still alive, the GMSL link recovered naturally — no
-	 *    SERDES intervention needed (the common case for D457).
+	 *    full tiered SERDES recovery needed (the common case for D457).
 	 *
-	 *    Do NOT call max9295_init_settings() on the light path.
+	 *    Do NOT call max9295_init_settings() here on the light path.
 	 *    The D457 FW continues reconfiguring the MAX9295 serializer
 	 *    for ~50-100ms after reporting 0xDEAD.  Calling init_settings
-	 *    now gets overwritten by the FW's ongoing init.  Instead,
-	 *    let the FW finish naturally; ds5_setup_pipeline() will write
-	 *    per-pipe settings at stream-start time (seconds later) on
-	 *    top of the FW's stable final state.  This matches v1.0.1.33
-	 *    behavior where HW reset was fire-and-forget with zero SERDES
-	 *    intervention and all CI tests passed.
+	 *    now races with the FW and gets overwritten.  Instead, the
+	 *    CALLER is responsible for waiting (≥200ms) and then calling
+	 *    max9295_init_settings() + dser init_settings() to restore
+	 *    the driver's authoritative pipe configuration.  See:
+	 *      - ds5_probe() first-probe block (probe-time reset)
+	 *      - ds5_s_ctrl() HWMC path (userspace-triggered reset)
+	 *
+	 *    This differs from v1.0.1.33 which had no probe-time HW reset,
+	 *    so the initial max9295_init_settings() from ds5_serdes_setup()
+	 *    was never disrupted and no restoration was needed.
 	 *
 	 *    Only run full tiered recovery (including init_settings +
 	 *    stability checks + Phase 2 escalation) when the I2C link
@@ -3098,6 +3102,49 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 			}
 		}
 	} /* if (serdes_recovery_ran) */
+
+	/* 11. Deferred SERDES pipe restoration (light path only).
+	 *     When Step 6 took the light path (natural link recovery),
+	 *     max9295_init_settings() was NOT called to avoid racing with
+	 *     the FW's ongoing MAX9295 reconfiguration.  The FW continues
+	 *     writing to MAX9295 for ~50-100ms after reporting 0xDEAD.
+	 *     Steps 7-9 may complete in as little as 12ms (device responds
+	 *     on first poll), so we must wait here for the FW to finish
+	 *     before restoring the driver's pipe configuration.
+	 *
+	 *     This restores all 4 pipes — including pipe 3 (IMU, vc_id=3)
+	 *     — ensuring I2C address translation works for all instances.
+	 *     Without this, non-primary peer probes (9-001d) and post-reset
+	 *     userspace access to RGB/IR fail with -EREMOTEIO (-121).
+	 */
+	if (!serdes_recovery_ran) {
+		int ser_ret, dser_ret;
+
+		/* Wait for FW to finish its MAX9295 serializer reconfig.
+		 * 0xDEAD was detected in Step 5; the FW reconfigures the
+		 * MAX9295 for 50-100ms after that.  Steps 7-9 consumed some
+		 * time, but may be as short as 12ms.  150ms ensures we are
+		 * past the FW's window before we overwrite its config.
+		 */
+		msleep(150);
+
+		ser_ret = max9295_init_settings(state->ser_dev);
+		if (ser_ret)
+			dev_warn(&state->client->dev,
+				"%s(): post-reset ser init_settings failed: %d\n",
+				__func__, ser_ret);
+
+		dser_ret = state->dser_ops->init_settings(state->dser_dev);
+		if (dser_ret)
+			dev_warn(&state->client->dev,
+				"%s(): post-reset deser init_settings failed: %d\n",
+				__func__, dser_ret);
+
+		if (!ser_ret && !dser_ret)
+			dev_info(&state->client->dev,
+				"%s(): SERDES pipe configuration restored after light-path recovery\n",
+				__func__);
+	}
 #endif
 
 	dev_info(&state->client->dev,
@@ -6746,11 +6793,10 @@ static int ds5_probe(struct i2c_client *c, const struct i2c_device_id *id)
 			goto e_chardev;
 		}
 
-		/* Allow the camera firmware to fully stabilize after HW reset
-		 * before subsequent driver instances attempt I2C communication.
-		 * Without this delay, the D457's FW may be briefly unresponsive
-		 * during a post-reset initialization phase, causing later probe
-		 * instances (especially the 4th/IMU) to fail I2C checks.
+		/* Allow the camera firmware to fully stabilize after HW reset.
+		 * ds5_hw_reset_with_recovery() Step 11 waits 150ms and then
+		 * restores SERDES pipe configuration.  This additional delay
+		 * provides a buffer before subsequent peer probes attempt I2C.
 		 */
 		msleep(100);
 	}
