@@ -3103,30 +3103,37 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 		}
 	} /* if (serdes_recovery_ran) */
 
-	/* 11. Deferred SERDES pipe restoration (light path only).
-	 *     When Step 6 took the light path (natural link recovery),
-	 *     max9295_init_settings() was NOT called to avoid racing with
-	 *     the FW's ongoing MAX9295 reconfiguration.  The FW continues
-	 *     writing to MAX9295 for ~50-100ms after reporting 0xDEAD.
-	 *     Steps 7-9 may complete in as little as 12ms (device responds
-	 *     on first poll), so we must wait here for the FW to finish
-	 *     before restoring the driver's pipe configuration.
+	/* 11. Final SERDES pipe restoration (unconditional).
+	 *     The D457 FW continues reconfiguring the MAX9295 serializer
+	 *     for ~50-100ms after reporting 0xDEAD.  Any earlier call to
+	 *     max9295_init_settings() — whether from Phase 1 (heavy path)
+	 *     or skipped entirely (light path) — may have been overwritten
+	 *     by the FW's late-boot serializer init.  Re-applying the
+	 *     driver's authoritative pipe configuration here, after Steps
+	 *     7-10 have consumed enough time, ensures all 4 pipes —
+	 *     including pipe 3 (IMU, vc_id=3) — are correctly configured.
 	 *
-	 *     This restores all 4 pipes — including pipe 3 (IMU, vc_id=3)
-	 *     — ensuring I2C address translation works for all instances.
-	 *     Without this, non-primary peer probes (9-001d) and post-reset
-	 *     userspace access to RGB/IR fail with -EREMOTEIO (-121).
+	 *     Light path: FW finished ~100ms after 0xDEAD but Steps 7-9
+	 *       may be as short as 12ms → need 150ms extra wait.
+	 *     Heavy path (Phase 1): Phase 1 itself takes ~750ms (100ms
+	 *       post-init sleep + 3×200ms stability reads) plus Steps 7-9,
+	 *       so the FW is long done → no extra wait needed.
+	 *     Heavy path (Phase 2): Full deser reset already called
+	 *       init_settings inside recovery, but re-calling is harmless
+	 *       insurance and keeps the logic simple.
 	 */
-	if (!serdes_recovery_ran) {
+	{
 		int ser_ret, dser_ret;
 
-		/* Wait for FW to finish its MAX9295 serializer reconfig.
-		 * 0xDEAD was detected in Step 5; the FW reconfigures the
-		 * MAX9295 for 50-100ms after that.  Steps 7-9 consumed some
-		 * time, but may be as short as 12ms.  150ms ensures we are
-		 * past the FW's window before we overwrite its config.
+		if (!serdes_recovery_ran) {
+			/* Light path: FW may still be reconfiguring MAX9295.
+			 * Wait for it to finish before we overwrite its config.
+			 */
+			msleep(150);
+		}
+		/* Heavy path: no extra delay — Phase 1/2 already consumed
+		 * enough time for FW to finish MAX9295 reconfig.
 		 */
-		msleep(150);
 
 		ser_ret = max9295_init_settings(state->ser_dev);
 		if (ser_ret)
@@ -3142,8 +3149,9 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 
 		if (!ser_ret && !dser_ret)
 			dev_info(&state->client->dev,
-				"%s(): SERDES pipe configuration restored after light-path recovery\n",
-				__func__);
+				"%s(): SERDES pipe configuration restored after %s recovery\n",
+				__func__,
+				serdes_recovery_ran ? "SERDES" : "light-path");
 	}
 #endif
 
