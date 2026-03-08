@@ -3129,6 +3129,24 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 
 	state->last_reset_jiffies = jiffies;
 
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	/* Propagate the reset timestamp to all peer instances of the same
+	 * physical camera (those sharing the same ser_dev) so that the
+	 * per-instance cooldown field effectively becomes per-physical-camera.
+	 * This prevents peer instances (Depth/RGB/IR/IMU) from skipping the
+	 * cooldown after any one of them has triggered a HW reset.
+	 */
+	for (i = 0; i < MAX_DEV_NUM; i++) {
+		struct ds5 *peer = serdes_inited[i];
+
+		if (!peer || peer == state)
+			continue;
+		if (peer->ser_dev != state->ser_dev)
+			continue;
+		peer->last_reset_jiffies = jiffies;
+	}
+#endif
+
 	return 0;
 }
 
