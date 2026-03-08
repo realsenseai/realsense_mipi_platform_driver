@@ -3103,53 +3103,50 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 		}
 	} /* if (serdes_recovery_ran) */
 
-	/* 11. Final SERDES pipe restoration (unconditional).
-	 *     The D457 FW continues reconfiguring the MAX9295 serializer
-	 *     for ~50-100ms after reporting 0xDEAD.  Any earlier call to
-	 *     max9295_init_settings() — whether from Phase 1 (heavy path)
-	 *     or skipped entirely (light path) — may have been overwritten
-	 *     by the FW's late-boot serializer init.  Re-applying the
-	 *     driver's authoritative pipe configuration here, after Steps
-	 *     7-10 have consumed enough time, ensures all 4 pipes —
-	 *     including pipe 3 (IMU, vc_id=3) — are correctly configured.
+	/* 11. Targeted pipe 3 (IMU) restoration (unconditional).
+	 *     The D457 FW configures MAX9295 pipes 0-2 (Depth, RGB, IR)
+	 *     during boot but does NOT configure pipe 3 (IMU, vc_id=3).
+	 *     Without pipe 3, the serializer has no I2C address translation
+	 *     for 9-001d and the IMU is unreachable (-EREMOTEIO / -121).
 	 *
-	 *     Light path: FW finished ~100ms after 0xDEAD but Steps 7-9
-	 *       may be as short as 12ms → need 150ms extra wait.
-	 *     Heavy path (Phase 1): Phase 1 itself takes ~750ms (100ms
-	 *       post-init sleep + 3×200ms stability reads) plus Steps 7-9,
-	 *       so the FW is long done → no extra wait needed.
-	 *     Heavy path (Phase 2): Full deser reset already called
-	 *       init_settings inside recovery, but re-calling is harmless
-	 *       insurance and keeps the logic simple.
+	 *     CRITICAL: Do NOT call max9295_init_settings() here.  That
+	 *     function writes to global registers (0x02 pipe enable, 0x308
+	 *     CSI port select, 0x311 pipe data source, 0x331 MIPI RX) that
+	 *     disrupt the active GMSL link.  The link is UP at this point
+	 *     (either naturally recovered or restored by Phase 1/2), and
+	 *     writing those global registers kills it immediately.
+	 *
+	 *     Instead, call ds5_setup_pipeline() for pipe 3 only.  This
+	 *     calls max9295_set_pipe() + dser set_pipe() which write ONLY
+	 *     per-pipe registers (data type, vc_id, BPP, LIM_HEART) —
+	 *     no global registers, no link disruption.
+	 *
+	 *     Light path: 150ms delay for FW to finish MAX9295 reconfig.
+	 *     Heavy path (Phase 1/2): no delay — FW is long done.
 	 */
 	{
-		int ser_ret, dser_ret;
+		int pipe3_ret;
 
 		if (!serdes_recovery_ran) {
-			/* Light path: FW may still be reconfiguring MAX9295.
-			 * Wait for it to finish before we overwrite its config.
+			/* Light path: FW continues writing to MAX9295 for
+			 * ~50-100ms after 0xDEAD.  Wait for it to finish
+			 * before we configure pipe 3.
 			 */
 			msleep(150);
 		}
-		/* Heavy path: no extra delay — Phase 1/2 already consumed
-		 * enough time for FW to finish MAX9295 reconfig.
-		 */
 
-		ser_ret = max9295_init_settings(state->ser_dev);
-		if (ser_ret)
+		pipe3_ret = ds5_setup_pipeline(state,
+					       GMSL_CSI_DT_YUV422_8,
+					       GMSL_CSI_DT_EMBED,
+					       3, /* pipe_id = 3 (IMU) */
+					       3  /* vc_id = 3 */);
+		if (pipe3_ret)
 			dev_warn(&state->client->dev,
-				"%s(): post-reset ser init_settings failed: %d\n",
-				__func__, ser_ret);
-
-		dser_ret = state->dser_ops->init_settings(state->dser_dev);
-		if (dser_ret)
-			dev_warn(&state->client->dev,
-				"%s(): post-reset deser init_settings failed: %d\n",
-				__func__, dser_ret);
-
-		if (!ser_ret && !dser_ret)
+				"%s(): post-reset pipe 3 (IMU) setup failed: %d\n",
+				__func__, pipe3_ret);
+		else
 			dev_info(&state->client->dev,
-				"%s(): SERDES pipe configuration restored after %s recovery\n",
+				"%s(): pipe 3 (IMU) configured after %s recovery\n",
 				__func__,
 				serdes_recovery_ran ? "SERDES" : "light-path");
 	}
