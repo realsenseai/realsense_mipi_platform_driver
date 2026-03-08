@@ -2854,19 +2854,15 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	 *    link is still alive, the GMSL link recovered naturally — no
 	 *    full tiered SERDES recovery needed (the common case for D457).
 	 *
-	 *    Do NOT call max9295_init_settings() here on the light path.
-	 *    The D457 FW continues reconfiguring the MAX9295 serializer
-	 *    for ~50-100ms after reporting 0xDEAD.  Calling init_settings
-	 *    now races with the FW and gets overwritten.  Instead, the
-	 *    CALLER is responsible for waiting (≥200ms) and then calling
-	 *    max9295_init_settings() + dser init_settings() to restore
-	 *    the driver's authoritative pipe configuration.  See:
-	 *      - ds5_probe() first-probe block (probe-time reset)
-	 *      - ds5_s_ctrl() HWMC path (userspace-triggered reset)
-	 *
-	 *    This differs from v1.0.1.33 which had no probe-time HW reset,
-	 *    so the initial max9295_init_settings() from ds5_serdes_setup()
-	 *    was never disrupted and no restoration was needed.
+	 *    Do NOT call max9295_init_settings() here.  That function writes
+	 *    global serializer registers (0x02, 0x308, 0x311, 0x331) that
+	 *    disrupt the active GMSL link.  Per-pipe reconfiguration is
+	 *    handled by callers:
+	 *      - First-probe: ds5_probe() configures pipe 3 (IMU) after
+	 *        this function returns, before IMU peer probes.
+	 *      - HWMC reset: ds5_invalidate_sensor() clears pipe state for
+	 *        all peers; ds5_configure() re-runs ds5_setup_pipeline()
+	 *        at the next STREAMON for each stream.
 	 *
 	 *    Only run full tiered recovery (including init_settings +
 	 *    stability checks + Phase 2 escalation) when the I2C link
@@ -3112,53 +3108,19 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 		}
 	} /* if (serdes_recovery_ran) */
 
-	/* 11. Targeted pipe 3 (IMU) restoration (unconditional).
-	 *     The D457 FW configures MAX9295 pipes 0-2 (Depth, RGB, IR)
-	 *     during boot but does NOT configure pipe 3 (IMU, vc_id=3).
-	 *     Without pipe 3, the serializer has no I2C address translation
-	 *     for 9-001d and the IMU is unreachable (-EREMOTEIO / -121).
+	/* 11. Per-pipe reconfiguration is NOT done here.
+	 *     - First-probe: ds5_probe() configures pipe 3 (IMU) after
+	 *       this function returns, before IMU peer probes.
+	 *     - HWMC reset: ds5_invalidate_sensor() (Step 2) already
+	 *       cleared pipe_data_type1/2/vc_id for all peers.  At next
+	 *       STREAMON, ds5_configure() detects the mismatch and calls
+	 *       ds5_setup_pipeline() to reconfigure each pipe.
 	 *
-	 *     CRITICAL: Do NOT call max9295_init_settings() here.  That
-	 *     function writes to global registers (0x02 pipe enable, 0x308
-	 *     CSI port select, 0x311 pipe data source, 0x331 MIPI RX) that
-	 *     disrupt the active GMSL link.  The link is UP at this point
-	 *     (either naturally recovered or restored by Phase 1/2), and
-	 *     writing those global registers kills it immediately.
-	 *
-	 *     Instead, call ds5_setup_pipeline() for pipe 3 only.  This
-	 *     calls max9295_set_pipe() + dser set_pipe() which write ONLY
-	 *     per-pipe registers (data type, vc_id, BPP, LIM_HEART) —
-	 *     no global registers, no link disruption.
-	 *
-	 *     Light path: 150ms delay for FW to finish MAX9295 reconfig.
-	 *     Heavy path (Phase 1/2): no delay — FW is long done.
+	 *     Do NOT call max9295_init_settings() or ds5_setup_pipeline()
+	 *     here.  init_settings() writes global MAX9295 registers that
+	 *     kill the GMSL link.  And for HWMC resets, the existing
+	 *     ds5_configure() path handles pipe reconfiguration cleanly.
 	 */
-	{
-		int pipe3_ret;
-
-		if (!serdes_recovery_ran) {
-			/* Light path: FW continues writing to MAX9295 for
-			 * ~50-100ms after 0xDEAD.  Wait for it to finish
-			 * before we configure pipe 3.
-			 */
-			msleep(150);
-		}
-
-		pipe3_ret = ds5_setup_pipeline(state,
-					       DS5_IMU_DT1,
-					       DS5_IMU_DT2,
-					       DS5_IMU_PIPE_ID,
-					       DS5_IMU_VC_ID);
-		if (pipe3_ret)
-			dev_warn(&state->client->dev,
-				"%s(): post-reset pipe 3 (IMU) setup failed: %d\n",
-				__func__, pipe3_ret);
-		else
-			dev_info(&state->client->dev,
-				"%s(): pipe 3 (IMU) configured after %s recovery\n",
-				__func__,
-				serdes_recovery_ran ? "SERDES" : "light-path");
-	}
 #endif
 
 	dev_info(&state->client->dev,
@@ -6807,12 +6769,67 @@ static int ds5_probe(struct i2c_client *c, const struct i2c_device_id *id)
 			goto e_chardev;
 		}
 
-		/* Allow the camera firmware to fully stabilize after HW reset.
-		 * ds5_hw_reset_with_recovery() Step 11 waits 150ms and then
-		 * restores SERDES pipe configuration.  This additional delay
-		 * provides a buffer before subsequent peer probes attempt I2C.
+		/* Wait for D457 FW to finish reconfiguring the MAX9295
+		 * serializer.  The FW continues writing to MAX9295 for
+		 * ~50-100ms after reporting 0xDEAD.  200ms total provides
+		 * margin before we touch serializer registers.
 		 */
-		msleep(100);
+		msleep(200);
+
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+		/* Configure pipe 3 (IMU) on the serializer/deserializer,
+		 * but only if an IMU peer actually exists in the device tree.
+		 *
+		 * The D457 FW configures pipes 0-2 (Depth/RGB/IR) during
+		 * boot but does NOT configure pipe 3.  Without pipe 3,
+		 * the serializer has no I2C address translation for the
+		 * IMU instance and its probe will fail with -EREMOTEIO.
+		 *
+		 * Only needed at first-probe time.  For HWMC resets,
+		 * ds5_configure() handles pipe reconfiguration at STREAMON.
+		 *
+		 * Uses ds5_setup_pipeline() (per-pipe registers only),
+		 * NOT max9295_init_settings() which writes global registers
+		 * (0x02, 0x308, 0x311) that disrupt the active GMSL link.
+		 */
+		{
+			struct device_node *bus_node, *peer;
+			const char *peer_cam_type;
+			bool has_imu_peer = false;
+
+			bus_node = of_get_parent(c->dev.of_node);
+			if (bus_node) {
+				for_each_child_of_node(bus_node, peer) {
+					if (!of_property_read_string(peer, "cam-type",
+								     &peer_cam_type) &&
+					    !strcmp(peer_cam_type, "IMU")) {
+						has_imu_peer = true;
+						of_node_put(peer);
+						break;
+					}
+				}
+				of_node_put(bus_node);
+			}
+
+			if (has_imu_peer) {
+				int pipe3_ret = ds5_setup_pipeline(state,
+						DS5_IMU_DT1, DS5_IMU_DT2,
+						DS5_IMU_PIPE_ID, DS5_IMU_VC_ID);
+				if (pipe3_ret)
+					dev_warn(&c->dev,
+						"%s(): first-probe pipe 3 (IMU) setup failed: %d\n",
+						__func__, pipe3_ret);
+				else
+					dev_info(&c->dev,
+						"%s(): first-probe pipe 3 (IMU) configured\n",
+						__func__);
+			} else {
+				dev_dbg(&c->dev,
+					"%s(): no IMU peer in DT, skipping pipe 3 setup\n",
+					__func__);
+			}
+		}
+#endif
 	}
 
 	/* Verify communication with retries and delay.
