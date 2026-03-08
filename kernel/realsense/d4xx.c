@@ -495,6 +495,10 @@ struct ds5 {
 	const struct dser_interface *dser_ops;
 	bool serdes_primary; /* true for the instance that ran SERDES setup */
 #endif
+	/* Timestamp (jiffies) of last completed HW reset for this instance.
+	 * Used to enforce DS5_HW_RESET_COOLDOWN_MS between consecutive resets.
+	 */
+	unsigned long last_reset_jiffies;
 };
 
 struct ds5_counters {
@@ -505,12 +509,6 @@ struct ds5_counters {
 
 static atomic_t ds5_reset_gen = ATOMIC_INIT(0);
 static atomic_t ds5_probe_reset_once = ATOMIC_INIT(0);
-
-/* Timestamp (jiffies) of last completed HW reset.
- * Used to enforce DS5_HW_RESET_COOLDOWN_MS between consecutive resets
- * and prevent GMSL link degradation from rapid reset cycles.
- */
-static unsigned long ds5_last_reset_jiffies;
 
 /* Cached device type from HW reset Step 8.
  * During probe the first instance resets the camera, causing DS5_DEVICE_TYPE
@@ -2661,13 +2659,13 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	 *    the camera FW finish its post-boot I2C bus reconfiguration
 	 *    progressively degrades the GMSL link until even SERDES pipe
 	 *    setup fails.  Enforce a minimum interval between resets.
-	 *    Skip check on the very first reset (ds5_last_reset_jiffies == 0).
+	 *    Skip check on the very first reset (last_reset_jiffies == 0).
 	 */
-	if (ds5_last_reset_jiffies) {
-		unsigned long elapsed = jiffies - ds5_last_reset_jiffies;
+	if (state->last_reset_jiffies) {
+		unsigned long elapsed = jiffies - state->last_reset_jiffies;
 		unsigned long cooldown = msecs_to_jiffies(DS5_HW_RESET_COOLDOWN_MS);
 
-		if (time_before(jiffies, ds5_last_reset_jiffies + cooldown)) {
+		if (time_before(jiffies, state->last_reset_jiffies + cooldown)) {
 			unsigned long remaining = cooldown - elapsed;
 
 			dev_info(&state->client->dev,
@@ -3129,7 +3127,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 		(state->fw_version >> 8) & 0xff, state->fw_version & 0xff,
 		(state->fw_build >> 8) & 0xff, state->fw_build & 0xff);
 
-	ds5_last_reset_jiffies = jiffies;
+	state->last_reset_jiffies = jiffies;
 
 	return 0;
 }
