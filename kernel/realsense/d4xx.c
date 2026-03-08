@@ -75,6 +75,15 @@ struct dser_interface {
 #define GMSL_CSI_DT_EMBED 0x12
 #endif
 
+/* IMU pipe defaults — used by ds5_configure() and post-reset pipe restoration.
+ * The D457 FW configures pipes 0-2 (Depth/RGB/IR) but NOT pipe 3 (IMU).
+ * The driver must configure pipe 3 explicitly with these values.
+ */
+#define DS5_IMU_PIPE_ID  3
+#define DS5_IMU_VC_ID    3
+#define DS5_IMU_DT1      GMSL_CSI_DT_YUV422_8
+#define DS5_IMU_DT2      GMSL_CSI_DT_EMBED
+
 //#define DS5_DRIVER_NAME "DS5 RealSense camera driver"
 #define DS5_DRIVER_NAME "d4xx"
 #define DS5_DRIVER_NAME_AWG "d4xx-awg"
@@ -1829,7 +1838,7 @@ static int ds5_configure(struct ds5 *state)
 		fps_addr = DS5_IMU_FPS;
 		width_addr = DS5_IMU_RES_WIDTH;
 		height_addr = DS5_IMU_RES_HEIGHT;
-		vc_id = 3;
+		vc_id = DS5_IMU_VC_ID;
 	} else {
 		return -EINVAL;
 	}
@@ -3136,10 +3145,10 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 		}
 
 		pipe3_ret = ds5_setup_pipeline(state,
-					       GMSL_CSI_DT_YUV422_8,
-					       GMSL_CSI_DT_EMBED,
-					       3, /* pipe_id = 3 (IMU) */
-					       3  /* vc_id = 3 */);
+					       DS5_IMU_DT1,
+					       DS5_IMU_DT2,
+					       DS5_IMU_PIPE_ID,
+					       DS5_IMU_VC_ID);
 		if (pipe3_ret)
 			dev_warn(&state->client->dev,
 				"%s(): post-reset pipe 3 (IMU) setup failed: %d\n",
