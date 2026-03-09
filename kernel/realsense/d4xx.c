@@ -6018,14 +6018,68 @@ e_chardev:
 	if (state->dfu_dev.ds5_class)
 		ds5_chrdev_remove(state);
 e_regulator:
-	if (state->vcc)
-		regulator_disable(state->vcc);
 #ifdef CONFIG_VIDEO_D4XX_SERDES
-	if (state->ser_i2c)
+	/*
+	 * Full SerDes teardown – mirrors ds5_remove() cleanup.
+	 * ds5_board_setup() registers in serdes_inited[] and
+	 * ds5_serdes_setup() pairs with max9295/max9296 drivers.
+	 * If probe fails after these, undo everything so next
+	 * modprobe finds clean SerDes state (RSDEV-6494).
+	 */
+	{
+	int i, rc;
+
+	for (i = 0; i < MAX_DEV_NUM; i++) {
+		if (serdes_inited[i] && serdes_inited[i] == state) {
+			mutex_lock(&serdes_lock__);
+			serdes_inited[i] = NULL;
+
+			/* s_dev is set in ds5_board_setup() before
+			 * serdes_inited[] is populated, so always valid here.
+			 */
+			if (state->ser_dev) {
+				rc = max9295_reset_control(state->ser_dev);
+				if (rc)
+					dev_warn(&c->dev,
+					  "probe cleanup: 9295 reset failed\n");
+			}
+			if (state->dser_dev && state->dser_ops) {
+				rc = state->dser_ops->reset_control(
+					state->dser_dev,
+					state->g_ctx.s_dev);
+				if (rc)
+					dev_warn(&c->dev,
+					  "probe cleanup: 9296 reset failed\n");
+			}
+			if (state->ser_dev) {
+				rc = max9295_sdev_unpair(state->ser_dev,
+					state->g_ctx.s_dev);
+				if (rc)
+					dev_warn(&c->dev,
+					  "probe cleanup: unpair failed\n");
+			}
+			if (state->dser_dev && state->dser_ops) {
+				rc = state->dser_ops->sdev_unregister(
+					state->dser_dev,
+					state->g_ctx.s_dev);
+				if (rc)
+					dev_warn(&c->dev,
+					  "probe cleanup: unregister failed\n");
+				state->dser_ops->power_off(state->dser_dev);
+			}
+
+			mutex_unlock(&serdes_lock__);
+			break;
+		}
+	}
+	}
+	if (state->ser_i2c && state->own_ser_i2c)
 		i2c_unregister_device(state->ser_i2c);
-	if (state->dser_i2c && !state->aggregated)
+	if (state->dser_i2c && state->own_dser_i2c)
 		i2c_unregister_device(state->dser_i2c);
 #endif
+	if (state->vcc)
+		regulator_disable(state->vcc);
 	return ret;
 }
 
