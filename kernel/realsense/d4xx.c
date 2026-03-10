@@ -3780,34 +3780,40 @@ static int ds5_serdes_setup(struct ds5 *state)
 	ret = max9295_sdev_pair(state->ser_dev, &state->g_ctx);
 	if (ret) {
 		dev_err(&c->dev, "gmsl ser pairing failed\n");
-		return ret;
+		goto serdes_setup_end;
 	}
 
 	/* Register sensor to deserializer dev */
 	ret = state->dser_ops->sdev_register(state->dser_dev, &state->g_ctx);
 	if (ret) {
 		dev_err(&c->dev, "gmsl deserializer register failed\n");
-		return ret;
+		goto serdes_setup_end;
 	}
 
 	ret = ds5_gmsl_serdes_setup(state);
 	if (ret) {
 		dev_err(&c->dev, "%s gmsl serdes setup failed\n", __func__);
-		return ret;
+		goto serdes_setup_end;
 	}
 
 	ret = max9295_init_settings(state->ser_dev);
 	if (ret) {
 		dev_warn(&c->dev, "%s, failed to init max9295 settings\n",
 			__func__);
-		return ret;
+		goto serdes_setup_end;
 	}
 
 	ret = state->dser_ops->init_settings(state->dser_dev);
 	if (ret) {
 		dev_warn(&c->dev, "%s, failed to init %s settings\n",
 			__func__, state->dser_ops->name);
-		return ret;
+		goto serdes_setup_end;
+	}
+
+serdes_setup_end:
+	if (ret) {
+		max9295_sdev_unpair(state->ser_dev, state->g_ctx.s_dev);
+		state->dser_ops->sdev_unregister(state->dser_dev, state->g_ctx.s_dev);
 	}
 
 	return ret;
