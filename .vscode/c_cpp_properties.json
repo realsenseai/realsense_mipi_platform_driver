@@ -1,0 +1,32 @@
+{
+  "configurations": [
+    {
+      "name": "Linux",
+      "includePath": [
+        "${workspaceFolder}/**",
+        "${workspaceFolder}/kernel/**",
+        "${workspaceFolder}/kernel/kernel-jammy-src/include",
+        "${workspaceFolder}/kernel/kernel-jammy-src/arch/**/include",
+        "${workspaceFolder}/kernel/realsense",
+        "${workspaceFolder}/nvidia-oot/**",
+        "/usr/include"
+      ],
+      "defines": [],
+      "compilerPath": "/usr/bin/gcc",
+      "cStandard": "c11",
+      "cppStandard": "c++17",
+      "intelliSenseMode": "linux-gcc-x64",
+      "compileCommands": "${workspaceFolder}/.vscode/compile_commands.json",
+      "browse": {
+        "path": [
+          "${workspaceFolder}/kernel/kernel-jammy-src/include",
+          "${workspaceFolder}/kernel/realsense",
+          "${workspaceFolder}/**"
+        ],
+        "limitSymbolsToIncludedHeaders": false,
+        "databaseFilename": "${workspaceFolder}/.vscode/browse.vc.db"
+      }
+    }
+  ],
+  "version": 4
+}

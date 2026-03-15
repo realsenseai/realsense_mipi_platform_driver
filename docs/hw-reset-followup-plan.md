@@ -17,7 +17,7 @@ The `reset_issue_dmesg.txt` log shows 35 consecutive userspace-triggered HW rese
 
 ### Steps
 
-1. **Add tracking fields to `struct ds5`** (`kernel/realsense/d4xx.c`):
+1. **Add tracking fields to `struct ds5_dev`** (`kernel/realsense/d4xx.c`):
    - `int consecutive_reset_failures` — incremented when `ds5_hw_reset_with_recovery()` returns an error, reset to 0 on success
    - `unsigned long last_reset_jiffies` — timestamp of the last reset attempt
    - `int total_resets` — lifetime counter for diagnostics (never reset)
@@ -27,39 +27,21 @@ The `reset_issue_dmesg.txt` log shows 35 consecutive userspace-triggered HW rese
    - `DS5_HW_RESET_COOLDOWN_MS` = 5000 — minimum interval between resets (5 seconds)
    - `DS5_HW_RESET_BREAKER_RESET_MS` = 60000 — if no reset for 60s, clear the failure counter (auto-recovery)
 
-3. **Add gating logic at top of `ds5_hw_reset_with_recovery()`**:
-   - Check `consecutive_reset_failures >= MAX_CONSECUTIVE_FAILURES`:
-     - If the breaker timeout (`DS5_HW_RESET_BREAKER_RESET_MS`) has elapsed since `last_reset_jiffies`, auto-clear the counter and allow the reset (self-healing)
-     - Otherwise, log `dev_err` "circuit breaker tripped — %d consecutive failures, refusing HW reset. Will auto-reset after %d seconds of inactivity" and return `-EBUSY`
-   - Check cooldown: if `jiffies - last_reset_jiffies < msecs_to_jiffies(COOLDOWN_MS)`, log `dev_warn` "HW reset throttled — last reset was %d ms ago" and return `-EAGAIN`
+### Implementation Notes (updated for refactored driver)
 
-4. **Update success/failure tracking at bottom of function**:
-   - On success (return 0): set `state->consecutive_reset_failures = 0`, update `state->last_reset_jiffies = jiffies`, increment `state->total_resets`
-   - On failure: increment `state->consecutive_reset_failures`, update `state->last_reset_jiffies = jiffies`, increment `state->total_resets`
-
-5. **Expose diagnostic counters via existing V4L2 log** — add the counters to the final `dev_info` message at the end of `ds5_hw_reset_with_recovery()` so they appear in dmesg.
-
-6. **Skip circuit-breaker for probe path** — the `ds5_probe()` call should bypass the circuit-breaker since it's a one-time initialization, not a userspace retry loop. Add a `bool force` parameter to `ds5_hw_reset_with_recovery()`, or handle it by checking `last_reset_jiffies == 0` (uninitialized).
-
----
-
-## Item 2: Phase 1 Dual-Camera Safety (Low Priority)
-
-### Analysis Conclusion
-
-The D401 dual-camera log errors (bus 12 I2C failures 12ms after SERDES re-init) occurred with the **old driver code** that did full SERDES re-init including deserializer `reset_oneshot`. Our new Phase 1 calls only `max9295_init_settings()`, which writes exclusively to serializer-local registers (`PIPE_EN`=0x2, `START_PIPE`=0x311, `MIPI_RX1`=0x331, `CSI_PORT_SEL`). This **cannot** disrupt sibling cameras on a different serializer.
-
-### Remaining Risk
-
-Theoretical — if the GMSL link is unstable, a serializer register write could briefly glitch the shared GMSL bus during the I2C transaction. This is extremely unlikely with MAX9295/MAX9296 but worth monitoring.
-
-### Steps
-
-7. **Add post-Phase-1 sibling health check** in `ds5_hw_reset_serdes_recovery()` — after the Phase 1 success path (`return 0`), before returning:
-   - Iterate `serdes_inited[]` for true siblings (same `dser_dev`, different `ser_dev`)
-   - For each streaming sibling, do a quick I2C read (`ds5_read(sib, DS5_FW_VERSION, &tmp)`)
-   - If any fail: log `dev_warn` "Phase 1 serializer re-init may have disrupted sibling %s" (informational only — do NOT fail the reset)
-   - This is a **diagnostic-only** check that gives us data to decide if future mitigation is needed
+- Use tracking fields in `struct ds5_dev`: `consecutive_reset_failures`, `last_reset_jiffies`, and `total_resets` (all per-camera, shared across sensor instances).
+- Reference `ds5_inited[]` for sibling streaming checks (not `serdes_inited[]`).
+- Circuit-breaker logic:
+   - Check `ds5_dev->consecutive_reset_failures >= DS5_HW_RESET_MAX_CONSECUTIVE_FAILURES`.
+      - If `DS5_HW_RESET_BREAKER_RESET_MS` has elapsed since `ds5_dev->last_reset_jiffies`, auto-clear the failure counter and allow the reset (self-healing).
+      - Otherwise, log `dev_err` "circuit breaker tripped — %d consecutive failures, refusing HW reset. Will auto-reset after %d seconds of inactivity" and return `-EBUSY`.
+   - Cooldown: if `jiffies - ds5_dev->last_reset_jiffies < msecs_to_jiffies(DS5_HW_RESET_COOLDOWN_MS)`, log `dev_warn` "HW reset throttled — last reset was %d ms ago" and return `-EAGAIN`.
+- Update success/failure tracking at the end of `ds5_hw_reset_with_recovery()`:
+   - On success: set `ds5_dev->consecutive_reset_failures = 0`, update `ds5_dev->last_reset_jiffies = jiffies`, increment `ds5_dev->total_resets`.
+   - On failure: increment `ds5_dev->consecutive_reset_failures`, update `ds5_dev->last_reset_jiffies = jiffies`, increment `ds5_dev->total_resets`.
+- Expose diagnostic counters via the final `dev_info` log in `ds5_hw_reset_with_recovery()` so they appear in dmesg.
+- Skip circuit-breaker for probe path: ensure probe-time HW reset bypasses the breaker logic (e.g., by checking `last_reset_jiffies == 0` or using a `force` parameter).
+- For dual-camera safety, after Phase 1 serializer re-init, iterate `ds5_inited[]` for sibling instances (same `ds5_dev`, different sensor). For each streaming sibling, perform a quick I2C read (`ds5_read(sib, DS5_FW_VERSION, &tmp)`). If any fail, log `dev_warn` "Phase 1 serializer re-init may have disrupted sibling %s" (diagnostic only, do not fail the reset).
 
 8. **Add a brief stabilization delay** — increase the post-Phase-1 `msleep(100)` to `msleep(150)` to give the GMSL link a bit more time to re-lock after serializer reconfiguration, before verifying. This is conservative and costs only 50ms.
 
@@ -75,7 +57,7 @@ Theoretical — if the GMSL link is unstable, a serializer register write could 
 
 ## Design Decisions
 
-- **Circuit-breaker is per-instance, not per-camera**: Each `struct ds5` has its own counter. Since userspace sends HW reset to one instance (typically Depth at `9-001a`), this naturally tracks per-camera. Peer instances aren't reset independently.
+- **Circuit-breaker is per-camera, shared across instances**: The tracking fields live in `struct ds5_dev`, so all `struct ds5` instances for the same physical camera share a single counter and breaker state. If any instance (typically Depth at `9-001a`) trips the breaker, further HW reset requests from any instance for that camera are rejected until the breaker auto‑clears.
 - **Return -EBUSY for tripped breaker, -EAGAIN for cooldown**: Distinct error codes let userspace distinguish "permanently failed" from "try again later".
 - **Auto-clear after 60s inactivity**: Avoids permanent lockout. If the camera recovers externally (e.g., power cycle), the driver will accept resets again.
 - **Phase 1 dual-camera is diagnostic only**: No blocking behavior added — just logging. If field data shows disruption, we can add a sibling-streaming gate in a future commit.

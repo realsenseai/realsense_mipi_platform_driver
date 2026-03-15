@@ -120,3 +120,10 @@ The build system cross-compiles for ARM64. Toolchains vary by JetPack:
 - `master` — primary/release branch
 - `dev` — active development branch
 - CI builds run on pushes to `master` and `dev`, and on all PRs
+
+## Concurrency notes
+
+- In SERDES builds, hold `serdes_lock__` while scanning or assigning global topology slots (`ds5_inited[]`, `dser_inited[]`).
+- Protect per-camera mutable slot state (`ds5_primary`, `depth/rgb/ir/imu_streaming`) with `struct ds5_dev::lock`.
+- Protect per-deserializer slot assignment (`dser_dev`) with `struct dser_control::lock`.
+- For sibling-health checks, snapshot pointers/flags under lock and perform I2C probing after unlocking.

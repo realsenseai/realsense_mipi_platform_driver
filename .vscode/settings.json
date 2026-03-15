@@ -1,0 +1,8 @@
+{
+  "C_Cpp.default.configurationProvider": "ms-vscode.cpptools",
+  "C_Cpp.default.compileCommands": "${workspaceFolder}/.vscode/compile_commands.json",
+  "C_Cpp.intelliSenseEngine": "Default",
+  "files.exclude": {
+    "**/.cache": true
+  }
+}

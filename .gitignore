@@ -5,3 +5,5 @@
 /.claude/skills/v4l2-test/v4l2-test_results
 **__pycache__
 /test.logs
+/.vscode/*.db*
+/.vscode/compile_commands.json

@@ -107,6 +107,7 @@ if [[ "$JETPACK_VERSION" == "6.x" ]]; then
         make ARCH=arm64 -C kernel
     fi
     make ARCH=arm64 modules
+    D4XX_CMD_FILE="$SRCS/nvidia-oot/drivers/media/i2c/.d4xx.o.cmd"
     make ARCH=arm64 dtbs
     mkdir -p $TEGRA_KERNEL_OUT/rootfs/boot/dtb
     cp $SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-p3737-0000+p3701-0000-nv.dtb $TEGRA_KERNEL_OUT/rootfs/boot/dtb/
@@ -138,5 +139,15 @@ else
     fi
     make ARCH=arm64 O=$TEGRA_KERNEL_OUT -j${NPROC}
     make ARCH=arm64 O=$TEGRA_KERNEL_OUT modules_install INSTALL_MOD_PATH=$KERNEL_MODULES_OUT
+    D4XX_CMD_FILE="$(find "$TEGRA_KERNEL_OUT" -name '.d4xx.o.cmd' 2>/dev/null | head -1)"
+fi
+
+# Generate .vscode/compile_commands.json from the cached module build artefact
+echo "Generating .vscode/compile_commands.json..."
+if [ -n "${D4XX_CMD_FILE:-}" ] && [ -f "$D4XX_CMD_FILE" ]; then
+    "$DEVDIR/scripts/generate_compile_commands.sh" "$D4XX_CMD_FILE" || \
+        echo "Warning: compile_commands.json generation failed (non-fatal)"
+else
+    echo "Warning: .d4xx.o.cmd not found; skipping compile_commands.json generation"
 fi
 
