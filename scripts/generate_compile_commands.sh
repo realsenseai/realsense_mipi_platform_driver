@@ -18,7 +18,7 @@ SOURCE_FILE="$REPO/kernel/realsense/d4xx.c"
 # ── locate the .d4xx.o.cmd file ───────────────────────────────────────────────
 CMD_FILE="${1:-}"
 if [ -z "$CMD_FILE" ]; then
-  CMD_FILE="$(find "$REPO/sources_"* -name '.d4xx.o.cmd' 2>/dev/null | head -1)"
+  CMD_FILE="$(find "$REPO/sources_"* -name '.d4xx.o.cmd' 2>/dev/null | head -1 || true)"
 fi
 
 if [ -z "$CMD_FILE" ] || [ ! -f "$CMD_FILE" ]; then

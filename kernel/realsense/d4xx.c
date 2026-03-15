@@ -30,6 +30,7 @@
 #include <linux/string.h>
 #include <linux/videodev2.h>
 #include <linux/version.h>
+#include <linux/mutex.h>
 #include <media/media-entity.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
@@ -2428,9 +2429,9 @@ static int ds5_hw_reset_serdes_recovery(struct ds5 *state, bool force_phase2)
 		 * later.  Do multiple reads with delays to catch oscillation.
 		 */
 		ret = ds5_read(state, DS5_FW_VERSION, &tmp);
-        if (ret == 0) {
-            int k;
-            bool stable = true;
+		if (ret == 0) {
+			int k;
+			bool stable = true;
 
 			for (k = 0; k < DS5_HW_RESET_STABILITY_READS; k++) {
 				msleep(DS5_HW_RESET_STABILITY_INTERVAL_MS);
@@ -6692,11 +6693,13 @@ static int ds5_probe(struct i2c_client *c, const struct i2c_device_id *id)
 	state->reset_ref_dser = atomic_read(dser_get_reset_gen(state));
 #else
 	ds5_init_global_slots_once();
+	mutex_lock(&ds5_inited[0].lock);
 	if (NULL == ds5_inited[0].ds5_primary) {
 		ds5_init_ds5_dev(state, &ds5_inited[0]);
 		dev_dbg(&c->dev, "%s(): set primary ds5 instance\n", __func__);
 	}
 	state->ds5_dev = &ds5_inited[0];
+	mutex_unlock(&ds5_inited[0].lock);
 #endif
 	state->reset_ref_ds5 = atomic_read(ds5_get_reset_gen(state));
 
