@@ -2337,6 +2337,8 @@ static int ds5_set_calibration_data(struct ds5 *state,
 #define DS5_HW_RESET_STABILITY_READS	3	/* consecutive successful reads */
 #define DS5_HW_RESET_STABILITY_INTERVAL_MS 200	/* between each check */
 #define DS5_HW_RESET_STABILITY_TIMEOUT_MS 3000	/* max wait for stable link */
+#define DS5_HW_RESET_NATURAL_STABILITY_READS	2
+#define DS5_HW_RESET_NATURAL_STABILITY_INTERVAL_MS 100
 
 /* Minimum interval between consecutive HW resets (ms).
  * Rapid back-to-back resets degrade the GMSL link because each
@@ -2953,33 +2955,50 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	}
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
-	/* 10. Post-reset I2C stability verification (conditional).
-	 *     Only needed when SERDES recovery was actively performed in Step 6,
-	 *     because the serializer/deserializer re-init can cause transient
-	 *     I2C instability.  When the GMSL link recovered naturally (Step 6
-	 *     was skipped), Steps 7-9 already verified the link via multiple
-	 *     I2C reads — an additional 600ms+ stability loop is unnecessary
-	 *     and causes timing-sensitive CI test failures.
+	/* 10. Post-reset I2C stability verification.
 	 *
-	 *     Some camera SKUs have a secondary FW initialization phase that
-	 *     briefly drops the I2C bus ~65-110ms after the initial readiness
-	 *     checks (Steps 7-9) pass.  This has been observed on both D401
-	 *     (FW 5.17.x) and D457 (FW 5.17.2.7).  If we return now,
-	 *     userspace HWMC queries NAK, the viewer triggers another reset,
-	 *     and repeated rapid resets degrade the GMSL link until SERDES pipe
-	 *     setup fails and the device is unrecoverable without a host reboot.
+	 *     Natural-recovery path: perform a lightweight stability gate
+	 *     (2 reads, 100ms apart).  This catches the FW secondary init
+	 *     window that can occur in parallel with Step 1/early ready checks.
+	 *     If any probe fails, run Phase 1 SERDES recovery and continue with
+	 *     the full Step 10 verification loop.
 	 *
-	 *     Verify I2C stability by performing DS5_HW_RESET_STABILITY_READS
-	 *     consecutive successful reads spaced DS5_HW_RESET_STABILITY_INTERVAL_MS
-	 *     apart.  If the link drops mid-verification, reset the counter and
-	 *     keep waiting (up to DS5_HW_RESET_STABILITY_TIMEOUT_MS).  If it
-	 *     remains unstable, escalate to Phase 2 (full deserializer reset).
+	 *     Full verification loop: when SERDES recovery ran, verify I2C
+	 *     stability with DS5_HW_RESET_STABILITY_READS consecutive reads
+	 *     spaced DS5_HW_RESET_STABILITY_INTERVAL_MS apart.  If unstable,
+	 *     escalate to Phase 2 (full deserializer reset).
 	 */
 	if (!serdes_recovery_ran) {
-		dev_info(&state->client->dev,
-			"%s(): SERDES recovery was skipped (natural link recovery), "
-			"bypassing Step 10 stability verification\n", __func__);
-	} else {
+		int natural_ok = 0;
+		u16 natural_val = 0;
+
+		for (; natural_ok < DS5_HW_RESET_NATURAL_STABILITY_READS;
+			     natural_ok++) {
+			msleep(DS5_HW_RESET_NATURAL_STABILITY_INTERVAL_MS);
+			ret = ds5_read(state, DS5_FW_VERSION, &natural_val);
+			if (ret < 0 || natural_val == 0)
+				break;
+		}
+
+		if (natural_ok < DS5_HW_RESET_NATURAL_STABILITY_READS) {
+			dev_warn(&state->client->dev,
+				"%s(): natural recovery stability probe failed (ret=%d, val=0x%x), running Phase 1 SERDES recovery\n",
+				__func__, ret, natural_val);
+			ret = ds5_hw_reset_serdes_recovery(state, false);
+			if (ret < 0)
+				dev_err(&state->client->dev,
+					"%s(): Phase 1 recovery from natural path failed: %d\n",
+					__func__, ret);
+			serdes_recovery_ran = true;
+		} else {
+			dev_info(&state->client->dev,
+				"%s(): natural recovery stable (%d reads x %d ms), skipping full Step 10 loop\n",
+				__func__, DS5_HW_RESET_NATURAL_STABILITY_READS,
+				DS5_HW_RESET_NATURAL_STABILITY_INTERVAL_MS);
+		}
+	}
+
+	if (serdes_recovery_ran) {
 		int stable_count = 0;
 		unsigned long stab_ts = jiffies;
 		unsigned long stab_timeout =
@@ -5233,6 +5252,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	struct ds5_sensor *sensor = state->mux.last_set;
 	u16 expected_streaming_state;
 	bool ds5_config_done = !on; /* for stop, skip config */
+	bool reset_invalidated = false;
 	bool *streaming_flag = NULL;
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	int serdes_recovery_attempts = 0;
@@ -5251,6 +5271,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			|| state->reset_ref_dser != cur_dser) {
 		ds5_invalidate_sensor(state, sensor);
 		sensor->streaming = false;
+		reset_invalidated = true;
 		state->reset_ref_ds5 = cur_ds5;
 		state->reset_ref_dser = cur_dser;
 	}
@@ -5322,20 +5343,42 @@ retry_after_serdes_recovery:
 			"stream %d in expected state, toggling to %d (status: 0x%04x) %dms\n",
 			stream_id, on, status, jiffies_to_msecs(jiffies - ts));
 	} else {
-		/* After HW reset the FW reboots and all streams return to
-		 * idle.  If VI error recovery tries to stop a stream that
-		 * is already stopped (or start one already started), treat
-		 * it as a no-op so the upper layer can proceed with
-		 * restart instead of getting stuck in an EBUSY loop.
+		/* If state was invalidated by reset-generation bump and FW still
+		 * reports this stream as active, force a stop to guarantee next
+		 * start goes through full reconfiguration.
 		 */
-		dev_warn(&state->client->dev,
-			"stream %d in %d state already (status: 0x%04x) %dms, treating as no-op\n",
-			stream_id, on, status, jiffies_to_msecs(jiffies - ts));
-		mutex_lock(&state->ds5_dev->lock);
-		*streaming_flag = on;
-		mutex_unlock(&state->ds5_dev->lock);
-		sensor->streaming = on;
-		return 0;
+		if (on && reset_invalidated && (status & DS5_STATUS_STREAMING)) {
+			dev_warn(&state->client->dev,
+				"stream %d reports streaming after reset invalidation (status: 0x%04x), forcing stop and reconfigure\n",
+				stream_id, status);
+
+			ret = ds5_write(state, DS5_START_STOP_STREAM,
+					DS5_STREAM_STOP | stream_id);
+			if (ret < 0)
+				dev_warn(&state->client->dev,
+					"stream %d forced stop write failed (%d), continuing with reconfigure\n",
+					stream_id, ret);
+
+			mutex_lock(&state->ds5_dev->lock);
+			*streaming_flag = false;
+			mutex_unlock(&state->ds5_dev->lock);
+			sensor->streaming = false;
+		} else {
+			/* After HW reset the FW reboots and all streams return to
+			 * idle.  If VI error recovery tries to stop a stream that
+			 * is already stopped (or start one already started), treat
+			 * it as a no-op so the upper layer can proceed with
+			 * restart instead of getting stuck in an EBUSY loop.
+			 */
+			dev_warn(&state->client->dev,
+				"stream %d in %d state already (status: 0x%04x) %dms, treating as no-op\n",
+				stream_id, on, status, jiffies_to_msecs(jiffies - ts));
+			mutex_lock(&state->ds5_dev->lock);
+			*streaming_flag = on;
+			mutex_unlock(&state->ds5_dev->lock);
+			sensor->streaming = on;
+			return 0;
+		}
 	}
 
 	restore_val = sensor->streaming;

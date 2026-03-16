@@ -127,3 +127,5 @@ The build system cross-compiles for ARM64. Toolchains vary by JetPack:
 - Protect per-camera mutable slot state (`ds5_primary`, `depth/rgb/ir/imu_streaming`) with `struct ds5_dev::lock`.
 - Protect per-deserializer slot assignment (`dser_dev`) with `struct dser_control::lock`.
 - For sibling-health checks, snapshot pointers/flags under lock and perform I2C probing after unlocking.
+- In HW reset Step 10, natural-recovery path must still run a lightweight stability gate (2 reads x 100ms); on failure, trigger Phase 1 SERDES recovery and then continue full stability verification.
+- In `ds5_mux_s_stream()`, treat pre-toggle "already streaming" as no-op only when state is coherent; after reset-generation invalidation on start path, force stop + state clear and proceed with normal reconfiguration flow.

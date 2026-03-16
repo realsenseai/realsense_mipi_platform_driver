@@ -30,6 +30,8 @@ Linux kernel driver and userspace utilities for Intel RealSense D4XX series 3D d
   - `CONFIG_TEGRA_CAMERA_PLATFORM` — Tegra-specific camera platform integration.
   - `LINUX_VERSION_CODE` checks for API differences between kernel versions (4.9, 5.10, 5.15+).
 - **Prefer lazy invalidation over explicit loops**: when state must be invalidated across multiple instances (e.g. after a deserializer reset), increment an atomic generation counter (`atomic_inc()`) and let each instance detect the bump lazily (e.g. in `ds5_configure()`). Avoid O(N) loops that iterate `ds5_inited[]` to poke siblings. Combine lazy checks when possible — if an existing function already detects a generation mismatch, add new invalidation logic there rather than adding a separate check elsewhere.
+- **HW reset natural recovery guard**: do not bypass Step 10 entirely when Step 6 is skipped. Keep a lightweight natural-recovery stability probe (2 reads spaced 100ms), and if it fails, run Phase 1 SERDES recovery before entering the full Step 10 stability verification path.
+- **`ds5_mux_s_stream()` pre-toggle no-op rule**: for start (`on=1`), if reset-generation invalidation was detected and FW still reports streaming, do not return no-op; force a stop, clear cached stream state, and continue through normal start/configure flow.
 
 ### V4L2 Subdev Architecture
 
