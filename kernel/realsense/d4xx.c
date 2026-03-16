@@ -2959,7 +2959,8 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	 *
 	 *     Natural-recovery path: perform a lightweight stability gate
 	 *     (2 reads, 100ms apart).  This catches the FW secondary init
-	 *     window that can occur in parallel with Step 1/early ready checks.
+	 *     window that can occur in parallel with the earlier readiness
+	 *     checks (Steps 5 and 7–9).
 	 *     If any probe fails, run Phase 1 SERDES recovery and continue with
 	 *     the full Step 10 verification loop.
 	 *
@@ -2985,10 +2986,12 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 				"%s(): natural recovery stability probe failed (ret=%d, val=0x%x), running Phase 1 SERDES recovery\n",
 				__func__, ret, natural_val);
 			ret = ds5_hw_reset_serdes_recovery(state, false);
-			if (ret < 0)
+			if (ret < 0) {
 				dev_err(&state->client->dev,
 					"%s(): Phase 1 recovery from natural path failed: %d\n",
 					__func__, ret);
+				return ret;
+			}
 			serdes_recovery_ran = true;
 		} else {
 			dev_info(&state->client->dev,
