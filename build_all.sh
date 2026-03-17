@@ -26,18 +26,16 @@ done
 export DEVDIR=$(cd `dirname $0` && pwd)
 NPROC=$(nproc)
 
-. $DEVDIR/scripts/setup-common "$1"
-
 if [[ "$1" == "-h" ]]; then
-    echo "build_all.sh [--clean] [--dev-dbg] JetPack_version [JetPack_Linux_source]"
+    echo "build_all.sh [--clean] [--dev-dbg] [JetPack_version [JetPack_Linux_source]]"
     echo "build_all.sh -h"
-    exit 1
 fi
 
-SRCS="$DEVDIR/sources_$JETPACK_VERSION"
+. scripts/setup-common "$1"
 
+BUILD_SRCS="${DEVDIR}/${BUILD_SRCS}"
 if [[ -n "$2" ]]; then
-    SRCS=$(realpath $2)
+    BUILD_SRCS=$(realpath $2)
 fi
 
 if [[ $(uname -m) == aarch64 ]]; then
@@ -64,7 +62,7 @@ export TEGRA_KERNEL_OUT="$DEVDIR/images/${JP_INPUT_VERSION}"
 if [[ $CLEAN == 1 ]]; then
     echo "Cleaning build artifacts for ${JP_INPUT_VERSION}..."
     rm -rf $TEGRA_KERNEL_OUT
-    rm -rf $SRCS/out
+    rm -rf $BUILD_SRCS/out
 fi
 
 mkdir -p $TEGRA_KERNEL_OUT
@@ -78,7 +76,7 @@ export KERNEL_MODULES_OUT=$TEGRA_KERNEL_OUT/modules
 # https://docs.nvidia.com/jetson/archives/r36.2/DeveloperGuide/SD/Kernel/KernelCustomization.html#building-the-jetson-linux-kernel
 if version_lt "$JETPACK_VERSION" "6.0"; then
     #JP4/5
-    cd $SRCS/$KERNEL_DIR
+    cd $BUILD_SRCS/$KERNEL_DIR
     make O=$TEGRA_KERNEL_OUT tegra_defconfig
     if [[ "$DEVDBG" == "1" ]]; then
         scripts/config --file $TEGRA_KERNEL_OUT/.config --enable DYNAMIC_DEBUG
@@ -87,9 +85,9 @@ if version_lt "$JETPACK_VERSION" "6.0"; then
     make O=$TEGRA_KERNEL_OUT modules_install INSTALL_MOD_PATH=$KERNEL_MODULES_OUT
     D4XX_CMD_FILE="$(find "$TEGRA_KERNEL_OUT" -name '.d4xx.o.cmd' 2>/dev/null | head -1)"
 else
-    cd $SRCS
-    export KERNEL_HEADERS=$SRCS/$KERNEL_DIR
-    ln -sf $TEGRA_KERNEL_OUT $SRCS/out
+    cd $BUILD_SRCS
+    export KERNEL_HEADERS=${BUILD_SRCS}/${KERNEL_DIR}
+    ln -sf $TEGRA_KERNEL_OUT $BUILD_SRCS/out
     if [[ "$DEVDBG" == "1" ]]; then
         cd $KERNEL_HEADERS
         # Generate .config file from default defconfig
@@ -104,7 +102,7 @@ else
         # Remove unwanted
         rm defconfig .config
         make mrproper
-        cd $SRCS
+        cd $BUILD_SRCS
         # Building the Image with custom_defconfig
         make KERNEL_DEF_CONFIG=custom_defconfig -C kernel
     else
@@ -112,13 +110,13 @@ else
         make -C kernel
     fi
     make modules
-    D4XX_CMD_FILE="$SRCS/nvidia-oot/drivers/media/i2c/.d4xx.o.cmd"
+    D4XX_CMD_FILE="$BUILD_SRCS/nvidia-oot/drivers/media/i2c/.d4xx.o.cmd"
     mkdir -p $TEGRA_KERNEL_OUT/rootfs/boot/dtb
     if version_lt "$JETPACK_VERSION" "7.0"; then
         make dtbs
-        cp $SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/
+        cp $BUILD_SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/
     else
-        cp $SRCS/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/tegra2[36]4-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/
+        cp $BUILD_SRCS/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/tegra2[36]4-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/
     fi
     export INSTALL_MOD_PATH=$TEGRA_KERNEL_OUT/rootfs/
     make -C kernel install

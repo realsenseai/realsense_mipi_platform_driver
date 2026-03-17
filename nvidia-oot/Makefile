@@ -109,7 +109,6 @@ nvgpu: conftest nvidia-oot
 define display-cmd
 	$(MAKE) -j $(NPROC) ARCH=arm64 TARGET_ARCH=aarch64 \
 		-C $(MAKEFILE_DIR)/nvdisplay \
-		LOCALVERSION=$(version) \
 		NV_VERBOSE=0 \
 		KERNELRELEASE="" \
 		SYSSRC=$(NVIDIA_HEADERS) \

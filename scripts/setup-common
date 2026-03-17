@@ -4,7 +4,7 @@ SUPPORTED_JP="7.1, 7.0, 6.2.1, 6.2, 6.1, 6.0, 5.1.2, 5.0.2, 4.6.1"
 
 if [[ $1 == "-h" ]]; then
     echo supported JetPack versions: ${SUPPORTED_JP}
-    exit 1
+    exit 0
 fi
 
 JP_INPUT_VERSION="$1"
@@ -17,11 +17,12 @@ fi
 
 export JP_INPUT_VERSION
 export JETPACK_VERSION="${JP_INPUT_VERSION}"
-export REVISION="35.1"
-export L4T_VERSION=jetson_"${REVISION}"
-export KERNEL_DIR="kernel/kernel-5.10"
-export LICENSE=release
+REVISION="35.1"
+L4T_VERSION=jetson_"${REVISION}"
+KERNEL_DIR="kernel/kernel-5.10"
+LICENSE=release
 export ARCH=arm64
+BUILD_SRCS="sources_${JP_INPUT_VERSION}"
 
 function version_lt {
     IFS='.' read -r -a v1 <<< "$1"

@@ -30,16 +30,14 @@ function DisplayNvidiaLicense {
     echo
 }
 
-export DEVDIR=$(cd `dirname $0` && pwd)
-
 if [[ $1 == "-h" ]]; then
-	echo Usage:
-	echo $0 [JetPack]
+    echo Usage:
+    echo $0 [JetPack]
 fi
 
-. $DEVDIR/scripts/setup-common
+. scripts/setup-common
 
-echo "Setup JetPack ${JP_INPUT_VERSION} to sources_$JETPACK_VERSION"
+echo "Setup JetPack ${JP_INPUT_VERSION} to ${BUILD_SRCS}"
 
 # Display NVIDIA license
 DisplayNvidiaLicense "${REVISION}" "${LICENSE}"
@@ -50,10 +48,10 @@ if [[ $(uname -m) == aarch64 ]]; then
     echo Native build
     echo
 else
-    if [[ ! -d "$DEVDIR/l4t-gcc/$JETPACK_VERSION/bin/" ]]; then
+    if [[ ! -d "l4t-gcc/$JETPACK_VERSION/bin/" ]]; then
         echo "Installing build toolchain"
-        mkdir -p $DEVDIR/l4t-gcc/$JETPACK_VERSION
-        cd $DEVDIR/l4t-gcc/$JETPACK_VERSION
+        mkdir -p "l4t-gcc/$JETPACK_VERSION"
+        pushd l4t-gcc/$JETPACK_VERSION
         if [[ "$JETPACK_VERSION" == "7.x" ]]; then
             wget --quiet --show-progress https://developer.nvidia.com/downloads/embedded/L4T/r38_Release_v2.0/release/x-tools.tbz2 -O x-tools.tbz2
             tar xf x-tools.tbz2 ./x-tools/aarch64-none-linux-gnu --strip-components 3
@@ -67,26 +65,26 @@ else
             wget --quiet --show-progress http://releases.linaro.org/components/toolchain/binaries/7.3-2018.05/aarch64-linux-gnu/gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu.tar.xz
             tar xf gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu.tar.xz --strip-components 1
         fi
+        popd
     fi
 fi
 
-[[ -d sources_$JETPACK_VERSION ]] && echo -e "\e[33mIn a case you have local changes you may reset them with ./apply_patches.sh reset\e[0m\n"
+[[ -d ${BUILD_SRCS} ]] && echo -e "\e[33mIn a case you have local changes you may reset them with ./apply_patches.sh reset\e[0m\n"
 # Clone L4T kernel source repo
-cd $DEVDIR
 
 # Check if local tar ball exists in /home/nvidia_sources_cache
 NVIDIA_CACHE_DIR="/home/nvidia_sources_cache"
-TARBALL_NAME="backup_sources_${JP_INPUT_VERSION}.tar.gz"
+TARBALL_NAME="backup_${BUILD_SRCS}.tar.gz"
 TARBALL_PATH="$NVIDIA_CACHE_DIR/$TARBALL_NAME"
 
-if [[ ! -d sources_$JETPACK_VERSION && -f "$TARBALL_PATH" ]]; then
+if [[ ! -d "${BUILD_SRCS}" && -f "$TARBALL_PATH" ]]; then
     echo "Found local tar ball: $TARBALL_PATH"
     echo "Extracting sources from local cache instead of cloning from NVIDIA repository..."
 
     # Remove existing sources directory if it exists
-    if [[ -d "sources_${JP_INPUT_VERSION}" ]]; then
-        echo "Removing existing sources_${JP_INPUT_VERSION} directory..."
-        rm -rf "sources_${JP_INPUT_VERSION}"
+    if [[ -d "${BUILD_SRCS}" ]]; then
+        echo "Removing existing ${BUILD_SRCS} directory..."
+        rm -rf "${BUILD_SRCS}"
     fi
 
     # Extract tar ball
@@ -96,26 +94,26 @@ if [[ ! -d sources_$JETPACK_VERSION && -f "$TARBALL_PATH" ]]; then
     # Check what directory was extracted and rename if necessary
     # The tar ball might contain sources_6.x instead of sources_6.0
     EXTRACTED_DIR=$(tar -tzf "$TARBALL_PATH" | head -1 | cut -d'/' -f1)
-    if [[ "$EXTRACTED_DIR" != "sources_$JETPACK_VERSION" ]]; then
-        echo "Renaming extracted directory from $EXTRACTED_DIR to sources_$JETPACK_VERSION..."
-        mv "$EXTRACTED_DIR" "sources_$JETPACK_VERSION"
+    if [[ "$EXTRACTED_DIR" != "${BUILD_SRCS}" ]]; then
+        echo "Renaming extracted directory from $EXTRACTED_DIR to ${BUILD_SRCS}..."
+        mv "$EXTRACTED_DIR" "${BUILD_SRCS}"
     fi
 
     echo -e "\e[32mSources extracted successfully from local cache\e[0m"
 else
     echo "Cloning sources from NVIDIA repository..."
-    ./scripts/sync-sources.sh -t $L4T_VERSION -d sources_$JETPACK_VERSION -k
+    ./scripts/sync-sources.sh -t $L4T_VERSION -d ${BUILD_SRCS} -k
 fi
 
 # copy Makefile for jp6
 if ! version_lt "$JETPACK_VERSION" "6.0"; then
-    cp ./nvidia-oot/Makefile "sources_$JETPACK_VERSION/"
-    cp ./$KERNEL_DIR/Makefile "sources_$JETPACK_VERSION/kernel/"
+    cp ./nvidia-oot/Makefile "${BUILD_SRCS}/"
+    cp ./$KERNEL_DIR/Makefile "${BUILD_SRCS}/kernel/"
 fi
 
 # remove BUILD_NUMBER env dependency kernel vermagic
 if [[ "${JETPACK_VERSION}" == "4.x" ]]; then
-    sed -i s/'UTS_RELEASE=\$(KERNELRELEASE)-ab\$(BUILD_NUMBER)'/'UTS_RELEASE=\$(KERNELRELEASE)'/g ./sources_${JETPACK_VERSION}/kernel/kernel-4.9/Makefile
-    sed -i 's/the-space :=/E =/g' ./sources_${JETPACK_VERSION}/kernel/kernel-4.9/scripts/Kbuild.include
-    sed -i 's/the-space += /the-space = \$E \$E/g' ./sources_${JETPACK_VERSION}/kernel/kernel-4.9/scripts/Kbuild.include
+    sed -i s/'UTS_RELEASE=\$(KERNELRELEASE)-ab\$(BUILD_NUMBER)'/'UTS_RELEASE=\$(KERNELRELEASE)'/g ./${BUILD_SRCS}/kernel/kernel-4.9/Makefile
+    sed -i 's/the-space :=/E =/g' ./${BUILD_SRCS}/kernel/kernel-4.9/scripts/Kbuild.include
+    sed -i 's/the-space += /the-space = \$E \$E/g' ./${BUILD_SRCS}/kernel/kernel-4.9/scripts/Kbuild.include
 fi
