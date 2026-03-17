@@ -3,45 +3,33 @@
 set -e
 
 ACTION="apply"
-if [[ "$1" == reset ]]; then
-	ACTION="reset"
-	shift
-fi
-
 # Default to single camera DT for JetPack 5.0.2
 # single - jp5 [default] single cam GMSL board
 # dual - dual cam GMSL board SC20220126
 JP5_D4XX_DTSI="tegra194-camera-d4xx-single.dtsi"
-if [[ "$1" == "--one-cam" ]]; then
-    JP5_D4XX_DTSI="tegra194-camera-d4xx-single.dtsi"
+while [[ $# -gt 0 ]]; do
+    if [[ "$1" == "--one-cam" ]]; then
+        JP5_D4XX_DTSI="tegra194-camera-d4xx-single.dtsi"
+    elif [[ "$1" == "--dual-cam" ]]; then
+        JP5_D4XX_DTSI="tegra194-camera-d4xx-dual.dtsi"
+    elif [[ "$1" == "--max96712-EVB" ]]; then
+        JP5_D4XX_DTSI="tegra194-camera-d4xx-max96712-EVB.dtsi"
+    elif [[ "$1" == "--fg12-16ch" ]]; then
+        JP5_D4XX_DTSI="tegra194-camera-d4xx-fg12-16ch.dtsi"
+    elif [[ "$1" == "--fg12-16ch-dual" ]]; then
+        JP5_D4XX_DTSI="tegra194-camera-d4xx-fg12-16ch-dual.dtsi"
+    elif [[ "$1" == reset ]]; then
+        ACTION="reset"
+    elif [[ $1 == "-h" ]]; then
+            echo Usage:
+            echo "$0 [--one-cam | --dual-cam | --max96712-EVB | --fg12-16ch | --fg12-16ch-dual ] [reset] [-h]"
+            echo -e 'reset\t: hard reset (git) to version from jetpack_version file'
+            echo -e '-h\t: show this help'
+            break
+    fi
     shift
-elif [[ "$1" == "--dual-cam" ]]; then
-    JP5_D4XX_DTSI="tegra194-camera-d4xx-dual.dtsi"
-    shift
-elif [[ "$1" == "--max96712-EVB" ]]; then
-    JP5_D4XX_DTSI="tegra194-camera-d4xx-max96712-EVB.dtsi"
-    shift
-elif [[ "$1" == "--fg12-16ch" ]]; then
-    JP5_D4XX_DTSI="tegra194-camera-d4xx-fg12-16ch.dtsi"
-    shift
-elif [[ "$1" == "--fg12-16ch-dual" ]]; then
-    JP5_D4XX_DTSI="tegra194-camera-d4xx-fg12-16ch-dual.dtsi"
-    shift
-fi
+done
 
-if [[ "$1" == reset ]]; then
-	ACTION="reset"
-	shift
-fi
-
-if [[ $1 == "-h" ]]; then
-	echo Usage:
-    echo "$0 [--one-cam | --dual-cam | --max96712-EVB | --fg12-16ch | --fg12-16ch-dual ] [reset] [-h]"
-	echo -e 'reset\t: hard reset (git) to version from jetpack_version file'
-	echo -e '-h\t: show this help'
-fi
-
-[[ $# -gt 0 ]] && [[ $1 != "-h" ]] && echo -e too many arguments && exit 1
 . scripts/setup-common
 
 # set JP4 devicetree
