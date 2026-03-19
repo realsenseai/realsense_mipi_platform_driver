@@ -252,7 +252,7 @@ struct hwm_cmd {
 	u32 param2;
 	u32 param3;
 	u32 param4;
-	unsigned char Data[0];
+	unsigned char Data[];
 };
 
 static const struct hwm_cmd cmd_switch_to_dfu = {
@@ -3195,7 +3195,7 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 				memcpy(calib_cmd, &set_calib_data, sizeof(set_calib_data));
 				calib_cmd->header = 276;
 				calib_cmd->param1 = DEPTH_CALIBRATION_ID;
-				__memcpy(calib_cmd->Data, (u8 *)ctrl->p_new.p, 256);
+				memcpy(calib_cmd->Data, (u8 *)ctrl->p_new.p, 256);
 				ret = ds5_set_calibration_data(state, calib_cmd,
 					sizeof(struct hwm_cmd) + 256);
 				devm_kfree(&state->client->dev, calib_cmd);
@@ -3224,7 +3224,7 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 				memcpy(calib_cmd, &set_calib_data, sizeof (set_calib_data));
 				calib_cmd->header = 532;
 				calib_cmd->param1 = COEF_CALIBRATION_ID;
-				__memcpy(calib_cmd->Data, (u8 *)ctrl->p_new.p, 512);
+				memcpy(calib_cmd->Data, (u8 *)ctrl->p_new.p, 512);
 				ret = ds5_set_calibration_data(state, calib_cmd,
 						sizeof(struct hwm_cmd) + 512);
 				devm_kfree(&state->client->dev, calib_cmd);
@@ -3260,7 +3260,7 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 				break;
 			}
 			memcpy(ae_setpoint_cmd, &set_ae_setpoint, sizeof (set_ae_setpoint));
-			__memcpy(ae_setpoint_cmd->Data, (u8 *)ctrl->p_new.p_s32, 4);
+			memcpy(ae_setpoint_cmd->Data, (u8 *)ctrl->p_new.p_s32, 4);
 			ret = ds5_send_hwmc(state, sizeof(struct hwm_cmd) + 4,
 					ae_setpoint_cmd);
 			if (!ret)
@@ -5189,7 +5189,7 @@ static int ds5_mux_get_fmt(struct v4l2_subdev *sd,
 
 /* Video ops */
 static int ds5_mux_g_frame_interval(struct v4l2_subdev *sd,
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0) || LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
 		struct v4l2_subdev_state *state,
 #endif
 		struct v4l2_subdev_frame_interval *fi)
