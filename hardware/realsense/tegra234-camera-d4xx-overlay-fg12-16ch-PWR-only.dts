@@ -1,0 +1,80 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-FileCopyrightText: Copyright (c) 2018-2023, INTEL CORPORATION.  All rights reserved.
+
+/dts-v1/;
+/plugin/;
+
+#include <dt-bindings/clock/tegra234-clock.h>
+#include <dt-bindings/gpio/tegra234-gpio.h>
+#include <dt-bindings/tegra234-p3737-0000+p3701-0000.h>
+
+#define CAM0_PWDN	TEGRA234_MAIN_GPIO(H, 6)  //MAX96712_1 PWDN
+#define CAM1_PWDN	TEGRA234_MAIN_GPIO(H, 3)  //MAX96712_2 PWDN
+#define CAM2_PWDN	TEGRA234_MAIN_GPIO(AC, 0) //MAX96712_3 PWDN
+#define CAM3_PWDN	TEGRA234_MAIN_GPIO(AC, 1) //MAX96712_4 PWDN
+#define CAM12V_POC	TEGRA234_MAIN_GPIO(AC, 7)
+
+#define CAMERA_I2C_MUX_BUS(x) (0x1E + x)
+
+/* camera control gpio definitions */
+/ {
+	overlay-name = "Jetson fg12-16ch power and reset gpios only";
+	jetson-header-name = "Jetson AGX CSI Connector";
+	compatible = JETSON_COMPATIBLE;
+
+	fragment@0 {
+		target-path = "/";
+		__overlay__ {
+			vdd_cam12v_poc: regulator-vdd-cam12v-poc {
+					compatible = "regulator-fixed";
+					regulator-name = "vdd-cam12v-poc";
+					regulator-min-microvolt = <12000000>;
+					regulator-max-microvolt = <12000000>;
+					gpio = <&gpio CAM12V_POC GPIO_ACTIVE_HIGH>;
+					enable-active-high;
+					regulator-always-on;
+					regulator-boot-on;
+			};
+			vdd_cam0_pwdn: regulator-vdd-cam0-pwdn {
+					compatible = "regulator-fixed";
+					regulator-name = "vdd-cam0-pwdn";
+					regulator-min-microvolt = <1800000>;
+					regulator-max-microvolt = <1800000>;
+					gpio = <&gpio CAM0_PWDN GPIO_ACTIVE_HIGH>;
+					enable-active-high;
+					regulator-always-on;
+					regulator-boot-on;
+			};
+			vdd_cam1_pwdn: regulator-vdd-cam1-pwdn {
+					compatible = "regulator-fixed";
+					regulator-name = "vdd-cam1-pwdn";
+					regulator-min-microvolt = <1800000>;
+					regulator-max-microvolt = <1800000>;
+					gpio = <&gpio CAM1_PWDN GPIO_ACTIVE_HIGH>;
+					enable-active-high;
+					regulator-always-on;
+					regulator-boot-on;
+			};
+			vdd_cam2_pwdn: regulator-vdd-cam2-pwdn {
+					compatible = "regulator-fixed";
+					regulator-name = "vdd-cam2-pwdn";
+					regulator-min-microvolt = <1800000>;
+					regulator-max-microvolt = <1800000>;
+					gpio = <&gpio CAM2_PWDN GPIO_ACTIVE_HIGH>;
+					enable-active-high;
+					regulator-always-on;
+					regulator-boot-on;
+			};
+			vdd_cam3_pwdn: regulator-vdd-cam3-pwdn {
+					compatible = "regulator-fixed";
+					regulator-name = "vdd-cam3-pwdn";
+					regulator-min-microvolt = <1800000>;
+					regulator-max-microvolt = <1800000>;
+					gpio = <&gpio CAM3_PWDN GPIO_ACTIVE_HIGH>;
+					enable-active-high;
+					regulator-always-on;
+					regulator-boot-on;
+			};
+		};
+	};
+};
