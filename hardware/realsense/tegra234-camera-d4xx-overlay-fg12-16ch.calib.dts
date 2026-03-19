@@ -222,7 +222,6 @@
 								reg = <0x29>;
 								compatible = "maxim,max96712";
 								csi-mode = "2x4";
-								max-src = <1>;
 								channel = "a";
 								pwdn-gpios = <&gpio CAM0_PWDN GPIO_ACTIVE_HIGH>;
 							};

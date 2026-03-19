@@ -654,7 +654,6 @@
 								reg = <0x29>;
 								compatible = "maxim,max96712";
 								csi-mode = "2x4";
-								max-src = <1>;
 								channel = "a";
 								pwdn-gpios = <&gpio CAM0_PWDN GPIO_ACTIVE_HIGH>;
 							};
@@ -870,7 +869,6 @@
 								reg = <0x29>;
 								compatible = "maxim,max96712";
 								csi-mode = "2x4";
-								max-src = <1>;
 								channel = "b";
 								pwdn-gpios = <&gpio CAM1_PWDN GPIO_ACTIVE_HIGH>;
 							};
@@ -1086,7 +1084,6 @@
 								reg = <0x29>;
 								compatible = "maxim,max96712";
 								csi-mode = "2x4";
-								max-src = <1>;
 								channel = "c";
 								pwdn-gpios = <&gpio CAM2_PWDN GPIO_ACTIVE_HIGH>;
 							};
@@ -1302,7 +1299,6 @@
 								reg = <0x29>;
 								compatible = "maxim,max96712";
 								csi-mode = "2x4";
-								max-src = <1>;
 								channel = "d";
 								pwdn-gpios = <&gpio CAM3_PWDN GPIO_ACTIVE_HIGH>;
 							};

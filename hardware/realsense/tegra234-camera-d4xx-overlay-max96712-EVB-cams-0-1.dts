@@ -343,7 +343,6 @@
 								compatible = "maxim,max96712";
 								csi-mode = "2x4";
 								link-mask = <0x3>;
-								max-src = <1>;
 								channel = "a";
 							};
 
@@ -353,7 +352,7 @@
 								reg = <0x40>;
 								maxim,gmsl-dser-device = <&dser>;
 							};
-							ser_b: max9295_a@41 {
+							ser_b: max9295_b@41 {
 								status = "okay";
 								compatible = "maxim,max9295";
 								reg = <0x41>;

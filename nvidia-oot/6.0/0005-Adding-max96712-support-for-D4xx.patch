@@ -1,24 +1,23 @@
-From fb61dddd1a33b33526bc839d57bf37c704200370 Mon Sep 17 00:00:00 2001
+From ec62225a679e72f539315a27066026fb8e9e7489 Mon Sep 17 00:00:00 2001
 From: ejgoldik <ehud.joseph.goldik@realsenseai.com>
-Date: Thu, 19 Mar 2026 09:01:44 +0200
+Date: Thu, 19 Mar 2026 15:28:35 +0200
 Subject: [PATCH] Adding max96712 support for D4xx
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- drivers/media/i2c/max96712.c | 423 ++++++++++++++++++++++++++++++++---
- 1 file changed, 386 insertions(+), 37 deletions(-)
+ drivers/media/i2c/max96712.c | 432 ++++++++++++++++++++++++++++++++---
+ 1 file changed, 396 insertions(+), 36 deletions(-)
 
 diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
-index 8e237eef..01344f4d 100644
+index 8e237eef..98172e74 100644
 --- a/drivers/media/i2c/max96712.c
 +++ b/drivers/media/i2c/max96712.c
-@@ -16,32 +16,73 @@
+@@ -16,32 +16,75 @@
  #include <linux/gpio.h>
  #include <linux/of.h>
  #include <linux/of_gpio.h>
--
 +#include <media/max96712.h>
-+
+ 
 +/* register specifics */
 +
 +#define MAX96712_REG6_ADDR 0x6
@@ -58,6 +57,8 @@ index 8e237eef..01344f4d 100644
 +
 +#define MAX96712_DPLL_0_ADDR 0x1D00
 +
++#define MAX9295_DEFAULT_ADDR 0x40
++
 +/* data defines */
 +#define MAX96712_MAX_LINKS 4
 +#define MAX96712_MAX_PIPES 8
@@ -92,7 +93,7 @@ index 8e237eef..01344f4d 100644
  	i2c_client = global_priv[channel]->i2c_client;
  	bak = i2c_client->addr;
  
-@@ -53,7 +94,6 @@ int max96712_write_reg_Dser(int slaveAddr, int channel,
+@@ -53,7 +96,6 @@ int max96712_write_reg_Dser(int slaveAddr, int channel,
  		dev_err(&i2c_client->dev, "%s: addr = 0x%x, val = 0x%x\n",
  				__func__, addr, val);
  	}
@@ -100,7 +101,7 @@ index 8e237eef..01344f4d 100644
  	return err;
  }
  EXPORT_SYMBOL(max96712_write_reg_Dser);
-@@ -68,8 +108,6 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
+@@ -68,8 +110,6 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
  
  	if (channel > 3 || channel < 0 || global_priv[channel] == NULL)
  		return -1;
@@ -109,7 +110,7 @@ index 8e237eef..01344f4d 100644
  	i2c_client = global_priv[channel]->i2c_client;
  	bak = i2c_client->addr;
  	i2c_client->addr = slaveAddr / 2;
-@@ -80,11 +118,53 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
+@@ -80,11 +120,56 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
  		dev_err(&i2c_client->dev, "%s: addr = 0x%x, val = 0x%x\n",
  				__func__, addr, *val);
  	}
@@ -148,6 +149,7 @@ index 8e237eef..01344f4d 100644
 +	int err;
 +	int bak = i2c_client->addr;
 +
++	mutex_lock(&priv->lock);
 +	i2c_client->addr = ShortSlaveAddr;
 +	err = regmap_write(priv->regmap, addr, val);
 +	i2c_client->addr = bak;
@@ -158,13 +160,15 @@ index 8e237eef..01344f4d 100644
 +
 +	/* delay before next i2c command as required for SERDES link */
 +	usleep_range(100, 110);
++	mutex_unlock(&priv->lock);
++
 +	return err;
 +}
 +
  static int max96712_read_reg(struct max96712 *priv,
  			u16 addr, unsigned int *val)
  {
-@@ -99,6 +179,20 @@ static int max96712_read_reg(struct max96712 *priv,
+@@ -99,6 +184,20 @@ static int max96712_read_reg(struct max96712 *priv,
  	return err;
  }
  
@@ -185,7 +189,7 @@ index 8e237eef..01344f4d 100644
  
  static int max96712_stats_show(struct seq_file *s, void *data)
  {
-@@ -153,24 +247,6 @@ static const struct file_operations max96712_debugfs_fops = {
+@@ -153,24 +252,6 @@ static const struct file_operations max96712_debugfs_fops = {
  	.release = single_release,
  };
  
@@ -210,16 +214,17 @@ index 8e237eef..01344f4d 100644
  static int max96712_debugfs_init(const char *dir_name,
  				struct dentry **d_entry,
  				struct dentry **f_entry,
-@@ -225,7 +301,7 @@ static int max96712_debugfs_init(const char *dir_name,
+@@ -225,7 +306,8 @@ static int max96712_debugfs_init(const char *dir_name,
  static  struct regmap_config max96712_regmap_config = {
  	.reg_bits = 16,
  	.val_bits = 8,
 -	.cache_type = REGCACHE_RBTREE,
++	/* As this driver remaps i2c addresses, the cache is unreliable */
 +	.cache_type = REGCACHE_NONE,
  };
  
  #if defined(NV_I2C_DRIVER_STRUCT_PROBE_WITHOUT_I2C_DEVICE_ID_ARG) /* Linux 6.3 */
-@@ -237,6 +313,8 @@ static int max96712_probe(struct i2c_client *client,
+@@ -237,6 +319,8 @@ static int max96712_probe(struct i2c_client *client,
  {
  	struct max96712 *priv;
  	int err = 0;
@@ -228,7 +233,7 @@ index 8e237eef..01344f4d 100644
  
  	dev_info(&client->dev, "%s: enter\n", __func__);
  
-@@ -249,15 +327,31 @@ static int max96712_probe(struct i2c_client *client,
+@@ -249,15 +333,31 @@ static int max96712_probe(struct i2c_client *client,
  			"regmap init failed: %ld\n", PTR_ERR(priv->regmap));
  		return -ENODEV;
  	}
@@ -266,7 +271,7 @@ index 8e237eef..01344f4d 100644
  	err = max96712_debugfs_init(NULL, NULL, NULL, priv);
  	if (err)
  		return err;
-@@ -274,8 +368,11 @@ static int max96712_remove(struct i2c_client *client)
+@@ -274,8 +374,11 @@ static int max96712_remove(struct i2c_client *client)
  static void max96712_remove(struct i2c_client *client)
  #endif
  {
@@ -279,7 +284,7 @@ index 8e237eef..01344f4d 100644
  		i2c_unregister_device(client);
  		client = NULL;
  	}
-@@ -284,13 +381,264 @@ static void max96712_remove(struct i2c_client *client)
+@@ -284,13 +387,269 @@ static void max96712_remove(struct i2c_client *client)
  #endif
  }
  
@@ -360,6 +365,8 @@ index 8e237eef..01344f4d 100644
 +		// All mappings to PHY1 (master for port A)
 +		{MAX96712_MIPI_TX45_MAP_DPHY_DEST_ADDR + (0x40 * pipe_id), 0x55},
 +		// SEQ_MISS_EN: Disabled / DIS_PKT_DET: Disabled
++		// This reg has inconsistent gaps between reg addresses per pipe:
++		// 0x100, 0x112, 0x124, 0x136, 0x148, *0x160*, 0x172, 0x184
 +		{MAX96712_VIDEO_RX0_ADDR + (0x12 * pipe_id) + ((pipe_id >= 5) ? 6 : 0), 0x23},
 +	};
 +
@@ -452,29 +459,32 @@ index 8e237eef..01344f4d 100644
 +	unsigned int reg_val = 0;
 +	unsigned int dser_empty_link_mask_reg = 0xF0;
 +	uint8_t link_id_iter = 0;
-+	unsigned default_addr = 0x40; // TODO: get from device tree
++	unsigned default_ser_addr = MAX9295_DEFAULT_ADDR;
 +	int err = 0;
 +
++	/* Iterating over the links and assigning unique serializer i2c addresses */
 +	for (link_id_iter = 0; link_id_iter < MAX96712_MAX_LINKS ; link_id_iter++)
 +	{
 +		if (link_mask & (1 << link_id_iter))
 +		{
 +			/* Camera should be connected on this link */
-+			unsigned int dst_addr = default_addr + link_id_iter;
++			unsigned int dst_ser_addr = default_ser_addr + link_id_iter;
 +			unsigned int curr_map = dser_empty_link_mask_reg | (1 << link_id_iter);
 +
++			/* Enable single link */
 +			max96712_write_reg(priv, MAX96712_REG6_ADDR, curr_map);
-+			max96712_write_reg(priv, MAX96712_CTRL1_ADDR, (1 << link_id_iter));
-+			msleep(1000);
-+			err = max96712_read_slave_reg(priv, dst_addr, 0, &reg_val);
++			msleep(10);
++			max96712_reset_oneshot(dev);
 +
-+			if ((err == 0) && (reg_val == (dst_addr << 1)))
++			err = max96712_read_slave_reg(priv, dst_ser_addr, 0, &reg_val);
++			if ((err == 0) && (reg_val == (dst_ser_addr << 1)))
 +			{
-+				dev_dbg(dev, "%s Serializer already at 0x%x\n", __func__, dst_addr);
++				dev_dbg(dev, "%s Serializer already at 0x%x\n", __func__, dst_ser_addr);
 +				continue;
 +			}
 +
-+			max96712_write_slave_reg(priv, default_addr, 0, dst_addr << 1);
++			/* Assign the new i2c address */
++			max96712_write_slave_reg(priv, default_ser_addr, 0, dst_ser_addr << 1);
 +		}
 +	}
 +	max96712_write_reg(priv, MAX96712_REG6_ADDR, dser_empty_link_mask_reg | link_mask);
@@ -545,7 +555,7 @@ index 8e237eef..01344f4d 100644
  	{ },
  };
  
-@@ -300,6 +648,7 @@ static struct i2c_driver max96712_i2c_driver = {
+@@ -300,6 +659,7 @@ static struct i2c_driver max96712_i2c_driver = {
  	.driver = {
  		.name = "max96712",
  		.owner = THIS_MODULE,

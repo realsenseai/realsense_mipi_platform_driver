@@ -366,7 +366,6 @@
 								reg = <0x29>;
 								compatible = "maxim,max96712";
 								csi-mode = "2x4";
-								max-src = <1>;
 								channel = "a";
 								pwdn-gpios = <&gpio CAM0_PWDN GPIO_ACTIVE_HIGH>;
 							};
@@ -582,12 +581,11 @@
 								reg = <0x29>;
 								compatible = "maxim,max96712";
 								csi-mode = "2x4";
-								max-src = <1>;
 								channel = "b";
 								pwdn-gpios = <&gpio CAM1_PWDN GPIO_ACTIVE_HIGH>;
 							};
 
-							ser_b: max9295_a@40 {
+							ser_b: max9295_b@40 {
 								status = "okay";
 								compatible = "maxim,max9295";
 								reg = <0x40>;
