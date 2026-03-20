@@ -61,10 +61,10 @@ SCRIPT_NAME=`basename $0`
 # info about sources.
 # NOTE: *Add only kernel repos here. Add new repos separately below. Keep related repos together*
 # NOTE: nvethrnetrm.git should be listed after "linux-nv-oot.git" due to nesting of sync path
-if [[ -f scripts/sources_${JETPACK_VERSION} ]]; then
-	SOURCE_INFO=$(cat scripts/sources_${JETPACK_VERSION})
-elif [[ -f scripts/sources_${JP_INPUT_VERSION} ]]; then
+if [[ -f scripts/sources_${JP_INPUT_VERSION} ]]; then
 	SOURCE_INFO=$(cat scripts/sources_${JP_INPUT_VERSION})
+elif [[ -f scripts/sources_${JETPACK_VERSION} ]]; then
+	SOURCE_INFO=$(cat scripts/sources_${JETPACK_VERSION})
 else
 	echo "Sources information file, scripts/sources_${JETPACK_VERSION}, is missing!"
 	exit 1

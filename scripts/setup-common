@@ -1,24 +1,23 @@
 #!/bin/bash
 
-SUPPORTED_JP="7.1, 7.0, 6.2.1, 6.2, 6.1, 6.0, 5.1.2, 5.0.2, 4.6.1"
-
-if [[ $1 == "-h" ]]; then
-    echo supported JetPack versions: ${SUPPORTED_JP}
-    exit 0
-fi
+SUPPORTED_JP="7.1, 7.0, 6.2.2, 6.2.1, 6.2, 6.1, 6.0, 5.1.6, 5.1.2, 5.0.2, 4.6.1"
 
 JP_INPUT_VERSION="$1"
-if [[ -z "${JP_INPUT_VERSION}" ]]; then
+if [[ -z "${JP_INPUT_VERSION}" || "$1" == "-h" ]]; then
     JP_INPUT_VERSION="${SUPPORTED_JP%%,*}"
     if [[ -f "jetpack_version" ]]; then
         JP_INPUT_VERSION="$(cat jetpack_version)"
     fi
 fi
 
+if [[ $1 == "-h" ]]; then
+    echo supported JetPack versions: ${SUPPORTED_JP}
+	echo pre-selected/active: ${JP_INPUT_VERSION:-none}
+    exit 0
+fi
+
 export JP_INPUT_VERSION
 export JETPACK_VERSION="${JP_INPUT_VERSION}"
-REVISION="35.1"
-L4T_VERSION=jetson_"${REVISION}"
 KERNEL_DIR="kernel/kernel-5.10"
 LICENSE=release
 export ARCH=arm64
@@ -45,7 +44,9 @@ if [[ "$JETPACK_VERSION" =~ ^7\.[0-1]$ ]]; then
     JETPACK_VERSION="7.x"
     L4T_VERSION=jetson_"${REVISION}"
 elif [[ "$JETPACK_VERSION" =~ ^6\.[0-2](\.[0-9]+)?$ ]]; then
-    if [[ $JETPACK_VERSION == "6.2.1" ]]; then
+    if [[ $JETPACK_VERSION == "6.2.2" ]]; then
+        REVISION="36.5"
+    elif [[ $JETPACK_VERSION == "6.2.1" ]]; then
         REVISION="36.4.4"
     elif [[ $JETPACK_VERSION == "6.2" ]]; then
         REVISION="36.4.3"
@@ -57,8 +58,10 @@ elif [[ "$JETPACK_VERSION" =~ ^6\.[0-2](\.[0-9]+)?$ ]]; then
     KERNEL_DIR="kernel/kernel-jammy-src"
     JETPACK_VERSION="6.x"
     L4T_VERSION=jetson_"${REVISION}"
-elif [[ "$JETPACK_VERSION" =~ ^5.[0-1].2$ ]]; then
-    if [[ $JETPACK_VERSION == "5.1.2" ]]; then
+elif [[ "$JETPACK_VERSION" =~ ^5\.[0-1]. ]]; then
+    if [[ $JETPACK_VERSION == "5.1.6" ]]; then
+        REVISION="35.6.4"
+    elif [[ $JETPACK_VERSION == "5.1.2" ]]; then
         REVISION="35.4.1"
     elif [[ $JETPACK_VERSION == "5.0.2" ]]; then
         REVISION="35.1"
@@ -73,7 +76,8 @@ elif [[ $JETPACK_VERSION == "4.6.1" ]]; then
     L4T_VERSION="tegra-l4t-r${REVISION}"
     LICENSE=T186
     JETPACK_VERSION="4.x"
-else
+fi
+if [[ -z $REVISION ]]; then
     echo "Wrong JetPack version ($JETPACK_VERSION)! Supported version: ${SUPPORTED_JP}"
     exit 1
 fi
