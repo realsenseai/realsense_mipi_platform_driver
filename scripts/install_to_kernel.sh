@@ -43,6 +43,8 @@ if [ "${JETPACK_VERSION}" = "5.0.2" ]; then
           sudo cp videobuf-vmalloc.ko /lib/modules/$(uname -r)/updates/
 elif [ "${JETPACK_VERSION}" = "6.0" ] || [ "${JETPACK_VERSION}" = "6.1" ] || [ "${JETPACK_VERSION}" = "6.2" ] || [ "${JETPACK_VERSION}" = "6.2.1" ] || [ "${JETPACK_VERSION}" = "7.0" ] || [ "${JETPACK_VERSION}" = "7.1" ]; then
     tar xf rootfs.tar.gz
+    echo "sudo rm -rf /lib/modules/$(uname -r)"
+          sudo rm -rf /lib/modules/$(uname -r)
     echo "sudo cp -r lib/modules/$(uname -r) /lib/modules/."
           sudo cp -r lib/modules/$(uname -r) /lib/modules/.
     echo "sudo cp boot/tegra234-camera-d4xx-overlay*.dtbo /boot/."

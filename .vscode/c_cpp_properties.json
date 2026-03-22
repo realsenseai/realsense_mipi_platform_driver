@@ -19,11 +19,9 @@
       "compileCommands": "${workspaceFolder}/.vscode/compile_commands.json",
       "browse": {
         "path": [
-          "${workspaceFolder}/kernel/kernel-jammy-src/include",
-          "${workspaceFolder}/kernel/realsense",
-          "${workspaceFolder}/**"
+          "${workspaceFolder}/kernel/realsense"
         ],
-        "limitSymbolsToIncludedHeaders": false,
+        "limitSymbolsToIncludedHeaders": true,
         "databaseFilename": "${workspaceFolder}/.vscode/browse.vc.db"
       }
     }
