@@ -339,6 +339,12 @@ static const struct hwm_cmd cmd_hw_reset = {
 	.opcode = 0x20,  /* HW reset opcode */
 };
 
+static const struct hwm_cmd log_prepare = {
+	.header = 0x014,
+	.magic_word = 0xCDAB,
+	.opcode = 0xf,
+	.param1 = 0x400, .param2 = 0, .param3 = 0, .param4 = 0,
+};
 struct __fw_status {
 	uint32_t	spare1;
 	uint32_t	FW_lastVersion;
@@ -2225,7 +2231,7 @@ enum DS5_HWMC_ERR {
 	DS5_HWMC_ERR_LAST,
 };
 
-static int ds5_get_hwmc_status(struct ds5 *state)
+static int ds5_hwmc_wait(struct ds5 *state)
 {
 	int ret = 0;
 	u16 status = DS5_HWMC_STATUS_WIP;
@@ -2242,17 +2248,20 @@ static int ds5_get_hwmc_status(struct ds5 *state)
 		}
 	} while (retries-- && (ret || status == DS5_HWMC_STATUS_WIP));
 	dev_dbg(&state->client->dev,
-			"%s(): ret: 0x%x, status: 0x%x\n",
-			__func__, ret, status);
-	if (ret || status != DS5_HWMC_STATUS_OK) {
+		"%s(): ret: 0x%x, status: 0x%x\n",
+		__func__, ret, status);
+	if (!ret) {
 		if (status == DS5_HWMC_STATUS_ERR) {
 			ds5_raw_read(state, DS5_HWMC_DATA, &errorCode, sizeof(errorCode));
-			return errorCode;
+			ret = errorCode;
+		} else if (status == DS5_HWMC_STATUS_WIP) {
+			ret = -ETIMEDOUT;
+			dev_warn(&state->client->dev,
+				"%s(): HWMC command timed out\n", __func__);
 		}
-	}
-	if (!ret && (status != DS5_HWMC_STATUS_OK))
+	} else {
 		ret = DS5_HWMC_ERR_LAST;
-
+	}
 	return ret;
 }
 
@@ -2266,7 +2275,7 @@ static int ds5_get_hwmc(struct ds5 *state, unsigned char *data,
 		return -ENOBUFS;
 
 	memset(data, 0, cmdDataLen);
-	ret = ds5_get_hwmc_status(state);
+	ret = ds5_hwmc_wait(state);
 	if (ret) {
 		dev_dbg(&state->client->dev,
 			"%s(): HWMC status not clear, ret: %d\n",
@@ -2304,7 +2313,7 @@ static int ds5_get_hwmc(struct ds5 *state, unsigned char *data,
 	return ret;
 }
 
-static int ds5_send_hwmc(struct ds5 *state,
+static int ds5_hwmc_send(struct ds5 *state,
 			u16 cmdLen,
 			struct hwm_cmd *cmd)
 {
@@ -2326,16 +2335,15 @@ static int ds5_set_calibration_data(struct ds5 *state,
 {
 	int ret;
 
-	ret = ds5_send_hwmc(state, length, cmd);
+	ret = ds5_hwmc_send(state, length, cmd);
 	if (ret)
 		return ret;
 
-	ret = ds5_get_hwmc_status(state);
+	ret = ds5_hwmc_wait(state);
 	if (ret) {
 		dev_err(&state->client->dev,
-				"%s(): Failed to set calibration table %d,"
-				"ret: %d, fw error: %x\n",
-				__func__, cmd->param1, ret, ret);
+				"%s(): Failed to set calibration table %d, error: %d\n",
+				__func__, cmd->param1, ret);
 	}
 
 	return ret;
@@ -2789,7 +2797,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 
 	/* 4. Send HW reset command */
 	memcpy(&reset_cmd, &cmd_hw_reset, sizeof(reset_cmd));
-	ret = ds5_send_hwmc(state, sizeof(reset_cmd), &reset_cmd);
+	ret = ds5_hwmc_send(state, sizeof(reset_cmd), &reset_cmd);
 	if (ret < 0) {
 		dev_err(&state->client->dev,
 			"%s(): Failed to send HW reset command: %d\n",
@@ -2827,6 +2835,11 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	if (retry >= DS5_HW_RESET_MAX_RETRIES) {
 		u16 dfu_magic = 0;
 
+		dev_err(&state->client->dev,
+			"%s(): Device did not become ready after %d ms (last control-status: 0x%04x, i2c ret: %d)\n",
+			__func__, DS5_HW_RESET_INITIAL_DELAY_MS + DS5_HW_RESET_TIMEOUT_MS,
+			ready_status, ret);
+
 		ret = ds5_read_poll(state, DS5_DFU_MAGIC_REG, &dfu_magic);
 		if (!ret && dfu_magic == DS5_DFU_MAGIC_LSW) {
 			dev_warn(&state->client->dev,
@@ -2835,10 +2848,6 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 			return 0;
 		}
 
-		dev_err(&state->client->dev,
-			"%s(): Device did not become ready after %d ms (last control-status: 0x%04x, i2c ret: %d)\n",
-			__func__, DS5_HW_RESET_INITIAL_DELAY_MS + DS5_HW_RESET_TIMEOUT_MS,
-			ready_status, ret);
 		return -ETIMEDOUT;
 	}
 
@@ -3048,10 +3057,10 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			ae_roi_cmd.param2 = *((u16 *)ctrl->p_new.p_u16 + 1);
 			ae_roi_cmd.param3 = *((u16 *)ctrl->p_new.p_u16 + 2);
 			ae_roi_cmd.param4 = *((u16 *)ctrl->p_new.p_u16 + 3);
-			ret = ds5_send_hwmc(state, sizeof(struct hwm_cmd),
+			ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd),
 				&ae_roi_cmd);
 			if (!ret)
-				ret = ds5_get_hwmc_status(state);
+				ret = ds5_hwmc_wait(state);
 		}
 		break;
 	case DS5_CAMERA_CID_AE_SETPOINT_SET:
@@ -3070,10 +3079,10 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			}
 			memcpy(ae_setpoint_cmd, &set_ae_setpoint, sizeof (set_ae_setpoint));
 			memcpy(ae_setpoint_cmd->Data, (u8 *)ctrl->p_new.p_s32, 4);
-			ret = ds5_send_hwmc(state, sizeof(struct hwm_cmd) + 4,
+			ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd) + 4,
 					ae_setpoint_cmd);
 			if (!ret)
-				ret = ds5_get_hwmc_status(state);
+				ret = ds5_hwmc_wait(state);
 			devm_kfree(&state->client->dev, ae_setpoint_cmd);
 		}
 		break;
@@ -3103,7 +3112,7 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			memcpy(erb_cmd, &erb, sizeof(struct hwm_cmd));
 			erb_cmd->param1 = offset;
 			erb_cmd->param2 = size;
-			ret = ds5_send_hwmc(state, sizeof(struct hwm_cmd), erb_cmd);
+			ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd), erb_cmd);
 			if (!ret)
 				ret = ds5_get_hwmc(state, erb_cmd->Data, len, &size);
 			if (ret) {
@@ -3162,9 +3171,9 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			ewb_cmd->param1 = offset; // start index
 			ewb_cmd->param2 = size; // size
 			memcpy(ewb_cmd->Data, (u8 *)ctrl->p_new.p_u8 + 4, size);
-			ret = ds5_send_hwmc(state, sizeof(struct hwm_cmd) + size, ewb_cmd);
+			ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd) + size, ewb_cmd);
 			if (!ret)
-				ret = ds5_get_hwmc_status(state);
+				ret = ds5_hwmc_wait(state);
 			if (ret) {
 				dev_err(&state->client->dev,
 					"%s(): EWB cmd failed, ret: %d,"
@@ -3183,7 +3192,7 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			struct hwm_cmd *cmd = (struct hwm_cmd *)ctrl->p_new.p_u8;
 			size = *((u8 *)ctrl->p_new.p_u8 + 1) << 8;
 			size |= *((u8 *)ctrl->p_new.p_u8 + 0);
-			ret = ds5_send_hwmc(state, size + 4, cmd);
+			ret = ds5_hwmc_send(state, size + 4, cmd);
 			ret = ds5_get_hwmc(state, cmd->Data, ctrl->dims[0], &size);
 			if (ctrl->dims[0] < DS5_HWMC_BUFFER_SIZE) {
 				ret = -ENODATA;
@@ -3208,7 +3217,7 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 					__func__);
 				ret = ds5_hw_reset_with_recovery(state);
 			} else {
-				ret = ds5_send_hwmc(state, size + 4, cmd);
+				ret = ds5_hwmc_send(state, size + 4, cmd);
 			}
 		}
 		break;
@@ -3253,17 +3262,17 @@ static int ds5_get_calibration_data(struct ds5 *state, enum table_id id,
 
 	memcpy(cmd, &get_calib_data, sizeof(get_calib_data));
 	cmd->param1 = id;
-	ret = ds5_send_hwmc(state, sizeof(struct hwm_cmd), cmd);
+	ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd), cmd);
 	if (ret) {
 		devm_kfree(&state->client->dev, cmd);
 		return ret;
 	}
 
-	ret = ds5_get_hwmc_status(state);
+	ret = ds5_hwmc_wait(state);
 
 	if (ret) {
 		dev_err(&state->client->dev,
-				"%s(): Failed to get calibration table %d, fw error: %x\n",
+				"%s(): Failed to get calibration table %d, error: %d\n",
 				__func__, id, ret);
 		devm_kfree(&state->client->dev, cmd);
 		return ret;
@@ -3289,14 +3298,14 @@ static int ds5_gvd(struct ds5 *state, unsigned char *data)
 	u16 length = 0;
 
 	memcpy(&cmd, &gvd, sizeof(gvd));
-	ret = ds5_send_hwmc(state, sizeof(cmd), &cmd);
+	ret = ds5_hwmc_send(state, sizeof(cmd), &cmd);
 	if (ret)
 		return ret;
 
-	ret = ds5_get_hwmc_status(state);
+	ret = ds5_hwmc_wait(state);
 	if (ret) {
 		dev_err(&state->client->dev,
-			"%s(): Failed to read GVD, HWM cmd status ret: %d\n",
+			"%s(): Failed to read GVD, error: %d\n",
 			__func__, ret);
 		return -EIO;
 	}
@@ -3311,8 +3320,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 {
 	struct ds5 *state = container_of(ctrl->handler, struct ds5,
 			ctrls.handler);
-	u16 log_prepare[] = {0x0014, 0xcdab, 0x000f, 0x0000, 0x0400, 0x0000,
-			0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000};
+			
 	u32 data;
 	int ret = 0;
 	struct ds5_sensor *sensor = (struct ds5_sensor *)ctrl->priv;
@@ -3390,12 +3398,11 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 
 	case DS5_CAMERA_CID_LOG:
-		ret = ds5_send_hwmc(state, sizeof(log_prepare),
-					    (struct hwm_cmd *)log_prepare);
+		ret = ds5_hwmc_send(state, sizeof(log_prepare), &log_prepare);
 		if (ret)
 			return ret;
 
-		ret = ds5_get_hwmc_status(state);
+		ret = ds5_hwmc_wait(state);
 		if (ret)
 			return ret;
 
@@ -3441,7 +3448,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 				break;
 			}
 			memcpy(ae_roi_cmd, &get_ae_roi, sizeof(struct hwm_cmd));
-			ret = ds5_send_hwmc(state, sizeof(struct hwm_cmd), ae_roi_cmd);
+			ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd), ae_roi_cmd);
 			if (ret) {
 				devm_kfree(&state->client->dev, ae_roi_cmd);
 				return ret;
@@ -3466,7 +3473,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			break;
 		}
 		memcpy(ae_setpoint_cmd, &get_ae_setpoint, sizeof(struct hwm_cmd));
-		ret = ds5_send_hwmc(state, sizeof(struct hwm_cmd), ae_setpoint_cmd);
+		ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd), ae_setpoint_cmd);
 		if (ret) {		
 			devm_kfree(&state->client->dev, ae_setpoint_cmd);
 			return ret;
@@ -5806,7 +5813,7 @@ static int ds5_dfu_switch_to_dfu(struct ds5 *state)
 	int i = DS5_START_MAX_COUNT;
 	u16 status;
 
-	ret = ds5_send_hwmc(state, sizeof(cmd_switch_to_dfu),
+	ret = ds5_hwmc_send(state, sizeof(cmd_switch_to_dfu),
 			    (struct hwm_cmd *)&cmd_switch_to_dfu);
 	if (ret)
 		return ret;
@@ -6725,10 +6732,12 @@ static void ds5_remove(struct i2c_client *c)
 
 		mutex_lock(&serdes_lock__);
 		mutex_lock(&state->ds5_dev->lock);
+
 		if (state->ds5_dev->ds5_primary) {
 			state->ds5_dev->ds5_primary = NULL;
 			do_cleanup = true;
 		}
+
 		mutex_unlock(&state->ds5_dev->lock);
 
 		if (do_cleanup) {
@@ -6754,11 +6763,12 @@ static void ds5_remove(struct i2c_client *c)
 		}
 
 		mutex_unlock(&serdes_lock__);
+
+		if (state->ser_i2c)
+			i2c_unregister_device(state->ser_i2c);
+		if (state->dser_i2c && !state->aggregated)
+			i2c_unregister_device(state->dser_i2c);
 	}
-	if (state->ser_i2c)
-		i2c_unregister_device(state->ser_i2c);
-	if (state->dser_i2c && !state->aggregated)
-		i2c_unregister_device(state->dser_i2c);
 #endif
 #ifndef CONFIG_TEGRA_CAMERA_PLATFORM
 	state->is_depth = 1;
@@ -6767,7 +6777,6 @@ static void ds5_remove(struct i2c_client *c)
 			ds5_get_sensor_name(state));
 	if (state->vcc)
 		regulator_disable(state->vcc);
-//	gpio_free(state->pwdn_gpio);
 
 	if (state->dfu_dev.dfu_state_flag != DS5_DFU_RECOVERY && \
 		 state->mux.sd.subdev.v4l2_dev) {

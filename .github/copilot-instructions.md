@@ -160,7 +160,7 @@ Recent multi-phase refactoring of `kernel/realsense/d4xx.c`:
 - **Reset readiness migration**: replaced `DS5_DFU_MAGIC_REG` (0x5020) non-DFU readiness detection with CONTROL_STATUS scratch-and-poll handshake (scratch 0x00AD before reset, poll for 0x0000 restore after). Eliminated ~800 lines of post-ready compensating logic (device-type waits, HWMC probe loops, natural-recovery gates) that hinged on 0x5020 assumption.
 - **Per-instance control base init**: added `control_base` and `control_status_reg` fields to `struct ds5`, initialized once at probe based on camera type (Depth/Y8/IMU → DEPTH values 0x4100/0x401E; RGB → RGB values 0x4200/0x402E). Eliminates dynamic ternary recalculation across `ds5_s_ctrl()` and `ds5_g_volatile_ctrl()`, reducing code duplication and improving readability.
 - **Polling semantics separation**: introduced `ds5_read_poll()` helper for expected-transient-failure loops (HWMC status, reset readiness, SERDES recovery, DFU timeout, probe communication retries). Migrated 13 polling contexts to use single-shot direct regmap reads, eliminating false warnings and excessive log spam without changing I/O behavior. Preserves `ds5_read()` retry/logging semantics for normal I2C operations.
-- **HWMC helper consolidation**: refactored calibration set/get, GVD, LOG command send, and DFU switch to use `ds5_send_hwmc()` + `ds5_get_hwmc_status()` consistently instead of ad-hoc raw register writes.
+- **HWMC helper consolidation**: refactored calibration set/get, GVD, LOG command send, and DFU switch to use `ds5_hwmc_send()` + `ds5_hwmc_wait()` consistently instead of ad-hoc raw register writes.
 
 Earlier phases (below) documented for reference:
 

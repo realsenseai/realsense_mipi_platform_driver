@@ -42,11 +42,26 @@ if [ "${JETPACK_VERSION}" = "5.0.2" ]; then
     echo "sudo cp videobuf-vmalloc.ko /lib/modules/$(uname -r)/updates/"
           sudo cp videobuf-vmalloc.ko /lib/modules/$(uname -r)/updates/
 elif [ "${JETPACK_VERSION}" = "6.0" ] || [ "${JETPACK_VERSION}" = "6.1" ] || [ "${JETPACK_VERSION}" = "6.2" ] || [ "${JETPACK_VERSION}" = "6.2.1" ] || [ "${JETPACK_VERSION}" = "7.0" ] || [ "${JETPACK_VERSION}" = "7.1" ]; then
-    tar xf rootfs.tar.gz
-    echo "sudo rm -rf /lib/modules/$(uname -r)"
-          sudo rm -rf /lib/modules/$(uname -r)
-    echo "sudo cp -r lib/modules/$(uname -r) /lib/modules/."
-          sudo cp -r lib/modules/$(uname -r) /lib/modules/.
+    MODULES_DIR="lib/modules/$(uname -r)"
+    echo "Extracting rootfs.tar.gz..."
+    if ! tar xf rootfs.tar.gz; then
+        echo "Error: Failed to extract rootfs.tar.gz; not modifying kernel modules."
+        exit 1
+    fi
+    if [ ! -d "${MODULES_DIR}" ] || [ -z "$(ls -A "${MODULES_DIR}" 2>/dev/null)" ]; then
+        echo "Error: Extracted modules directory '${MODULES_DIR}' is missing or empty; not modifying kernel modules."
+        exit 1
+    fi
+    echo "sudo rm -rf /${MODULES_DIR}"
+    if ! sudo rm -rf /${MODULES_DIR}; then
+        echo "Error: Failed to remove existing modules directory '${MODULES_DIR}', DON'T REBOOT"
+        exit 1
+    fi
+    echo "sudo cp -r ${MODULES_DIR} /lib/modules/."
+    if ! sudo cp -r ${MODULES_DIR} /lib/modules/.; then
+        echo "Error: Failed to copy modules to '/lib/modules/', DON'T REBOOT"
+        exit 1
+    fi
     echo "sudo cp boot/tegra234-camera-d4xx-overlay*.dtbo /boot/."
           sudo cp boot/tegra234-camera-d4xx-overlay*.dtbo /boot/.
     echo "sudo cp boot/dtb/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/dtb/."
