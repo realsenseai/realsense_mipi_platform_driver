@@ -7,3 +7,4 @@
 /test.logs
 /.vscode/*.db*
 /.vscode/compile_commands.json
+jetpack_version

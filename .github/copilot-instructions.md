@@ -20,6 +20,7 @@ Linux kernel driver and userspace utilities for Intel RealSense D4XX series 3D d
 - **Macro naming**: prefix with `DS5_`. Register addresses: `DS5_FW_VERSION`, `DS5_START_STOP_STREAM`, `DS5_DEPTH_STREAM_DT`.
 - **Driver name**: `DS5_DRIVER_NAME` = `"d4xx"`, with variants `-awg`, `-asr`, `-class`, `-dfu`.
 - **I2C access**: use `ds5_read()` / `ds5_write()` wrappers around `regmap_raw_read()` / `regmap_raw_write()` with built-in retry logic (`DS5_I2C_RETRY_COUNT=5`, `DS5_I2C_RETRY_DELAY_US=5000`).
+- **Polling vs. normal I2C semantics**: for transient-failure-expected polling loops (HWMC status checks, reset readiness polls, SERDES recovery probes, DFU timeout checks), use `ds5_read_poll()` instead of `ds5_read()`. `ds5_read_poll()` performs a single direct `regmap_raw_read()` call without retry or logging, preventing false warnings and excessive log spam on expected transients. Reserve `ds5_read()` for normal I2C operations where retry logic and verbose failure logging are desired.
 - **Helper macros**: `ds5_read_with_check()`, `ds5_write_with_check()`, `ds5_raw_read_with_check()`, `ds5_raw_write_with_check()` — these return on error.
 - **Logging**: use `dev_err()`, `dev_warn()`, `dev_info()`, `dev_dbg()` with `&state->client->dev` as the device. Always include `__func__` in log messages.
 - **Locking**: `mutex_lock()` / `mutex_unlock()` for state synchronization.
@@ -30,7 +31,9 @@ Linux kernel driver and userspace utilities for Intel RealSense D4XX series 3D d
   - `CONFIG_TEGRA_CAMERA_PLATFORM` — Tegra-specific camera platform integration.
   - `LINUX_VERSION_CODE` checks for API differences between kernel versions (4.9, 5.10, 5.15+).
 - **Prefer lazy invalidation over explicit loops**: when state must be invalidated across multiple instances (e.g. after a deserializer reset), increment an atomic generation counter (`atomic_inc()`) and let each instance detect the bump lazily (e.g. in `ds5_configure()`). Avoid O(N) loops that iterate `ds5_inited[]` to poke siblings. Combine lazy checks when possible — if an existing function already detects a generation mismatch, add new invalidation logic there rather than adding a separate check elsewhere.
-- **HW reset natural recovery guard**: do not bypass Step 10 entirely when Step 6 is skipped. Keep a lightweight natural-recovery stability probe (2 reads spaced 100ms), and if it fails, run Phase 1 SERDES recovery before entering the full Step 10 stability verification path.
+- **HW reset readiness source of truth**: do not use register `0x5020` (`DS5_DFU_MAGIC_REG`) as a non-DFU reset-ready signal. Before HW reset, scratch `DS5_*_CONTROL_STATUS` with a non-zero sentinel (for example `0x00AD`), then after reset poll for the default `0x0000` restore to declare readiness. Keep `0x5020` only for DFU-magic detection (`0x04030201`).
+- **Post-reset operational readiness source of truth**: after reset completion, treat `DS5_DEVICE_TYPE` becoming valid as the firmware-ready gate for format/config-dependent code paths. `DS5_FW_VERSION` may become readable earlier and is acceptable for basic liveness checks, but do not use it as the only post-reset readiness signal.
+- **Reset-time cache invalidation for readiness gates**: whenever HW reset invalidates firmware-populated registers, clear any cached equivalents in the same reset path before readiness polling (for example reset `cached_device_type` before waiting on `DS5_DEVICE_TYPE`). Never allow a stale cache value to satisfy post-reset readiness checks.
 - **`ds5_mux_s_stream()` pre-toggle no-op rule**: for start (`on=1`), if reset-generation invalidation was detected and FW still reports streaming, do not return no-op; force a stop, clear cached stream state, and continue through normal start/configure flow.
 
 ### V4L2 Subdev Architecture
@@ -149,10 +152,19 @@ CI requires `git config user.email/name` to be set before `apply_patches.sh`.
 - `master` — primary/release branch
 - `dev` — active development branch
 -
-## Refactoring notes (recent commit)
+## Refactoring notes (recent commits)
 
-Short summary of approaches used in the refactor of `kernel/realsense/d4xx.c`:
+Recent multi-phase refactoring of `kernel/realsense/d4xx.c`:
 
+**Phase 1–3 (Reset Readiness + Per-Instance State Init + Polling Decoupling):**
+- **Reset readiness migration**: replaced `DS5_DFU_MAGIC_REG` (0x5020) non-DFU readiness detection with CONTROL_STATUS scratch-and-poll handshake (scratch 0x00AD before reset, poll for 0x0000 restore after). Eliminated ~800 lines of post-ready compensating logic (device-type waits, HWMC probe loops, natural-recovery gates) that hinged on 0x5020 assumption.
+- **Per-instance control base init**: added `control_base` and `control_status_reg` fields to `struct ds5`, initialized once at probe based on camera type (Depth/Y8/IMU → DEPTH values 0x4100/0x401E; RGB → RGB values 0x4200/0x402E). Eliminates dynamic ternary recalculation across `ds5_s_ctrl()` and `ds5_g_volatile_ctrl()`, reducing code duplication and improving readability.
+- **Polling semantics separation**: introduced `ds5_read_poll()` helper for expected-transient-failure loops (HWMC status, reset readiness, SERDES recovery, DFU timeout, probe communication retries). Migrated 13 polling contexts to use single-shot direct regmap reads, eliminating false warnings and excessive log spam without changing I/O behavior. Preserves `ds5_read()` retry/logging semantics for normal I2C operations.
+- **HWMC helper consolidation**: refactored calibration set/get, GVD, LOG command send, and DFU switch to use `ds5_send_hwmc()` + `ds5_get_hwmc_status()` consistently instead of ad-hoc raw register writes.
+
+Earlier phases (below) documented for reference:
+
+**Earlier Phases (Encapsulation + Lazy Invalidation):**
 - **Encapsulated shared state**: introduced `struct ds5_dev` (per-camera) and
   `struct dser_control` (per-deserializer) to centralize reset generation,
   cached device type and last-reset timestamps instead of scattered globals.
@@ -171,8 +183,9 @@ Short summary of approaches used in the refactor of `kernel/realsense/d4xx.c`:
 - **Non-SERDES compatibility**: added small fallbacks so callers can use the
   same reset-gen accessors in non-SERDES builds (where applicable).
 
-Advantages: clearer ownership of shared state, fewer global arrays and linear
-searches, more deterministic recovery behavior, and reduced duplicate code.
+Overall advantages: clearer ownership of shared state, fewer global arrays and linear
+searches, more deterministic recovery behavior, reduced duplicate code, improved logging
+clarity, and architectural separation of restart readiness detection from compensation logic.
 
 ## Workflow Rules
 
@@ -184,3 +197,10 @@ After every confirmed code patch, review and update this file and `CLAUDE.md`:
 2. **New conventions**: if the patch exposed a coding practice gap (e.g. a cleanup step that was missed), add a general coding convention so it is enforced going forward — do not just fix the specific instance.
 
 Do not leave stale or incorrect claims in configuration files after changing the code they describe.
+
+This review is not complete until the final response explicitly reports the outcome of both checks.
+
+- If a new convention was exposed, document it in the same patch series.
+- If no new convention was exposed, say that explicitly and give a short reason why the change was purely mechanical or already covered by existing rules.
+- If the code patch was refined by follow-up edits, re-run the convention review against the final net change, not just the first patch.
+- Treat a missed convention update as an incomplete task, even if the code change itself is correct.

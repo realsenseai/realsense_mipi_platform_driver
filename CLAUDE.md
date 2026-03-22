@@ -127,5 +127,17 @@ The build system cross-compiles for ARM64. Toolchains vary by JetPack:
 - Protect per-camera mutable slot state (`ds5_primary`, `depth/rgb/ir/imu_streaming`) with `struct ds5_dev::lock`.
 - Protect per-deserializer slot assignment (`dser_dev`) with `struct dser_control::lock`.
 - For sibling-health checks, snapshot pointers/flags under lock and perform I2C probing after unlocking.
-- In HW reset Step 10, natural-recovery path must still run a lightweight stability gate (2 reads x 100ms); on failure, trigger Phase 1 SERDES recovery and then continue full stability verification.
+- Do not use `0x5020` as non-DFU reset-ready status; in non-DFU mode it is not a readiness source of truth. For HW reset readiness, scratch `DS5_*_CONTROL_STATUS` with a non-zero sentinel before reset and wait for FW to restore default `0x0000` after reset. Use `0x5020` only for DFU magic detection.
+- After reset completion, use `DS5_DEVICE_TYPE` validity as the operational-readiness gate for code that depends on firmware-populated stream/config state. `DS5_FW_VERSION` can come back earlier and should only be treated as basic liveness, not full post-reset readiness.
+- On each HW reset, clear cached values for firmware-populated readiness registers before polling readiness (for example clear `cached_device_type` before waiting for `DS5_DEVICE_TYPE`). Do not let pre-reset cache values short-circuit post-reset readiness checks.
+- For polling loops expecting transient I2C failures (HWMC status checks, reset readiness polls, SERDES recovery probes, DFU timeout checks), use `ds5_read_poll()` which performs a single-shot regmap read without retry or logging. This prevents false warnings and excessive log spam. Reserve `ds5_read()` for normal I2C operations where retry semantics are desired.
 - In `ds5_mux_s_stream()`, treat pre-toggle "already streaming" as no-op only when state is coherent; after reset-generation invalidation on start path, force stop + state clear and proceed with normal reconfiguration flow.
+
+## Post-patch instruction hygiene
+
+After every confirmed code patch, review both `.github/copilot-instructions.md` and `CLAUDE.md` against the final net diff, including any follow-up tuning edits.
+
+- Check for stale architectural claims and remove or correct them immediately.
+- Check whether the patch exposed a reusable convention; if it did, write it down as a general rule instead of leaving it implicit in code.
+- If no new convention was exposed, state that explicitly in the final report and include a short justification.
+- Do not treat the task as complete until that review outcome has been reported.

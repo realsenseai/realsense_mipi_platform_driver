@@ -116,31 +116,35 @@ struct dser_interface {
 #define DS5_STREAM_IDLE			0x1
 #define DS5_STREAM_STREAMING		0x2
 
-#define DS5_DEPTH_STREAM_DT		0x4000
-#define DS5_DEPTH_STREAM_MD		0x4002
-#define DS5_DEPTH_RES_WIDTH		0x4004
-#define DS5_DEPTH_RES_HEIGHT		0x4008
-#define DS5_DEPTH_FPS			0x400C
-#define DS5_DEPTH_OVERRIDE		0x401C
+#define DS5_DEPTH_STREAM_DT		 0x4000
+#define DS5_DEPTH_STREAM_MD		 0x4002
+#define DS5_DEPTH_RES_WIDTH		 0x4004
+#define DS5_DEPTH_RES_HEIGHT	 0x4008
+#define DS5_DEPTH_FPS			 0x400C
+#define DS5_DEPTH_OVERRIDE		 0x401C
+#define DS5_DEPTH_CONTROL_STATUS 0x401E
 
 #define DS5_RGB_STREAM_DT		0x4020
 #define DS5_RGB_STREAM_MD		0x4022
 #define DS5_RGB_RES_WIDTH		0x4024
 #define DS5_RGB_RES_HEIGHT		0x4028
-#define DS5_RGB_FPS			0x402C
+#define DS5_RGB_FPS				0x402C
+#define DS5_RGB_CONTROL_STATUS 	0x402E
 
 #define DS5_IMU_STREAM_DT		0x4040
 #define DS5_IMU_STREAM_MD		0x4042
 #define DS5_IMU_RES_WIDTH		0x4044
 #define DS5_IMU_RES_HEIGHT		0x4048
-#define DS5_IMU_FPS			0x404C
+#define DS5_IMU_FPS				0x404C
+#define DS5_IMU_CONTROL_STATUS 	0x404E
 
 #define DS5_IR_STREAM_DT		0x4080
 #define DS5_IR_STREAM_MD		0x4082
 #define DS5_IR_RES_WIDTH		0x4084
 #define DS5_IR_RES_HEIGHT		0x4088
-#define DS5_IR_FPS			0x408C
+#define DS5_IR_FPS				0x408C
 #define DS5_IR_OVERRIDE			0x409C
+#define DS5_IR_CONTROL_STATUS 	0x409E
 
 #define DS5_DEPTH_CONTROL_BASE		0x4100
 #define DS5_RGB_CONTROL_BASE		0x4200
@@ -478,6 +482,8 @@ struct ds5 {
 	int reset_ref_dser;
 	u16 fw_version;
 	u16 fw_build;
+	u16 control_base;
+	u16 control_status_reg;
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	struct gmsl_link_ctx g_ctx;
 	struct device *ser_dev;
@@ -503,11 +509,12 @@ struct ds5_dev {
 	*/
 	atomic_t reset_gen;
 
-	/* Cached device type from HW reset Step 8.
+	/* Cached device type from post-reset device-type polling.
 	* During probe the first instance resets the camera, causing DS5_DEVICE_TYPE
-	* to temporarily return 0.  Step 8 polls until the register is valid and
-	* stores the result here so that all four probe instances (and any post-reset
-	* code path) can use the confirmed value even if the register read returns 0.
+	* to temporarily return 0. The reset path polls until the register is valid
+	* and stores the result here so that all four probe instances (and any
+	* post-reset code path) can use the confirmed value even if the register
+	* read still returns 0.
 	*/
 	u16 cached_device_type;
 
@@ -653,6 +660,20 @@ static inline u16 ds5_dev_type(struct ds5 *state, u16 dev_type)
 	return dev_type;
 }
 
+static bool ds5_is_valid_device_type(u16 dev_type)
+{
+	switch (dev_type) {
+	case DS5_DEVICE_TYPE_D40X:
+	case DS5_DEVICE_TYPE_D41X:
+	case DS5_DEVICE_TYPE_D43X:
+	case DS5_DEVICE_TYPE_D45X:
+	case DS5_DEVICE_TYPE_D46X:
+		return true;
+	default:
+		return false;
+	}
+}
+
 #define ds5_from_depth_sd(sd) container_of(sd, struct ds5, depth.sd)
 #define ds5_from_ir_sd(sd) container_of(sd, struct ds5, ir.sd)
 #define ds5_from_rgb_sd(sd) container_of(sd, struct ds5, rgb.sd)
@@ -757,6 +778,11 @@ static int ds5_read(struct ds5 *state, u16 reg, u16 *val)
 			__func__, reg, *val);
 
 	return ret;
+}
+
+static int ds5_read_poll(struct ds5 *state, u16 reg, u16 *val)
+{
+	return regmap_raw_read(state->regmap, reg, val, 2);
 }
 
 static int ds5_raw_read(struct ds5 *state, u16 reg, void *val, size_t val_len)
@@ -2208,7 +2234,7 @@ static int ds5_get_hwmc_status(struct ds5 *state)
 	do {
 		if (retries != 100)
 			msleep_range(1);
-		ret = ds5_read(state, DS5_HWMC_STATUS, &status);
+		ret = ds5_read_poll(state, DS5_HWMC_STATUS, &status);
 		if (ret) {
 			dev_dbg(&state->client->dev,
 				"%s(): I2C read failed (%d), retries left: %d\n",
@@ -2298,24 +2324,18 @@ static int ds5_send_hwmc(struct ds5 *state,
 static int ds5_set_calibration_data(struct ds5 *state,
 		struct hwm_cmd *cmd, u16 length)
 {
-	int ret = -1;
-	int retries = 10;
-	u16 status = 2;
+	int ret;
 
-	ds5_raw_write_with_check(state, DS5_HWMC_DATA, cmd, length); /* Write command data */
+	ret = ds5_send_hwmc(state, length, cmd);
+	if (ret)
+		return ret;
 
-	ds5_write_with_check(state, DS5_HWMC_EXEC, 0x01); /* execute cmd */
-	do {
-		if (retries != 10)
-			msleep_range(200);
-		ret = ds5_read(state, DS5_HWMC_STATUS, &status);
-	} while (retries-- && status != 0);
-
-	if (ret || status != 0) {
+	ret = ds5_get_hwmc_status(state);
+	if (ret) {
 		dev_err(&state->client->dev,
 				"%s(): Failed to set calibration table %d,"
 				"ret: %d, fw error: %x\n",
-				__func__, cmd->param1, ret, status);
+				__func__, cmd->param1, ret, ret);
 	}
 
 	return ret;
@@ -2327,16 +2347,10 @@ static int ds5_set_calibration_data(struct ds5 *state,
 #define DS5_HW_RESET_TIMEOUT_MS		10000
 #define DS5_HW_RESET_MAX_RETRIES	(DS5_HW_RESET_TIMEOUT_MS / DS5_HW_RESET_POLL_INTERVAL_MS)
 
-/* Post-reset I2C stability verification (Step 10).
- * After FW reports ready and HWMC passes, verify the I2C link is
- * *sustained* — some camera SKUs (D401) have a secondary FW init phase
- * that briefly drops I2C ~65ms after the initial checks pass.
- */
+/* Post-reset I2C stability verification parameters used by SERDES recovery. */
 #define DS5_HW_RESET_STABILITY_READS	3	/* consecutive successful reads */
 #define DS5_HW_RESET_STABILITY_INTERVAL_MS 200	/* between each check */
 #define DS5_HW_RESET_STABILITY_TIMEOUT_MS 3000	/* max wait for stable link */
-#define DS5_HW_RESET_NATURAL_STABILITY_READS	2
-#define DS5_HW_RESET_NATURAL_STABILITY_INTERVAL_MS 100
 
 /* Minimum interval between consecutive HW resets (ms).
  * Rapid back-to-back resets degrade the GMSL link because each
@@ -2345,14 +2359,47 @@ static int ds5_set_calibration_data(struct ds5 *state,
  */
 #define DS5_HW_RESET_COOLDOWN_MS	2000
 
-/*
- * Register 0x5020 status values (from firmware):
- * - 0xDEAD: Device in normal UVC mode (ready) - ICT returns error for unhandled cmd
- * - 0x04030201: Device in DFU mode (DFU magic bytes, little-endian)
- * - I2C error: Device not yet responding (still resetting)
+/* Reset readiness handshake:
+ * 1) write scratch value before reset,
+ * 2) wait for FW to restore control-status registers to default 0.
  */
-#define DS5_HW_RESET_STATUS_READY	0xDEAD
-#define DS5_HW_RESET_DFU_MAGIC_LSW	0x0201  /* Lower 16 bits of 0x04030201 */
+#define DS5_HW_RESET_READY_SCRATCH_VAL	0x00AD
+#define DS5_HW_RESET_READY_EXPECTED_VAL	0x0000
+
+/*
+ * Register holding DFU magic (0x5020).
+ * In non-DFU mode this register is not defined.
+ * - 0x04030201: Device in DFU mode (DFU magic bytes, little-endian)
+ */
+#define DS5_DFU_MAGIC_REG	0x5020
+#define DS5_DFU_MAGIC_LSW		0x0201  /* Lower 16 bits of 0x04030201 */
+
+static int ds5_wait_device_type(struct ds5 *state, u16 *dev_type)
+{
+	int ret = -ETIMEDOUT;
+	int retry;
+	u16 cached_type;
+	u16 probed_type = DS5_DEVICE_TYPE_UNKNOWN;
+
+	for (retry = 0; retry < DS5_HW_RESET_MAX_RETRIES;
+	     retry++, msleep(DS5_HW_RESET_POLL_INTERVAL_MS)) {
+		cached_type = READ_ONCE(state->ds5_dev->cached_device_type);
+		if (ds5_is_valid_device_type(cached_type)) {
+			*dev_type = cached_type;
+			return 0;
+		}
+
+		ret = ds5_read_poll(state, DS5_DEVICE_TYPE, &probed_type);
+		if (!ret && ds5_is_valid_device_type(probed_type)) {
+			WRITE_ONCE(state->ds5_dev->cached_device_type, probed_type);
+			*dev_type = probed_type;
+			return 0;
+		}
+	}
+
+	*dev_type = probed_type;
+	return ret ? ret : -ETIMEDOUT;
+}
 
 /*
  * ds5_hw_reset_serdes_recovery - Tiered SERDES recovery after HW reset.
@@ -2428,14 +2475,14 @@ static int ds5_hw_reset_serdes_recovery(struct ds5 *state, bool force_phase2)
 		 * serializer reconfiguration, only to kill it again ~100 ms
 		 * later.  Do multiple reads with delays to catch oscillation.
 		 */
-		ret = ds5_read(state, DS5_FW_VERSION, &tmp);
+		ret = ds5_read_poll(state, DS5_FW_VERSION, &tmp);
 		if (ret == 0) {
 			int k;
 			bool stable = true;
 
 			for (k = 0; k < DS5_HW_RESET_STABILITY_READS; k++) {
 				msleep(DS5_HW_RESET_STABILITY_INTERVAL_MS);
-				ret = ds5_read(state, DS5_FW_VERSION, &tmp);
+				ret = ds5_read_poll(state, DS5_FW_VERSION, &tmp);
 				if (ret < 0) {
 					dev_warn(&state->client->dev,
 						"%s(): Phase 1 stability check %d/%d failed (err %d)\n",
@@ -2501,7 +2548,7 @@ static int ds5_hw_reset_serdes_recovery(struct ds5 *state, bool force_phase2)
 		if (!sib_streaming[i])
 			continue;
 
-		if (0 == ds5_read(sib_primary[i], DS5_FW_VERSION, &tmp)) {
+		if (0 == ds5_read_poll(sib_primary[i], DS5_FW_VERSION, &tmp)) {
 			sibling_alive = true;
 			dev_warn(&state->client->dev,
 				"%s(): true sibling %s alive & streaming, skipping deser reset\n",
@@ -2552,7 +2599,7 @@ static int ds5_hw_reset_serdes_recovery(struct ds5 *state, bool force_phase2)
 	 */
 	for (i = 0; i < 8; i++) {
 		msleep(500);
-		ret = ds5_read(state, DS5_FW_VERSION, &tmp);
+		ret = ds5_read_poll(state, DS5_FW_VERSION, &tmp);
 		if (ret == 0) {
 			dev_info(&state->client->dev,
 				"%s(): Phase 2: I2C link up after %d ms\n",
@@ -2603,7 +2650,7 @@ static int ds5_hw_reset_serdes_recovery(struct ds5 *state, bool force_phase2)
 
 		for (k = 0; k < 3; k++) {
 			msleep(200);
-			ret = ds5_read(state, DS5_FW_VERSION, &tmp);
+			ret = ds5_read_poll(state, DS5_FW_VERSION, &tmp);
 			if (ret < 0) {
 				stable = false;
 				break;
@@ -2647,15 +2694,14 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 {
 	int ret;
 	int retry;
-	int __maybe_unused i;
-	u16 status = 0;
+	u16 dev_type = DS5_DEVICE_TYPE_UNKNOWN;
+	u16 ready_status = 0;
+	u16 ready_reg = state->control_status_reg;
+	struct hwm_cmd reset_cmd;
 	bool depth_streaming;
 	bool rgb_streaming;
 	bool ir_streaming;
 	bool imu_streaming;
-#ifdef CONFIG_VIDEO_D4XX_SERDES
-	bool serdes_recovery_ran = false;
-#endif
 	unsigned long ds5_last_reset_jiffies = READ_ONCE(state->ds5_dev->last_reset_jiffies);
 
 	dev_info(&state->client->dev, "%s(): Initiating HW reset with recovery\n",
@@ -2712,29 +2758,41 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	 *    After HW reset the device loses all configuration, so driver
 	 *    state must be brought in sync, like clearing streaming flags so that
 	 *    ds5_mux_s_stream() won't silently skip the next stream-start.
+	 *    Also clear cached device type so post-reset readiness polling
+	 *    cannot be satisfied by stale pre-reset values.
 	 *    Covers this instance AND all peer instances of the same camera.
 	 *
-	 *    Do NOT release SERDES pipes here — the D457 FW is still
-	 *    reconfiguring the MAX9295 serializer after reporting 0xDEAD.
+	 *    Do NOT release SERDES pipes here — the D4XX FW may still
+	 *    reconfigure MAX9295 while reset completion propagates.
 	 *    Releasing + re-allocating pipes now would race with FW init.
 	 *    Instead, clear pipe_data_type to force ds5_configure() to
 	 *    release-then-reallocate at stream-start time, when the FW
 	 *    has long finished its init (matching v1.0.1.33 behavior).
 	 */
 	atomic_inc(ds5_get_reset_gen(state));
+	WRITE_ONCE(state->ds5_dev->cached_device_type, DS5_DEVICE_TYPE_UNKNOWN);
 	ds5_reset_streaming_flags(state->ds5_dev);
 
-	/* 3. Send HW reset command */
-	ret = ds5_raw_write(state, DS5_HWMC_DATA, &cmd_hw_reset, sizeof(cmd_hw_reset));
-	if (ret < 0) {
-		dev_err(&state->client->dev, "%s(): Failed to write HW reset command: %d\n",
-			__func__, ret);
+	/* 3. Scratch one control-status register before reset.
+	 *    FW restores them to default 0x0000 only after reset completes.
+	 */
+	if (!ready_reg)
+		ready_reg = DS5_DEPTH_CONTROL_STATUS;
+
+	ret = ds5_write(state, ready_reg, DS5_HW_RESET_READY_SCRATCH_VAL);
+	if (ret) {
+		dev_err(&state->client->dev,
+			"%s(): scratch write failed reg 0x%04x (%d)\n",
+			__func__, ready_reg, ret);
 		return ret;
 	}
 
-	ret = ds5_write(state, DS5_HWMC_EXEC, 0x01);
+	/* 4. Send HW reset command */
+	memcpy(&reset_cmd, &cmd_hw_reset, sizeof(reset_cmd));
+	ret = ds5_send_hwmc(state, sizeof(reset_cmd), &reset_cmd);
 	if (ret < 0) {
-		dev_err(&state->client->dev, "%s(): Failed to execute HW reset command: %d\n",
+		dev_err(&state->client->dev,
+			"%s(): Failed to send HW reset command: %d\n",
 			__func__, ret);
 		return ret;
 	}
@@ -2742,86 +2800,72 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	dev_info(&state->client->dev, "%s(): HW reset command sent, waiting for device...\n",
 		__func__);
 
-	/* 4. Brief delay to allow reset to begin */
+	/* 5. Brief delay to allow reset to begin */
 	msleep(DS5_HW_RESET_INITIAL_DELAY_MS);
 
-	/* 5. Poll for device to come back online */
-	for (retry = 0; retry < DS5_HW_RESET_MAX_RETRIES; retry++) {
-		msleep(DS5_HW_RESET_POLL_INTERVAL_MS);
-
-		ret = ds5_read(state, 0x5020, &status);
+	/* 6. Poll for control-status defaults to confirm reset completion. */
+	for (retry = 0; retry < DS5_HW_RESET_MAX_RETRIES; retry++, msleep(DS5_HW_RESET_POLL_INTERVAL_MS)) {
+		ret = ds5_read_poll(state, ready_reg, &ready_status);
 
 		if (ret < 0) {
-			/* I2C failed - device is resetting (expected during reset) */
 			dev_dbg(&state->client->dev,
 				"%s(): Device not responding (resetting), retry %d\n",
 				__func__, retry);
 			continue;
 		}
 
-		/* I2C succeeded - check status */
-		if (status == DS5_HW_RESET_STATUS_READY) {
-			/* 0xDEAD means device is in normal UVC mode (ready) */
+		if (ready_status == DS5_HW_RESET_READY_EXPECTED_VAL) {
 			dev_info(&state->client->dev,
-				"%s(): Device ready after %d ms, status: 0x%04x\n",
+				"%s(): Device ready after %d ms (control-status default restored)\n",
 				__func__,
 				DS5_HW_RESET_INITIAL_DELAY_MS +
-				(retry + 1) * DS5_HW_RESET_POLL_INTERVAL_MS,
-				status);
+				(retry + 1) * DS5_HW_RESET_POLL_INTERVAL_MS);
 			break;
 		}
+	}
 
-		if (status == DS5_HW_RESET_DFU_MAGIC_LSW) {
-			/* 0x0201 is lower 16-bits of DFU magic 0x04030201 */
+	if (retry >= DS5_HW_RESET_MAX_RETRIES) {
+		u16 dfu_magic = 0;
+
+		ret = ds5_read_poll(state, DS5_DFU_MAGIC_REG, &dfu_magic);
+		if (!ret && dfu_magic == DS5_DFU_MAGIC_LSW) {
 			dev_warn(&state->client->dev,
 				"%s(): Device in DFU/recovery mode after reset\n", __func__);
 			state->dfu_dev.dfu_state_flag = DS5_DFU_RECOVERY;
 			return 0;
 		}
 
-		/* Other status - keep waiting */
-		dev_dbg(&state->client->dev,
-			"%s(): Unexpected status 0x%04x, retry %d\n",
-			__func__, status, retry);
-	}
-
-	if (retry >= DS5_HW_RESET_MAX_RETRIES) {
 		dev_err(&state->client->dev,
-			"%s(): Device did not become ready after %d ms (last status: 0x%04x, i2c ret: %d)\n",
+			"%s(): Device did not become ready after %d ms (last control-status: 0x%04x, i2c ret: %d)\n",
 			__func__, DS5_HW_RESET_INITIAL_DELAY_MS + DS5_HW_RESET_TIMEOUT_MS,
-			status, ret);
+			ready_status, ret);
 		return -ETIMEDOUT;
 	}
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
-	/* 6. SERDES recovery (conditional).
-	 *    Step 5 polled the device over I2C until 0xDEAD was returned,
-	 *    which means the GMSL link is up.  Probe once more: if the
-	 *    link is still alive, the GMSL link recovered naturally — no
-	 *    full tiered SERDES recovery needed (the common case for D457).
+	/* 7. SERDES recovery (conditional).
+	 *    Step 6 confirmed reset completion via control-status defaults.
+	 *    Wait for DEVICE_TYPE: if the register becomes valid,
+	 *    the GMSL link recovered naturally and the firmware progressed far
+	 *    enough for format-dependent paths — no
+	 *    full tiered SERDES recovery needed (the common case for D4xx).
 	 *
 	 *    Do NOT call max9295_init_settings() here.  That function writes
 	 *    global serializer registers (0x02, 0x308, 0x311, 0x331) that
 	 *    disrupt the active GMSL link.  Per-pipe reconfiguration is
-	 *    handled by callers:
-	 *      - First-probe: ds5_probe() configures pipe 3 (IMU) after
-	 *        this function returns, before IMU peer probes.
-	 *      - HWMC reset: ds5_invalidate_sensor() clears pipe state for
-	 *        all peers; ds5_configure() re-runs ds5_setup_pipeline()
-	 *        at the next STREAMON for each stream.
+	 *    handled by ds5_configure()->ds5_setup_pipeline()
+	 *    at the next STREAMON for each stream.
 	 *
 	 *    Only run full tiered recovery (including init_settings +
 	 *    stability checks + Phase 2 escalation) when the I2C link
 	 *    is actually broken.
 	 */
 	{
-		u16 link_probe = 0;
-
-		ret = ds5_read(state, DS5_FW_VERSION, &link_probe);
-		if (ret < 0 || link_probe == 0) {
+		ret = ds5_wait_device_type(state, &dev_type);
+		if (ret < 0) {
 			dev_info(&state->client->dev,
-				"%s(): I2C link dead after Step 5 (ret=%d, val=0x%x), running full SERDES recovery\n",
-				__func__, ret, link_probe);
+				"%s(): device type not ready after reset (ret=%d, val=0x%x), running full SERDES recovery\n",
+				__func__, ret, dev_type);
 			ret = ds5_hw_reset_serdes_recovery(state, false);
 			if (ret < 0) {
 				dev_err(&state->client->dev,
@@ -2829,16 +2873,31 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 					__func__, ret);
 				return ret;
 			}
-			serdes_recovery_ran = true;
+
+			ret = ds5_wait_device_type(state, &dev_type);
+			if (ret < 0) {
+				dev_err(&state->client->dev,
+					"%s(): device type still not ready after SERDES recovery (ret=%d, val=0x%x)\n",
+					__func__, ret, dev_type);
+				return ret;
+			}
 		} else {
 			dev_info(&state->client->dev,
-				"%s(): GMSL link recovered naturally (FW ver 0x%04x), no SERDES intervention needed\n",
-				__func__, link_probe);
+				"%s(): GMSL link recovered naturally (device type 0x%04x), no SERDES intervention needed\n",
+				__func__, dev_type);
 		}
+	}
+#else
+	ret = ds5_wait_device_type(state, &dev_type);
+	if (ret < 0) {
+		dev_err(&state->client->dev,
+			"%s(): device type not ready after reset (ret=%d, val=0x%x)\n",
+			__func__, ret, dev_type);
+		return ret;
 	}
 #endif
 
-	/* 7. Verify device is operational by reading firmware version */
+	/* 8. Verify device is operational by reading firmware version */
 	ret = ds5_read(state, DS5_FW_VERSION, &state->fw_version);
 	if (ret < 0) {
 		dev_err(&state->client->dev,
@@ -2853,244 +2912,10 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 		return ret;
 	}
 
-	/* 8. Wait for device type register to be populated.
-	 * After HW reset the firmware sets status to 0xDEAD before fully
-	 * initializing configuration registers (DS5_DEVICE_TYPE, stream DT,
-	 * resolution, etc.).  If ds5_fixed_configuration() reads device type
-	 * as 0 it falls into the default switch case and selects D46X format
-	 * arrays (2 depth resolutions) instead of the correct tables per SKU
-	 * Poll until the register returns a known valid value or timeout.
-	 */
-	{
-		u16 dev_type = 0;
-
-		for (retry = 0; retry < DS5_HW_RESET_MAX_RETRIES; retry++) {
-			ret = ds5_read(state, DS5_DEVICE_TYPE, &dev_type);
-			if (ret == 0 && dev_type != 0) {
-				dev_info(&state->client->dev,
-					"%s(): Device type 0x%x ready after %d ms\n",
-					__func__, dev_type,
-					(retry + 1) * DS5_HW_RESET_POLL_INTERVAL_MS);
-				state->ds5_dev->cached_device_type = dev_type;
-				break;
-			}
-			msleep(DS5_HW_RESET_POLL_INTERVAL_MS);
-		}
-
-		if (retry >= DS5_HW_RESET_MAX_RETRIES)
-			dev_warn(&state->client->dev,
-				"%s(): Device type register not ready (0x%x) after %d ms, formats may be wrong\n",
-				__func__, dev_type, DS5_HW_RESET_TIMEOUT_MS);
-	}
-
-	/* 9. Verify HWMC subsystem is ready to accept commands.
-	 * After HW reset the FW reports 0xDEAD and populates device type
-	 * before the HWM command processor is fully initialized.  If
-	 * userspace queries GVD/HWMC immediately after we return, the
-	 * I2C reads NAK (EREMOTEIO) or return stale status (WIP/ERR),
-	 * which can crash RS Viewer.  Send a lightweight GVD command and
-	 * poll HWMC_STATUS until it completes successfully.
-	 */
-	{
-		struct hwm_cmd hwmc_probe;
-		u16 hwmc_status = DS5_HWMC_STATUS_WIP;
-		int hwmc_ret;
-
-		memcpy(&hwmc_probe, &gvd, sizeof(gvd));
-
-		for (retry = 0; retry < DS5_HW_RESET_MAX_RETRIES; retry++) {
-			hwmc_ret = ds5_raw_write(state, DS5_HWMC_DATA,
-						 &hwmc_probe, sizeof(hwmc_probe));
-			if (hwmc_ret) {
-				dev_dbg(&state->client->dev,
-					"%s(): HWMC probe write failed (%d), retry %d\n",
-					__func__, hwmc_ret, retry);
-				msleep(DS5_HW_RESET_POLL_INTERVAL_MS);
-				continue;
-			}
-
-			hwmc_ret = ds5_write(state, DS5_HWMC_EXEC, 0x01);
-			if (hwmc_ret) {
-				dev_dbg(&state->client->dev,
-					"%s(): HWMC probe exec failed (%d), retry %d\n",
-					__func__, hwmc_ret, retry);
-				msleep(DS5_HW_RESET_POLL_INTERVAL_MS);
-				continue;
-			}
-
-			/* Poll status — allow both I2C and WIP retries */
-			{
-				int poll;
-
-				for (poll = 0; poll < 100; poll++) {
-					msleep_range(5);
-					hwmc_ret = ds5_read(state, DS5_HWMC_STATUS,
-							     &hwmc_status);
-					if (hwmc_ret == 0 &&
-					    hwmc_status == DS5_HWMC_STATUS_OK)
-						break;
-				}
-			}
-
-			if (hwmc_ret == 0 && hwmc_status == DS5_HWMC_STATUS_OK) {
-				dev_info(&state->client->dev,
-					"%s(): HWMC ready after %d ms\n",
-					__func__,
-					(retry + 1) * DS5_HW_RESET_POLL_INTERVAL_MS);
-				break;
-			}
-
-			dev_dbg(&state->client->dev,
-				"%s(): HWMC not ready (status: 0x%x, ret: %d), retry %d\n",
-				__func__, hwmc_status, hwmc_ret, retry);
-			msleep(DS5_HW_RESET_POLL_INTERVAL_MS);
-		}
-
-		if (retry >= DS5_HW_RESET_MAX_RETRIES)
-			dev_warn(&state->client->dev,
-				"%s(): HWMC subsystem not ready after %d ms, userspace queries may fail\n",
-				__func__, DS5_HW_RESET_TIMEOUT_MS);
-	}
-
-#ifdef CONFIG_VIDEO_D4XX_SERDES
-	/* 10. Post-reset I2C stability verification.
-	 *
-	 *     Natural-recovery path: perform a lightweight stability gate
-	 *     (2 reads, 100ms apart).  This catches the FW secondary init
-	 *     window that can occur in parallel with the earlier readiness
-	 *     checks (Steps 5 and 7–9).
-	 *     If any probe fails, run Phase 1 SERDES recovery and continue with
-	 *     the full Step 10 verification loop.
-	 *
-	 *     Full verification loop: when SERDES recovery ran, verify I2C
-	 *     stability with DS5_HW_RESET_STABILITY_READS consecutive reads
-	 *     spaced DS5_HW_RESET_STABILITY_INTERVAL_MS apart.  If unstable,
-	 *     escalate to Phase 2 (full deserializer reset).
-	 */
-	if (!serdes_recovery_ran) {
-		int natural_ok = 0;
-		u16 natural_val = 0;
-
-		for (; natural_ok < DS5_HW_RESET_NATURAL_STABILITY_READS;
-			     natural_ok++) {
-			msleep(DS5_HW_RESET_NATURAL_STABILITY_INTERVAL_MS);
-			ret = ds5_read(state, DS5_FW_VERSION, &natural_val);
-			if (ret < 0 || natural_val == 0)
-				break;
-		}
-
-		if (natural_ok < DS5_HW_RESET_NATURAL_STABILITY_READS) {
-			dev_warn(&state->client->dev,
-				"%s(): natural recovery stability probe failed (ret=%d, val=0x%x), running Phase 1 SERDES recovery\n",
-				__func__, ret, natural_val);
-			ret = ds5_hw_reset_serdes_recovery(state, false);
-			if (ret < 0) {
-				dev_err(&state->client->dev,
-					"%s(): Phase 1 recovery from natural path failed: %d\n",
-					__func__, ret);
-				return ret;
-			}
-			serdes_recovery_ran = true;
-		} else {
-			dev_info(&state->client->dev,
-				"%s(): natural recovery stable (%d reads x %d ms), skipping full Step 10 loop\n",
-				__func__, DS5_HW_RESET_NATURAL_STABILITY_READS,
-				DS5_HW_RESET_NATURAL_STABILITY_INTERVAL_MS);
-		}
-	}
-
-	if (serdes_recovery_ran) {
-		int stable_count = 0;
-		unsigned long stab_ts = jiffies;
-		unsigned long stab_timeout =
-			stab_ts + msecs_to_jiffies(DS5_HW_RESET_STABILITY_TIMEOUT_MS);
-		u16 stab_val = 0;
-
-		while (time_before(jiffies, stab_timeout)) {
-			msleep(DS5_HW_RESET_STABILITY_INTERVAL_MS);
-
-			ret = ds5_read(state, DS5_FW_VERSION, &stab_val);
-			if (ret == 0 && stab_val != 0) {
-				stable_count++;
-				if (stable_count >= DS5_HW_RESET_STABILITY_READS) {
-					dev_info(&state->client->dev,
-						"%s(): I2C link stable after %d ms (%d consecutive reads OK)\n",
-						__func__,
-						jiffies_to_msecs(jiffies - stab_ts),
-						stable_count);
-					break;
-				}
-			} else {
-				if (stable_count > 0)
-					dev_warn(&state->client->dev,
-						"%s(): I2C stability check failed after %d OK reads (ret=%d, val=0x%x), resetting counter\n",
-						__func__, stable_count, ret, stab_val);
-				stable_count = 0;
-			}
-		}
-
-		if (stable_count < DS5_HW_RESET_STABILITY_READS) {
-			/* I2C link is unstable — escalate to Phase 2 (full deser reset) */
-			dev_warn(&state->client->dev,
-				"%s(): I2C link unstable after %d ms, escalating to Phase 2 SERDES recovery\n",
-				__func__,
-				jiffies_to_msecs(jiffies - stab_ts));
-
-			ret = ds5_hw_reset_serdes_recovery(state, true);
-			if (ret < 0) {
-				dev_err(&state->client->dev,
-					"%s(): Phase 2 escalation failed: %d\n",
-					__func__, ret);
-				/* Continue anyway — the device might still be partially usable */
-			} else {
-				/* Re-verify stability after Phase 2 */
-				stable_count = 0;
-				stab_ts = jiffies;
-				stab_timeout = stab_ts + msecs_to_jiffies(
-					DS5_HW_RESET_STABILITY_TIMEOUT_MS);
-
-				while (time_before(jiffies, stab_timeout)) {
-					msleep(DS5_HW_RESET_STABILITY_INTERVAL_MS);
-					ret = ds5_read(state, DS5_FW_VERSION, &stab_val);
-					if (ret == 0 && stab_val != 0) {
-						stable_count++;
-						if (stable_count >= DS5_HW_RESET_STABILITY_READS) {
-							dev_info(&state->client->dev,
-								"%s(): I2C link stable after Phase 2 (%d ms)\n",
-								__func__,
-								jiffies_to_msecs(jiffies - stab_ts));
-							break;
-						}
-					} else {
-						stable_count = 0;
-					}
-				}
-
-				if (stable_count < DS5_HW_RESET_STABILITY_READS)
-					dev_warn(&state->client->dev,
-						"%s(): I2C still unstable after Phase 2, proceeding anyway\n",
-						__func__);
-			}
-		}
-	} /* if (serdes_recovery_ran) */
-
-	/* 11. Per-pipe reconfiguration is NOT done here.
-	 *     - First-probe: ds5_probe() configures pipe 3 (IMU) after
-	 *       this function returns, before IMU peer probes.
-	 *     - HWMC reset: (Step 2) invalidates all peer pipe state.
-	 *		 At next STREAMON, ds5_configure() detects the mismatch and calls
-	 *       ds5_setup_pipeline() to reconfigure each pipe.
-	 *
-	 *     Do NOT call max9295_init_settings() or ds5_setup_pipeline()
-	 *     here.  init_settings() writes global MAX9295 registers that
-	 *     kill the GMSL link.  And for HWMC resets, the existing
-	 *     ds5_configure() path handles pipe reconfiguration cleanly.
-	 */
-#endif
-
 	dev_info(&state->client->dev,
-		"%s(): HW reset complete. Firmware: %d.%d.%d.%d\n",
+		"%s(): HW reset complete. Device type 0x%04x, firmware: %d.%d.%d.%d\n",
 		__func__,
+		dev_type,
 		(state->fw_version >> 8) & 0xff, state->fw_version & 0xff,
 		(state->fw_build >> 8) & 0xff, state->fw_build & 0xff);
 
@@ -3108,50 +2933,28 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 	struct v4l2_subdev *sd = &state->mux.sd.subdev;
 	struct ds5_sensor *sensor = (struct ds5_sensor *)ctrl->priv;
 	int ret = -EINVAL;
-	u16 base = DS5_DEPTH_CONTROL_BASE;
+	u16 base;
 
 	if (sensor) {
 		switch (sensor->mux_pad) {
 		case DS5_MUX_PAD_DEPTH:
 			state = container_of(ctrl->handler, struct ds5, ctrls.handler_depth);
-			state->is_rgb = 0;
-			state->is_depth = 1;
-			state->is_y8 = 0;
-			state->is_imu = 0;
-		break;
+			break;
 		case DS5_MUX_PAD_RGB:
 			state = container_of(ctrl->handler, struct ds5, ctrls.handler_rgb);
-			state->is_rgb = 1;
-			state->is_depth = 0;
-			state->is_y8 = 0;
-			state->is_imu = 0;
-		break;
+			break;
 		case DS5_MUX_PAD_IR:
 			state = container_of(ctrl->handler, struct ds5, ctrls.handler_y8);
-			state->is_rgb = 0;
-			state->is_depth = 0;
-			state->is_y8 = 1;
-			state->is_imu = 0;
-		break;
+			break;
 		case DS5_MUX_PAD_IMU:
 			state = container_of(ctrl->handler, struct ds5, ctrls.handler_imu);
-			state->is_rgb = 0;
-			state->is_depth = 0;
-			state->is_y8 = 0;
-			state->is_imu = 1;
-		break;
+			break;
 		default:
-			state->is_rgb = 0;
-			state->is_depth = 0;
-			state->is_y8 = 0;
-			state->is_imu = 1;
-		break;
-
+			break;
 		}
 	}
 
-	if (state->is_rgb)
-		base = DS5_RGB_CONTROL_BASE;
+	base = state->control_base;
 	v4l2_dbg(3, 1, sd, "ctrl: %s, value: %d\n", ctrl->name, ctrl->val);
 	dev_dbg(&state->client->dev, "%s(): %s - ctrl: %s, value: %d\n",
 		__func__, ds5_get_sensor_name(state), ctrl->name, ctrl->val);
@@ -3438,9 +3241,7 @@ static int ds5_get_calibration_data(struct ds5 *state, enum table_id id,
 		unsigned char *table, unsigned int length)
 {
 	struct hwm_cmd *cmd;
-	int ret = -1;
-	int retries = 3;
-	u16 status = 2;
+	int ret;
 	u16 table_length;
 
 	cmd = devm_kzalloc(&state->client->dev,
@@ -3452,20 +3253,20 @@ static int ds5_get_calibration_data(struct ds5 *state, enum table_id id,
 
 	memcpy(cmd, &get_calib_data, sizeof(get_calib_data));
 	cmd->param1 = id;
-	ds5_raw_write_with_check(state, DS5_HWMC_DATA, cmd, sizeof(struct hwm_cmd)); /* Write command data */
-	ds5_write_with_check(state, DS5_HWMC_EXEC, 0x01); /* execute cmd */
-	do {
-		if (retries != 3)
-			msleep_range(10);
-		ret = ds5_read(state, DS5_HWMC_STATUS, &status);
-	} while (ret && retries-- && status != 0);
+	ret = ds5_send_hwmc(state, sizeof(struct hwm_cmd), cmd);
+	if (ret) {
+		devm_kfree(&state->client->dev, cmd);
+		return ret;
+	}
 
-	if (ret || status != 0) {
+	ret = ds5_get_hwmc_status(state);
+
+	if (ret) {
 		dev_err(&state->client->dev,
 				"%s(): Failed to get calibration table %d, fw error: %x\n",
-				__func__, id, status);
+				__func__, id, ret);
 		devm_kfree(&state->client->dev, cmd);
-		return status;
+		return ret;
 	}
 
 	// get table length from fw
@@ -3484,25 +3285,19 @@ static int ds5_get_calibration_data(struct ds5 *state, enum table_id id,
 static int ds5_gvd(struct ds5 *state, unsigned char *data)
 {
 	struct hwm_cmd cmd;
-	int ret = -1;
+	int ret;
 	u16 length = 0;
-	u16 status = DS5_HWMC_STATUS_WIP;
-	u8 retries = 20;
 
 	memcpy(&cmd, &gvd, sizeof(gvd));
-	ds5_raw_write_with_check(state, DS5_HWMC_DATA, &cmd, sizeof(cmd)); /* Write command data */
-	ds5_write_with_check(state, DS5_HWMC_EXEC, 0x01); /* execute cmd */
-	do {
-		if (retries != 20)
-			msleep_range(50);
+	ret = ds5_send_hwmc(state, sizeof(cmd), &cmd);
+	if (ret)
+		return ret;
 
-		ret = ds5_read(state, DS5_HWMC_STATUS, &status);
-	} while ((ret || status == DS5_HWMC_STATUS_WIP) && retries--);
-
-	if (ret || status != DS5_HWMC_STATUS_OK) {
+	ret = ds5_get_hwmc_status(state);
+	if (ret) {
 		dev_err(&state->client->dev,
-				"%s(): Failed to read GVD, HWM cmd status: %x, ret: %d\n",
-				__func__, status, ret);
+			"%s(): Failed to read GVD, HWM cmd status ret: %d\n",
+			__func__, ret);
 		return -EIO;
 	}
 
@@ -3518,54 +3313,31 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			ctrls.handler);
 	u16 log_prepare[] = {0x0014, 0xcdab, 0x000f, 0x0000, 0x0400, 0x0000,
 			0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000};
-	u16 execute_cmd = 0x0001;
-	unsigned int i;
 	u32 data;
 	int ret = 0;
 	struct ds5_sensor *sensor = (struct ds5_sensor *)ctrl->priv;
-	u16 base = (state->is_rgb) ? DS5_RGB_CONTROL_BASE : DS5_DEPTH_CONTROL_BASE;
+	u16 base;
 	u16 reg;
 
 	if (sensor) {
 		switch (sensor->mux_pad) {
 		case DS5_MUX_PAD_DEPTH:
 			state = container_of(ctrl->handler, struct ds5, ctrls.handler_depth);
-			state->is_rgb = 0;
-			state->is_depth = 1;
-			state->is_y8 = 0;
-			state->is_imu = 0;
-		break;
+			break;
 		case DS5_MUX_PAD_RGB:
 			state = container_of(ctrl->handler, struct ds5, ctrls.handler_rgb);
-			state->is_rgb = 1;
-			state->is_depth = 0;
-			state->is_y8 = 0;
-			state->is_imu = 0;
-		break;
+			break;
 		case DS5_MUX_PAD_IR:
 			state = container_of(ctrl->handler, struct ds5, ctrls.handler_y8);
-			state->is_rgb = 0;
-			state->is_depth = 0;
-			state->is_y8 = 1;
-			state->is_imu = 0;
-		break;
+			break;
 		case DS5_MUX_PAD_IMU:
 			state = container_of(ctrl->handler, struct ds5, ctrls.handler_imu);
-			state->is_rgb = 0;
-			state->is_depth = 0;
-			state->is_y8 = 0;
-			state->is_imu = 1;
-		break;
+			break;
 		default:
-			state->is_rgb = 0;
-			state->is_depth = 0;
-			state->is_y8 = 0;
-			state->is_imu = 1;
-		break;
-
+			break;
 		}
 	}
-	base = (state->is_rgb) ? DS5_RGB_CONTROL_BASE : DS5_DEPTH_CONTROL_BASE;
+	base = state->control_base;
 
 	dev_dbg(&state->client->dev, "%s(): %s - ctrl: %s \n",
 		__func__, ds5_get_sensor_name(state), ctrl->name);
@@ -3618,35 +3390,14 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 
 	case DS5_CAMERA_CID_LOG:
-		// TODO: wrap HWMonitor command
-		//       1. prepare and send command
-		//       2. send command
-		//       3. execute command
-		//       4. wait for completion
-		ret = ds5_raw_write(state, DS5_HWMC_DATA, /* Write command data */
-				log_prepare, sizeof(log_prepare));
-		if (ret < 0)
+		ret = ds5_send_hwmc(state, sizeof(log_prepare),
+					    (struct hwm_cmd *)log_prepare);
+		if (ret)
 			return ret;
 
-		ret = ds5_raw_write(state, DS5_HWMC_EXEC,
-				&execute_cmd, sizeof(execute_cmd)); /* execute cmd */
-		if (ret < 0)
+		ret = ds5_get_hwmc_status(state);
+		if (ret)
 			return ret;
-
-		for (i = 0; i < DS5_MAX_LOG_POLL; i++) {
-			ret = ds5_raw_read(state, DS5_HWMC_STATUS,
-					&data, sizeof(data));
-			dev_dbg(&state->client->dev, "%s(): log ready 0x%x\n",
-				 __func__, data);
-			if (ret < 0)
-				return ret;
-			if (!data)
-				break;
-			msleep_range(5);
-		}
-
-//		if (i == DS5_MAX_LOG_POLL)
-//			return -ETIMEDOUT;
 
 		ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN, &data, sizeof(data)); /* Read response length */
 		dev_dbg(&state->client->dev, "%s(): log size 0x%x\n", __func__, data);
@@ -6055,9 +5806,10 @@ static int ds5_dfu_switch_to_dfu(struct ds5 *state)
 	int i = DS5_START_MAX_COUNT;
 	u16 status;
 
-	ds5_raw_write_with_check(state, DS5_HWMC_DATA,
-			&cmd_switch_to_dfu, sizeof(cmd_switch_to_dfu)); /* Write command data */
-	ds5_write_with_check(state, DS5_HWMC_EXEC, 0x01); /* execute cmd */
+	ret = ds5_send_hwmc(state, sizeof(cmd_switch_to_dfu),
+			    (struct hwm_cmd *)&cmd_switch_to_dfu);
+	if (ret)
+		return ret;
 	/*Wait for DFU fw to boot*/
 	do {
 		msleep_range(DS5_START_POLL_TIME*10);
@@ -6791,7 +6543,7 @@ static int ds5_probe(struct i2c_client *c
 	// Verify communication
 	retry = 5;
 	do {
-		ret = ds5_read(state, 0x5020, &rec_state);
+		ret = ds5_read_poll(state, DS5_FW_VERSION, &state->fw_version);
 	} while (retry-- && ret < 0);
 	if (ret < 0) {
 		dev_err(&c->dev,
@@ -6808,15 +6560,23 @@ static int ds5_probe(struct i2c_client *c
 	ret = of_property_read_string(c->dev.of_node, "cam-type", &str);
 	if (!ret && !strncmp(str, "Depth", strlen("Depth"))) {
 		state->is_depth = 1;
+		state->control_base = DS5_DEPTH_CONTROL_BASE;
+		state->control_status_reg = DS5_DEPTH_CONTROL_STATUS;
 	}
 	if (!ret && !strncmp(str, "Y8", strlen("Y8"))) {
 		state->is_y8 = 1;
+		state->control_base = DS5_DEPTH_CONTROL_BASE;
+		state->control_status_reg = DS5_DEPTH_CONTROL_STATUS;
 	}
 	if (!ret && !strncmp(str, "RGB", strlen("RGB"))) {
 		state->is_rgb = 1;
+		state->control_base = DS5_RGB_CONTROL_BASE;
+		state->control_status_reg = DS5_RGB_CONTROL_STATUS;
 	}
 	if (!ret && !strncmp(str, "IMU", strlen("IMU"))) {
 		state->is_imu = 1;
+		state->control_base = DS5_DEPTH_CONTROL_BASE;
+		state->control_status_reg = DS5_DEPTH_CONTROL_STATUS;
 	}
 
 	mode0_node = of_get_child_by_name(state->client->dev.of_node, "mode0");
@@ -6840,7 +6600,14 @@ static int ds5_probe(struct i2c_client *c
 	dev_dbg(&state->client->dev, "metadata_enabled = %d\n", state->metadata_enabled);
 #else
 	state->is_depth = 1;
+	state->control_base = DS5_DEPTH_CONTROL_BASE;
+	state->control_status_reg = DS5_DEPTH_CONTROL_STATUS;
 #endif
+
+	if (!state->control_base) {
+		state->control_base = DS5_DEPTH_CONTROL_BASE;
+		state->control_status_reg = DS5_DEPTH_CONTROL_STATUS;
+	}
 	/* create DFU chardev once */
 	if (state->is_depth) {
 		ret = ds5_chrdev_init(c, state);
@@ -6874,24 +6641,23 @@ static int ds5_probe(struct i2c_client *c
 		msleep(200);
 	}
 
-	/* Verify communication with retries and delay.
-	 * After HW reset (done by the first probe instance), the camera
-	 * firmware may still be initializing and briefly NAK I2C requests.
-	 * Use the same retry pattern as the initial communication check.
+	/* Verify post-reset format-discovery readiness.
+	 * FW_VERSION becomes readable earlier than DS5_DEVICE_TYPE, while later
+	 * probe code depends on DEVICE_TYPE to pick the correct format tables.
 	 */
-	retry = 10;
-	do {
-		ret = ds5_read(state, 0x5020, &rec_state);
-		if (ret < 0)
-			msleep(50);
-	} while (retry-- && ret < 0);
+	ret = ds5_wait_device_type(state, &rec_state);
 	if (ret < 0) {
-		dev_err(&c->dev, "%s(): cannot communicate with D4XX: %d\n",
-				__func__, ret);
+		dev_err(&c->dev,
+			"%s(): device type not ready after reset: %d (last val 0x%x)\n",
+			__func__, ret, rec_state);
 		goto e_chardev;
 	}
 
-	if (rec_state == 0x201) {
+	ret = ds5_read(state, DS5_DFU_MAGIC_REG, &rec_state);
+	if (ret < 0)
+		rec_state = 0;
+
+	if (rec_state == DS5_DFU_MAGIC_LSW) {
 		dev_info(&c->dev, "%s(): D4XX recovery state\n", __func__);
 		state->dfu_dev.dfu_state_flag = DS5_DFU_RECOVERY;
 		/* Override I2C drvdata with state for use in remove function */
