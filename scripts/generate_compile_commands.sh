@@ -40,6 +40,42 @@ if [ -z "$RAW_CMD" ]; then
   exit 1
 fi
 
+# Try to locate the kernel source top under the same sources_* tree
+# 1) extract the sources_<ver> root folder from the .cmd path
+SOURCES_ROOT="$(echo "$CMD_FILE" | sed -n 's@\(.*sources_[^/]*\)/.*@\1@p' || true)"
+KERNEL_TOP=""
+if [ -n "$SOURCES_ROOT" ] && [ -d "$SOURCES_ROOT" ]; then
+  # First check for an immediate child like sources_*/kernel*/ that looks like the kernel tree
+  for d in "$SOURCES_ROOT"/*; do
+    if [ -d "$d" ] && [[ "$(basename "$d")" == kernel* ]] && [ -f "$d/include/linux/kconfig.h" ]; then
+      KERNEL_TOP="$d"
+      break
+    fi
+  done
+  # If not found, fall back to searching for any include/linux/kconfig.h
+  if [ -z "$KERNEL_TOP" ]; then
+    while IFS= read -r kp; do
+      maybe_top="$(dirname "$(dirname "$kp")")"  # parent of 'include'
+      if [ -f "$maybe_top/Makefile" ]; then
+        KERNEL_TOP="$maybe_top"
+        break
+      fi
+    done < <(find "$SOURCES_ROOT" -maxdepth 12 -type f -path '*/include/linux/kconfig.h' -print || true)
+  fi
+fi
+
+if [ -n "$KERNEL_TOP" ]; then
+  DIRECTORY="$KERNEL_TOP"
+else
+  # Fallback: use the object path recorded in the cmd_ key if available
+  OBJ_PATH="$(sed -n 's/^cmd_\([^ ]*\) := .*$/\1/p' "$CMD_FILE" | head -1 || true)"
+  if [ -n "$OBJ_PATH" ]; then
+    DIRECTORY="$(dirname "$OBJ_PATH")"
+  else
+    DIRECTORY="$REPO"
+  fi
+fi
+
 # ── rewrite the command for IDE use ───────────────────────────────────────────
 # 1. Strip -Wp,-MMD,... (generates .d dependency files, confuses clangd/cpptools)
 # 2. Replace the original source path with our repo's d4xx.c
@@ -55,13 +91,20 @@ if ! echo "$CLEAN_CMD" | grep -q "$SOURCE_FILE"; then
   CLEAN_CMD="$CLEAN_CMD $SOURCE_FILE"
 fi
 
+# If the kernel config indicates OF support, ensure CONFIG_OF is visible to the indexer
+if find "$REPO/sources_"* -path '*/include/config/OF' -print -quit | grep -q .; then
+  if ! echo "$CLEAN_CMD" | grep -q -- '-DCONFIG_OF'; then
+    CLEAN_CMD="$CLEAN_CMD -DCONFIG_OF"
+  fi
+fi
+
 # ── write compile_commands.json ───────────────────────────────────────────────
 mkdir -p "$REPO/.vscode"
-python3 - "$DEST" "$REPO" "$CLEAN_CMD" "$SOURCE_FILE" <<'PY'
+python3 - "$DEST" "$DIRECTORY" "$CLEAN_CMD" "$SOURCE_FILE" <<'PY'
 import sys, json
 dest, directory, command, src = sys.argv[1:]
 db = [{"directory": directory, "command": command, "file": src}]
 with open(dest, "w") as f:
-    json.dump(db, f, indent=2)
-print(f"Written {dest}")
+  json.dump(db, f, indent=2)
+print(f"Written {dest} (directory={directory})")
 PY

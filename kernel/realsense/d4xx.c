@@ -2315,7 +2315,7 @@ static int ds5_get_hwmc(struct ds5 *state, unsigned char *data,
 
 static int ds5_hwmc_send(struct ds5 *state,
 			u16 cmdLen,
-			struct hwm_cmd *cmd)
+			const struct hwm_cmd *cmd)
 {
 	dev_dbg(&state->client->dev,
 			"%s(): HWMC header: 0x%x, magic: 0x%x, opcode: 0x%x, "
@@ -2331,7 +2331,7 @@ static int ds5_hwmc_send(struct ds5 *state,
 }
 
 static int ds5_set_calibration_data(struct ds5 *state,
-		struct hwm_cmd *cmd, u16 length)
+		const struct hwm_cmd *cmd, u16 length)
 {
 	int ret;
 
@@ -4098,6 +4098,7 @@ static int ds5_board_setup(struct ds5 *state)
 		.is_prim_ser = 1, // todo: configurable
 		.def_addr = 0x40, // todo: configurable
 	};
+
 	static struct max9296_pdata max9296_pdata = {
 		.max_src = 2,
 		.csi_mode = GMSL_CSI_2X4_MODE,
@@ -6548,10 +6549,7 @@ static int ds5_probe(struct i2c_client *c
 	state->reset_ref_ds5 = atomic_read(ds5_get_reset_gen(state));
 
 	// Verify communication
-	retry = 5;
-	do {
-		ret = ds5_read_poll(state, DS5_FW_VERSION, &state->fw_version);
-	} while (retry-- && ret < 0);
+	ret = ds5_read(state, DS5_FW_VERSION, &state->fw_version);
 	if (ret < 0) {
 		dev_err(&c->dev,
 			"%s(): cannot communicate with D4XX: %d on addr: 0x%x\n",
@@ -6706,10 +6704,12 @@ e_regulator:
 	if (state->vcc)
 		regulator_disable(state->vcc);
 #ifdef CONFIG_VIDEO_D4XX_SERDES
+#ifndef CONFIG_OF
 	if (state->ser_i2c)
 		i2c_unregister_device(state->ser_i2c);
 	if (state->dser_i2c && !state->aggregated)
 		i2c_unregister_device(state->dser_i2c);
+#endif
 #endif
 	return ret;
 }
@@ -6764,12 +6764,14 @@ static void ds5_remove(struct i2c_client *c)
 
 		mutex_unlock(&serdes_lock__);
 
-		if (state->ser_i2c)
-			i2c_unregister_device(state->ser_i2c);
-		if (state->dser_i2c && !state->aggregated)
-			i2c_unregister_device(state->dser_i2c);
 	}
+#ifndef CONFIG_OF
+	if (state->ser_i2c)
+		i2c_unregister_device(state->ser_i2c);
+	if (state->dser_i2c && !state->aggregated)
+		i2c_unregister_device(state->dser_i2c);
 #endif
+#endif /* CONFIG_VIDEO_D4XX_SERDES */
 #ifndef CONFIG_TEGRA_CAMERA_PLATFORM
 	state->is_depth = 1;
 #endif
