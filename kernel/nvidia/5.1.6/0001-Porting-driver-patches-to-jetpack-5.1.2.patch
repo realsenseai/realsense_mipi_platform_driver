@@ -1375,7 +1375,7 @@ index 78ad66433..8795afe4e 100644
  	struct tegra_camera_info *info;
  	int ret = 0;
  
-+	/* TODO: workarouud for Xavier */
++	/* TODO: workaround for Xavier */
 +	if (NULL == tegra_camera_misc.parent) {
 +		return 0;
 +	}
