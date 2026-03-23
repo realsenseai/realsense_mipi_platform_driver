@@ -21,11 +21,12 @@ while [[ $# -gt 0 ]]; do
     elif [[ "$1" == reset ]]; then
         ACTION="reset"
     elif [[ $1 == "-h" ]]; then
-            echo Usage:
-            echo "$0 [--one-cam | --dual-cam | --max96712-EVB | --fg12-16ch | --fg12-16ch-dual ] [reset] [-h]"
-            echo -e 'reset\t: hard reset (git) to version from jetpack_version file'
-            echo -e '-h\t: show this help'
-            exit 0
+        echo Usage:
+        echo "$0 [--one-cam | --dual-cam | --max96712-EVB | --fg12-16ch | --fg12-16ch-dual ] [reset] [-h]"
+        echo -e 'reset\t: hard reset (git) to version from jetpack_version file'
+        echo -e '-h\t: show this help'
+        exit 0
+    else break
     fi
     shift
 done
