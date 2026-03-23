@@ -53,16 +53,16 @@ else
         mkdir -p "l4t-gcc/$JETPACK_VERSION"
         pushd l4t-gcc/$JETPACK_VERSION
         if [[ "$JETPACK_VERSION" == "7.x" ]]; then
-            wget --quiet --show-progress https://developer.nvidia.com/downloads/embedded/L4T/r38_Release_v2.0/release/x-tools.tbz2 -O x-tools.tbz2
+            wget --quiet https://developer.nvidia.com/downloads/embedded/L4T/r38_Release_v2.0/release/x-tools.tbz2 -O x-tools.tbz2
             tar xf x-tools.tbz2 ./x-tools/aarch64-none-linux-gnu --strip-components 3
         elif [[ "$JETPACK_VERSION" == "6.x" ]]; then
-            wget --quiet --show-progress https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v3.0/toolchain/aarch64--glibc--stable-2022.08-1.tar.bz2 -O aarch64--glibc--stable-final.tar.bz2
+            wget --quiet https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v3.0/toolchain/aarch64--glibc--stable-2022.08-1.tar.bz2 -O aarch64--glibc--stable-final.tar.bz2
             tar xf aarch64--glibc--stable-final.tar.bz2 --strip-components 1
         elif [[ "$JETPACK_VERSION" == "5.x" ]]; then
-            wget --quiet --show-progress https://developer.nvidia.com/embedded/jetson-linux/bootlin-toolchain-gcc-93 -O aarch64--glibc--stable-final.tar.gz
+            wget --quiet https://developer.nvidia.com/embedded/jetson-linux/bootlin-toolchain-gcc-93 -O aarch64--glibc--stable-final.tar.gz
             tar xf aarch64--glibc--stable-final.tar.gz
         elif [[ "$JETPACK_VERSION" == "4.x" ]]; then
-            wget --quiet --show-progress http://releases.linaro.org/components/toolchain/binaries/7.3-2018.05/aarch64-linux-gnu/gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu.tar.xz
+            wget --quiet http://releases.linaro.org/components/toolchain/binaries/7.3-2018.05/aarch64-linux-gnu/gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu.tar.xz
             tar xf gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu.tar.xz --strip-components 1
         fi
         popd
