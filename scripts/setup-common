@@ -58,7 +58,7 @@ elif [[ "$JETPACK_VERSION" =~ ^6\.[0-2](\.[0-9]+)?$ ]]; then
     KERNEL_DIR="kernel/kernel-jammy-src"
     JETPACK_VERSION="6.x"
     L4T_VERSION=jetson_"${REVISION}"
-elif [[ "$JETPACK_VERSION" =~ ^5\.[0-1]. ]]; then
+elif [[ "$JETPACK_VERSION" =~ ^5\.[01](\.[0-9]+)?$ ]]; then
     if [[ $JETPACK_VERSION == "5.1.6" ]]; then
         REVISION="35.6.4"
     elif [[ $JETPACK_VERSION == "5.1.2" ]]; then
