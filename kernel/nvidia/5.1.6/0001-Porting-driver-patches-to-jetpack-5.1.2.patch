@@ -1247,7 +1247,7 @@ index b54833d3f..042a80e51 100644
 +	for(vi_port = 0; vi_port < chan->valid_ports; vi_port++) {
 +		chan->tegra_vi_channel[vi_port] = vi_channel_open_ex(chan->id + vi_port, false);
 +		if (IS_ERR(chan->tegra_vi_channel[vi_port])) {
-+			err = PTR_ERR(chan);
++			err = PTR_ERR(chan->tegra_vi_channel[vi_port]);
 +			goto done;
 +		}
 +		err = tegra_channel_capture_setup(chan, vi_port);
