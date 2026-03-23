@@ -6485,7 +6485,7 @@ static int ds5_probe(struct i2c_client *c
 	const struct i2c_device_id *id = i2c_client_get_device_id(c);
 #endif
 	u16 rec_state;
-	int ret, retry, err = 0;
+	int ret, err = 0;
 #ifdef CONFIG_OF
 	const char *str;
 	uint32_t override_addr = 0;
