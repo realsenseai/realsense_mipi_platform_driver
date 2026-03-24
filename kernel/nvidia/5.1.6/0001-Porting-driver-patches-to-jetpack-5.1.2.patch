@@ -461,15 +461,16 @@ diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/pl
 index 03de76844..5801984aa 100644
 --- a/drivers/media/platform/tegra/camera/vi/channel.c
 +++ b/drivers/media/platform/tegra/camera/vi/channel.c
-@@ -215,7 +215,12 @@ static void tegra_channel_fmt_align(struct tegra_channel *chan,
+@@ -215,7 +215,13 @@ static void tegra_channel_fmt_align(struct tegra_channel *chan,
  	 * different. Aligned width also may force a sensor mode change other
  	 * than the requested one
  	 */
 -	*height = clamp(*height, TEGRA_MIN_HEIGHT, TEGRA_MAX_HEIGHT);
-+	For D4XX IMU, the total size of one frame is 32 while the width:height
-+	* should be set to 32:1. Therefore, ignored the clamping on height here by
-+	* replacing TEGRA_MIN_HEIGHT with 1U ((unsigned int) 1).
-+	*/
++	/*
++	 * For D4XX IMU, the total size of one frame is 32 while the width:height
++	 * should be set to 32:1. Therefore, ignored the clamping on height here by
++	 * replacing TEGRA_MIN_HEIGHT with 1U ((unsigned int) 1).
++	 */
 +	*height = clamp(*height, 1U /*TEGRA_MIN_HEIGHT*/, TEGRA_MAX_HEIGHT);
 +
  
