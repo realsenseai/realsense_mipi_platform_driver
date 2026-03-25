@@ -82,7 +82,9 @@ if version_lt "$JETPACK_VERSION" "6.0"; then
         scripts/config --file $TEGRA_KERNEL_OUT/.config --enable DYNAMIC_DEBUG
     fi
     make O=$TEGRA_KERNEL_OUT -j${NPROC}
+    echo WOJTEK: make O=$TEGRA_KERNEL_OUT modules_install INSTALL_MOD_PATH=$KERNEL_MODULES_OUT
     make O=$TEGRA_KERNEL_OUT modules_install INSTALL_MOD_PATH=$KERNEL_MODULES_OUT
+    echo WOJTEK: done
     D4XX_CMD_FILE="$(find "$TEGRA_KERNEL_OUT" -name '.d4xx.o.cmd' 2>/dev/null | head -1)"
 else
     cd $BUILD_SRCS

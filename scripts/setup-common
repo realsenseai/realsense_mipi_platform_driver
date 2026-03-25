@@ -74,7 +74,7 @@ elif ! version_lt "${JP_INPUT_VERSION}" 4.0; then
     LICENSE=T186
 fi
 if [[ -z $REVISION ]]; then
-    echo "Wrong JetPack version ($JETPACK_VERSION)! Supported version: ${SUPPORTED_JP}"
+    echo "Wrong JetPack version $JP_INPUT_VERSION! Supported version: ${SUPPORTED_JP}"
     exit 1
 fi
 echo "${JP_INPUT_VERSION}" > jetpack_version
