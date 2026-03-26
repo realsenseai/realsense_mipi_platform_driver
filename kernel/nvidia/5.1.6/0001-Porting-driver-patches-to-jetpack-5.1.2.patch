@@ -755,11 +755,11 @@ index 03de76844..5801984aa 100644
 +			chan->embedded.tail = chan->embedded.tail - 16;
 +		vb2_buffer_done(evb, VB2_BUF_STATE_ERROR);
 +	}
-+	spin_unlock(&chan->embedded.spin_lock);
-+
 +	chan->embedded.head = 0;
 +	chan->embedded.tail = 0;;
 +	chan->embedded.num_buffers = 0;
++
++	spin_unlock(&chan->embedded.spin_lock);
 +}
 +
 +static const struct vb2_ops tegra_metadata_qops = {
