@@ -24,7 +24,6 @@ while [[ "$1" == --* ]]; do
 done
 
 export DEVDIR=$(cd `dirname $0` && pwd)
-NPROC=$(nproc)
 
 if [[ "$1" == "-h" ]]; then
     echo "build_all.sh [--clean] [--dev-dbg] [JetPack_version [JetPack_Linux_source]]"
@@ -56,7 +55,9 @@ else
 fi
 
 export LOCALVERSION=-tegra
-export TEGRA_KERNEL_OUT="$DEVDIR/images/${JP_INPUT_VERSION}"
+TEGRA_KERNEL_OUT="$DEVDIR/images/${JP_INPUT_VERSION}"	# ./images/5.1.6
+mkdir -p $TEGRA_KERNEL_OUT/rootfs/boot/dtb
+export INSTALL_MOD_PATH=$TEGRA_KERNEL_OUT/rootfs/
 
 # Clean if requested
 if [[ $CLEAN == 1 ]]; then
@@ -65,8 +66,8 @@ if [[ $CLEAN == 1 ]]; then
     rm -rf $BUILD_SRCS/out
 fi
 
-mkdir -p $TEGRA_KERNEL_OUT
-export KERNEL_MODULES_OUT=$TEGRA_KERNEL_OUT/modules
+ln -sfn $TEGRA_KERNEL_OUT $BUILD_SRCS/out
+ln -sfn $INSTALL_MOD_PATH $INSTALL_MOD_PATH/usr # some depmod require usr in the path
 
 # Check if BUILD_NUMBER is set as it will add a postfix to the kernel name "vermagic" (normally it happens on CI who have BUILD_NUMBER defined)
 [[ -n "${BUILD_NUMBER}" ]] && echo "Warning! You have BUILD_NUMBER set to ${BUILD_NUMBER}, This will affect your vermagic"
@@ -77,17 +78,16 @@ export KERNEL_MODULES_OUT=$TEGRA_KERNEL_OUT/modules
 if version_lt "$JETPACK_VERSION" "6.0"; then
     #JP4/5
     cd $BUILD_SRCS/$KERNEL_DIR
-    make O=$TEGRA_KERNEL_OUT tegra_defconfig
+    make tegra_defconfig
     if [[ "$DEVDBG" == "1" ]]; then
         scripts/config --file $TEGRA_KERNEL_OUT/.config --enable DYNAMIC_DEBUG
     fi
-    make O=$TEGRA_KERNEL_OUT -j${NPROC}
-    make O=$TEGRA_KERNEL_OUT modules_install INSTALL_MOD_PATH=$KERNEL_MODULES_OUT
+    make -j$(nproc)
+    make modules_install
     D4XX_CMD_FILE="$(find "$TEGRA_KERNEL_OUT" -name '.d4xx.o.cmd' 2>/dev/null | head -1)"
 else
     cd $BUILD_SRCS
     export KERNEL_HEADERS=${BUILD_SRCS}/${KERNEL_DIR}
-    ln -sf $TEGRA_KERNEL_OUT $BUILD_SRCS/out
     if [[ "$DEVDBG" == "1" ]]; then
         cd $KERNEL_HEADERS
         # Generate .config file from default defconfig
@@ -111,14 +111,12 @@ else
     fi
     make modules
     D4XX_CMD_FILE="$BUILD_SRCS/nvidia-oot/drivers/media/i2c/.d4xx.o.cmd"
-    mkdir -p $TEGRA_KERNEL_OUT/rootfs/boot/dtb
     if version_lt "$JETPACK_VERSION" "7.0"; then
         make dtbs
         cp $BUILD_SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/
     else
         cp $BUILD_SRCS/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/tegra2[36]4-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/
     fi
-    export INSTALL_MOD_PATH=$TEGRA_KERNEL_OUT/rootfs/
     make -C kernel install
     make modules_install
     # iio support
