@@ -10,9 +10,6 @@ kernel_source_dir := $(MAKEFILE_DIR)/$(KERNEL_SRC_DIR)
 ifdef KERNEL_OUTPUT
 O_OPT := O=$(KERNEL_OUTPUT)
 $(mkdir -p $(KERNEL_OUTPUT))
-kernel_image := $(KERNEL_OUTPUT)/arch/arm64/boot/Image
-else
-kernel_image := $(kernel_source_dir)/arch/arm64/boot/Image
 endif
 
 NPROC ?= $(shell nproc)
@@ -48,12 +45,6 @@ kernel:
 		--output-sync=target modules
 
 	@echo   "================================================================================"
-	@if [ -f "$(kernel_image)" ] ; then \
-		echo   "Kernel Image: $(kernel_image)"; \
-	else \
-		echo   "Error: Missing kernel image: $(kernel_image)"; \
-        false ; \
-	fi
 	@echo   "Kernel sources compiled successfully."
 	@echo   "================================================================================"
 
@@ -62,7 +53,7 @@ install:
 	@echo   "================================================================================"
 	@echo   "Installing $(KERNEL_SRC_DIR) sources"
 	@echo   "================================================================================"
-	install $(kernel_image) $(INSTALL_MOD_PATH)/boot/
+	$(MAKE) -C $(kernel_source_dir) install
 	$(MAKE) \
 		-C $(kernel_source_dir) $(O_OPT) \
 		LOCALVERSION=$(version) \

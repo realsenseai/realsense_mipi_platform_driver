@@ -56,8 +56,10 @@ fi
 
 export LOCALVERSION=-tegra
 TEGRA_KERNEL_OUT="$DEVDIR/images/${JP_INPUT_VERSION}"	# ./images/5.1.6
-mkdir -p $TEGRA_KERNEL_OUT/rootfs/boot/dtb
-export INSTALL_MOD_PATH=$TEGRA_KERNEL_OUT/rootfs/
+export INSTALL_MOD_PATH=${TEGRA_KERNEL_OUT}/rootfs/
+export INSTALL_PATH=${INSTALL_MOD_PATH}/boot/
+export INSTALL_DTBS_PATH=${INSTALL_PATH}/dtb/${KERNELRELEASE}
+mkdir -p ${INSTALL_DTBS_PATH}
 
 # Clean if requested
 if [[ $CLEAN == 1 ]]; then
@@ -83,7 +85,9 @@ if version_lt "$JETPACK_VERSION" "6.0"; then
         scripts/config --file $TEGRA_KERNEL_OUT/.config --enable DYNAMIC_DEBUG
     fi
     make -j$(nproc)
-    make modules_install
+    make -j$(nproc) modules
+    make dtbs
+    make dtbs_install
     D4XX_CMD_FILE="$(find "$TEGRA_KERNEL_OUT" -name '.d4xx.o.cmd' 2>/dev/null | head -1)"
 else
     cd $BUILD_SRCS
@@ -113,27 +117,14 @@ else
     D4XX_CMD_FILE="$BUILD_SRCS/nvidia-oot/drivers/media/i2c/.d4xx.o.cmd"
     if version_lt "$JETPACK_VERSION" "7.0"; then
         make dtbs
-        cp $BUILD_SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/
+        cp $BUILD_SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra2[36]4-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/dtb
     else
-        cp $BUILD_SRCS/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/tegra2[36]4-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/
+        cp $BUILD_SRCS/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/tegra2[36]4-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/dtb
     fi
-    make -C kernel install
-    make modules_install
-    # iio support
-    KERNELVERSION=$(cat $KERNEL_HEADERS/include/config/kernel.release)
-    KERNEL_MODULES_OUT=$INSTALL_MOD_PATH/lib/modules/${KERNELVERSION}
-    mkdir -p $KERNEL_MODULES_OUT/extra
-    cp $KERNEL_MODULES_OUT/kernel/drivers/iio/buffer/kfifo_buf.ko $KERNEL_MODULES_OUT/extra/ || true
-    cp $KERNEL_MODULES_OUT/kernel/drivers/iio/buffer/industrialio-triggered-buffer.ko $KERNEL_MODULES_OUT/extra/ || true
-    cp $KERNEL_MODULES_OUT/kernel/drivers/iio/common/hid-sensors/hid-sensor-iio-common.ko $KERNEL_MODULES_OUT/extra/ || true
-    cp $KERNEL_MODULES_OUT/kernel/drivers/hid/hid-sensor-hub.ko $KERNEL_MODULES_OUT/extra/ || true
-    cp $KERNEL_MODULES_OUT/kernel/drivers/iio/accel/hid-sensor-accel-3d.ko $KERNEL_MODULES_OUT/extra/ || true
-    cp $KERNEL_MODULES_OUT/kernel/drivers/iio/gyro/hid-sensor-gyro-3d.ko $KERNEL_MODULES_OUT/extra/ || true
-    cp $KERNEL_MODULES_OUT/kernel/drivers/iio/common/hid-sensors/hid-sensor-trigger.ko $KERNEL_MODULES_OUT/extra/ || true
-    # RealSense cameras support
-    cp $KERNEL_MODULES_OUT/kernel/drivers/media/usb/uvc/uvcvideo.ko $KERNEL_MODULES_OUT/extra/ || true
-    cp $KERNEL_MODULES_OUT/kernel/drivers/media/v4l2-core/videodev.ko $KERNEL_MODULES_OUT/extra/ || true
 fi
+
+make install
+make modules_install
 
 # Generate .vscode/compile_commands.json from the cached module build artefact
 echo "Generating .vscode/compile_commands.json..."

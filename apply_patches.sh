@@ -26,12 +26,13 @@ while [[ $# -gt 0 ]]; do
         echo -e 'reset\t: hard reset (git) to version from jetpack_version file'
         echo -e '-h\t: show this help'
         exit 0
-    else break
+    else
+		version=$1
     fi
     shift
 done
 
-. scripts/setup-common
+. scripts/setup-common ${version}
 
 # set JP4 devicetree
 if [[ "$JETPACK_VERSION" == "4.x" ]]; then
@@ -102,27 +103,27 @@ fi
 echo "Patches applied successfully"
 
 if [[ "$ACTION" = "apply" ]]; then
-    version_lt "$JETPACK_VERSION" "5.0" || ln -f kernel/realsense/d4xx.c "${BUILD_SRCS}/${D4XX_SRC_DST}/drivers/media/i2c/"
+    version_lt "$JETPACK_VERSION" "5.0" || ln -sfr "kernel/realsense/d4xx.c" "${BUILD_SRCS}/${D4XX_SRC_DST}/drivers/media/i2c/"
     if version_lt "$JETPACK_VERSION" "6.0"; then
         # device tree
-        cp "hardware/realsense/${JP5_D4XX_DTSI}" "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen/kernel-dts/common/tegra194-camera-d4xx.dtsi"
+        ln -sfr "hardware/realsense/${JP5_D4XX_DTSI}" "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen/kernel-dts/common/tegra194-camera-d4xx.dtsi"
         # max96712 header
-        cp kernel/nvidia/max96712.h "${BUILD_SRCS}/kernel/nvidia/include/media/"
+        ln -sfr "kernel/nvidia/max96712.h" "${BUILD_SRCS}/kernel/nvidia/include/media/"
     else
         # max96712 header
-        ln -f nvidia-oot/max96712.h "${BUILD_SRCS}/nvidia-oot/include/media/"
+        ln -sfr "nvidia-oot/max96712.h" "${BUILD_SRCS}/nvidia-oot/include/media/"
         if version_lt "$JETPACK_VERSION" "7.0"; then
             # jp6 overlay
-            ln -f hardware/realsense/tegra234-camera-d4xx-overlay*.dts "${BUILD_SRCS}/hardware/nvidia/t23x/nv-public/overlay/"
-            ln -f ${BUILD_SRCS}/hardware/nvidia/t23x/nv-public/include/platforms/dt-bindings/tegra234-p3737-0000+p3701-0000.h \
-                    ${BUILD_SRCS}/$KERNEL_DIR/include/dt-bindings/
+            ln -sfr "hardware/realsense/tegra234-camera-d4xx-overlay*.dts" "${BUILD_SRCS}/hardware/nvidia/t23x/nv-public/overlay/"
+            ln -sfr "hardware/nvidia/t23x/nv-public/include/platforms/dt-bindings/tegra234-p3737-0000+p3701-0000.h" \
+                    "${BUILD_SRCS}/$KERNEL_DIR/include/dt-bindings/"
         else
-            # Copy tegra264-gpio.h for Thor overlay compilation if not already present
+            # link tegra264-gpio.h for Thor overlay compilation if not already present
             if [[ ! -f "${BUILD_SRCS}/$KERNEL_DIR/include/dt-bindings/gpio/tegra264-gpio.h" ]]; then
-                ln -f "${BUILD_SRCS}/$KERNEL_DIR/3rdparty/canonical/linux-noble/include/dt-bindings/gpio/tegra264-gpio.h" \
+                ln -sfr "${BUILD_SRCS}/$KERNEL_DIR/3rdparty/canonical/linux-noble/include/dt-bindings/gpio/tegra264-gpio.h" \
                     "${BUILD_SRCS}/$KERNEL_DIR/include/dt-bindings/gpio/" 2>/dev/null || true
             fi
-            ln -f hardware/realsense/tegra264-camera-d4xx-overlay*.dtso "${BUILD_SRCS}/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/"
+            ln -sfr hardware/realsense/tegra264-camera-d4xx-overlay*.dtso "${BUILD_SRCS}/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/"
         fi
     fi
 

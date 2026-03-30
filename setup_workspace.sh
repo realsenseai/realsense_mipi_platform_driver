@@ -105,10 +105,10 @@ else
     ./scripts/sync-sources.sh -t $L4T_VERSION -d ${BUILD_SRCS} -k
 fi
 
-# copy Makefile for jp6
+# link Makefile for jp6
 if ! version_lt "$JETPACK_VERSION" "6.0"; then
-    cp ./nvidia-oot/Makefile "${BUILD_SRCS}/"
-    cp ./$KERNEL_DIR/Makefile "${BUILD_SRCS}/kernel/"
+    ln -sfr ./nvidia-oot/Makefile "${BUILD_SRCS}/"
+    ln -sfr ./$KERNEL_DIR/Makefile "${BUILD_SRCS}/kernel/"
 fi
 
 # remove BUILD_NUMBER env dependency kernel vermagic
