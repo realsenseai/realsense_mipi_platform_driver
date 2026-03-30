@@ -130,7 +130,7 @@ if [[ "$ACTION" = "apply" ]]; then
     # Stage all modified files after patching
     git -C "${BUILD_SRCS}/$D4XX_SRC_DST" add drivers/media/i2c/d4xx.c
     git -C "${BUILD_SRCS}/$D4XX_SRC_DST" add -u
-    [[ -d "${BUILD_SRCS}/$KERNEL_DIR" ]] && git -C "${BUILD_SRCS}/$KERNEL_DIR" add -A
+    [[ -d "${BUILD_SRCS}/$KERNEL_DIR" ]] && git -C "${BUILD_SRCS}/$KERNEL_DIR" add -u
     if [[ -d "${BUILD_SRCS}/hardware/nvidia/t23x/nv-public" ]]; then
         git -C "${BUILD_SRCS}/hardware/nvidia/t23x/nv-public" add -A
     fi

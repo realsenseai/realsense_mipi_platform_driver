@@ -87,6 +87,8 @@ if version_lt "$JETPACK_VERSION" "6.0"; then
     make -j$(nproc)
     make -j$(nproc) modules
     make dtbs
+	make install
+	make modules_install
     make dtbs_install
     D4XX_CMD_FILE="$(find "$TEGRA_KERNEL_OUT" -name '.d4xx.o.cmd' 2>/dev/null | head -1)"
 else
@@ -114,17 +116,16 @@ else
         make -C kernel
     fi
     make modules
+	make -C kernel install
+	make modules_install
     D4XX_CMD_FILE="$BUILD_SRCS/nvidia-oot/drivers/media/i2c/.d4xx.o.cmd"
     if version_lt "$JETPACK_VERSION" "7.0"; then
         make dtbs
-        cp $BUILD_SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra2[36]4-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/dtb
+        cp $BUILD_SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra2[36]4-camera-d4xx-overlay*.dtbo ${INSTALL_DTBS_PATH}
     else
-        cp $BUILD_SRCS/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/tegra2[36]4-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/dtb
+        cp $BUILD_SRCS/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/tegra2[36]4-camera-d4xx-overlay*.dtbo {INSTALL_DTBS_PATH}
     fi
 fi
-
-make install
-make modules_install
 
 # Generate .vscode/compile_commands.json from the cached module build artefact
 echo "Generating .vscode/compile_commands.json..."
