@@ -1,0 +1,40 @@
+From af28f338321c0e622f4a63abed77f12f4bd12ffb Mon Sep 17 00:00:00 2001
+From: Nikolai-L <nlyskov@realsenseai.com>
+Date: Tue, 31 Mar 2026 14:08:14 +0300
+Subject: [PATCH] media: i2c: max9295/max9296: change regmap cache type to
+ REGCACHE_NONE
+
+---
+ drivers/media/i2c/max9295.c | 2 +-
+ drivers/media/i2c/max9296.c | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/media/i2c/max9295.c b/drivers/media/i2c/max9295.c
+index 2ea0ee461..fa5c2ef71 100644
+--- a/drivers/media/i2c/max9295.c
++++ b/drivers/media/i2c/max9295.c
+@@ -542,7 +542,7 @@ EXPORT_SYMBOL(max9295_sdev_unpair);
+ static  struct regmap_config max9295_regmap_config = {
+ 	.reg_bits = 16,
+ 	.val_bits = 8,
+-	.cache_type = REGCACHE_RBTREE,
++	.cache_type = REGCACHE_NONE,
+ };
+ 
+ struct reg_pair {
+diff --git a/drivers/media/i2c/max9296.c b/drivers/media/i2c/max9296.c
+index b4a18c5a3..d5498c5d3 100644
+--- a/drivers/media/i2c/max9296.c
++++ b/drivers/media/i2c/max9296.c
+@@ -1070,7 +1070,7 @@ static int max9296_parse_dt(struct max9296 *priv,
+ static struct regmap_config max9296_regmap_config = {
+ 	.reg_bits = 16,
+ 	.val_bits = 8,
+-	.cache_type = REGCACHE_RBTREE,
++	.cache_type = REGCACHE_NONE,
+ };
+ 
+ static int max9296_probe(struct i2c_client *client,
+-- 
+2.43.0
+
