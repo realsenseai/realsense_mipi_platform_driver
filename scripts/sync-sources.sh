@@ -193,7 +193,7 @@ function DownloadAndSync {
 				return 4
 			fi
 		else
-                        echo -e "\e[31mCouldn't find tag $TAG. $2 source sync to tag $TAG failed!\e[0m"
+			echo -e "\e[31mCouldn't find tag $TAG. $2 source sync to tag $TAG failed!\e[0m"
 			return 5
 		fi
 }
