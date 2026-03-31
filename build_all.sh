@@ -123,7 +123,7 @@ else
         make dtbs
         cp $BUILD_SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra2[36]4-camera-d4xx-overlay*.dtbo ${INSTALL_DTBS_PATH}
     else
-        cp $BUILD_SRCS/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/tegra2[36]4-camera-d4xx-overlay*.dtbo {INSTALL_DTBS_PATH}
+        cp $BUILD_SRCS/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/tegra2[36]4-camera-d4xx-overlay*.dtbo ${INSTALL_DTBS_PATH}
     fi
 fi
 
