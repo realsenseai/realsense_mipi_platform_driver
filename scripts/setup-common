@@ -22,7 +22,6 @@ KERNEL_DIR="kernel/kernel-5.10"
 LICENSE=release
 export ARCH=arm64
 BUILD_SRCS="sources_${JP_INPUT_VERSION}"
-export NVIDIA_MODULES=update
 
 function version_lt {
 	IFS='.' read -r -a v1 <<< "$1"
@@ -65,8 +64,6 @@ elif ! version_lt "${JP_INPUT_VERSION}" 5.0; then
 	KERNEL_DIR="kernel/kernel-5.10"
 	JETPACK_VERSION="5.x"
 	L4T_VERSION=jetson_"${REVISION}"
-	NVIDIA_MODULES=kernel
-	export USB_DRIVER_BUILD=true
 elif ! version_lt "${JP_INPUT_VERSION}" 4.0; then
 	case "${JP_INPUT_VERSION}" in
 		4.6.1) REVISION=32.7.1;;
@@ -75,8 +72,6 @@ elif ! version_lt "${JP_INPUT_VERSION}" 4.0; then
 	JETPACK_VERSION="4.x"
 	L4T_VERSION="tegra-l4t-r${REVISION}"
 	LICENSE=T186
-	NVIDIA_MODULES=kernel
-	export USB_DRIVER_BUILD=true
 fi
 if [[ -z $REVISION ]]; then
 	echo "Wrong JetPack version $JP_INPUT_VERSION! Supported version: ${SUPPORTED_JP}"
