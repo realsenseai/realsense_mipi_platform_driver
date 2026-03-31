@@ -114,7 +114,7 @@ if [[ "$ACTION" = "apply" ]]; then
         ln -sfr "nvidia-oot/max96712.h" "${BUILD_SRCS}/nvidia-oot/include/media/"
         if version_lt "$JETPACK_VERSION" "7.0"; then
             # jp6 overlay
-            ln -sfr "hardware/realsense/tegra234-camera-d4xx-overlay*.dts" "${BUILD_SRCS}/hardware/nvidia/t23x/nv-public/overlay/"
+            ln -sfr hardware/realsense/tegra234-camera-d4xx-overlay*.dts "${BUILD_SRCS}/hardware/nvidia/t23x/nv-public/overlay/"
             ln -sfr "${BUILD_SRCS}/hardware/nvidia/t23x/nv-public/include/platforms/dt-bindings/tegra234-p3737-0000+p3701-0000.h" \
                     "${BUILD_SRCS}/$KERNEL_DIR/include/dt-bindings/"
         else
