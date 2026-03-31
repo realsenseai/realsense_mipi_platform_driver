@@ -8,10 +8,7 @@
 #include <dt-bindings/gpio/tegra234-gpio.h>
 #include <dt-bindings/tegra234-p3737-0000+p3701-0000.h>
 
-#define CAM0_PWDN	TEGRA234_MAIN_GPIO(H, 6)  //MAX96712_1 PWDN
-#define CAM1_PWDN	TEGRA234_MAIN_GPIO(H, 3)  //MAX96712_2 PWDN
 #define CAM2_PWDN	TEGRA234_MAIN_GPIO(AC, 0) //MAX96712_3 PWDN
-#define CAM3_PWDN	TEGRA234_MAIN_GPIO(AC, 1) //MAX96712_4 PWDN
 #define CAM12V_POC	TEGRA234_MAIN_GPIO(AC, 7)
 
 /* camera control gpio definitions */
@@ -30,48 +27,6 @@
 					regulator-max-microvolt = <12000000>;
 					gpio = <&gpio CAM12V_POC GPIO_ACTIVE_HIGH>;
 					enable-active-high;
-					regulator-always-on;
-					regulator-boot-on;
-			};
-			vdd_cam0_pwdn: regulator-vdd-cam0-pwdn {
-					compatible = "regulator-fixed";
-					regulator-name = "vdd-cam0-pwdn";
-					regulator-min-microvolt = <1800000>;
-					regulator-max-microvolt = <1800000>;
-					gpio = <&gpio CAM0_PWDN GPIO_ACTIVE_HIGH>;
-					enable-active-high;
-					regulator-always-on;
-					regulator-boot-on;
-			};
-			vdd_cam1_pwdn: regulator-vdd-cam1-pwdn {
-					compatible = "regulator-fixed";
-					regulator-name = "vdd-cam1-pwdn";
-					regulator-min-microvolt = <1800000>;
-					regulator-max-microvolt = <1800000>;
-					gpio = <&gpio CAM1_PWDN GPIO_ACTIVE_HIGH>;
-					enable-active-high;
-					regulator-always-on;
-					regulator-boot-on;
-			};
-			vdd_cam2_pwdn: regulator-vdd-cam2-pwdn {
-					compatible = "regulator-fixed";
-					regulator-name = "vdd-cam2-pwdn";
-					regulator-min-microvolt = <1800000>;
-					regulator-max-microvolt = <1800000>;
-					gpio = <&gpio CAM2_PWDN GPIO_ACTIVE_HIGH>;
-					enable-active-high;
-					regulator-always-on;
-					regulator-boot-on;
-			};
-			vdd_cam3_pwdn: regulator-vdd-cam3-pwdn {
-					compatible = "regulator-fixed";
-					regulator-name = "vdd-cam3-pwdn";
-					regulator-min-microvolt = <1800000>;
-					regulator-max-microvolt = <1800000>;
-					gpio = <&gpio CAM3_PWDN GPIO_ACTIVE_HIGH>;
-					enable-active-high;
-					regulator-always-on;
-					regulator-boot-on;
 			};
 		};
 	};
@@ -88,7 +43,7 @@
 						d4xx_vi_in0: endpoint {
 							status = "okay";
 							vc-id = <0>;
-							port-index = <0>;
+							port-index = <4>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out0>;
 						};
@@ -99,7 +54,7 @@
 						d4xx_vi_in1: endpoint {
 							status = "okay";
 							vc-id = <1>;
-							port-index = <0>;
+							port-index = <4>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out1>;
 						};
@@ -110,7 +65,7 @@
 						d4xx_vi_in2: endpoint {
 							status = "okay";
 							vc-id = <2>;
-							port-index = <0>;
+							port-index = <4>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out2>;
 						};
@@ -121,7 +76,7 @@
 						d4xx_vi_in3: endpoint {
 							status = "okay";
 							vc-id = <3>;
-							port-index = <0>;
+							port-index = <4>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out3>;
 						};
@@ -143,7 +98,7 @@
 									reg = <0>;
 									d4xx_csi_in0: endpoint@0 {
 										status = "okay";
-										port-index = <0>;
+										port-index = <4>;
 										bus-width = <2>;
 										remote-endpoint = <&ds5_0_out>;
 									};
@@ -168,7 +123,7 @@
 									reg = <0>;
 									d4xx_csi_in1: endpoint@2 {
 										status = "okay";
-										port-index = <0>;
+										port-index = <4>;
 										bus-width = <2>;
 										remote-endpoint = <&ds5_1_out>;
 									};
@@ -193,7 +148,7 @@
 									reg = <0>;
 									d4xx_csi_in2: endpoint@4 {
 										status = "okay";
-										port-index = <0>;
+										port-index = <4>;
 										bus-width = <2>;
 										remote-endpoint = <&ds5_2_out>;
 									};
@@ -218,7 +173,7 @@
 									reg = <0>;
 									d4xx_csi_in3: endpoint@6 {
 										status = "okay";
-										port-index = <0>;
+										port-index = <4>;
 										bus-width = <2>;
 										remote-endpoint = <&ds5_3_out>;
 									};
@@ -245,7 +200,7 @@
 						compatible = "maxim,max96712";
 						csi-mode = "2x4";
 						channel = "a";
-						//pwdn-gpios = <&gpio CAM0_PWDN GPIO_ACTIVE_HIGH>;
+						pwdn-gpios = <&gpio CAM2_PWDN GPIO_ACTIVE_HIGH>;
 					};
 
 					ser_a: max9295_a@40 {
@@ -262,7 +217,7 @@
 						override_reg = <0x1a>;
 						compatible = "intel,d4xx";
 						use_sensor_mode_id = "true";
-						//vcc-supply = <&vdd_cam12v_poc>;
+						vcc-supply = <&vdd_cam12v_poc>;
 						cam-type = "IMU";
 						nvidia,gmsl-ser-device = <&ser_a>;
 						nvidia,gmsl-dser-device = <&dser>;
@@ -310,7 +265,7 @@
 						override_reg = <0x1a>;
 						compatible = "intel,d4xx";
 						use_sensor_mode_id = "true";
-						//vcc-supply = <&vdd_cam12v_poc>;
+						vcc-supply = <&vdd_cam12v_poc>;
 						cam-type = "Y8";
 						nvidia,gmsl-ser-device = <&ser_a>;
 						nvidia,gmsl-dser-device = <&dser>;
@@ -359,7 +314,7 @@
 						override_reg = <0x1a>;
 						compatible = "intel,d4xx";
 						use_sensor_mode_id = "true";
-						//vcc-supply = <&vdd_cam12v_poc>;
+						vcc-supply = <&vdd_cam12v_poc>;
 						cam-type = "RGB";
 						nvidia,gmsl-ser-device = <&ser_a>;
 						nvidia,gmsl-dser-device = <&dser>;
@@ -406,7 +361,7 @@
 						reg = <0x1a>;
 						compatible = "intel,d4xx";
 						use_sensor_mode_id = "true";
-						//vcc-supply = <&vdd_cam12v_poc>;
+						vcc-supply = <&vdd_cam12v_poc>;
 						cam-type = "Depth";
 						nvidia,gmsl-ser-device = <&ser_a>;
 						nvidia,gmsl-dser-device = <&dser>;

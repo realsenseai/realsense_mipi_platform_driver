@@ -495,7 +495,7 @@ index 8e237eef..c4577bbb 100644
 +	struct reg_pair map_phy_opt[] =
 +	{
 +		/* MIPI D-PHY Config */
-+		{MAX96712_MIPI_PHY0_ADDR, 0x04}, //0x8A0
++		{MAX96712_MIPI_PHY0_ADDR, 0x24}, //0x8A0
 +		{MAX96712_MIPI_TX10_ADDR, 0x50}, //0x94a - 2 MIPI lanes (Master controller for PHYA), and enable extended VC
 +		{MAX96712_MIPI_PHY3_ADDR, 0xe4}, //0x8A3, Lower phys to lower lanes
 +
