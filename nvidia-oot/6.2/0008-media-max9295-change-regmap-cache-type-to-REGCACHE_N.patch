@@ -1,0 +1,25 @@
+From 4777c225eac754a2b71265809659d888d37e3b84 Mon Sep 17 00:00:00 2001
+From: Nikolai-L <nlyskov@realsenseai.com>
+Date: Thu, 26 Mar 2026 14:09:07 +0200
+Subject: [PATCH] media: max9295: change regmap cache type to REGCACHE_NONE
+
+---
+ drivers/media/i2c/max9295.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/media/i2c/max9295.c b/drivers/media/i2c/max9295.c
+index 428d505b..cac4e1a2 100644
+--- a/drivers/media/i2c/max9295.c
++++ b/drivers/media/i2c/max9295.c
+@@ -496,7 +496,7 @@ EXPORT_SYMBOL(max9295_sdev_unpair);
+ static  struct regmap_config max9295_regmap_config = {
+ 	.reg_bits = 16,
+ 	.val_bits = 8,
+-	.cache_type = REGCACHE_RBTREE,
++	.cache_type = REGCACHE_NONE,
+ };
+ 
+ struct reg_pair {
+-- 
+2.43.0
+
