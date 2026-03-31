@@ -6702,14 +6702,9 @@ static int ds5_probe(struct i2c_client *c
 	if (ret < 0)
 		goto e_chardev;
 
-/*	regulators? clocks?
- *	devm_regulator_bulk_get(&c->dev, DS5_N_SUPPLIES, state->supplies);
- *	state->clock = devm_clk_get(&c->dev, DS5_CLK_NAME);
- *	if (IS_ERR(state->clock)) {
- *		ret = -EPROBE_DEFER;
- *		goto err;
- *	}
- */
+	dev_info(&c->dev, "%s: driver version: %s\n", __func__,
+		THIS_MODULE->version ? THIS_MODULE->version : "N/A");
+
 #ifdef CONFIG_SYSFS
 	/* Custom sysfs attributes */
 	/* create the sysfs file group */

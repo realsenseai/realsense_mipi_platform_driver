@@ -206,17 +206,10 @@
 								reset-gpios = <&gpio CAM0_RST_L GPIO_ACTIVE_HIGH>;
 							};
 
-							ser_prim: max9295_prim@40 {
+							ser_a: max9295_a@40 {
 								status = "okay";
+								compatible = "maxim,max9295";
 								reg = <0x40>;
-								compatible = "maxim,max9295";
-								is-prim-ser;
-							};
-
-							ser_a: max9295_a@42 {
-								status = "okay";
-								compatible = "maxim,max9295";
-								reg = <0x42>;
 								maxim,gmsl-dser-device = <&dser>;
 							};
 
