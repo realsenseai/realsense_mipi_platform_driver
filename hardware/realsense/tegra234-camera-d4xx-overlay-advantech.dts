@@ -201,6 +201,7 @@
 						csi-mode = "2x4";
 						channel = "a";
 						pwdn-gpios = <&gpio CAM2_PWDN GPIO_ACTIVE_HIGH>;
+						force_clk0;
 					};
 
 					ser_a: max9295_a@40 {
