@@ -24,16 +24,16 @@ fi
 . scripts/setup-common
 
 # set JP4 devicetree
-if [[ "$JETPACK_VERSION" == "4.6.1" ]]; then
+if [[ "$JETPACK_VERSION" == "4.x" ]]; then
     JP5_D4XX_DTSI="tegra194-camera-d4xx.dtsi"
 fi
-if [[ "$JETPACK_VERSION" == "6.x" ]]; then
-    D4XX_SRC_DST=nvidia-oot
-else
+if [[ "$JETPACK_VERSION" == "4.x" || "$JETPACK_VERSION" == "5.x" ]]; then
     D4XX_SRC_DST=kernel/nvidia
+else
+    D4XX_SRC_DST=nvidia-oot
 fi
 
-TARGET="sources_${JETPACK_VERSION}"
+TARGET="sources_${JP_INPUT_VERSION}"
 [[ -n "$2" ]] && TARGET="$2"
 
 # NVIDIA SDK Manager's JetPack 4.6.1 source_sync.sh doesn't set the right folder name, it mismatches with the direct tar
@@ -53,8 +53,8 @@ apply_external_patches "$1" "${KERNEL_DIR}"
 
 if [[ "$JETPACK_VERSION" == "6.x" ]]; then
     apply_external_patches "$JETPACK_VERSION" "hardware/nvidia/t23x/nv-public" "$2"
-else
-    apply_external_patches "$1" "hardware/nvidia/platform/t19x/galen/kernel-dts" "$2"
+elif [[ "$JETPACK_VERSION" != "7.x" ]]; then
+    apply_external_patches "$JETPACK_VERSION" "hardware/nvidia/platform/t19x/galen/kernel-dts" "$2"
 fi
 
 # For a common driver for JP4 + JP5 we override the i2c driver and ignore the previous that was created from patches
@@ -64,7 +64,7 @@ if [[ "$JETPACK_VERSION" == "6.x" ]]; then
     cp hardware/realsense/tegra234-camera-d4xx-overlay*.dts "$TARGET/hardware/nvidia/t23x/nv-public/overlay/"
     # max96712 header
     cp nvidia-oot/max96712.h "$TARGET/nvidia-oot/include/media/"
-else
+elif [[ "$JETPACK_VERSION" == "4.x" || "$JETPACK_VERSION" == "5.x" ]]; then
     cp "hardware/realsense/${JP5_D4XX_DTSI}" "$TARGET/hardware/nvidia/platform/t19x/galen/kernel-dts/common/tegra194-camera-d4xx.dtsi"
     # max96712 header
     cp kernel/nvidia/max96712.h "$TARGET/kernel/nvidia/include/media/"
