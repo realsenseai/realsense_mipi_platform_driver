@@ -4246,6 +4246,11 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 	state->dser_ops->power_off(state->dser_dev);
 	/* For now no separate power on required for serializer device */
 	state->dser_ops->power_on(state->dser_dev);
+	/* Allow deserializer to stabilize after power cycle before I2C access.
+	 * With REGCACHE_NONE the first register write goes straight to I2C;
+	 * if the chip is still booting after XCLR deassert the write fails.
+	 */
+	msleep(600);
 
 	dev_dbg(dev, "Setup SERDES addressing and control pipeline\n");
 	/* setup serdes addressing and control pipeline */

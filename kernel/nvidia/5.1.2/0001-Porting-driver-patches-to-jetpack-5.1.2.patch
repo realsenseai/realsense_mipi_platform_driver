@@ -241,12 +241,15 @@ index 5f48c9b9f..316e687a1 100644
  
  #define MAX9296_PIPE_X_ST_SEL_ADDR 0x50
  
-@@ -260,6 +262,9 @@ void max9296_power_off(struct device *dev)
+@@ -260,6 +262,12 @@ void max9296_power_off(struct device *dev)
  	mutex_lock(&priv->lock);
  	priv->pw_ref--;
- 
-+	if (priv->pw_ref < 0)
+
++	if (priv->pw_ref < 0) {
 +		priv->pw_ref = 0;
++		mutex_unlock(&priv->lock);
++		return;
++	}
 +
  	if (priv->pw_ref == 0) {
  		/* enter reset mode: XCLR */
