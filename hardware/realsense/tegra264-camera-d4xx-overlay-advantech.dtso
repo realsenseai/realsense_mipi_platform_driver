@@ -8,7 +8,7 @@
 
 /* camera control gpio definitions */
 / {
-	overlay-name = "Jetson RealSense Camera D4xx with max96712 for Thor";
+	overlay-name = "Jetson RealSense Camera D4xx with max96712 Advantech for Thor";
 	jetson-header-name = "Jetson AGX CSI Connector";
 	compatible = "nvidia,p4071-0000+p3834-0008", "nvidia,p3834-0008", "nvidia,tegra264";
 
@@ -25,7 +25,7 @@
 						d4xx_vi_in0: endpoint {
 							status = "okay";
 							vc-id = <0>;
-							port-index = <4>;
+							port-index = <0>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out0>;
 						};
@@ -36,7 +36,7 @@
 						d4xx_vi_in1: endpoint {
 							status = "okay";
 							vc-id = <1>;
-							port-index = <4>;
+							port-index = <0>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out1>;
 						};
@@ -47,7 +47,7 @@
 						d4xx_vi_in2: endpoint {
 							status = "okay";
 							vc-id = <2>;
-							port-index = <4>;
+							port-index = <0>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out2>;
 						};
@@ -58,7 +58,7 @@
 						d4xx_vi_in3: endpoint {
 							status = "okay";
 							vc-id = <3>;
-							port-index = <4>;
+							port-index = <0>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out3>;
 						};
@@ -146,7 +146,7 @@
 									reg = <0>;
 									d4xx_csi_in0: endpoint@0 {
 										status = "okay";
-										port-index = <4>;
+										port-index = <0>;
 										bus-width = <2>;
 										remote-endpoint = <&ds5_0_out>;
 									};
@@ -171,7 +171,7 @@
 									reg = <0>;
 									d4xx_csi_in1: endpoint@2 {
 										status = "okay";
-										port-index = <4>;
+										port-index = <0>;
 										bus-width = <2>;
 										remote-endpoint = <&ds5_1_out>;
 									};
@@ -196,7 +196,7 @@
 									reg = <0>;
 									d4xx_csi_in2: endpoint@4 {
 										status = "okay";
-										port-index = <4>;
+										port-index = <0>;
 										bus-width = <2>;
 										remote-endpoint = <&ds5_2_out>;
 									};
@@ -221,7 +221,7 @@
 									reg = <0>;
 									d4xx_csi_in3: endpoint@6 {
 										status = "okay";
-										port-index = <4>;
+										port-index = <0>;
 										bus-width = <2>;
 										remote-endpoint = <&ds5_3_out>;
 									};
@@ -240,7 +240,7 @@
 				};
 
 				i2c@810c6a0000 {
-					clock-frequency = <400000>;
+					clock-frequency = <100000>;
 
 					dser: max96712@29 {
 						status = "okay";
