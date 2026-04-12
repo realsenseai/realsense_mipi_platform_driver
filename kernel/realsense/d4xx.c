@@ -545,7 +545,6 @@ struct ds5_dev {
 	bool ir_streaming;
 	bool rgb_streaming;
 	bool imu_streaming;
-	atomic_t ds5_probe_reset_once;
 };
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
@@ -3512,7 +3511,6 @@ static void ds5_init_ds5_dev(struct ds5 *state, struct ds5_dev *ds5_dev)
 	state->ds5_dev = ds5_dev;
 	mutex_lock(&ds5_dev->lock);
 	ds5_dev->ds5_primary = state;
-	atomic_set(&ds5_dev->ds5_probe_reset_once, 0);
 	ds5_dev->cached_device_type = DS5_DEVICE_TYPE_UNKNOWN;
 	mutex_unlock(&ds5_dev->lock);
 	ds5_reset_streaming_flags(ds5_dev);
@@ -6284,40 +6282,14 @@ static int ds5_probe(struct i2c_client *c
 			goto e_regulator;
 	}
 
-	if (atomic_cmpxchg(&state->ds5_dev->ds5_probe_reset_once, 0, 1) == 0) {
-		dev_info(&c->dev, "%s(): first probe instance, running HW reset recovery\n",
-			__func__);
-
-		/* Initialize sensor pipe_ids to PIPE_NOT_CONFIGURED before
-		 * hw_reset_with_recovery, otherwise the kzalloc default of 0
-		 * causes a spurious release_pipe(0) in step 2.
-		 */
-		state->depth.sensor.pipe_id = PIPE_NOT_CONFIGURED;
-		state->ir.sensor.pipe_id = PIPE_NOT_CONFIGURED;
-		state->rgb.sensor.pipe_id = PIPE_NOT_CONFIGURED;
-		state->imu.sensor.pipe_id = PIPE_NOT_CONFIGURED;
-
-		ret = ds5_hw_reset_with_recovery(state);
-		if (ret < 0) {
-			dev_err(&c->dev, "%s(): probe HW reset recovery failed: %d\n",
-				__func__, ret);
-			goto e_chardev;
-		}
-
-		/* Wait after HW reset before touching MAX9295 serializer registers.
-		 * This delay helps ensure the device is ready.
-		 */
-		msleep(200);
-	}
-
-	/* Verify post-reset format-discovery readiness.
+	/* Verify format-discovery readiness.
 	 * FW_VERSION becomes readable earlier than DS5_DEVICE_TYPE, while later
 	 * probe code depends on DEVICE_TYPE to pick the correct format tables.
 	 */
 	ret = ds5_wait_device_type(state, &rec_state);
 	if (ret < 0) {
 		dev_err(&c->dev,
-			"%s(): device type not ready after reset: %d (last val 0x%x)\n",
+			"%s(): device type is not valid: %d (last val 0x%x)\n",
 			__func__, ret, rec_state);
 		goto e_chardev;
 	}
