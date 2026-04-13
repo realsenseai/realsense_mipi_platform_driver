@@ -2696,6 +2696,81 @@ static int ds5_hw_reset_serdes_recovery(struct ds5 *state, bool force_phase2)
 #endif /* CONFIG_VIDEO_D4XX_SERDES */
 
 /*
+ * ds5_csr_read32 - Read a 32-bit CSR via HWMC DMRD (opcode 0x01).
+ * @state: Driver state
+ * @addr:  LCP address (e.g. 0x12104 for BootRstSource)
+ * @val:   Output 32-bit value
+ *
+ * Used for post-reset diagnostics — CSR registers in the 0x12000-0x12FFF
+ * range survive HWMC RstMost (and most survive WDT-induced resets too),
+ * so they let us see WDT/reset state from the previous boot session.
+ */
+static int ds5_csr_read32(struct ds5 *state, u32 addr, u32 *val)
+{
+	struct hwm_cmd dmrd = {
+		.header = 0x14,
+		.magic_word = 0xCDAB,
+		.opcode = 0x01,            /* DMRD */
+		.param1 = addr,
+		.param2 = addr + 4,        /* end address (exclusive), reads 1 dword */
+	};
+	u8 resp[16] = { 0 };
+	u16 resp_len = 0;
+	int ret;
+
+	ret = ds5_hwmc_send(state, sizeof(dmrd), &dmrd);
+	if (ret)
+		return ret;
+	ret = ds5_get_hwmc(state, resp, sizeof(resp), &resp_len);
+	if (ret)
+		return ret;
+	if (resp_len < 4)
+		return -EBADMSG;
+
+	*val = resp[0] | (resp[1] << 8) | (resp[2] << 16) | (resp[3] << 24);
+	return 0;
+}
+
+/* CSR offsets per DS5-B0 spec.  All survive HWMC RstMost; WDT counters
+ * and BootRstSource also survive WDT-induced full chip reset. */
+#define DS5_CSR_BOOT_RST_SOURCE		0x12104	/* 1=WDT, 2=RstMost, 4=RstProc, 0=POR */
+#define DS5_CSR_WDT_CURR_COUNT_0	0x12084
+#define DS5_CSR_WDT_CURR_COUNT_1	0x12088
+#define DS5_CSR_WDT_CURR_COUNT_2	0x1208C
+#define DS5_CSR_WDT_STATUS		0x1209C	/* count of WDT chip resets since last kick */
+
+/*
+ * ds5_log_post_reset_diag - Log WDT/reset state captured from CSRs.
+ *
+ * After HWMC reset, reads BootRstSource and WDT counter state to determine
+ * whether the previous reset was caused by a WDT cascade vs the HWMC reset
+ * we issued, and whether the WDT cascade is partway through.
+ */
+static void ds5_log_post_reset_diag(struct ds5 *state)
+{
+	u32 boot_src = 0, wdt_status = 0;
+	u32 c0 = 0, c1 = 0, c2 = 0;
+	int ret;
+
+	ret = ds5_csr_read32(state, DS5_CSR_BOOT_RST_SOURCE, &boot_src);
+	if (ret) {
+		dev_warn(&state->client->dev,
+			"%s(): CSR diag read failed (%d) — DMRD opcode unsupported?\n",
+			__func__, ret);
+		return;
+	}
+	ds5_csr_read32(state, DS5_CSR_WDT_STATUS, &wdt_status);
+	ds5_csr_read32(state, DS5_CSR_WDT_CURR_COUNT_0, &c0);
+	ds5_csr_read32(state, DS5_CSR_WDT_CURR_COUNT_1, &c1);
+	ds5_csr_read32(state, DS5_CSR_WDT_CURR_COUNT_2, &c2);
+
+	dev_info(&state->client->dev,
+		"%s(): post-reset diag: BootRstSrc=%u (1=WDT,2=RstMost,4=RstProc,0=POR) "
+		"wdtStatus=%u curr0=0x%08x curr1=0x%08x curr2=0x%08x\n",
+		__func__, boot_src & 0x7, wdt_status & 0xff, c0, c1, c2);
+}
+
+/*
  * ds5_hw_reset_with_recovery - Perform hardware reset with GMSL recovery
  * @state: Driver state structure
  *
@@ -2936,6 +3011,8 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 		dev_type,
 		(state->fw_version >> 8) & 0xff, state->fw_version & 0xff,
 		(state->fw_build >> 8) & 0xff, state->fw_build & 0xff);
+
+	ds5_log_post_reset_diag(state);
 
 	WRITE_ONCE(state->ds5_dev->last_reset_jiffies, jiffies);
 
