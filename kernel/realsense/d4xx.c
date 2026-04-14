@@ -2351,7 +2351,7 @@ static int ds5_set_calibration_data(struct ds5 *state,
 }
 
 /* HW reset timeout and polling parameters */
-#define DS5_HW_RESET_INITIAL_DELAY_MS	1500
+#define DS5_HW_RESET_INITIAL_DELAY_MS	500
 #define DS5_HW_RESET_POLL_INTERVAL_MS	200
 #define DS5_HW_RESET_TIMEOUT_MS		10000
 #define DS5_HW_RESET_MAX_RETRIES	(DS5_HW_RESET_TIMEOUT_MS / DS5_HW_RESET_POLL_INTERVAL_MS)
