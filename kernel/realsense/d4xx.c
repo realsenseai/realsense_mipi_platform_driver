@@ -547,7 +547,6 @@ struct ds5_dev {
 	bool imu_streaming;
 };
 
-
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 static DEFINE_MUTEX(serdes_lock__);
 static bool ds5_slots_inited;
@@ -1956,10 +1955,10 @@ static int ds5_configure(struct ds5 *state)
 		mutex_lock(&serdes_lock__);
 		ret = ds5_setup_pipeline(state, data_type1, data_type2,
 					 sensor->pipe_id, vc_id);
-		mutex_unlock(&serdes_lock__);
 		// reset data path when switching to Y12I
 		if (is_calib)
 			state->dser_ops->reset_oneshot(state->dser_dev);
+		mutex_unlock(&serdes_lock__);
 		if (ret < 0)
 			return ret;
 		dev_dbg(&state->client->dev,
@@ -1977,6 +1976,9 @@ static int ds5_configure(struct ds5 *state)
 	vc_id = (state->is_depth) ? 0 : (state->is_rgb) ? 1 : (state->is_y8) ? 2 : 3;
 #endif
 
+	dev_dbg(&state->client->dev,
+		"sensor %p: dt_value=0x%x, cached_dt_value=0x%x, cached_fps_value=%u, framerate=%u\n",
+		sensor, dt_value, sensor->cached_dt_value, sensor->cached_fps_value, sensor->config.framerate);
 	/* Determine desired data-type (special cases for depth/IR), then write
 	 * it only when it differs from cached value. This avoids overwriting a
 	 * correct DT with 0 (which caused INVALID_DT on subsequent attempts).
@@ -2412,8 +2414,6 @@ static void ds5_reset_streaming_flags(struct ds5_dev *ds5_dev)
 	ds5_dev->imu_streaming = false;
 	mutex_unlock(&ds5_dev->lock);
 }
-
-static int ds5_gmsl_serdes_setup(struct ds5 *state);
 
 /*
  * ds5_hw_reset_with_recovery - Perform hardware reset with readiness polling
