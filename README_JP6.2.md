@@ -1,6 +1,6 @@
 # RealSense™ camera driver for GMSL* interface
 
-# D457 MIPI on NVIDIA® Jetson AGX Orin™ JetPack 6.x 
+# D4XX MIPI on NVIDIA® Jetson AGX Orin™ JetPack 6.x 
 The RealSense™ MIPI platform driver enables the user to control and stream RealSense™ 3D MIPI cameras.
 The system shall include:
 * NVIDIA® Jetson™ platform Supported JetPack versions are:
@@ -99,13 +99,10 @@ Note: dev_dbg() log support will not be enabled by default. If needed, run the `
 ```
 
 ## Archive JetPack 6.x build results (optional)
-Assuming 6.2 (or 6.1) build the kernel version is 5.15.148-tegra. For 6.0 the kernel version is 5.15.136-tegra.
+Assuming 6.2 (or 6.1) build the kernel version is 5.15.148-tegra.
 - kernel image : `images/6.2/rootfs/boot/Image`
 - dtb: `images/6.2/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb`
-- dtb overlay: `images/6.2/rootfs/boot/tegra234-camera-d4xx-overlay.dtbo`
-- dtb dual camera overlay: `images/6.2/rootfs/boot/tegra234-camera-d4xx-overlay-dual.dtbo`
-- dtb fg12-16ch camera overlay: `images/6.0/rootfs/boot/tegra234-camera-d4xx-overlay-fg12-16ch.dtbo`
-- dtb fg12-16ch dual camera overlay: `images/6.0/rootfs/boot/tegra234-camera-d4xx-overlay-fg12-16ch-dual.dtbo`
+- dtb overlays: `images/6.2/rootfs/boot/tegra234-camera-d4xx-overlay*.dtbo`
 - kernel modules: `images/6.2/rootfs/lib/modules/5.15.148-tegra`
 
 ## Backup JetPack 6.2 boot configuration and drivers (optional)
@@ -156,13 +153,38 @@ sudo update-initramfs -u -k 5.15.148-tegra
 sudo rm -f /boot/initrd
 sudo ln -s /boot/initrd.img-5.15.148-tegra /boot/initrd
 ```
-5. Modify bootloader configuration:
+5. Select the correct overlay for your HW:
+
+    Currently supported overlays are -
+
+    | Overlay file | Description |
+    |---|---|
+    | `tegra234-camera-d4xx-overlay.dtbo` | max9296 deserializer board |
+    | `tegra234-camera-d4xx-overlay.calib.dtbo` | max9296 deserializer board w/o IR metadata (For calib) |
+    | `tegra234-camera-d4xx-overlay-dual.dtbo` | max9296 deserializer board w/ two connected cameras |
+    | `tegra234-camera-d4xx-overlay-dual.calib.dtbo` | max9296 deserializer board w/ two connected cameras w/o IR metadata (For calib) |
+    | `tegra234-camera-d4xx-overlay-max96712-EVB.dtbo` | max96712 evaluation board |
+    | `tegra234-camera-d4xx-overlay-max96712-EVB.calib.dtbo` | max96712 evaluation board w/o IR metadata (For calib) |
+    | `tegra234-camera-d4xx-overlay-max96712-EVB-cams-0-1.dtbo` | max96712 evaluation board w/ two connected cameras |
+    | `tegra234-camera-d4xx-overlay-fg12-16ch.dtbo` | Fangzhu fg12-16ch board with a single camera connected to cam0 |
+    | `tegra234-camera-d4xx-overlay-fg12-16ch.calib.dtbo` | Fangzhu fg12-16ch board with a single camera connected to cam0 w/o IR metadata (For calib) |
+    | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-1.dtbo` | Fangzhu fg12-16ch board with two cameras connected to cam0 & cam1 |
+    | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-1-2-3.dtbo` | Fangzhu fg12-16ch board with four cameras connected to cam0,1,2 & 3 (all links of the first deserializer) |
+    | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-4.dtbo` | Fangzhu fg12-16ch board with two cameras connected to cam0 & cam4 (one camera per deserializer) |
+    | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-4.calib.dtbo` | Fangzhu fg12-16ch board with two cameras connected to cam0 & cam4 (one camera per deserializer) w/o IR metadata (For calib) |
+    | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-4-8-12.dtbo` | Fangzhu fg12-16ch board with four cameras connected to cam0,4,8 & 12 (one camera per deserializer) |
+    | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-4-8-12.calib.dtbo` | Fangzhu fg12-16ch board with four cameras connected to cam0,4,8 & 12 (one camera per deserializer) w/o IR metadata (For calib) |
+    | `tegra234-camera-d4xx-overlay-fg12-16ch-PWR-only.dtbo` | Fangzhu fg12-16ch board ONLY POWER GPIOS (driver will not be probed) - for development use |
+    | `tegra234-camera-d4xx-overlay-advantech.dtbo` | Advantech board with one camera connected to bottom right of the left port |
+    | `tegra234-camera-d4xx-overlay-avermedia.dtbo` | AverMedia board with one camera connected to bottom right of the right port |
+
+6. Modify bootloader configuration:
  - open /boot/extlinux/extlinux.conf for editing using your preferred editor
  - Copy existing primary kernel and rename the copy to "dev"
  - Change the "MENU LABEL" to a meaningful label (e.g "development kernel")
  - Change the "LINUX" line to point to the newly copied /boot/**dev**/Image
  - Add the "FDT" line pointing at the newly copied device tree "/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb" (or tegra234-p3737-0000+p3701-0005-nv.dtb for production boards)
- - add the "OVERLAYS" line pointing to the required overlay "tegra234-camera-d4xx-overlay/dual/else>.dtb
+ - add the "OVERLAYS" line pointing to the required overlay "tegra234-camera-d4xx-overlay/dual/else>.dtbo
  - Select the new label as the default
 
 The result should be:
@@ -186,12 +208,11 @@ LABEL dev
     OVERLAYS /boot/dev/tegra234-camera-d4xx-overlay.dtbo
 
 ```
-6. Reboot
+
+7. Reboot
 ```
 sudo reboot
 ```
-
-For fg12-16ch/dual/quad, use `tegra234-camera-d4xx-overlay-fg12-16ch</dual/quad>.dtbo` 
 
 On Jetson target (user home folder) assuming backup step was followed:
 
@@ -273,25 +294,5 @@ LABEL JetsonIO_calib
     APPEND ${cbootargs} root=PARTUUID=634b7e44-aacc-4dd9-a769-3a664b83b159 rw rootwait rootfstype=ext4 mminit_loglevel=4 console=ttyTCU0,115200 console=ttyAMA0,115200 firmware_class.path=/etc/firmware fbcon=map:0 net.ifnames=0 nospectre_bhb video=efifb:off console=tty0 nv-auto-config
     OVERLAYS /boot/tegra234-camera-d4xx-overlay-dual.calib.dtbo
 ```
-
-- To generate `tegra234-camera-d4xx-overlay.calib.dtbo` and `tegra234-camera-d4xx-overlay-dual.calib.dtbo` on the Host build system, replace the contents of the below files:
-    `tegra234-camera-d4xx-overlay.dts` by the contents of `tegra234-camera-d4xx-overlay.calib.dts`
-    
-    `tegra234-camera-d4xx-overlay-dual.dts` by the contents of `tegra234-camera-d4xx-overlay-dual.calib.dts`
-
-- Reset and reapply patches and rebuild driver:
-```
-./apply_patches.sh 6.2 reset
-
-./apply_patches.sh 6.2
-
-./build_all.sh 6.2
-```
-
-- Deploy 2 DTBO files on the Jetson:
-- In `./images/6.2/rootfs/boot/` folder, locate and rename the following DTBO files:
-    - Rename `tegra234-camera-d4xx-overlay.dtbo` to `tegra234-camera-d4xx-overlay.calib.dtbo`
-    - Rename `tegra234-camera-d4xx-overlay-dual.dtbo` to `tegra234-camera-d4xx-overlay-dual.calib.dtbo`
-- Copy the two DTBO files from the build Host to `/boot/` on the Jetson. 
 
 ---
