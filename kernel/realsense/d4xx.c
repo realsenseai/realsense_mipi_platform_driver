@@ -1977,9 +1977,6 @@ static int ds5_configure(struct ds5 *state)
 	vc_id = (state->is_depth) ? 0 : (state->is_rgb) ? 1 : (state->is_y8) ? 2 : 3;
 #endif
 
-	dev_dbg(&state->client->dev,
-		"sensor %p: dt_value=0x%x, cached_dt_value=0x%x, cached_fps_value=%u, framerate=%u\n",
-		sensor, dt_value, sensor->cached_dt_value, sensor->cached_fps_value, sensor->config.framerate);
 	/* Determine desired data-type (special cases for depth/IR), then write
 	 * it only when it differs from cached value. This avoids overwriting a
 	 * correct DT with 0 (which caused INVALID_DT on subsequent attempts).
@@ -1989,6 +1986,10 @@ static int ds5_configure(struct ds5 *state)
 		dt_value = 0x31;
 	else if (state->is_y8 && dt_value == GMSL_CSI_DT_YUV422_8)
 		dt_value = 0x32;
+
+	dev_dbg(&state->client->dev,
+		"sensor %p: dt_value=0x%x, cached_dt_value=0x%x, cached_fps_value=%u, framerate=%u\n",
+		sensor, dt_value, sensor->cached_dt_value, sensor->cached_fps_value, sensor->config.framerate);
 
 	if (sensor->cached_dt_value != dt_value) {
 		ret = ds5_write(state, dt_addr, dt_value);
@@ -2545,42 +2546,39 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 
 	/* 6. Poll for control-status defaults to confirm reset completion. */
 	for (retry = 0, timeout = ts + msecs_to_jiffies(DS5_HW_RESET_TIMEOUT_MS);
-			time_before(jiffies, timeout); retry++, msleep_range(DS5_HW_RESET_POLL_INTERVAL_MS)) {
-		ret = ds5_read_poll(state, ready_reg, &ready_status);
+			; retry++, msleep_range(DS5_HW_RESET_POLL_INTERVAL_MS)) {
 
+		ret = ds5_read_poll(state, ready_reg, &ready_status);
 		if (ret < 0) {
 			dev_dbg(&state->client->dev,
 				"%s(): Device not responding (resetting), retry %d\n",
 				__func__, retry);
 			continue;
 		}
-
 		if (ready_status == DS5_HW_RESET_READY_EXPECTED_VAL) {
 			dev_info(&state->client->dev,
 				"%s(): Device ready after %d ms (control-status default restored)\n",
 				__func__, jiffies_to_msecs(jiffies - ts));
 			break;
 		}
-	}
 
-	if (retry >= DS5_HW_RESET_MAX_RETRIES) {
-		u16 dfu_magic = 0;
-
-		dev_err(&state->client->dev,
-			"%s(): Device did not become ready after %d ms (last control-status: 0x%04x, i2c ret: %d)\n",
-			__func__, DS5_HW_RESET_INITIAL_DELAY_MS + DS5_HW_RESET_TIMEOUT_MS,
-			ready_status, ret);
-
-		ret = ds5_read_poll(state, DS5_DFU_MAGIC_REG, &dfu_magic);
-		if (!ret && dfu_magic == DS5_DFU_MAGIC_LSW) {
+		ret = ds5_read_poll(state, DS5_DFU_MAGIC_REG, &ready_status);
+		if (!ret && ready_status == DS5_DFU_MAGIC_LSW) {
 			dev_warn(&state->client->dev,
 				"%s(): Device in DFU/recovery mode after reset\n", __func__);
 			state->dfu_dev.dfu_state_flag = DS5_DFU_RECOVERY;
 			return 0;
 		}
 
-		return -ETIMEDOUT;
+		if (!time_before(jiffies, timeout)) {
+			dev_err(&state->client->dev,
+				"%s(): Device isn't ready after %d ms (last control-status: 0x%04x, i2c ret: %d)\n",
+				__func__, jiffies_to_msecs(jiffies - ts), ready_status, ret);
+
+			return -ETIMEDOUT;
+		}
 	}
+
 
 	/* 7. Wait for DEVICE_TYPE to confirm GMSL link recovery.
 	 *    Step 6 confirmed reset completion via control-status defaults.
