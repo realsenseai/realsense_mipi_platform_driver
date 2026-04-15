@@ -113,6 +113,16 @@ sudo cp /boot/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/tegra234-p3737-0000+p3
 sudo cp /boot/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/tegra234-p3737-0000+p3701-0005-nv-bkp.dtb
 ```
 
+## Deploy build results on Jetson target
+On build host, copy build results to the right places.
+Assuming user 'nvidia' on Jetson with ip: `10.0.0.116` (if building natively on Jetson use $USER@localhost):
+
+```
+# Configuration files
+tar czf rootfs.tar.gz -C images/6.2/rootfs boot lib
+scp rootfs.tar.gz nvidia@10.0.0.116:
+```
+
 ## Install kernel drivers, extra modules and device-tree to Jetson AGX Orin
 
 Following steps required:
