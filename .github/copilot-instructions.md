@@ -124,6 +124,8 @@ Build outputs go to `images/<version>/`.
 
 Camera variant flags: `--one-cam`, `--dual-cam`, `--max96712-EVB`, `--fg12-16ch`, `--fg12-16ch-dual` (only some apply to specific JetPack versions).
 
+- **Separate patches per kernel module**: when changes span different kernel modules (e.g. max9295, max9296, max96712, d4xx), each module must get its own patch file. Do not combine changes to different modules in a single patch.
+
 ## Key Directories
 
 | Path | Description |
@@ -188,6 +190,12 @@ searches, more deterministic recovery behavior, reduced duplicate code, improved
 clarity, and architectural separation of restart readiness detection from compensation logic.
 
 ## Workflow Rules
+
+### Requirements discipline
+
+- When the user establishes requirements during a conversation, treat them as fixed. Do not modify, reinterpret, or drop requirements on your own initiative.
+- Only change requirements when the user explicitly requests it.
+- If you believe a requirement is wrong or conflicting, raise it as a question — do not silently adjust.
 
 ### Post-patch configuration review (mandatory)
 
