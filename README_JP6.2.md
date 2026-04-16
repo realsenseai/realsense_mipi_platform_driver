@@ -1,6 +1,6 @@
 # RealSense™ camera driver for GMSL* interface
 
-# D4XX MIPI on NVIDIA® Jetson AGX Orin™ JetPack 6.x 
+# D4XX MIPI on NVIDIA® Jetson AGX Orin™ JetPack 6.x
 The RealSense™ MIPI platform driver enables the user to control and stream RealSense™ 3D MIPI cameras.
 The system shall include:
 * NVIDIA® Jetson™ platform Supported JetPack versions are:
@@ -194,7 +194,7 @@ sudo ln -s /boot/initrd.img-5.15.148-tegra /boot/initrd
  - Change the "MENU LABEL" to a meaningful label (e.g "development kernel")
  - Change the "LINUX" line to point to the newly copied /boot/**dev**/Image
  - Add the "FDT" line pointing at the newly copied device tree "/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb" (or tegra234-p3737-0000+p3701-0005-nv.dtb for production boards)
- - add the "OVERLAYS" line pointing to the required overlay "tegra234-camera-d4xx-overlay/dual/else>.dtbo
+ - add the "OVERLAYS" line pointing to the required overlay as chosen in step 5 (e.g /boot/dev/tegra234-camera-d4xx-overlay.dtbo)
  - Select the new label as the default
 
 The result should be:
