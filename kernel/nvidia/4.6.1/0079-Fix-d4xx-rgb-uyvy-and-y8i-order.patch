@@ -1,0 +1,12 @@
+diff --git a/drivers/media/platform/tegra/camera/vi/vi5_formats.h b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
+--- a/drivers/media/platform/tegra/camera/vi/vi5_formats.h
++++ b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
+@@ -148,5 +148,7 @@
+ 	TEGRA_VIDEO_FORMAT(YUV422, 16, UYVY8_1X16, 2, 1, T_U8_Y8__V8_Y8,
+ 				YUV422_8, Z16, "Depth 16"),
+-	TEGRA_VIDEO_FORMAT(YUV422, 16, VYUY8_1X16, 2, 1, T_V8_Y8__U8_Y8,
++	TEGRA_VIDEO_FORMAT(YUV422, 16, VYUY8_1X16, 2, 1, T_U8_Y8__V8_Y8,
+ 				YUV422_8, Y8I, "Y8I 16"),
++	TEGRA_VIDEO_FORMAT(YUV422, 16, UYVY8_2X8, 2, 1, T_U8_Y8__V8_Y8,
++				YUV422_8, YUYV, "YUV 4:2:2"),
+ 	// TODO: RealSesne calibration format Y12I should be 3-byte,

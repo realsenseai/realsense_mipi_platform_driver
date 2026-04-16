@@ -1414,21 +1414,21 @@ static const struct ds5_format ds5_y_formats_45x[] = {
 
 static const struct ds5_format ds5_41x_rgb_format = {
 	.data_type = GMSL_CSI_DT_YUV422_8,	/* UYVY */
-	.mbus_code = MEDIA_BUS_FMT_YUYV8_1X16,
+	.mbus_code = MEDIA_BUS_FMT_UYVY8_2X8,
 	.n_resolutions = ARRAY_SIZE(ds5_41x_rgb_sizes),
 	.resolutions = ds5_41x_rgb_sizes,
 };
 
 static const struct ds5_format ds5_40x_rgb_format = {
 	.data_type = GMSL_CSI_DT_YUV422_8,	/* UYVY */
-	.mbus_code = MEDIA_BUS_FMT_YUYV8_1X16,
+	.mbus_code = MEDIA_BUS_FMT_UYVY8_2X8,
 	.n_resolutions = ARRAY_SIZE(d40x_rgb_sizes),
 	.resolutions = d40x_rgb_sizes,
 };
 
 static const struct ds5_format ds5_rlt_rgb_format = {
 	.data_type = GMSL_CSI_DT_YUV422_8,	/* UYVY */
-	.mbus_code = MEDIA_BUS_FMT_YUYV8_1X16,
+	.mbus_code = MEDIA_BUS_FMT_UYVY8_2X8,
 	.n_resolutions = ARRAY_SIZE(ds5_rlt_rgb_sizes),
 	.resolutions = ds5_rlt_rgb_sizes,
 };
@@ -1436,7 +1436,7 @@ static const struct ds5_format ds5_rlt_rgb_format = {
 
 static const struct ds5_format ds5_onsemi_rgb_format = {
 	.data_type = GMSL_CSI_DT_YUV422_8,	/* UYVY */
-	.mbus_code = MEDIA_BUS_FMT_YUYV8_1X16,
+	.mbus_code = MEDIA_BUS_FMT_UYVY8_2X8,
 	.n_resolutions = ARRAY_SIZE(ds5_onsemi_rgb_sizes),
 	.resolutions = ds5_onsemi_rgb_sizes,
 };
