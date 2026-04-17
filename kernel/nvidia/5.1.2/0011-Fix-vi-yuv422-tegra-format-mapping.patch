@@ -1,0 +1,46 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Pinquan Wang <pinquanw@realsenseai.com>
+Date: Thu, 17 Apr 2025 12:00:00 +0800
+Subject: [PATCH] Fix vi5/vi4 YUV422 1X16 Tegra format mapping
+
+Change YUYV8_1X16 and VYUY8_1X16 (Y8I) Tegra image format to
+T_U8_Y8__V8_Y8 to unify all YUV422 1X16 formats to use the same
+Tegra pixel format, fixing RGB (UYVY) and IR stereo (Y8I) stream
+color/channel issues on GMSL D4xx cameras.
+
+Signed-off-by: Pinquan Wang <pinquanw@realsenseai.com>
+---
+diff --git a/drivers/media/platform/tegra/camera/vi/vi4_formats.h b/drivers/media/platform/tegra/camera/vi/vi4_formats.h
+--- a/drivers/media/platform/tegra/camera/vi/vi4_formats.h
++++ b/drivers/media/platform/tegra/camera/vi/vi4_formats.h
+@@ -131,5 +131,5 @@
+ 	// TEGRA_VIDEO_FORMAT(YUV422, 16, VYUY8_1X16, 2, 1, T_V8_Y8__U8_Y8,
+ 	// 			YUV422_8, VYUY, "YUV 4:2:2"),
+-	TEGRA_VIDEO_FORMAT(YUV422, 16, YUYV8_1X16, 2, 1, T_Y8_U8__Y8_V8,
++	TEGRA_VIDEO_FORMAT(YUV422, 16, YUYV8_1X16, 2, 1, T_U8_Y8__V8_Y8,
+ 				YUV422_8, YUYV, "YUV 4:2:2"),
+ 	TEGRA_VIDEO_FORMAT(YUV422, 16, YVYU8_1X16, 2, 1, T_Y8_V8__Y8_U8,
+@@ -148,4 +148,4 @@
+ 	TEGRA_VIDEO_FORMAT(YUV422, 16, UYVY8_1X16, 2, 1, T_U8_Y8__V8_Y8,
+ 				YUV422_8, Z16, "Depth 16"),
+-	TEGRA_VIDEO_FORMAT(YUV422, 16, VYUY8_1X16, 2, 1, T_V8_Y8__U8_Y8,
++	TEGRA_VIDEO_FORMAT(YUV422, 16, VYUY8_1X16, 2, 1, T_U8_Y8__V8_Y8,
+ 				YUV422_8, Y8I, "Y8I 16"),
+diff --git a/drivers/media/platform/tegra/camera/vi/vi5_formats.h b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
+--- a/drivers/media/platform/tegra/camera/vi/vi5_formats.h
++++ b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
+@@ -130,5 +130,5 @@
+ 	// TEGRA_VIDEO_FORMAT(YUV422, 16, VYUY8_1X16, 2, 1, T_V8_Y8__U8_Y8,
+ 	// 			YUV422_8, VYUY, "YUV 4:2:2"),
+-	TEGRA_VIDEO_FORMAT(YUV422, 16, YUYV8_1X16, 2, 1, T_Y8_U8__Y8_V8,
++	TEGRA_VIDEO_FORMAT(YUV422, 16, YUYV8_1X16, 2, 1, T_U8_Y8__V8_Y8,
+ 				YUV422_8, YUYV, "YUV 4:2:2"),
+ 	TEGRA_VIDEO_FORMAT(YUV422, 16, YVYU8_1X16, 2, 1, T_Y8_V8__Y8_U8,
+@@ -147,4 +147,4 @@
+ 	TEGRA_VIDEO_FORMAT(YUV422, 16, UYVY8_1X16, 2, 1, T_U8_Y8__V8_Y8,
+ 				YUV422_8, Z16, "Depth 16"),
+-	TEGRA_VIDEO_FORMAT(YUV422, 16, VYUY8_1X16, 2, 1, T_V8_Y8__U8_Y8,
++	TEGRA_VIDEO_FORMAT(YUV422, 16, VYUY8_1X16, 2, 1, T_U8_Y8__V8_Y8,
+ 				YUV422_8, Y8I, "Y8I 16"),
+-- 
+2.34.1
