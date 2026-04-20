@@ -18,19 +18,18 @@ fi
 
 export JP_INPUT_VERSION
 export JETPACK_VERSION="${JP_INPUT_VERSION}"
-KERNEL_DIR="kernel/kernel-5.10"
 LICENSE=release
 export ARCH=arm64
 BUILD_SRCS="sources_${JP_INPUT_VERSION}"
 
 function version_lt {
-    IFS='.' read -r -a v1 <<< "$1"
-    IFS='.' read -r -a v2 <<< "$2"
-    for i in 0 1 2; do
-        [[ v1[i] -lt v2[i] ]] && return 0
-        [[ v1[i] -gt v2[i] ]] && return 1
-    done
-    return 1
+	IFS='.' read -r -a v1 <<< "$1"
+	IFS='.' read -r -a v2 <<< "$2"
+	for i in 0 1 2; do
+		[[ v1[i] -lt v2[i] ]] && return 0
+		[[ v1[i] -gt v2[i] ]] && return 1
+	done
+	return 1
 }
 
 echo "JetPack version ${JP_INPUT_VERSION}..."
@@ -40,9 +39,9 @@ if ! version_lt "$JP_INPUT_VERSION" 7.0; then
 		7.1) REVISION=38.4;;
 		7.0) REVISION=38.2;;
 	esac
-    KERNEL_DIR="kernel/kernel-noble-src"
-    JETPACK_VERSION="7.x"
-    L4T_VERSION=jetson_"${REVISION}"
+	KERNEL_DIR="kernel/kernel-noble-src"
+	JETPACK_VERSION="7.x"
+	L4T_VERSION=jetson_"${REVISION}"
 elif ! version_lt "$JP_INPUT_VERSION" 6.0; then
 	case "${JP_INPUT_VERSION}" in
 		6.2.2) REVISION=36.5;;
@@ -51,9 +50,9 @@ elif ! version_lt "$JP_INPUT_VERSION" 6.0; then
 		6.1) REVISION=36.4;;
 		6.0) REVISION=36.3;;
 	esac
-    KERNEL_DIR="kernel/kernel-jammy-src"
-    JETPACK_VERSION="6.x"
-    L4T_VERSION=jetson_"${REVISION}"
+	KERNEL_DIR="kernel/kernel-jammy-src"
+	JETPACK_VERSION="6.x"
+	L4T_VERSION=jetson_"${REVISION}"
 elif ! version_lt "${JP_INPUT_VERSION}" 5.0; then
 	case "${JP_INPUT_VERSION}" in
 		5.1.6) REVISION=35.6.4;;
@@ -61,20 +60,20 @@ elif ! version_lt "${JP_INPUT_VERSION}" 5.0; then
 		5.0.2) REVISION=35.1
 			LICENSE=Release;;
 	esac
-    KERNEL_DIR="kernel/kernel-5.10"
-    JETPACK_VERSION="5.x"
-    L4T_VERSION=jetson_"${REVISION}"
+	KERNEL_DIR="kernel/kernel-5.10"
+	JETPACK_VERSION="5.x"
+	L4T_VERSION=jetson_"${REVISION}"
 elif ! version_lt "${JP_INPUT_VERSION}" 4.0; then
 	case "${JP_INPUT_VERSION}" in
 		4.6.1) REVISION=32.7.1;;
 	esac
-    KERNEL_DIR="kernel/kernel-4.9"
-    L4T_VERSION="tegra-l4t-r${REVISION}"
-    JETPACK_VERSION="4.x"
-    LICENSE=T186
+	KERNEL_DIR="kernel/kernel-4.9"
+	JETPACK_VERSION="4.x"
+	L4T_VERSION="tegra-l4t-r${REVISION}"
+	LICENSE=T186
 fi
 if [[ -z $REVISION ]]; then
-    echo "Wrong JetPack version $JP_INPUT_VERSION! Supported version: ${SUPPORTED_JP}"
-    exit 1
+	echo "Wrong JetPack version $JP_INPUT_VERSION! Supported version: ${SUPPORTED_JP}"
+	exit 1
 fi
 echo "${JP_INPUT_VERSION}" > jetpack_version

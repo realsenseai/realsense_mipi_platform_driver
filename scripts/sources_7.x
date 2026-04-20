@@ -3,6 +3,7 @@ k:nvgpu:nv-tegra/tegra/kernel-src/linux-nvgpu.git:
 k:nvidia-oot:nv-tegra/linux-nv-oot.git:
 k:hwpm:nv-tegra/linux-hwpm.git:
 k:nvethernetrm:nv-tegra/kernel/nvethernetrm.git:
+k:hardware/nvidia/t23x/nv-public:nv-tegra/device/hardware/nvidia/t23x-public-dts.git:
 k:hardware/nvidia/t264/nv-public:nv-tegra/device/hardware/nvidia/t264-public-dts.git:
 k:hardware/nvidia/tegra/nv-public:nv-tegra/device/hardware/nvidia/tegra-public-dts.git:
 k:nvdisplay:nv-tegra/tegra/kernel-src/nv-kernel-display-driver.git:

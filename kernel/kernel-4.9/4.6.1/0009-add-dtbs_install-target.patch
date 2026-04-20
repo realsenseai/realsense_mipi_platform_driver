@@ -1,0 +1,21 @@
+Index: sources_4.6.1/kernel/kernel-4.9/Makefile
+===================================================================
+--- a/Makefile
++++ b/Makefile
+@@ -1869,3 +1869,16 @@ FORCE:
+ # Declare the contents of the .PHONY variable as phony.  We keep that
+ # information in a variable so we can use it in if_changed and friends.
+ .PHONY: $(PHONY)
++
++# ---------------------------------------------------------------------------
++# Devicetree files
++
++ifneq ($(wildcard $(srctree)/arch/$(SRCARCH)/boot/dts/),)
++dtstree := arch/$(SRCARCH)/boot/dts
++endif
++
++ifneq ($(dtstree),)
++dtbs_install:
++	mkdir -p $(INSTALL_DTBS_PATH)
++	cp -rf $(dtstree)/*.dtb $(INSTALL_DTBS_PATH)
++endif

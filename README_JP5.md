@@ -1,251 +1,209 @@
-# RealSense™ camera driver for GMSL* interface on NVIDIA® Jetson AGX Xavier™ JetPack 5.x.2
+# RealSense™ camera driver for GMSL* interface
 
-# D457 MIPI on NVIDIA® Jetson AGX Xavier™
+# D457 MIPI on NVIDIA® Jetson AGX Xavier™ JetPack 5.x.2
 The RealSense™ MIPI platform driver enables the user to control and stream RealSense™ 3D MIPI cameras.
-
 The system shall include:
-* NVIDIA® Jetson™ platform (Currently Supported JetPack versions are: 5.1.2, 5.0.2)
+* NVIDIA® Jetson™ platform Supported JetPack versions are:
+    - [5.1.2 production release](https://developer.nvidia.com/embedded/jetpack-sdk-512)
+    - [5.0.2 production release](https://developer.nvidia.com/embedded/jetpack-sdk-502)
 * RealSense™ De-Serialize board
-* RS MIPI camera (e.g. https://store.realsenseai.com/buy-intel-realsense-depth-camera-d457.html)
+* Jetson AGX Xavier™ Passive adapter board from [Leopard Imaging® LI-JTX1-SUB-ADPT](https://leopardimaging.com/product/accessories/adapters-carrier-boards/for-nvidia-jetson/li-jtx1-sub-adpt/)
+* RS MIPI camera [D457](https://store.realsenseai.com/buy-intel-realsense-depth-camera-d457.html)
 
-> Note: This MIPI reference driver is based on RealSense™ de-serialize board. For other de-serialize boards, modification might be needed.
+![xavier_adapter](https://github.com/dmipx/realsense_mipi_platform_driver/assets/104717350/524e3eb6-6e6b-41cf-9562-9c0f920dd821)
+
+
+> Note: This MIPI reference driver is based on RealSense™ de-serialize board. For other de-serialize boards, modification might be needed. 
 
 ### Links
 - RealSense™ camera driver for GMSL* interface [Front Page](./README.md)
-- Jetson AGX Orin™ board setup - AGX Orin™ [JetPack 6.x](./README_JP6.md) setup guide
-- Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 5.x.2](./README_JP5.md) setup guide
-- Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 4.6.1](./README_JP4.md) setup guide
+- NVIDIA® Jetson AGX Thor™ board setup - AGX Thor™ [JetPack 7.x](./README_JP7.md) setup guide
+- NVIDIA® Jetson AGX Orin™ board setup - AGX Orin™ [JetPack 6.0](./README_JP6.md) setup guide
+- NVIDIA® Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 4.6.1](./README_JP4.md) setup guide
 - Build Tools manual page [Build Manual page](./README_tools.md)
 - Driver API manual page [Driver API page](./README_driver.md)
 
+## NVIDIA® Jetson AGX Xavier™ board setup
 
-## NVIDIA® Jetson AGX Xavier™ board setup for cross compile on x86-64
+Please follow the [instruction](https://docs.nvidia.com/sdk-manager/install-with-sdkm-jetson/index.html) to flash JetPack to the NVIDIA® Jetson AGX Xavier™ with NVIDIA® SDK Manager or other methods NVIDIA provides. Make sure the board is ready to use.
 
-Please follow the [instruction](https://docs.nvidia.com/sdk-manager/install-with-sdkm-jetson/index.html) to flash JetPack to the Jetson AGX Xavier™ with NVIDIA® SDK Manager or other methods NVIDIA provides. Make sure the board is ready to use.
-
-## Build kernel, dtb and D457 driver on host - cross compile x86-64
-
-<details>
-<summary>JetPack manual build</summary>
-
-Download Jetson Linux source code tarball from 
-- [JetPack 5.1.2 BSP sources](https://developer.nvidia.com/downloads/embedded/l4t/r35_release_v4.1/sources/public_sources.tbz2)
-- [JetPack 5.0.2 BSP sources](https://developer.nvidia.com/embedded/l4t/r35_release_v1.0/sources/public_sources.tbz2)
-- [JetPack 5.x.2 Toolchain](https://developer.nvidia.com/embedded/jetson-linux/bootlin-toolchain-gcc-93)
-
-
-## JetPack 5.1.2
+## Build environment prerequisites
 ```
-mkdir -p l4t-gcc/5.x
-cd ./l4t-gcc/5.x
-wget https://developer.nvidia.com/embedded/jetson-linux/bootlin-toolchain-gcc-93 -O aarch64--glibc--stable-final.tar.gz
-tar xf aarch64--glibc--stable-final.tar.gz
-cd ../..
-wget https://developer.nvidia.com/downloads/embedded/l4t/r35_release_v4.1/sources/public_sources.tbz2
-tar xjf public_sources.tbz2
-cd Linux_for_Tegra/source/public
-tar xjf kernel_src.tbz2
-cd ../../..
+sudo apt-get install -y build-essential bc wget flex bison curl libssl-dev xxd tar
 ```
-## JetPack 5.0.2
+## Build NVIDIA® kernel drivers, dtb and D457 driver
+
+These are descriptiver steps. Bash commands to be issued follow:
+1. Clone [realsense_mipi_platform_driver](https://github.com/realsenseai/realsense_mipi_platform_driver.git) repo.
+2. Checkout the `dev` branch.
+3. Set up build environment, ARM64 compiler, kernel sources and NVIDIA's Jetson git repositories by using the setup script.
+4. Apply patches for kernel drivers, nvidia-oot module and tegra devicetree.
+5. Build the project
+6. Apply build results to the target (Jetson).
+7. Configure the target.
+
+Assuming building for 5.1.2. One can also build for 5.0.2 just replace the parameter to ./setup_workspace.sh script.
+Build version can be specified only once. It will be written to jetpack_version.txt file and used for later steps.
+You can display the current version running any script below with -h option. Effective version will be also shown while running any script.
 ```
-mkdir -p l4t-gcc/5.x
-cd ./l4t-gcc/5.x
-wget https://developer.nvidia.com/embedded/jetson-linux/bootlin-toolchain-gcc-93 -O aarch64--glibc--stable-final.tar.gz
-tar xf aarch64--glibc--stable-final.tar.gz --strip-components 1
-cd ../..
-wget https://developer.nvidia.com/embedded/l4t/r35_release_v1.0/sources/public_sources.tbz2
-tar xjf public_sources.tbz2
-cd Linux_for_Tegra/source/public
-tar xjf kernel_src.tbz2
-cd ../../..
-```
-
-## Apply D457 patches and build the kernel image, dtb and D457 driver.
-
-```
-# install dependencies
-sudo apt install build-essential bc flex bison
-
-# apply patches
-./apply_patches_ext.sh 5.1.2 ./Linux_for_Tegra/source/public
-
-# build kernel, dtb and D457 driver
-./build_all.sh 5.1.2 ./Linux_for_Tegra/source/public
-```
-Note: dev_dbg() log support will not be enabled by default. If needed, run the `./build_all.sh` script with `--dev-dbg` option like below.
-```
-./build_all.sh --dev-dbg 5.1.2 ./Linux_for_Tegra/source/public
-```
-
-</details>
-
----
-
-The developers can set up the source code with NVIDIA's Jetson git repositories by using the provided scripts.
-- Prepare build workspace for cross-compile on host
-- Apply necessary patches
-- Build workspace
-- Deploy build results on target Jetson
-
-```
+git clone --branch dev --single-branch https://github.com/realsenseai/realsense_mipi_platform_driver.git
+cd realsense_mipi_platform_driver
 ./setup_workspace.sh 5.1.2
-
-./apply_patches.sh 5.1.2
-
-./build_all.sh 5.1.2
+./apply_patches.sh
+./build_all.sh
 ```
-For Fangzhu FG12-16CH support (Currently only supported on 5.0.2):
-```
-./setup_workspace.sh 5.0.2
-
-- Single camera connected to cam0:
-./apply_patches.sh --fg12-16ch 5.0.2
-
-- Dual camera connected to cam0 and cam4:
-./apply_patches.sh --fg12-16ch-dual 5.0.2
-
-./build_all.sh 5.1.2
-```
-
 Note: dev_dbg() log support will not be enabled by default. If needed, run the `./build_all.sh` script with `--dev-dbg` option like below.
 ```
-./build_all.sh --dev-dbg 5.1.2
+./build_all.sh --dev-dbg
 ```
 
-## Install kernel, device-tree and D457 driver to Jetson AGX Xavier
+## Install kernel drivers, extra modules and device-tree to Jetson AGX Xavier™
 
-1. Install the kernel and modules (change 5.1.2 to 5.0.2 for 5.0.2 build)
+Following steps required:
 
-Building with `build_all.sh 5.1.2`
-
-The necessary files are:
-
-- kernel image `images/5.1.2/arch/arm64/boot/Image`
-- dtb `images/5.1.2/arch/arm64/boot/dts/nvidia/tegra194-p2888-0001-p2822-0000.dtb`
-- D457 driver `images/5.1.2/drivers/media/i2c/d4xx.ko`
-- UVC Video driver `images/5.1.2/drivers/media/usb/uvc/uvcvideo.ko`
-- V4L2 Core Video driver `images/5.1.2/drivers/media/v4l2-core/videobuf-core.ko`
-- V4L2 VMalloc Video driver `images/5.1.2/drivers/media/v4l2-core/videobuf-vmalloc.ko`
-
-Copy build results from Host to Jetson target `10.0.0.116` user `nvidia`
+1. Copy build artifacts:
+If you build locally (native build on Jetson) use the following bash commands:
 ```
-scp ./images/5.1.2/arch/arm64/boot/Image nvidia@10.0.0.116:~/
-scp ./images/5.1.2/arch/arm64/boot/dts/nvidia/tegra194-p2888-0001-p2822-0000.dtb nvidia@10.0.0.116:~/
-scp ./images/5.1.2/drivers/media/i2c/d4xx.ko nvidia@10.0.0.116:~/
-scp ./images/5.1.2/drivers/media/usb/uvc/uvcvideo.ko nvidia@10.0.0.116:~/
-scp ./images/5.1.2/drivers/media/v4l2-core/videobuf-core.ko nvidia@10.0.0.116:~/
-scp ./images/5.1.2/drivers/media/v4l2-core/videobuf-vmalloc.ko nvidia@10.0.0.116:~/
+sudo cp -r ./images/$(cat jetpack_version)/rootfs/lib/modules/*-tegra /lib/modules/
+sudo cp -r ./images/$(cat jetpack_version)/rootfs/boot/dtb /boot/dev/
+sudo cp -v ./images/$(cat jetpack_version)/rootfs/boot/vmlinu?-*-tegra /boot/dev/
 ```
+Please take note of image file name displayed in last command, it will be used in later steps to update bootloader configuration.
+For example, if the copied kernel image file is `vmlinux-5.10.120-tegra`, the version part `5.10.120-tegra` will be used in later steps to update bootloader configuration.
 
-Copy them to the right places on Jetson target:
+In case of crossbuild on external host prepare a tarball to ssh-copy to Jetson target.
+Example user 'nvidia' on Jetson with host name 'jetson.domain'
 ```
-sudo mkdir /boot/d457
-sudo mkdir /lib/modules/$(uname -r)/updates
-sudo cp Image /boot/d457/
-sudo cp tegra194-p2888-0001-p2822-0000.dtb /boot/d457/
-sudo cp d4xx.ko /lib/modules/$(uname -r)/updates/
-sudo cp uvcvideo.ko /lib/modules/$(uname -r)/updates/
-sudo cp videobuf-core.ko /lib/modules/$(uname -r)/updates/
-sudo cp videobuf-vmalloc.ko /lib/modules/$(uname -r)/updates/
+tar czf rootfs.tar.gz -C images/$(cat jetpack_version)/rootfs boot lib
+scp rootfs.tar.gz nvidia@jetson.domain:
+```
+Log in into Jetson target, extract the tarball and install extracted files:
+```
+tar xf rootfs.tar.gz
+sudo cp -r ./lib/modules/* /lib/modules/
+sudo cp -r ./boot/dtb /boot/dev/
+sudo cp -v ./boot/vmlinu?-*-tegra /boot/dev/
+```
+Please take note of image file name displayed in last command, it will be used in later steps to update bootloader configuration.
+For example, if the copied kernel image file is `vmlinux-5.10.120-tegra`, the version part `5.10.120-tegra` will be used in later steps to update bootloader configuration.
+
+2.	Enable and run depmod scan for "extra" & "kernel" modules
+```
+# original file content: cat /etc/depmod.d/ubuntu.conf -- search updates ubuntu built-in
+sudo sed -i 's/search updates/search extra updates kernel/g' /etc/depmod.d/ubuntu.conf
+# update driver cache
 sudo depmod
+# create initramfs file in /boot/ for new kernel
+sudo update-initramfs -ck <ver from previous step>
 ```
-2. Add a boot option to `/boot/extlinux/extlinux.conf` by duplicating the existing default option to capture all boot arguments.
+3.	Run  $ `sudo /opt/nvidia/jetson-io/jetson-io.py`:
+	1.	Configure Jetson AGX CSI Connector
+	2.	Configure for compatible hardware
+	3.	Choose appropriate configuration:
+		i.	Jetson RealSense Camera D457
+		ii.	Jetson RealSense Camera D457 dual
+    5.	Save and exit
 
-3. Edit `LINUX/FDT` lines to use built kernel image and dtb file:
+4.
+Verify bootloader configuration
+```
+cat /boot/extlinux/extlinux.conf
+----<CUT>----
+LABEL JetsonIO
+    MENU LABEL Custom Header Config: <CSI Jetson RealSense Camera D457>
+    LINUX /boot/dev/vmlinux-<ver from previous step>
+    INITRD /boot/initrd.img-<ver from previous step>
+    APPEND ${cbootargs} root=...
+    FDT /boot/dtb/tegra194-p2888-0001-p2822-0000.dtb
+----<CUT>----
+```
+5.
+Reboot cycling the power or using shell command
+```
+sudo reboot
+```
 
-    ```
-    LINUX /boot/d457/Image
-    FDT /boot/d457/tegra194-p2888-0001-p2822-0000.dtb
-    ```
+### Verify driver loaded - on Jetson:
+- Driver API manual page [Driver API page](./README_driver.md)
 
 ```
-$ cat /boot/extlinux/extlinux.conf
-TIMEOUT 30
-DEFAULT d457
+nvidia@ubuntu:~$ sudo dmesg | grep tegra-capture-vi
+[    9.357521] platform 13e00000.host1x:nvcsi@15a00000: Fixing up cyclic dependency with tegra-capture-vi
+[    9.419926] tegra-camrtc-capture-vi tegra-capture-vi: ep of_device is not enabled endpoint.
+[    9.419932] tegra-camrtc-capture-vi tegra-capture-vi: ep of_device is not enabled endpoint.
+[   10.001170] tegra-camrtc-capture-vi tegra-capture-vi: subdev DS5 mux 9-001a bound
+[   10.025295] tegra-camrtc-capture-vi tegra-capture-vi: subdev DS5 mux 12-001a bound
+[   10.040934] tegra-camrtc-capture-vi tegra-capture-vi: subdev DS5 mux 13-001a bound
+[   10.056151] tegra-camrtc-capture-vi tegra-capture-vi: subdev DS5 mux 14-001a bound
+[   10.288088] tegra-camrtc-capture-vi tegra-capture-vi: subdev 13e00000.host1x:nvcsi@15a00000- bound
+[   10.324025] tegra-camrtc-capture-vi tegra-capture-vi: subdev 13e00000.host1x:nvcsi@15a00000- bound
+[   10.324631] tegra-camrtc-capture-vi tegra-capture-vi: subdev 13e00000.host1x:nvcsi@15a00000- bound
+[   10.325056] tegra-camrtc-capture-vi tegra-capture-vi: subdev 13e00000.host1x:nvcsi@15a00000- bound
 
-MENU TITLE L4T boot options
+nvidia@ubuntu:~$ sudo dmesg | grep d4xx
+[    9.443608] d4xx 9-001a: Probing driver for D45x
+[    9.983168] d4xx 9-001a: ds5_chrdev_init() class_create
+[    9.989521] d4xx 9-001a: D4XX Sensor: DEPTH, firmware build: 5.15.1.0
+[   10.007813] d4xx 12-001a: Probing driver for D45x
+[   10.013899] d4xx 12-001a: D4XX Sensor: RGB, firmware build: 5.15.1.0
+[   10.025787] d4xx 13-001a: Probing driver for D45x
+[   10.029095] d4xx 13-001a: D4XX Sensor: Y8, firmware build: 5.15.1.0
+[   10.041282] d4xx 14-001a: Probing driver for D45x
+[   10.044759] d4xx 14-001a: D4XX Sensor: IMU, firmware build: 5.15.1.0
 
+```
+
+### Known issues
+- Camera not recognized
+Verify I2C MUX detected. If "probe failed" reported, replace extension board adapter (LI-JTX1-SUB-ADPT).
+```
+nvidia@ubuntu:~$ sudo dmesg | grep pca954x
+[    3.933113] pca954x 2-0072: probe failed
+```
+
+- kernel does not recognize the I2C device
+```
+# Make sure which Jetson Carrier board is used:
+#   p3701-0000 → Dev kit carrier board
+#   p3701-0005 → Production carrier board or custom carrier
+# if you have the *0005* board, replace the relevant dtb file in in the instructions above
+
+Example: 
+sudo cat /proc/device-tree/compatible
+
+Output:
+nvidia,p3701-0000
+```
+### Notes
+- With the introduction of meta data support for depth IR starting from release r/1.0.1.27, calibration format streaming requires a separate DTB that disables meta data since the camera does not metadata in calibration mode.
+- If calibration is needed, it's recommended to add `d457_calib` boot option as shown below.
+
+```
 LABEL primary
-      MENU LABEL primary kernel
-      LINUX /boot/Image
-      INITRD /boot/initrd
-      FDT /boot/dtb/tegra194-p2888-0001-p2822-0000.dtb
-      APPEND ${cbootargs} quiet root=/dev/mmcblk0p1 rw rootwait rootfstype=ext4 console=ttyTCU0,115200n8 console=tty0 fbcon=map:0 net.ifnames=0 rootfstype=ext4
+    MENU LABEL primary kernel
+    LINUX /boot/Image
+    INITRD /boot/initrd
+    APPEND ${cbootargs} root=PARTUUID=634b7e44-aacc-4dd9-a769-3a664b83b159 rw rootwait rootfstype=ext4 mminit_loglevel=4 console=ttyTCU0,115200 console=ttyAMA0,115200 firmware_class.path=/etc/firmware fbcon=map:0 net.ifnames=0 nospectre_bhb video=efifb:off console=tty0 nv-auto-config
 
-LABEL d457
-      MENU LABEL d457 kernel
-      LINUX /boot/d457/Image
-      INITRD /boot/initrd
-      FDT /boot/d457/tegra194-p2888-0001-p2822-0000.dtb
-      APPEND ${cbootargs} root=/dev/mmcblk0p1 rw rootwait rootfstype=ext4 console=ttyTCU0,115200n8 console=tty0 fbcon=map:0 net.ifnames=0 rootfstype=ext4
+LABEL JetsonIO
+    MENU LABEL Custom Header Config: <CSI Jetson RealSense Camera D457 dual>
+    LINUX /boot/dev/vmlinux-<ver from previous step>
+    FDT /boot/dtb/kernel_tegra234-p3737-0000+p3701-0000-nv.dtb
+    INITRD /boot/initrd.img-<ver from previous step>
+    APPEND ${cbootargs} root=PARTUUID=634b7e44-aacc-4dd9-a769-3a664b83b159 rw rootwait rootfstype=ext4 mminit_loglevel=4 console=ttyTCU0,115200 console=ttyAMA0,115200 firmware_class.path=/etc/firmware fbcon=map:0 net.ifnames=0 nospectre_bhb video=efifb:off console=tty0 nv-auto-config
 
-LABEL d457_calib
-      MENU LABEL d457_calib kernel
-      LINUX /boot/d457/Image
-      INITRD /boot/initrd
-      FDT /boot/d457/tegra194-p2888-0001-p2822-0000.calib.dtb
-      APPEND ${cbootargs} root=/dev/mmcblk0p1 rw rootwait rootfstype=ext4 console=ttyTCU0,115200n8 console=tty0 fbcon=map:0 net.ifnames=0 rootfstype=ext4
+LABEL JetsonIO_calib
+    MENU LABEL Custom Header Config: <CSI Jetson RealSense Camera D457 dual - Calibration>
+    LINUX /boot/dev/vmlinux-<ver from previous step>
+    FDT /boot/dtb/kernel_tegra234-p3737-0000+p3701-0000-nv.dtb
+    INITRD /boot/initrd.img-<ver from previous step>
+    APPEND ${cbootargs} root=PARTUUID=634b7e44-aacc-4dd9-a769-3a664b83b159 rw rootwait rootfstype=ext4 mminit_loglevel=4 console=ttyTCU0,115200 console=ttyAMA0,115200 firmware_class.path=/etc/firmware fbcon=map:0 net.ifnames=0 nospectre_bhb video=efifb:off console=tty0 nv-auto-config
 ```
-
-
-3. Make D457 I2C module autoload at boot time:
-    ```
-    echo "d4xx" | sudo tee /etc/modules-load.d/d4xx.conf
-    ```
-
-After rebooting Jetson, the D457 driver should work.
-
-## Notes
-
-- It's recommended to save the original kernel image as backup boot option in `/boot/extlinux/extlinux.conf`.
-- With the introduction of meta data support for depth IR starting from release r/1.0.1.27, calibration format streaming requires a separate DTB that disables meta data. If calibration is needed, it's recommended to add `d457_calib` boot option as shown below.
-
-```
-$ cat /boot/extlinux/extlinux.conf
-TIMEOUT 30
-DEFAULT d457
-
-MENU TITLE L4T boot options
-
-LABEL primary
-      MENU LABEL primary kernel
-      LINUX /boot/Image
-      INITRD /boot/initrd
-      FDT /boot/dtb/tegra194-p2888-0001-p2822-0000.dtb
-      APPEND ${cbootargs} quiet root=/dev/mmcblk0p1 rw rootwait rootfstype=ext4 console=ttyTCU0,115200n8 console=tty0 fbcon=map:0 net.ifnames=0 rootfstype=ext4
-
-LABEL d457
-      MENU LABEL d457 kernel
-      LINUX /boot/d457/Image
-      INITRD /boot/initrd
-      FDT /boot/d457/tegra194-p2888-0001-p2822-0000.dtb
-      APPEND ${cbootargs} root=/dev/mmcblk0p1 rw rootwait rootfstype=ext4 console=ttyTCU0,115200n8 console=tty0 fbcon=map:0 net.ifnames=0 rootfstype=ext4
-
-LABEL d457_calib
-      MENU LABEL d457_calib kernel
-      LINUX /boot/d457/Image
-      INITRD /boot/initrd
-      FDT /boot/d457/tegra194-p2888-0001-p2822-0000.calib.dtb
-      APPEND ${cbootargs} root=/dev/mmcblk0p1 rw rootwait rootfstype=ext4 console=ttyTCU0,115200n8 console=tty0 fbcon=map:0 net.ifnames=0 rootfstype=ext4
-```
-
-- To generate `tegra194-p2888-0001-p2822-0000.calib.dtb` on the Host build system, replace the contents of the below files:
-    `tegra194-camera-d4xx-dual.dtsi` by the contents of `tegra194-camera-d4xx-dual.calib.dtsi`
-    `tegra194-camera-d4xx-single.dtsi` by the contents of `tegra194-camera-d4xx-single.calib.dtsi`
 
 - Reset and reapply patches and rebuild driver:
 ```
-./apply_patches.sh 5.1.2 reset
-
-./apply_patches.sh 5.1.2
-
-./build_all.sh 5.1.2
+./apply_patches.sh reset
+./apply_patches.sh
+./build_all.sh
 ```
-
-- Deploy one DTB file on the Jetson:
-- In `./images/5.1.2/arch/arm64/boot/dts/nvidia/` folder, locate and rename the follwing file:
-    - `tegra194-p2888-0001-p2822-0000.dtb` to `tegra194-p2888-0001-p2822-0000.calib.dtb`
-- Copy `tegra194-p2888-0001-p2822-0000.calib.dtb` from Host to `/boot/d457/` on the Jetson. 
-
-
+---

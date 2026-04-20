@@ -1,0 +1,16 @@
+diff --git a/scripts/conftest/conftest.sh b/scripts/conftest/conftest.sh
+index fbe14b47..02e0c2ab 100755
+--- a/scripts/conftest/conftest.sh
++++ b/scripts/conftest/conftest.sh
+@@ -9456,9 +9456,9 @@ case "$5" in
+         kernel_cc_string=`cat ${kernel_compile_h} | \
+             grep LINUX_COMPILER | cut -f 2 -d '"'`
+ 
+-        kernel_cc_version=`echo ${kernel_cc_string} | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -n 1`
++        kernel_cc_version=`echo ${kernel_cc_string} | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+,' | head -n 1`
+         if [ -z "${kernel_cc_version}" ]; then
+-            kernel_cc_version=`echo ${kernel_cc_string} | grep -o '[0-9]\+\.[0-9]\+' | head -n 1`
++            kernel_cc_version=`echo ${kernel_cc_string} | grep -o '[0-9]\+\.[0-9]\+,' | head -n 1`
+         fi
+         kernel_cc_major=`echo ${kernel_cc_version} | cut -d '.' -f 1`
+         kernel_cc_minor=`echo ${kernel_cc_version} | cut -d '.' -f 2`

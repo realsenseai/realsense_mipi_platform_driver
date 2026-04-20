@@ -2,6 +2,7 @@ k:kernel/kernel-5.10:nv-tegra/linux-5.10.git:
 k:kernel/nvgpu:nv-tegra/linux-nvgpu.git:
 k:kernel/nvidia:nv-tegra/linux-nvidia.git:
 k:kernel/nvidia/drivers/net/ethernet/nvidia/nvethernet/nvethernetrm:nv-tegra/kernel/nvethernetrm.git:
+k:tegra/kernel-src/nv-kernel-display-driver:nv-tegra/tegra/kernel-src/nv-kernel-display-driver.git:
 k:hardware/nvidia/platform/tegra/common:nv-tegra/device/hardware/nvidia/platform/tegra/common.git:
 k:hardware/nvidia/soc/t19x:nv-tegra/device/hardware/nvidia/soc/t19x.git:
 k:hardware/nvidia/platform/t19x/common:nv-tegra/device/hardware/nvidia/platform/t19x/common.git:
@@ -15,7 +16,6 @@ k:hardware/nvidia/platform/t23x/p3768/kernel-dts:nv-tegra/device/hardware/nvidia
 k:hardware/nvidia/platform/t23x/concord/kernel-dts:nv-tegra/device/hardware/nvidia/platform/t23x/concord-dts.git:
 k:hardware/nvidia/platform/t23x/prometheus/kernel-dts:nv-tegra/device/hardware/nvidia/platform/t23x/prometheus-dts:
 k:hardware/nvidia/soc/tegra:nv-tegra/device/hardware/nvidia/soc/tegra.git:
-k:tegra/kernel-src/nv-kernel-display-driver:nv-tegra/tegra/kernel-src/nv-kernel-display-driver.git:
 o:3rdparty/libnl/3.5.0:nv-tegra/3rdparty/libnl/3.5.0.git:
 o:tegra/argus-cam-libav/argus_cam_libavencoder:nv-tegra/tegra/argus-cam-libav/argus_cam_libavencoder.git:
 o:tegra/cuda-src/nvsample_cudaprocess:nv-tegra/tegra/cuda-src/nvsample_cudaprocess.git:
