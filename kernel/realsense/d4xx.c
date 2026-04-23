@@ -2547,6 +2547,13 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	/* 6. Poll for control-status defaults to confirm reset completion. */
 	for (retry = 0, timeout = ts + msecs_to_jiffies(DS5_HW_RESET_TIMEOUT_MS);
 			; retry++, msleep_range(DS5_HW_RESET_POLL_INTERVAL_MS)) {
+		if (!time_before(jiffies, timeout)) {
+			dev_err(&state->client->dev,
+				"%s(): Device isn't ready after %d ms (last control-status: 0x%04x, i2c ret: %d)\n",
+				__func__, jiffies_to_msecs(jiffies - ts), ready_status, ret);
+
+			return -ETIMEDOUT;
+		}
 
 		ret = ds5_read_poll(state, ready_reg, &ready_status);
 		if (ret < 0) {
@@ -2568,14 +2575,6 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 				"%s(): Device in DFU/recovery mode after reset\n", __func__);
 			state->dfu_dev.dfu_state_flag = DS5_DFU_RECOVERY;
 			return 0;
-		}
-
-		if (!time_before(jiffies, timeout)) {
-			dev_err(&state->client->dev,
-				"%s(): Device isn't ready after %d ms (last control-status: 0x%04x, i2c ret: %d)\n",
-				__func__, jiffies_to_msecs(jiffies - ts), ready_status, ret);
-
-			return -ETIMEDOUT;
 		}
 	}
 
