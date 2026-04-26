@@ -67,22 +67,6 @@ if [ -z "${TARGET}" ]; then
     echo "No TARGET specified, skipping copy and reboot."
     exit 0
 else
-    # Check that built kernel version matches the target device
-    BUILD_KVER=$(ls images/${JETPACK_VERSION}/rootfs/lib/modules/ 2>/dev/null | head -1)
-    if [ -n "${BUILD_KVER}" ]; then
-        TARGET_KVER=$(ssh -o ConnectTimeout=10 ${USERNAME}@${TARGET} "uname -r" 2>/dev/null)
-        if [ -n "${TARGET_KVER}" ] && [ "${BUILD_KVER}" != "${TARGET_KVER}" ]; then
-            echo "WARNING: Kernel version mismatch!"
-            echo "  Built modules:  ${BUILD_KVER}"
-            echo "  Target running: ${TARGET_KVER}"
-            read -p "Continue anyway? (y/N) " answer
-            if [ "${answer}" != "y" ] && [ "${answer}" != "Y" ]; then
-                echo "Aborting deploy."
-                exit 1
-            fi
-        fi
-    fi
-
     echo "Copying files and setting permissions on remote host..."
     cp ${LOCAL_DIR}/scripts/install_to_kernel.sh ${LOCAL_DIR}/kernel_mod/${JETPACK_VERSION}/
     # Use SSH ControlMaster to reuse a single SSH connection

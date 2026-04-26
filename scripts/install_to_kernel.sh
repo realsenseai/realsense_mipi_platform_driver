@@ -48,32 +48,23 @@ if [ "${JETPACK_VERSION}" = "5.0.2" ]; then
     echo "sudo cp videobuf-vmalloc.ko /lib/modules/$(uname -r)/updates/"
           sudo cp videobuf-vmalloc.ko /lib/modules/$(uname -r)/updates/
 elif [ "${JETPACK_VERSION}" = "6.0" ] || [ "${JETPACK_VERSION}" = "6.1" ] || [ "${JETPACK_VERSION}" = "6.2" ] || [ "${JETPACK_VERSION}" = "6.2.1" ] || [ "${JETPACK_VERSION}" = "7.0" ] || [ "${JETPACK_VERSION}" = "7.1" ]; then
+    MODULES_DIR="lib/modules/$(uname -r)"
     echo "Extracting rootfs.tar.gz..."
     if ! tar xf rootfs.tar.gz; then
         echo "Error: Failed to extract rootfs.tar.gz; not modifying kernel modules."
         exit 1
     fi
-    # Use the extracted modules directory rather than uname -r, in case the
-    # build kernel version differs from the currently running kernel.
-    EXTRACTED_KVER=$(ls lib/modules/ 2>/dev/null | head -1)
-    if [ -z "${EXTRACTED_KVER}" ] || [ ! -d "lib/modules/${EXTRACTED_KVER}" ] || [ -z "$(ls -A "lib/modules/${EXTRACTED_KVER}" 2>/dev/null)" ]; then
-        echo "Error: Extracted modules directory is missing or empty; not modifying kernel modules."
+    if [ ! -d "${MODULES_DIR}" ] || [ -z "$(ls -A "${MODULES_DIR}" 2>/dev/null)" ]; then
+        echo "Error: Extracted modules directory '${MODULES_DIR}' is missing or empty; not modifying kernel modules."
         exit 1
     fi
-    MODULES_DIR="lib/modules/${EXTRACTED_KVER}"
-    RUNNING_KVER=$(uname -r)
-    if [ "${EXTRACTED_KVER}" != "${RUNNING_KVER}" ]; then
-        echo "Note: Built modules (${EXTRACTED_KVER}) differ from running kernel (${RUNNING_KVER}); installing built modules and removing old ones."
-        echo "sudo rm -rf /lib/modules/${RUNNING_KVER}"
-        sudo rm -rf "/lib/modules/${RUNNING_KVER}"
-    fi
     echo "sudo rm -rf /${MODULES_DIR}"
-    if ! sudo rm -rf "/${MODULES_DIR}"; then
+    if ! sudo rm -rf /${MODULES_DIR}; then
         echo "Error: Failed to remove existing modules directory '${MODULES_DIR}', DON'T REBOOT"
         exit 1
     fi
     echo "sudo cp -r ${MODULES_DIR} /lib/modules/."
-    if ! sudo cp -r "${MODULES_DIR}" /lib/modules/.; then
+    if ! sudo cp -r ${MODULES_DIR} /lib/modules/.; then
         echo "Error: Failed to copy modules to '/lib/modules/', DON'T REBOOT"
         exit 1
     fi
@@ -92,12 +83,7 @@ elif [ -f Image ]; then
 else
     echo "Warning: Image not found, skipping kernel update"
 fi
-if [ -n "${EXTRACTED_KVER}" ] && [ "${EXTRACTED_KVER}" != "$(uname -r)" ]; then
-    echo "sudo depmod ${EXTRACTED_KVER}"
-          sudo depmod "${EXTRACTED_KVER}"
-else
-    echo "sudo depmod"
-          sudo depmod
-fi
+echo "sudo depmod"
+      sudo depmod
 echo "done - rebooting"
       sudo reboot
