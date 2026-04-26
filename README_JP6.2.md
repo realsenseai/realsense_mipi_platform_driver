@@ -136,9 +136,10 @@ If you build locally use those commands:
 ```
 sudo cp -r ./images/6.2/rootfs/lib/modules/5.15.148-tegra /lib/modules/.
 sudo cp    ./images/6.2/rootfs/boot/tegra234-camera-d4xx-overlay*.dtbo /boot/dev/.
-sudo cp    ./images/6.2/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/dtb/.
-# For production carrier boards (p3701-0005):
-sudo cp    ./images/6.2/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/dtb/.
+# Copy the FDT - For Orin dev kit use: tegra234-p3737-0000+p3701-0000-nv.dtb
+# For Orin production carrier boards: tegra234-p3737-0000+p3701-0005-nv.dtb
+# For Seeed Orin nano, no need to copy FDT, we will use the one already on the device
+sudo cp    ./images/6.2/rootfs/boot/dtb/tegra234-p3737-0000+p3701-<0000/0005>-nv.dtb /boot/dtb/.
 sudo cp    ./images/6.2/rootfs/boot/Image /boot/dev/.
 ```
 In case of scp copy from host use this commands:
@@ -187,17 +188,23 @@ sudo ln -s /boot/initrd.img-5.15.148-tegra /boot/initrd
     | `tegra234-camera-d4xx-overlay-fg12-16ch-PWR-only.dtbo` | Fangzhu fg12-16ch board ONLY POWER GPIOS (driver will not be probed) - for development use |
     | `tegra234-camera-d4xx-overlay-advantech.dtbo` | Advantech board with one camera connected to bottom right of the left port |
     | `tegra234-camera-d4xx-overlay-avermedia.dtbo` | AverMedia board with one camera connected to bottom right of the right port |
+    | `tegra234-camera-d4xx-overlay-seeed.dtbo` | Seeed reComputer board with one camera connected to top right link |
+    | `tegra234-camera-d4xx-overlay-seeed-0-1.dtbo` | Seeed reComputer board with two cameras connected to top two links |
+    | `tegra234-camera-d4xx-overlay-seeed-0-1-2-3.dtbo` | Seeed reComputer board with four cameras connected |
 
 6. Modify bootloader configuration:
  - open /boot/extlinux/extlinux.conf for editing using your preferred editor
  - Copy existing primary kernel and rename the copy to "dev"
  - Change the "MENU LABEL" to a meaningful label (e.g "development kernel")
  - Change the "LINUX" line to point to the newly copied /boot/**dev**/Image
- - Add the "FDT" line pointing at the newly copied device tree "/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb" (or tegra234-p3737-0000+p3701-0005-nv.dtb for production boards)
+ - Add the "FDT" line pointing at the correct device tree 
+    - For Orin devkit: /boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb (Copied in step 2)
+    - For Orin production board: /boot/dtb/tegra234-p3737-0000+p3701-0005-nv.dtb (Copied in step 2)
+    - For Seeed Orin nano: /boot/dtb/kernel_tegra234-j401-p3768-0000+p3767-0004-recomputer-robo-gmsl.dtb (Already on the device)
  - add the "OVERLAYS" line pointing to the required overlay as chosen in step 5 (e.g /boot/dev/tegra234-camera-d4xx-overlay.dtbo)
  - Select the new label as the default
 
-The result should be:
+The result should be (e.g for Orin devkit with max9296 overlay):
 
 ```
 ...
@@ -213,7 +220,7 @@ LABEL dev
     MENU LABEL development kernel
     LINUX /boot/dev/Image
     INITRD /boot/initrd
-    APPEND ${cbootargs} root=...
+    APPEND ${cbootargs} root=<Long APPEND line copied from primary...>
     FDT /boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb
     OVERLAYS /boot/dev/tegra234-camera-d4xx-overlay.dtbo
 
