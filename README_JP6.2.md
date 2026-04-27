@@ -140,7 +140,7 @@ sudo cp    ./images/6.2/rootfs/boot/tegra234-camera-d4xx-overlay*.dtbo /boot/dev
 sudo cp    ./images/6.2/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/dtb/.
 # For Orin production carrier boards: tegra234-p3737-0000+p3701-0005-nv.dtb
 sudo cp    ./images/6.2/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/dtb/.
-# For Seeed Orin nano, no need to copy FDT, we will use the one already on the device
+# For Seeed Orin nano, no need to copy FDT, we will use the one already on the device (Prerequisite: Seeed's GMSL-enabled BSP https://wiki.seeedstudio.com/recomputer_jetson_robotics_j401_getting_started/)
 sudo cp    ./images/6.2/rootfs/boot/Image /boot/dev/.
 ```
 In case of scp copy from host use this commands:
@@ -202,7 +202,7 @@ sudo ln -s /boot/initrd.img-5.15.148-tegra /boot/initrd
  - Add the "FDT" line pointing at the correct device tree 
     - For Orin devkit: /boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb (Copied in step 2)
     - For Orin production board: /boot/dtb/tegra234-p3737-0000+p3701-0005-nv.dtb (Copied in step 2)
-    - For Seeed Orin nano: /boot/dtb/kernel_tegra234-j401-p3768-0000+p3767-0004-recomputer-robo-gmsl.dtb (Already on the device)
+    - For Seeed Orin nano: /boot/dtb/kernel_tegra234-j401-p3768-0000+p3767-0004-recomputer-robo-gmsl.dtb (Requires Seeed's GMSL-enabled BSP - see step 2)
  - add the "OVERLAYS" line pointing to the required overlay as chosen in step 5 (e.g /boot/dev/tegra234-camera-d4xx-overlay.dtbo)
  - Select the new label as the default
 
