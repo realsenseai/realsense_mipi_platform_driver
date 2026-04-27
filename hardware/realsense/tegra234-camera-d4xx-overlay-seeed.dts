@@ -10,7 +10,7 @@
 
 /* camera control gpio definitions */
 / {
-	overlay-name = "Jetson RealSense Camera D4xx with max96712 for Seed studio Orin nano (Top right)";
+	overlay-name = "Jetson RealSense Camera D4xx with max96712 for Seeed studio Orin nano (Top right)";
 	jetson-header-name = "Jetson AGX CSI Connector";
 	compatible = JETSON_COMPATIBLE;
 

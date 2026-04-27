@@ -10,7 +10,7 @@
 
 /* camera control gpio definitions */
 / {
-	overlay-name = "Jetson Two RealSense D4xx Cameras with max96712 for Seed studio Orin nano (Top two)";
+	overlay-name = "Jetson Two RealSense D4xx Cameras with max96712 for Seeed studio Orin nano (Top two)";
 	jetson-header-name = "Jetson AGX CSI Connector";
 	compatible = JETSON_COMPATIBLE;
 
@@ -204,7 +204,7 @@
 						drivernode0 {
 							status = "okay";
 							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 2-001c";
+							devname = "DS5 mux 2-002c";
 							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@3180000/ds5@2c";
 						};
 					};
@@ -216,7 +216,7 @@
 						drivernode0 {
 							status = "okay";
 							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 2-001d";
+							devname = "DS5 mux 2-002d";
 							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@3180000/ds5@2d";
 						};
 					};
@@ -645,6 +645,7 @@
 							num-lanes = <2>;
 						};
 					};
+
 					ds5_3: ds5@1d {
 						status = "okay";
 						def-addr = <0x10>;

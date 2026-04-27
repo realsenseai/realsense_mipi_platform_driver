@@ -137,9 +137,10 @@ If you build locally use those commands:
 sudo cp -r ./images/6.2/rootfs/lib/modules/5.15.148-tegra /lib/modules/.
 sudo cp    ./images/6.2/rootfs/boot/tegra234-camera-d4xx-overlay*.dtbo /boot/dev/.
 # Copy the FDT - For Orin dev kit use: tegra234-p3737-0000+p3701-0000-nv.dtb
+sudo cp    ./images/6.2/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/dtb/.
 # For Orin production carrier boards: tegra234-p3737-0000+p3701-0005-nv.dtb
+sudo cp    ./images/6.2/rootfs/boot/dtb/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/dtb/.
 # For Seeed Orin nano, no need to copy FDT, we will use the one already on the device
-sudo cp    ./images/6.2/rootfs/boot/dtb/tegra234-p3737-0000+p3701-<0000/0005>-nv.dtb /boot/dtb/.
 sudo cp    ./images/6.2/rootfs/boot/Image /boot/dev/.
 ```
 In case of scp copy from host use this commands:
@@ -150,6 +151,7 @@ sudo cp    ./boot/tegra234-camera-d4xx-overlay*.dtbo /boot/dev/.
 sudo cp    ./boot/dtb/tegra234-p3737-0000+p3701-0000-nv.dtb /boot/dtb/.
 # For production carrier boards (p3701-0005):
 sudo cp    ./boot/dtb/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/dtb/.
+# For Seeed Orin nano, no need to copy FDT, we will use the one already on the device
 sudo cp    ./boot/Image /boot/dev/.
 ```
 3.	Run depmod
@@ -189,8 +191,8 @@ sudo ln -s /boot/initrd.img-5.15.148-tegra /boot/initrd
     | `tegra234-camera-d4xx-overlay-advantech.dtbo` | Advantech board with one camera connected to bottom right of the left port |
     | `tegra234-camera-d4xx-overlay-avermedia.dtbo` | AverMedia board with one camera connected to bottom right of the right port |
     | `tegra234-camera-d4xx-overlay-seeed.dtbo` | Seeed reComputer board with one camera connected to top right link |
-    | `tegra234-camera-d4xx-overlay-seeed-0-1.dtbo` | Seeed reComputer board with two cameras connected to top two links |
-    | `tegra234-camera-d4xx-overlay-seeed-0-1-2-3.dtbo` | Seeed reComputer board with four cameras connected |
+    | `tegra234-camera-d4xx-overlay-seeed-cams-0-1.dtbo` | Seeed reComputer board with two cameras connected to top two links |
+    | `tegra234-camera-d4xx-overlay-seeed-cams-0-1-2-3.dtbo` | Seeed reComputer board with four cameras connected |
 
 6. Modify bootloader configuration:
  - open /boot/extlinux/extlinux.conf for editing using your preferred editor
