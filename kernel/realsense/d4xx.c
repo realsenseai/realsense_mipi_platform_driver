@@ -2416,6 +2416,42 @@ static void ds5_reset_streaming_flags(struct ds5_dev *ds5_dev)
 	mutex_unlock(&ds5_dev->lock);
 }
 
+static int ds5_set_ser_esync_tunneling(struct ds5 *state, bool enable)
+{
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	int ret;
+
+	if (!state || !state->ser_dev)
+		return -EINVAL;
+	if (state->dser_ops != &max96712_interface)
+		return 0;
+
+	dev_info(&state->client->dev,
+		"%s(): serializer ESYNC %s requested\n",
+		__func__, enable ? "enable" : "disable");
+
+	mutex_lock(&serdes_lock__);
+	if (enable)
+		ret = max9295_enable_gpio_tunneling(state->ser_dev);
+	else
+		ret = max9295_disable_gpio_tunneling(state->ser_dev);
+	mutex_unlock(&serdes_lock__);
+
+	if (ret)
+		dev_warn(&state->client->dev,
+			"%s(): serializer ESYNC %s failed (%d)\n",
+			__func__, enable ? "enable" : "disable", ret);
+	else
+		dev_info(&state->client->dev,
+			"%s(): serializer ESYNC %s OK\n",
+			__func__, enable ? "enable" : "disable");
+
+	return ret;
+#else
+	return 0;
+#endif
+}
+
 /*
  * ds5_hw_reset_with_recovery - Perform hardware reset with readiness polling
  * @state: Driver state structure
@@ -2622,6 +2658,14 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 		dev_type,
 		(state->fw_version >> 8) & 0xff, state->fw_version & 0xff,
 		(state->fw_build >> 8) & 0xff, state->fw_build & 0xff);
+
+	dev_info(&state->client->dev,
+		"%s(): disabling serializer ESYNC after HW reset\n", __func__);
+	ret = ds5_set_ser_esync_tunneling(state, false);
+	if (ret)
+		dev_warn(&state->client->dev,
+			"%s(): serializer ESYNC disable after HW reset failed (%d)\n",
+			__func__, ret);
 
 	WRITE_ONCE(state->ds5_dev->last_reset_jiffies, jiffies);
 
@@ -2928,6 +2972,15 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			ret = ds5_write(state, base | DS5_CAMERA_SYNC_MODE, ctrl->val);
 			dev_info(&state->client->dev, "%s(): SYNC_MODE command passed to FW, addr: 0x%x, value: %d, ret: %d\n",
 				__func__, base | DS5_CAMERA_SYNC_MODE, ctrl->val, ret);
+			if (!ret) {
+				bool need_esync = (ctrl->val == 2 || ctrl->val == 3);
+
+				dev_info(&state->client->dev,
+					"%s(): sync_mode=%d -> serializer ESYNC %s\n",
+					__func__, ctrl->val,
+					need_esync ? "enable" : "disable");
+				ret = ds5_set_ser_esync_tunneling(state, need_esync);
+			}
 		}
 		break;
 	case DS5_CAMERA_CID_PWM:
@@ -3950,13 +4003,6 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 	/* proceed even if ser setup failed, to setup deser correctly */
 	if (err)
 		dev_err(dev, "gmsl serializer setup failed\n");
-
-	/* Extended GPIO tunneling for MAX96712A deserializer */
-	if (state->dser_ops == &max96712_interface) {
-		int tun_err = max9295_setup_gpio_tunneling(state->ser_dev);
-		if (tun_err)
-			dev_err(dev, "gmsl serializer GPIO tunneling setup failed\n");
-	}
 
 	des_err = state->dser_ops->setup_control(state->dser_dev, &state->client->dev);
 	if (des_err) {
