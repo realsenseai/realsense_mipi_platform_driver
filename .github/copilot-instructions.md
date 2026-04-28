@@ -125,6 +125,7 @@ Build outputs go to `images/<version>/`.
 Camera variant flags: `--one-cam`, `--dual-cam`, `--max96712-EVB`, `--fg12-16ch`, `--fg12-16ch-dual` (only some apply to specific JetPack versions).
 
 - **Separate patches per kernel module**: when changes span different kernel modules (e.g. max9295, max9296, max96712, d4xx), each module must get its own patch file. Do not combine changes to different modules in a single patch.
+- **Signed-off-by in every patch**: every `.patch` file must include a `Signed-off-by:` trailer. When you modify a patch, add your own `Signed-off-by:` using the current `git config user.name` / `user.email`. Do not leave any patch without one.
 
 ## Key Directories
 

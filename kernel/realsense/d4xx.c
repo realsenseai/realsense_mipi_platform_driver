@@ -2206,6 +2206,16 @@ static int ds5_hw_set_exposure(struct ds5 *state, u32 base, s32 val)
 #define DS5_CAMERA_CID_HWMC			(DS5_CAMERA_CID_BASE+15)
 #define DS5_CAMERA_CID_SYNC_MODE		(DS5_CAMERA_CID_BASE+16)
 
+/* Sync mode values — indices into sync_mode_menu_full[] */
+enum ds5_sync_mode {
+	DS5_SYNC_MODE_DEFAULT,
+	DS5_SYNC_MODE_MASTER,
+	DS5_SYNC_MODE_SLAVE,
+	DS5_SYNC_MODE_FULL_SLAVE,
+	DS5_SYNC_MODE_SUB_PREMASTER,
+	DS5_SYNC_MODE_FULL_MASTER,
+};
+
 #define DS5_CAMERA_CID_PWM			(DS5_CAMERA_CID_BASE+22)
 
 /* the HWMC will remain for legacy tools compatibility,
@@ -2426,23 +2436,21 @@ static int ds5_set_ser_esync_tunneling(struct ds5 *state, bool enable)
 	if (state->dser_ops != &max96712_interface)
 		return 0;
 
-	dev_info(&state->client->dev,
+	dev_dbg(&state->client->dev,
 		"%s(): serializer ESYNC %s requested\n",
 		__func__, enable ? "enable" : "disable");
 
-	mutex_lock(&serdes_lock__);
 	if (enable)
 		ret = max9295_enable_gpio_tunneling(state->ser_dev);
 	else
 		ret = max9295_disable_gpio_tunneling(state->ser_dev);
-	mutex_unlock(&serdes_lock__);
 
 	if (ret)
 		dev_warn(&state->client->dev,
 			"%s(): serializer ESYNC %s failed (%d)\n",
 			__func__, enable ? "enable" : "disable", ret);
 	else
-		dev_info(&state->client->dev,
+		dev_dbg(&state->client->dev,
 			"%s(): serializer ESYNC %s OK\n",
 			__func__, enable ? "enable" : "disable");
 
@@ -2659,13 +2667,18 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 		(state->fw_version >> 8) & 0xff, state->fw_version & 0xff,
 		(state->fw_build >> 8) & 0xff, state->fw_build & 0xff);
 
-	dev_info(&state->client->dev,
-		"%s(): disabling serializer ESYNC after HW reset\n", __func__);
-	ret = ds5_set_ser_esync_tunneling(state, false);
-	if (ret)
-		dev_warn(&state->client->dev,
-			"%s(): serializer ESYNC disable after HW reset failed (%d)\n",
-			__func__, ret);
+	/* Re-apply ESYNC tunneling to match cached sync_mode control */
+	if (state->ctrls.sync_mode) {
+		int sync_val = state->ctrls.sync_mode->cur.val;
+		bool need_esync = (sync_val == DS5_SYNC_MODE_SLAVE ||
+				   sync_val == DS5_SYNC_MODE_FULL_SLAVE);
+
+		ret = ds5_set_ser_esync_tunneling(state, need_esync);
+		if (ret)
+			dev_warn(&state->client->dev,
+				"%s(): serializer ESYNC %s after HW reset failed (%d)\n",
+				__func__, need_esync ? "enable" : "disable", ret);
+	}
 
 	WRITE_ONCE(state->ds5_dev->last_reset_jiffies, jiffies);
 
@@ -2973,9 +2986,10 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			dev_info(&state->client->dev, "%s(): SYNC_MODE command passed to FW, addr: 0x%x, value: %d, ret: %d\n",
 				__func__, base | DS5_CAMERA_SYNC_MODE, ctrl->val, ret);
 			if (!ret) {
-				bool need_esync = (ctrl->val == 2 || ctrl->val == 3);
+				bool need_esync = (ctrl->val == DS5_SYNC_MODE_SLAVE ||
+						   ctrl->val == DS5_SYNC_MODE_FULL_SLAVE);
 
-				dev_info(&state->client->dev,
+				dev_dbg(&state->client->dev,
 					"%s(): sync_mode=%d -> serializer ESYNC %s\n",
 					__func__, ctrl->val,
 					need_esync ? "enable" : "disable");
@@ -3486,12 +3500,12 @@ static const struct v4l2_ctrl_config ds5_ctrl_hw_reset = {
 
 /* Sync mode menu arrays for different camera platforms */
 static const char * const sync_mode_menu_full[] = {
-	"Default",           /* 0 */
-	"Master",            /* 1 */
-	"Slave",             /* 2 */
-	"Full Slave",        /* 3 */
-	"Sub Pre-Master",    /* 4 */
-	"Full Master",       /* 5 */
+	[DS5_SYNC_MODE_DEFAULT]       = "Default",
+	[DS5_SYNC_MODE_MASTER]        = "Master",
+	[DS5_SYNC_MODE_SLAVE]         = "Slave",
+	[DS5_SYNC_MODE_FULL_SLAVE]    = "Full Slave",
+	[DS5_SYNC_MODE_SUB_PREMASTER] = "Sub Pre-Master",
+	[DS5_SYNC_MODE_FULL_MASTER]   = "Full Master",
 };
 
 static const char * const sync_mode_menu_d401[] = {
