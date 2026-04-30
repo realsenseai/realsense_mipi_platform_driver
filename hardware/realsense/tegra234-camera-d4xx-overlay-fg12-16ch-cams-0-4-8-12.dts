@@ -6,8 +6,10 @@
 
 #include <dt-bindings/clock/tegra234-clock.h>
 #include <dt-bindings/gpio/tegra234-gpio.h>
+#include <dt-bindings/pinctrl/pinctrl-tegra.h>
 #include <dt-bindings/tegra234-p3737-0000+p3701-0000.h>
 
+#define CAM_SYNCALL	TEGRA234_AON_GPIO(CC, 0)  //MAX96712x4 MFP6
 #define CAM0_PWDN	TEGRA234_MAIN_GPIO(H, 6)  //MAX96712_1 PWDN
 #define CAM1_PWDN	TEGRA234_MAIN_GPIO(H, 3)  //MAX96712_2 PWDN
 #define CAM2_PWDN	TEGRA234_MAIN_GPIO(AC, 0) //MAX96712_3 PWDN
@@ -24,6 +26,19 @@
 	jetson-header-name = "Jetson AGX CSI Connector";
 	compatible = JETSON_COMPATIBLE;
 
+	fragment@2 {
+		target-path = "/bus@0/gpio@c2f0000";
+		__overlay__ {
+			/* CAM_SYNCALL (PCC.00) as open-drain input for MAX96712 MFP6 sync */
+			cam_syncall_hog {
+				gpio-hog;
+				gpios = <CAM_SYNCALL GPIO_OPEN_DRAIN>;
+				input;
+				line-name = "cam-syncall";
+			};
+		};
+	};
+
 	fragment@1 {
 		target-path = "/";
 		__overlay__ {
@@ -37,6 +52,7 @@
 			};
 		};
 	};
+
 	fragment@0 {
 		target-path = "/";
 		__overlay__ {
