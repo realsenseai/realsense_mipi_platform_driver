@@ -40,7 +40,7 @@
 					duty_cycle = <25>;
 					gpio_pinmux = <&gpio_aon MAX1_CSI_SYNC GPIO_ACTIVE_LOW>;
 				};
-				generator@400 {
+				generator@480 {
 					status = "okay";
 					freq_hz = <30>;
 					duty_cycle = <25>;
