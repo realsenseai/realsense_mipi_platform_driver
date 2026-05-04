@@ -69,6 +69,7 @@ if [ -z "${TARGET}" ]; then
 else
     echo "Copying files and setting permissions on remote host..."
     cp ${LOCAL_DIR}/scripts/install_to_kernel.sh ${LOCAL_DIR}/kernel_mod/${JETPACK_VERSION}/
+    cp ${LOCAL_DIR}/scripts/ext_sync_gen.py ${LOCAL_DIR}/kernel_mod/${JETPACK_VERSION}/
     # Use SSH ControlMaster to reuse a single SSH connection
     CONTROL_PATH="/tmp/ssh-control-${USERNAME}-${TARGET}"
     ssh -o ControlMaster=yes -o ControlPath="${CONTROL_PATH}" -o ControlPersist=10s -fN ${USERNAME}@${TARGET}

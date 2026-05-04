@@ -10,8 +10,8 @@
 #include <dt-bindings/tegra234-p3737-0000+p3701-0000.h>
 
 #define MAX1_CSI_SYNC	TEGRA234_AON_GPIO(BB, 2)  //MAX96712_1 MFP2
-#define MAX2_CSI_SYNC	TEGRA234_AON_GPIO(AA, 4)  //MAX96712_2 MFP2
-#define MAX4_CSI_SYNC	TEGRA234_AON_GPIO(AA, 7)  //MAX96712_4 MFP2
+#define MAX2_CSI_SYNC	TEGRA234_AON_GPIO(AA, 7)  //MAX96712_2 MFP2
+#define MAX4_CSI_SYNC	TEGRA234_AON_GPIO(BB, 3)  //MAX96712_4 MFP2
 #define CAM0_PWDN	TEGRA234_MAIN_GPIO(H, 6)  //MAX96712_1 PWDN
 #define CAM1_PWDN	TEGRA234_MAIN_GPIO(H, 3)  //MAX96712_2 PWDN
 #define CAM2_PWDN	TEGRA234_MAIN_GPIO(AC, 0) //MAX96712_3 PWDN
@@ -46,7 +46,7 @@
 					duty_cycle = <25>;
 					gpio_pinmux = <&gpio_aon MAX2_CSI_SYNC GPIO_ACTIVE_LOW>;
 				};
-				generator@480 {
+				generator@500 {
 					status = "okay";
 					freq_hz = <30>;
 					duty_cycle = <25>;
@@ -65,8 +65,6 @@
 	fragment@2 {
 		target-path = "/bus@0/pinmux@c300000";
 		__overlay__ {
-			pinctrl-names = "default";
-			pinctrl-0 = <&tsc_sync_pinmux>;
 			tsc_sync_pinmux: tsc-sync-pins {
 				max1-csi-sync {
 					nvidia,pins = "soc_gpio50_pbb2";
@@ -75,7 +73,7 @@
 					nvidia,enable-input = <TEGRA_PIN_DISABLE>;
 				};
 				max2-csi-sync {
-					nvidia,pins = "can0_stb_paa4";
+					nvidia,pins = "can0_err_paa7";
 					nvidia,function = "tsc";
 					nvidia,tristate = <TEGRA_PIN_DISABLE>;
 					nvidia,enable-input = <TEGRA_PIN_DISABLE>;
@@ -88,7 +86,7 @@
 					nvidia,pull = <TEGRA_PIN_PULL_DOWN>;
 				};
 				max4-csi-sync {
-					nvidia,pins = "can0_err_paa7";
+					nvidia,pins = "can1_err_pbb3";
 					nvidia,function = "tsc";
 					nvidia,tristate = <TEGRA_PIN_DISABLE>;
 					nvidia,enable-input = <TEGRA_PIN_DISABLE>;

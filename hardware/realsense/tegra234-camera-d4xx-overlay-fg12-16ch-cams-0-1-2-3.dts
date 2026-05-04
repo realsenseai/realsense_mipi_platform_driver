@@ -48,8 +48,6 @@
 	fragment@2 {
 		target-path = "/bus@0/pinmux@c300000";
 		__overlay__ {
-			pinctrl-names = "default";
-			pinctrl-0 = <&tsc_sync_pinmux>;
 			tsc_sync_pinmux: tsc-sync-pins {
 				max1-csi-sync {
 					nvidia,pins = "soc_gpio50_pbb2";
