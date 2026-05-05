@@ -66,7 +66,7 @@
 					nvidia,enable-input = <TEGRA_PIN_DISABLE>;
 				};
 				max2-csi-sync {
-					nvidia,pins = "can0_stb_paa7";
+					nvidia,pins = "can0_err_paa7";
 					nvidia,function = "tsc";
 					nvidia,tristate = <TEGRA_PIN_DISABLE>;
 					nvidia,enable-input = <TEGRA_PIN_DISABLE>;
