@@ -40,9 +40,9 @@ def main():
     group.add_argument("--disable", action="store_true",
                        help="Stop all TSC generators")
     parser.add_argument("--fps", type=int, default=None,
-                        help="Signal frequency in Hz (1-120, sets before start)")
+                        help="Signal frequency in Hz (1-120, sets before start - without it - default taken from DTS)")
     parser.add_argument("--duty", type=int, default=None,
-                        help="Duty cycle in percent (1-99, sets before start)")
+                        help="Duty cycle in percent (1-99, sets before start - without it - default taken from DTS)")
     args = parser.parse_args()
 
     if not os.path.exists(CDI_TSC_DEV):
