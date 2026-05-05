@@ -1,0 +1,113 @@
+From 844a2ba8df0cdd19f18ed078c93c16ef75002b64 Mon Sep 17 00:00:00 2001
+From: ejgoldik <ehud.joseph.goldik@realsenseai.com>
+Date: Mon, 4 May 2026 15:02:50 +0300
+Subject: [PATCH] Runtime tsc rate config
+
+- Patching cam_cdi_tsc driver to allow for hz and duty cycle
+configuration in runtime (original driver only gets these from device tree)
+
+Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
+---
+ .../media/platform/tegra/cdi/cam_cdi_tsc.c    | 58 +++++++++++++------
+ 1 file changed, 39 insertions(+), 19 deletions(-)
+
+diff --git a/drivers/media/platform/tegra/cdi/cam_cdi_tsc.c b/drivers/media/platform/tegra/cdi/cam_cdi_tsc.c
+index 52c3767a..504bda6d 100644
+--- a/drivers/media/platform/tegra/cdi/cam_cdi_tsc.c
++++ b/drivers/media/platform/tegra/cdi/cam_cdi_tsc.c
+@@ -30,6 +30,14 @@
+ #define CDI_TSC_FSYNC \
+ 	_IOW('T', 1, int)
+ 
++struct cdi_tsc_rate {
++	__u32 freq_hz;
++	__u32 duty_cycle;
++};
++
++#define CDI_TSC_SET_RATE \
++	_IOW('T', 2, struct cdi_tsc_rate)
++
+ 
+ #define TSC_TICKS_PER_HZ			(31250000ULL)
+ #define TSC_NS_PER_TICK_T234			(32)
+@@ -85,7 +93,6 @@
+ static int majorNumber;
+ static struct class *tsc_charClass;
+ static struct device *tsc_charDevice;
+-extern int Hawk_Owl_Fsync_program(int fsync_type);
+ 
+ /**
+  * struct tsc_signal_controller_features: TSC signal controller SW feature support.
+@@ -483,31 +490,16 @@ static void cdi_tsc_debugfs_remove(struct tsc_signal_controller *controller)
+ 
+ static int cdi_tsc_chardev_open(struct inode *inode, struct file *file)
+ {
+-	int err = 0;
+-
+ 	pr_info("%s:Device opened\n", __func__);
+ 
+-	/* Set External Fsync */
+-	err = Hawk_Owl_Fsync_program(EXTERNAL_FSYNC);
+-
+-	return err;
++	return 0;
+ }
+ 
+ static int cdi_tsc_chardev_release(struct inode *inode, struct file *file)
+ {
+-	struct tsc_signal_controller *controller = dev_get_drvdata(tsc_charDevice);
+-	int err = -EFAULT;
++	pr_info("%s:Device closed\n", __func__);
+ 
+-	dev_info(controller->dev, "%s Device closed .....\n", __func__);
+-	/* To make sure whenever the device is closed, tsc is also stopped
+-	 * to avoid inconsistency in generating the pulses */
+-	err = cdi_tsc_stop_generators(controller);
+-
+-	if (err)
+-		return err;
+-	/* Set back to Internal Fsync */
+-	err = Hawk_Owl_Fsync_program(INTERNAL_FSYNC);
+-	return err;
++	return 0;
+ }
+ 
+ static long cdi_tsc_chardev_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+@@ -528,6 +520,34 @@ static long cdi_tsc_chardev_ioctl(struct file *file, unsigned int cmd, unsigned
+ 			err = cdi_tsc_stop_generators(controller);
+ 		}
+ 		break;
++	case _IOC_NR(CDI_TSC_SET_RATE): {
++		struct cdi_tsc_rate rate;
++		struct tsc_signal_generator *gen;
++
++		if (copy_from_user(&rate, ptr, sizeof(rate)) != 0U)
++			break;
++		if (rate.freq_hz == 0 ||
++		    rate.freq_hz > controller->features->rational_locking.max_freq_hz_lcm) {
++			dev_err(controller->dev, "%s: freq_hz %u out of range\n",
++				__func__, rate.freq_hz);
++			err = -EINVAL;
++			break;
++		}
++		if (rate.duty_cycle == 0 || rate.duty_cycle >= 100) {
++			dev_err(controller->dev, "%s: duty_cycle %u out of range\n",
++				__func__, rate.duty_cycle);
++			err = -EINVAL;
++			break;
++		}
++		list_for_each_entry(gen, &controller->generators, list) {
++			gen->config.freq_hz = rate.freq_hz;
++			gen->config.duty_cycle = rate.duty_cycle;
++		}
++		dev_info(controller->dev, "%s: rate set to %u Hz, %u%% duty\n",
++			 __func__, rate.freq_hz, rate.duty_cycle);
++		err = 0;
++		break;
++	}
+ 	default: {
+ 			 dev_err(controller->dev, "%s:Unknown ioctl\n", __func__);
+ 			 return -ENOIOCTLCMD;
+-- 
+2.43.0
+

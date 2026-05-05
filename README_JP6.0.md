@@ -285,4 +285,8 @@ LABEL JetsonIO_calib
     - Rename `tegra234-camera-d4xx-overlay-dual.dtbo` to `tegra234-camera-d4xx-overlay-dual.calib.dtbo`
 - Copy the two DTBO files from the build Host to `/boot/` on the Jetson. 
 
+### External Sync (fg12-16ch)
+
+For multi-camera frame synchronization on the fg12-16ch board using TSC signal generators or an external signal source, see the [External Sync Guide](./docs/external-sync-fg12-16ch.md).
+
 ---

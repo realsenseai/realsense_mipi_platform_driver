@@ -6,8 +6,12 @@
 
 #include <dt-bindings/clock/tegra234-clock.h>
 #include <dt-bindings/gpio/tegra234-gpio.h>
+#include <dt-bindings/pinctrl/pinctrl-tegra.h>
 #include <dt-bindings/tegra234-p3737-0000+p3701-0000.h>
 
+#define MAX1_CSI_SYNC	TEGRA234_AON_GPIO(BB, 2)  //MAX96712_1 MFP2
+#define MAX2_CSI_SYNC	TEGRA234_AON_GPIO(AA, 7)  //MAX96712_2 MFP2
+#define MAX4_CSI_SYNC	TEGRA234_AON_GPIO(BB, 3)  //MAX96712_4 MFP2
 #define CAM0_PWDN	TEGRA234_MAIN_GPIO(H, 6)  //MAX96712_1 PWDN
 #define CAM1_PWDN	TEGRA234_MAIN_GPIO(H, 3)  //MAX96712_2 PWDN
 #define CAM2_PWDN	TEGRA234_MAIN_GPIO(AC, 0) //MAX96712_3 PWDN
@@ -21,6 +25,82 @@
 	overlay-name = "Jetson fg12-16ch power and reset gpios only";
 	jetson-header-name = "Jetson AGX CSI Connector";
 	compatible = JETSON_COMPATIBLE;
+
+	/* TSC signal generators for MAX96712 MFP2 sync (one per deserializer). */
+	fragment@2 {
+		target-path = "/";
+		__overlay__ {
+			tsc_sig_gen@c6a0000 {
+				status = "okay";
+				generator@380 {
+					status = "okay";
+					freq_hz = <30>;
+					duty_cycle = <25>;
+					gpio_pinmux = <&gpio_aon MAX1_CSI_SYNC GPIO_ACTIVE_LOW>;
+				};
+				generator@480 {
+					status = "okay";
+					freq_hz = <30>;
+					duty_cycle = <25>;
+					gpio_pinmux = <&gpio_aon MAX2_CSI_SYNC GPIO_ACTIVE_LOW>;
+				};
+				generator@500 {
+					status = "okay";
+					freq_hz = <30>;
+					duty_cycle = <25>;
+					gpio_pinmux = <&gpio_aon MAX4_CSI_SYNC GPIO_ACTIVE_LOW>;
+				};
+			};
+		};
+	};
+
+	/* Muxing MAX<1/2/4>_CSI_SYNC to TSC function
+	 * MAX3_CSI_SYNC (PCC.02) & MAX_ALL_CAM_SYNC (PCC.00) do not have
+	 * this routing on Orin, so we define them as high-Z input with pull-down for external wiring
+	 * use jumper cable from MAX<1/2/4>_CSI_SYNC to MAX3_CSI_SYNC to use Orin TSC for sync signal or
+	 * MAX_ALL_CAM_SYNC connected to an external signal generator
+	 */
+	fragment@1 {
+		target-path = "/bus@0/pinmux@c300000";
+		__overlay__ {
+			pinctrl-names = "default";
+			pinctrl-0 = <&tsc_sync_pinmux>;
+			tsc_sync_pinmux: tsc-sync-pins {
+				max1-csi-sync {
+					nvidia,pins = "soc_gpio50_pbb2";
+					nvidia,function = "tsc";
+					nvidia,tristate = <TEGRA_PIN_DISABLE>;
+					nvidia,enable-input = <TEGRA_PIN_DISABLE>;
+				};
+				max2-csi-sync {
+					nvidia,pins = "can0_err_paa7";
+					nvidia,function = "tsc";
+					nvidia,tristate = <TEGRA_PIN_DISABLE>;
+					nvidia,enable-input = <TEGRA_PIN_DISABLE>;
+				};
+				max3-csi-sync-input {
+					nvidia,pins = "spi2_mosi_pcc2";
+					nvidia,function = "rsvd1";
+					nvidia,tristate = <TEGRA_PIN_ENABLE>;
+					nvidia,enable-input = <TEGRA_PIN_ENABLE>;
+					nvidia,pull = <TEGRA_PIN_PULL_DOWN>;
+				};
+				max4-csi-sync {
+					nvidia,pins = "can1_err_pbb3";
+					nvidia,function = "tsc";
+					nvidia,tristate = <TEGRA_PIN_DISABLE>;
+					nvidia,enable-input = <TEGRA_PIN_DISABLE>;
+				};
+				sync-all-input {
+					nvidia,pins = "spi2_sck_pcc0";
+					nvidia,function = "rsvd1";
+					nvidia,tristate = <TEGRA_PIN_ENABLE>;
+					nvidia,enable-input = <TEGRA_PIN_ENABLE>;
+					nvidia,pull = <TEGRA_PIN_PULL_DOWN>;
+				};
+			};
+		};
+	};
 
 	fragment@0 {
 		target-path = "/";
