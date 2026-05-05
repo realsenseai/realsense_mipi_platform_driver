@@ -48,7 +48,7 @@
 	};
 
 	/* Muxing MAX<1/2>_CSI_SYNC to TSC function
-	 * MAX_ALL_CAM_SYNC (PCC.00) does not have This routing in Orin
+	 * MAX_ALL_CAM_SYNC (PCC.00) does not have This routing on Orin
 	 * so we define it as high-Z input with pull-down for external wiring
 	 * Use MAX<1/2>_CSI_SYNC for Orin TSC as sync signal or use
 	 * MAX_ALL_CAM_SYNC connected to an external signal generator
