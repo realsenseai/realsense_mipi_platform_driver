@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-2.0-only
-# SPDX-FileCopyrightText: Copyright (c) 2024, INTEL CORPORATION.  All rights reserved.
 #
-# tsc_sync_ioctl.py - Control TSC signal generators via /dev/cdi_tsc.
+# ext_sync_gen.py - Control TSC signal generators via /dev/cdi_tsc.
 #
 # Uses the kernel CDI TSC driver ioctl interface. Supports runtime
 # frequency and duty cycle changes via CDI_TSC_SET_RATE ioctl.
