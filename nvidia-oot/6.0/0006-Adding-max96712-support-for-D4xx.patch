@@ -513,8 +513,8 @@ index 8e237eef..188bb083 100644
 +		/* Put DPLL in reset before changing MIPI lane rates */
 +		{MAX96712_DPLL_0_ADDR, 0xF4}, //0x1D00
 +
-+		/* 1500Mbps/lane on port A */
-+		{MAX96712_BACKTOP25_ADDR, 0x2f}, //0x418
++		/* 2500Mbps/lane on port A */
++		{MAX96712_BACKTOP25_ADDR, 0x39}, //0x418
 +
 +		/* Release DPLL reset */
 +		{MAX96712_DPLL_0_ADDR, 0xF5}, //0x1D00
