@@ -2,13 +2,14 @@
 
 # Display help message
 if [ "$#" -lt 1 ] || [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
-      echo "Usage: $0 <JETPACK_VERSION> [BOOT_FOLDER]"
+    echo "Usage: $0 <JETPACK_VERSION> [BOOT_FOLDER] [DELAY_SECONDS]"
       echo ""
       echo "Update the kernel modules and boot files on the local device for a specific JetPack version."
       echo ""
       echo "Arguments:"
       echo "  JETPACK_VERSION   JetPack version (e.g., 5.0.2, 5.1.2, 6.0, 6.1, 6.2, 6.2.1, 7.0, 7.1)"
       echo "  BOOT_FOLDER       Folder name under /boot to copy Image (default: dev)"
+      echo "  DELAY_SECONDS     Delay before reboot in seconds (default: 0)"
       echo ""
       echo "Example:"
       echo "  $0 6.2 foo"
@@ -17,6 +18,13 @@ fi
 
 JETPACK_VERSION="$1"
 FOLDER="${2:-dev}"
+DELAY="${3:-0}"
+
+# Validate DELAY is a non-negative integer
+if ! [[ "${DELAY}" =~ ^[0-9]+$ ]]; then
+    echo "Error: DELAY_SECONDS must be a non-negative integer"
+    exit 1
+fi
 
 if [ ! -d /boot/${FOLDER} ]; then
     sudo mkdir /boot/${FOLDER}
@@ -85,5 +93,5 @@ else
 fi
 echo "sudo depmod"
       sudo depmod
-echo "done - rebooting"
-      sudo reboot
+echo "done - scheduling reboot in ${DELAY} seconds (backgrounded via sudo -n)"
+sudo -n bash -c "nohup sh -c \"sleep ${DELAY}; /sbin/reboot\" >/dev/null 2>&1 &"
