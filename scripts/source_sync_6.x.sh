@@ -244,7 +244,7 @@ function DownloadAndSync {
 
 		if git -C $LDK_SOURCE_DIR rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
 			echo "Syncing up with tag $TAG..."
-			if git -C $LDK_SOURCE_DIR checkout -b mybranch_$(date +%Y-%m-%d-%s) $TAG; then
+			if git -C $LDK_SOURCE_DIR checkout -b source_sync_$(date +%Y-%m-%d-%s) $TAG; then
 				echo "$2 source sync'ed to tag $TAG successfully!"
 			else
 				echo "$2 could not sync to tag $TAG!"
