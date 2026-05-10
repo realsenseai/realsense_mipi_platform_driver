@@ -172,6 +172,7 @@ function UpdateTags {
 
 GIT_RETRY_MAX=5
 GIT_RETRY_DELAY=10
+GIT_HTTP_OPTS=(-c http.version=HTTP/1.1 -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60)
 
 function GitWithRetry {
 	local RET=0
@@ -208,7 +209,7 @@ function DownloadAndSync {
 			echo ""
 			return 1
 		fi
-		if ! GitWithRetry git -C $LDK_SOURCE_DIR -c http.version=HTTP/1.1 -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 fetch --all --tags --force 2>&1 >/dev/null; then
+		if ! GitWithRetry git -C $LDK_SOURCE_DIR "${GIT_HTTP_OPTS[@]}" fetch --all --tags 2>&1 >/dev/null; then
 			echo "$2 source sync failed"
 			return 2
 		fi
@@ -216,11 +217,11 @@ function DownloadAndSync {
 		echo "Downloading default $WHAT_SOURCE source..."
 
 		if [[ -n "$TAG" ]]; then
-			if ! GitWithRetry git -c http.version=HTTP/1.1 -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 clone -n --branch "$TAG" --depth 1 "$REPO_URL" ${LDK_SOURCE_DIR} 2>&1 >/dev/null; then
+			if ! GitWithRetry git "${GIT_HTTP_OPTS[@]}" clone -n --branch "$TAG" --depth 1 "$REPO_URL" ${LDK_SOURCE_DIR} 2>&1 >/dev/null; then
 				echo "$2 source sync failed"
 				return 3
 			fi
-		elif ! GitWithRetry git -c http.version=HTTP/1.1 -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 clone -n "$REPO_URL" ${LDK_SOURCE_DIR} 2>&1 >/dev/null; then
+		elif ! GitWithRetry git "${GIT_HTTP_OPTS[@]}" clone -n "$REPO_URL" ${LDK_SOURCE_DIR} 2>&1 >/dev/null; then
 			echo "$2 source sync failed"
 			return 3
 		fi
@@ -237,11 +238,11 @@ function DownloadAndSync {
 	fi
 
 	if [[ -n "$TAG" ]]; then
-		if [ -z "$(git -C $LDK_SOURCE_DIR tag -l "$TAG")" ]; then
-			GitWithRetry git -C $LDK_SOURCE_DIR -c http.version=HTTP/1.1 -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 fetch --tags 2>&1 >/dev/null
+		if ! git -C $LDK_SOURCE_DIR rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+			GitWithRetry git -C $LDK_SOURCE_DIR "${GIT_HTTP_OPTS[@]}" fetch --tags 2>&1 >/dev/null
 		fi
 
-		if [ -n "$(git -C $LDK_SOURCE_DIR tag -l "$TAG")" ]; then
+		if git -C $LDK_SOURCE_DIR rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
 			echo "Syncing up with tag $TAG..."
 			if git -C $LDK_SOURCE_DIR checkout -b mybranch_$(date +%Y-%m-%d-%s) $TAG; then
 				echo "$2 source sync'ed to tag $TAG successfully!"
