@@ -170,6 +170,30 @@ function UpdateTags {
 	done
 }
 
+GIT_RETRY_MAX=5
+GIT_RETRY_DELAY=10
+
+function GitWithRetry {
+	local RET=0
+	local ATTEMPT=1
+
+	while [[ $ATTEMPT -le $GIT_RETRY_MAX ]]; do
+		if "$@"; then
+			return 0
+		fi
+
+		RET=$?
+		if [[ $ATTEMPT -lt $GIT_RETRY_MAX ]]; then
+			local BACKOFF=$((GIT_RETRY_DELAY * ATTEMPT))
+			echo "Git command failed (attempt ${ATTEMPT}/${GIT_RETRY_MAX}). Retrying in ${BACKOFF}s..."
+			sleep $BACKOFF
+		fi
+		ATTEMPT=$((ATTEMPT + 1))
+	done
+
+	return $RET
+}
+
 function DownloadAndSync {
 	local WHAT_SOURCE="$1"
 	local LDK_SOURCE_DIR="$2"
@@ -178,25 +202,30 @@ function DownloadAndSync {
 	local OPT="$5"
 
 	if [ -d "${LDK_SOURCE_DIR}" ]; then
-		echo "Directory for $WHAT, ${LDK_SOURCE_DIR}, already exists!"
+		echo "Directory for $WHAT_SOURCE, ${LDK_SOURCE_DIR}, already exists!"
 		if ! git -C $LDK_SOURCE_DIR status 2>&1 >/dev/null; then
 			echo "But the directory is not a git repository -- clean it up first"
 			echo ""
 			return 1
 		fi
-		if ! git -C $LDK_SOURCE_DIR fetch --all 2>&1 >/dev/null; then
+		if ! GitWithRetry git -C $LDK_SOURCE_DIR -c http.version=HTTP/1.1 -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 fetch --all --tags --force 2>&1 >/dev/null; then
 			echo "$2 source sync failed"
 			return 2
 		fi
 	else
-		echo "Downloading default $WHAT source..."
+		echo "Downloading default $WHAT_SOURCE source..."
 
-		if ! git clone -n "$REPO_URL" ${LDK_SOURCE_DIR} 2>&1 >/dev/null; then
+		if [[ -n "$TAG" ]]; then
+			if ! GitWithRetry git -c http.version=HTTP/1.1 -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 clone -n --branch "$TAG" --depth 1 "$REPO_URL" ${LDK_SOURCE_DIR} 2>&1 >/dev/null; then
+				echo "$2 source sync failed"
+				return 3
+			fi
+		elif ! GitWithRetry git -c http.version=HTTP/1.1 -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 clone -n "$REPO_URL" ${LDK_SOURCE_DIR} 2>&1 >/dev/null; then
 			echo "$2 source sync failed"
 			return 3
 		fi
 
-		echo "The default $WHAT source is downloaded in: ${LDK_SOURCE_DIR}"
+		echo "The default $WHAT_SOURCE source is downloaded in: ${LDK_SOURCE_DIR}"
 	fi
 
 	if [ -z "$TAG" ]; then
@@ -208,6 +237,10 @@ function DownloadAndSync {
 	fi
 
 	if [[ -n "$TAG" ]]; then
+		if [ -z "$(git -C $LDK_SOURCE_DIR tag -l "^$TAG\$")" ]; then
+			GitWithRetry git -C $LDK_SOURCE_DIR -c http.version=HTTP/1.1 -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 fetch --tags 2>&1 >/dev/null
+		fi
+
 		if [ -n $(git -C $LDK_SOURCE_DIR tag -l "^$TAG\$") ]; then
 			echo "Syncing up with tag $TAG..."
 			if git -C $LDK_SOURCE_DIR checkout -b mybranch_$(date +%Y-%m-%d-%s) $TAG; then
@@ -320,16 +353,7 @@ for ((i=0; i < NSOURCES; i++)); do
 	DNLOAD=$(echo "${SOURCE_INFO_PROCESSED[i]}" | cut -f 5 -d ':')
 
 	if [ $DALL -eq 1 -o "x${DNLOAD}" == "xy" ]; then
-		if DownloadAndSync "$WHAT" "${LDK_DIR}/${WHAT}" "https://${REPO}" "${TAG}" "${OPT}"; then
-			true
-		else
-			if [[ $? == 3 ]]; then
-				echo "Trying git protocol"
-				DownloadAndSync "$WHAT" "${LDK_DIR}/${WHAT}" "git://${REPO}" "${TAG}" "${OPT}"
-			else
-				exit 1
-			fi
-		fi
+		DownloadAndSync "$WHAT" "${LDK_DIR}/${WHAT}" "https://${REPO}" "${TAG}" "${OPT}" || exit 1
 	fi
 done
 
