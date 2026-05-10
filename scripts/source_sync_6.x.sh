@@ -237,11 +237,11 @@ function DownloadAndSync {
 	fi
 
 	if [[ -n "$TAG" ]]; then
-		if [ -z "$(git -C $LDK_SOURCE_DIR tag -l "^$TAG\$")" ]; then
+		if [ -z "$(git -C $LDK_SOURCE_DIR tag -l "$TAG")" ]; then
 			GitWithRetry git -C $LDK_SOURCE_DIR -c http.version=HTTP/1.1 -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 fetch --tags 2>&1 >/dev/null
 		fi
 
-		if [ -n $(git -C $LDK_SOURCE_DIR tag -l "^$TAG\$") ]; then
+		if [ -n "$(git -C $LDK_SOURCE_DIR tag -l "$TAG")" ]; then
 			echo "Syncing up with tag $TAG..."
 			if git -C $LDK_SOURCE_DIR checkout -b mybranch_$(date +%Y-%m-%d-%s) $TAG; then
 				echo "$2 source sync'ed to tag $TAG successfully!"
