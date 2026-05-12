@@ -442,14 +442,16 @@ def _discover_via_symlinks() -> List[D4xxCamera]:
         depth_path = os.path.realpath(link)
 
         color_link = f"/dev/video-rs-color-{cam_idx}"
-        if not os.path.exists(color_link):
-            continue
-        rgb_path = os.path.realpath(color_link)
-
-        rgb_fmts = _enum_formats(rgb_path)
-        preferred = [PIX_FMT_YUYV, PIX_FMT_UYVY, PIX_FMT_BGR3, PIX_FMT_RGB3]
-        rgb_pixfmt = next((f for f in preferred if f in rgb_fmts),
-                          rgb_fmts[0] if rgb_fmts else PIX_FMT_YUYV)
+        rgb_path = ""
+        rgb_pixfmt = PIX_FMT_YUYV
+        if os.path.exists(color_link):
+            rgb_path = os.path.realpath(color_link)
+            rgb_fmts = _enum_formats(rgb_path)
+            if rgb_fmts:
+                preferred = [PIX_FMT_YUYV, PIX_FMT_UYVY, PIX_FMT_BGR3, PIX_FMT_RGB3]
+                rgb_pixfmt = next((f for f in preferred if f in rgb_fmts), rgb_fmts[0])
+            else:
+                rgb_path = ""
 
         cap = _querycap(depth_path)
         card = cap.card.rstrip(b"\x00").decode("ascii", errors="replace") if cap else ""
@@ -501,11 +503,13 @@ def _discover_via_querycap() -> List[D4xxCamera]:
         group      = ds5_nodes[i:i + DEVICES_PER_CAMERA]
         depth_path = group[STREAM_DEPTH]
         rgb_path   = group[STREAM_RGB]
-
+        rgb_pixfmt = PIX_FMT_YUYV
         rgb_fmts   = _enum_formats(rgb_path)
-        preferred  = [PIX_FMT_YUYV, PIX_FMT_UYVY, PIX_FMT_BGR3, PIX_FMT_RGB3]
-        rgb_pixfmt = next((f for f in preferred if f in rgb_fmts),
-                          rgb_fmts[0] if rgb_fmts else PIX_FMT_YUYV)
+        if rgb_fmts:
+            preferred  = [PIX_FMT_YUYV, PIX_FMT_UYVY, PIX_FMT_BGR3, PIX_FMT_RGB3]
+            rgb_pixfmt = next((f for f in preferred if f in rgb_fmts), rgb_fmts[0])
+        else:
+            rgb_path = ""
 
         cap  = _querycap(depth_path)
         card = cap.card.rstrip(b"\x00").decode("ascii", errors="replace") if cap else ""
@@ -633,13 +637,21 @@ def _close_stream(fd: int, buffers: List[Tuple[v4l2_buffer, mmap.mmap]]) -> None
 
 
 def _capture_frames(fd: int, buffers: List[Tuple[v4l2_buffer, mmap.mmap]],
-                    n_frames: int, timeout_s: float = 5.0) -> List[FrameInfo]:
+                    n_frames: int, timeout_s: float = 5.0,
+                    stop_event: Optional[threading.Event] = None) -> List[FrameInfo]:
     """Capture n_frames from an already-started stream. Returns (seq, ts_us) list."""
     frames: List[FrameInfo] = []
     for _ in range(n_frames):
-        ready, _, _ = select.select([fd], [], [], timeout_s)
-        if not ready:
-            break  # timeout — stop collecting, report partial result
+        deadline = time.monotonic() + timeout_s
+        while True:
+            if stop_event and stop_event.is_set():
+                return frames
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return frames  # timeout — stop collecting, report partial result
+            ready, _, _ = select.select([fd], [], [], min(0.25, remaining))
+            if ready:
+                break
 
         dqbuf = v4l2_buffer()
         dqbuf.type   = V4L2_BUF_TYPE_VIDEO_CAPTURE
@@ -672,6 +684,7 @@ def _stream_thread(
     out: dict,
     setup_done: threading.Event,
     capture_start: threading.Event,
+    stop_event: threading.Event,
 ) -> None:
     """
     Phase 1 (parallel): open device, set format, allocate mmap buffers.
@@ -699,7 +712,8 @@ def _stream_thread(
         out["error"] = "fd lost before capture"
         return
     try:
-        out["frames"] = _capture_frames(fd, buffers, n_frames, timeout_s=5.0)
+        out["frames"] = _capture_frames(fd, buffers, n_frames, timeout_s=5.0,
+                                        stop_event=stop_event)
     except Exception as exc:
         out["error"] = f"capture failed: {exc}"
 
@@ -1083,7 +1097,7 @@ def _run_once(args: argparse.Namespace, run_idx: int = 1,
     if len(discovered) < args.num_cameras:
         print(f"  ERROR: found {len(discovered)} camera(s), need {args.num_cameras}. "
               f"Check driver: lsmod | grep d4xx")
-        return 1
+        return 1, False
     cameras = discovered[:args.num_cameras]
     check_cross_cam = len(cameras) >= 2
     if len(discovered) > len(cameras):
@@ -1130,6 +1144,7 @@ def _run_once(args: argparse.Namespace, run_idx: int = 1,
     print(f"\n[4] Starting {n_streams} streams (setup parallel, STREAMON sequential)...")
 
     setup_events: Dict[Tuple[int, str], threading.Event] = {}
+    stop_events: Dict[Tuple[int, str], threading.Event] = {}
     capture_start = threading.Event()
     results: Dict[Tuple[int, str], dict] = {}
     threads: List[threading.Thread] = []
@@ -1138,19 +1153,21 @@ def _run_once(args: argparse.Namespace, run_idx: int = 1,
 
     for cam in cameras:
         stream_list = []
+        stream_list.append(("depth", cam.depth_path, PIX_FMT_Z16))
         if cam.has_rgb:
             stream_list.append(("rgb", cam.rgb_path, cam.rgb_pixfmt))
-        stream_list.append(("depth", cam.depth_path, PIX_FMT_Z16))
         for stream, path, pixfmt in stream_list:
             key = (cam.index, stream)
             out = {}
             results[key] = out
             ev = threading.Event()
+            stop_ev = threading.Event()
             setup_events[key] = ev
+            stop_events[key] = stop_ev
             stream_order.append(key)
             t = threading.Thread(
                 target=_stream_thread,
-                args=(path, WIDTH, HEIGHT, pixfmt, n_frames, out, ev, capture_start),
+                args=(path, WIDTH, HEIGHT, pixfmt, n_frames, out, ev, capture_start, stop_ev),
                 daemon=True,
                 name=f"cam{cam.index}-{stream}",
             )
@@ -1186,6 +1203,7 @@ def _run_once(args: argparse.Namespace, run_idx: int = 1,
 
     deadline = start + n_frames / FPS + 20.0
     timed_out_threads = 0
+    live_thread_keys = set()
     for t in threads:
         remaining = max(0.0, deadline - time.monotonic())
         t.join(timeout=remaining)
@@ -1193,14 +1211,21 @@ def _run_once(args: argparse.Namespace, run_idx: int = 1,
             timed_out_threads += 1
             print(f"  [WARN] Thread {t.name} did not finish in time")
             key = thread_key_map.get(t.name)
-            if key is not None and not results[key].get("error"):
-                results[key]["error"] = "thread timeout (possible stuck stream)"
+            if key is not None:
+                stop_events[key].set()
+                t.join(timeout=6.0)
+                if t.is_alive():
+                    live_thread_keys.add(key)
+                    if not results[key].get("error"):
+                        results[key]["error"] = "thread timeout (possible stuck stream)"
     elapsed = time.monotonic() - start
     print(f"  Capture complete in {elapsed:.1f}s")
 
     # STREAMOFF/CLOSE all streams in reverse STREAMON order from main thread.
     n_stopped = 0
     for key in reversed(stream_order):
+        if key in live_thread_keys:
+            continue
         out = results.get(key, {})
         fd = out.pop("fd", None)
         buffers = out.pop("buffers", None)
