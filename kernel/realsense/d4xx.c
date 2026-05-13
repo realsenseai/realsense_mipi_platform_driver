@@ -134,6 +134,10 @@ struct dser_interface {
 #define DS5_RGB_FPS				0x402C
 #define DS5_RGB_CONTROL_STATUS 	0x402E
 
+/* SerDes startup I2C readiness polling (defer probe if not responsive) */
+#define DS5_SERDES_STARTUP_TIMEOUT_MS 2000
+#define DS5_SERDES_STARTUP_RETRY_DELAY_MS 100
+
 #define DS5_IMU_STREAM_DT		0x4040
 #define DS5_IMU_STREAM_MD		0x4042
 #define DS5_IMU_RES_WIDTH		0x4044
@@ -540,6 +544,7 @@ struct ds5_dev {
 
 	/* Pointer to the primary DS5 struct */
 	struct ds5 *ds5_primary;
+	bool serdes_setup_complete;
 
 	bool depth_streaming;
 	bool ir_streaming;
@@ -3577,6 +3582,7 @@ static void ds5_init_ds5_dev(struct ds5 *state, struct ds5_dev *ds5_dev)
 	state->ds5_dev = ds5_dev;
 	mutex_lock(&ds5_dev->lock);
 	ds5_dev->ds5_primary = state;
+	ds5_dev->serdes_setup_complete = false;
 	ds5_dev->cached_device_type = DS5_DEVICE_TYPE_UNKNOWN;
 	mutex_unlock(&ds5_dev->lock);
 	ds5_reset_streaming_flags(ds5_dev);
@@ -3595,12 +3601,18 @@ static int ds5_setup_and_link(struct ds5 *state)
 	/* Look for existing DS5 instances */
 	for (i = 0; i < MAX_DS5_NUM; i++) {
 		bool match;
+		bool ready;
 
 		mutex_lock(&ds5_inited[i].lock);
 		match = ds5_inited[i].ds5_primary &&
 			ds5_inited[i].ds5_primary->ser_dev == state->ser_dev;
+		ready = ds5_inited[i].serdes_setup_complete;
 		mutex_unlock(&ds5_inited[i].lock);
 		if (match) { /* Same camera, different stream instance. */
+			if (!ready) {
+				err = -EPROBE_DEFER;
+				goto out_unlock;
+			}
 			state->serdes_primary = false;
 			state->ds5_dev = &ds5_inited[i];
 			break;
@@ -3986,6 +3998,8 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 {
 	int err = 0;
 	int des_err = 0;
+	int attempts;
+	int retry;
 	struct device *dev;
 
 	if (!state || !state->ser_dev || !state->dser_dev || !state->client)
@@ -4012,7 +4026,23 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 		goto error;
 	}
 	msleep(100);
-	err = max9295_setup_control(state->ser_dev);
+	attempts = (DS5_SERDES_STARTUP_TIMEOUT_MS +
+		DS5_SERDES_STARTUP_RETRY_DELAY_MS - 1) /
+		DS5_SERDES_STARTUP_RETRY_DELAY_MS;
+	for (retry = 0; retry < attempts; retry++) {
+		err = max9295_setup_control(state->ser_dev);
+		if (!err)
+			break;
+		if (retry < attempts - 1)
+			msleep(DS5_SERDES_STARTUP_RETRY_DELAY_MS);
+	}
+	if (err) {
+		dev_err(dev,
+			"%s(): serializer setup timed out after %d ms, deferring probe\n",
+			__func__, DS5_SERDES_STARTUP_TIMEOUT_MS);
+		err = -EPROBE_DEFER;
+		goto error;
+	}
 
 	/* proceed even if ser setup failed, to setup deser correctly */
 	if (err)
@@ -4089,6 +4119,19 @@ serdes_setup_end:
 	if (ret) {
 		max9295_sdev_unpair(state->ser_dev, state->g_ctx.s_dev);
 		state->dser_ops->sdev_unregister(state->dser_dev, state->g_ctx.s_dev);
+		if (state->serdes_primary) {
+			mutex_lock(&state->ds5_dev->lock);
+			if (state->ds5_dev->ds5_primary == state) {
+				state->ds5_dev->ds5_primary = NULL;
+				state->ds5_dev->serdes_setup_complete = false;
+			}
+			mutex_unlock(&state->ds5_dev->lock);
+		}
+	} else if (state->serdes_primary) {
+		mutex_lock(&state->ds5_dev->lock);
+		if (state->ds5_dev->ds5_primary == state)
+			state->ds5_dev->serdes_setup_complete = true;
+		mutex_unlock(&state->ds5_dev->lock);
 	}
 
 	return ret;
@@ -6425,6 +6468,7 @@ static void ds5_remove(struct i2c_client *c)
 
 		if (state->ds5_dev->ds5_primary) {
 			state->ds5_dev->ds5_primary = NULL;
+			state->ds5_dev->serdes_setup_complete = false;
 			do_cleanup = true;
 		}
 
