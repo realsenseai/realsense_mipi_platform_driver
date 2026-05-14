@@ -4038,8 +4038,8 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 	}
 	if (err) {
 		dev_err(dev,
-			"%s(): serializer setup timed out after %d ms, deferring probe\n",
-			__func__, DS5_SERDES_STARTUP_TIMEOUT_MS);
+			"%s(): serializer setup failed (err=%d) after %d ms, deferring probe\n",
+			__func__, err, DS5_SERDES_STARTUP_TIMEOUT_MS);
 		err = -EPROBE_DEFER;
 		goto error;
 	}
