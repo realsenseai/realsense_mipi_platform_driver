@@ -79,6 +79,8 @@ struct dser_interface {
 #define GMSL_CSI_DT_EMBED 0x12
 #endif
 
+#define I2C_LESS 1
+
 //#define DS5_DRIVER_NAME "DS5 RealSense camera driver"
 #define DS5_DRIVER_NAME "d4xx"
 #define DS5_DRIVER_NAME_AWG "d4xx-awg"
@@ -5162,6 +5164,7 @@ static int ds5_mux_register(struct i2c_client *c, struct ds5 *state)
 
 static int ds5_hw_init(struct i2c_client *c, struct ds5 *state)
 {
+#ifndef I2C_LESS
 	struct v4l2_subdev *sd = &state->mux.sd.subdev;
 	u16 mipi_status, n_lanes, phy, drate_min, drate_max;
 	int ret = ds5_read(state, DS5_MIPI_SUPPORT_LINES, &n_lanes);
@@ -5195,8 +5198,10 @@ static int ds5_hw_init(struct i2c_client *c, struct ds5 *state)
 	dev_dbg(sd->dev, "%s(): %d phandle %x node %s status %x\n", __func__, __LINE__,
 		 c->dev.of_node->phandle, c->dev.of_node->full_name, mipi_status);
 #endif
-
 	return ret;
+#endif
+	dev_warn(&c->dev, "EHUD_DEBUG: %u\n", __LINE__);
+	return 0;
 }
 
 static int ds5_mux_init(struct i2c_client *c, struct ds5 *state)
@@ -5343,10 +5348,10 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	if (ret < 0)
 		return ret;
 
-	dev_dbg(&client->dev, "%s(): cfg0 %x %ux%u cfg0_md %x %ux%u\n", __func__,
+	dev_warn(&client->dev, "%s(): cfg0 %x %ux%u cfg0_md %x %ux%u\n", __func__,
 		 cfg0, dw, dh, cfg0_md, yw, yh);
 
-	dev_dbg(&client->dev, "%s(): cfg1 %x %ux%u cfg1_md %x %ux%u\n", __func__,
+	dev_warn(&client->dev, "%s(): cfg1 %x %ux%u cfg1_md %x %ux%u\n", __func__,
 		 cfg1, dw, dh, cfg1_md, yw, yh);
 
 	sensor = &state->depth.sensor;
@@ -6267,6 +6272,7 @@ static int ds5_probe(struct i2c_client *c
 #endif
 	state->reset_ref_ds5 = atomic_read(ds5_get_reset_gen(state));
 
+#ifndef I2C_LESS
 	// Verify communication
 	ret = ds5_read(state, DS5_FW_VERSION, &state->fw_version);
 	if (ret < 0) {
@@ -6275,7 +6281,10 @@ static int ds5_probe(struct i2c_client *c
 			__func__, ret, c->addr);
 		goto e_regulator;
 	}
-
+#else
+	state->fw_version = 0xAA;
+	dev_warn(&c->dev, "EHUD_DEBUG: %u\n", __LINE__);
+#endif
 	state->is_depth = 0;
 	state->is_y8 = 0;
 	state->is_rgb = 0;
@@ -6302,7 +6311,6 @@ static int ds5_probe(struct i2c_client *c
 		state->control_base = DS5_DEPTH_CONTROL_BASE;
 		state->control_status_reg = DS5_DEPTH_CONTROL_STATUS;
 	}
-	dev_warn(&c->dev, "EHUD_DEBUG: %u\n", __LINE__);
 
 	mode0_node = of_get_child_by_name(state->client->dev.of_node, "mode0");
 	if (mode0_node) {
@@ -6317,7 +6325,6 @@ static int ds5_probe(struct i2c_client *c
 		dev_err(&state->client->dev, "No mode0 provided\n");
 		goto e_regulator;
 	}
-	dev_warn(&c->dev, "EHUD_DEBUG: %u\n", __LINE__);
 
 	if (ret < 0) {
 		dev_err(&state->client->dev, "No embedded_metadata_height provided\n");
@@ -6341,6 +6348,9 @@ static int ds5_probe(struct i2c_client *c
 			goto e_regulator;
 	}
 
+#ifdef I2C_LESS
+	WRITE_ONCE(state->ds5_dev->cached_device_type, DS5_DEVICE_TYPE_D45X);
+#endif
 	/* Verify format-discovery readiness.
 	 * FW_VERSION becomes readable earlier than DS5_DEVICE_TYPE, while later
 	 * probe code depends on DEVICE_TYPE to pick the correct format tables.
@@ -6352,8 +6362,11 @@ static int ds5_probe(struct i2c_client *c
 			__func__, ret, rec_state);
 		goto e_chardev;
 	}
+	dev_warn(&c->dev, "EHUD_DEBUG: %u, rec_state: %u\n", __LINE__, rec_state);
 
+#ifndef I2C_LESS
 	ret = ds5_read(state, DS5_DFU_MAGIC_REG, &rec_state);
+#endif
 	if (ret < 0)
 		rec_state = 0;
 
@@ -6365,9 +6378,13 @@ static int ds5_probe(struct i2c_client *c
 		return 0;
 	}
 
+#ifndef I2C_LESS
 	ds5_read_with_check(state, DS5_FW_VERSION, &state->fw_version);
 	ds5_read_with_check(state, DS5_FW_BUILD, &state->fw_build);
-
+#else
+	state->fw_version = 0x0A0A;
+	state->fw_build = 0x0B0B;
+#endif
 	dev_info(&c->dev, "D4XX Sensor: %s, firmware build: %d.%d.%d.%d\n",
 			ds5_get_sensor_name(state),
 			(state->fw_version >> 8) & 0xff, state->fw_version & 0xff,
