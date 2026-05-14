@@ -5327,7 +5327,7 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	u16 cfg0 = 0, cfg0_md = 0, cfg1 = 0, cfg1_md = 0;
 	u16 dw = 0, dh = 0, yw = 0, yh = 0, dev_type = 0;
 	int ret;
-
+#ifndef I2C_LESS
 	ret = ds5_read(state, DS5_DEPTH_STREAM_DT, &cfg0);
 	if (!ret)
 		ret = ds5_read(state, DS5_DEPTH_STREAM_MD, &cfg0_md);
@@ -5347,7 +5347,17 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 		ret = ds5_read(state, DS5_DEVICE_TYPE, &dev_type);
 	if (ret < 0)
 		return ret;
-
+#else
+	cfg0 = 0x31;
+	cfg0_md = 0;
+	dw = 1280;
+	dh = 720;
+	cfg1 = 0x2a;
+	cfg1_md = 0x200;
+	yw = 1280;
+	yh = 720;
+	dev_type = DS5_DEVICE_TYPE_D45X;
+#endif
 	dev_warn(&client->dev, "%s(): cfg0 %x %ux%u cfg0_md %x %ux%u\n", __func__,
 		 cfg0, dw, dh, cfg0_md, yw, yh);
 
