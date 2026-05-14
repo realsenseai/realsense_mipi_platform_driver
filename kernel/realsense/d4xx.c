@@ -6259,13 +6259,11 @@ static int ds5_probe(struct i2c_client *c
 	state->reset_ref_dser = atomic_read(dser_get_reset_gen(state));
 #else
 	ds5_init_global_slots_once();
-	mutex_lock(&ds5_inited[0].lock);
 	if (NULL == ds5_inited[0].ds5_primary) {
 		ds5_init_ds5_dev(state, &ds5_inited[0]);
 		dev_dbg(&c->dev, "%s(): set primary ds5 instance\n", __func__);
 	}
 	state->ds5_dev = &ds5_inited[0];
-	mutex_unlock(&ds5_inited[0].lock);
 #endif
 	state->reset_ref_ds5 = atomic_read(ds5_get_reset_gen(state));
 
@@ -6304,6 +6302,7 @@ static int ds5_probe(struct i2c_client *c
 		state->control_base = DS5_DEPTH_CONTROL_BASE;
 		state->control_status_reg = DS5_DEPTH_CONTROL_STATUS;
 	}
+	dev_warn(&c->dev, "EHUD_DEBUG: %u\n", __LINE__);
 
 	mode0_node = of_get_child_by_name(state->client->dev.of_node, "mode0");
 	if (mode0_node) {
@@ -6318,6 +6317,7 @@ static int ds5_probe(struct i2c_client *c
 		dev_err(&state->client->dev, "No mode0 provided\n");
 		goto e_regulator;
 	}
+	dev_warn(&c->dev, "EHUD_DEBUG: %u\n", __LINE__);
 
 	if (ret < 0) {
 		dev_err(&state->client->dev, "No embedded_metadata_height provided\n");
