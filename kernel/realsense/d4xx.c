@@ -4045,9 +4045,6 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 	}
 
 	/* proceed even if ser setup failed, to setup deser correctly */
-	if (err)
-		dev_err(dev, "gmsl serializer setup failed\n");
-
 	des_err = state->dser_ops->setup_control(state->dser_dev, &state->client->dev);
 	if (des_err) {
 		dev_err(dev, "gmsl deserializer setup failed\n");
@@ -4116,6 +4113,10 @@ static int ds5_serdes_setup(struct ds5 *state)
 	}
 
 serdes_setup_end:
+	/* Set/clear serdes_setup_complete from the same exit gate: error branch
+	 * clears it, success branch sets it. This ensures flag state is
+	 * synchronized with actual setup completion status.
+	 */
 	if (ret) {
 		max9295_sdev_unpair(state->ser_dev, state->g_ctx.s_dev);
 		state->dser_ops->sdev_unregister(state->dser_dev, state->g_ctx.s_dev);
