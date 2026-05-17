@@ -25,7 +25,7 @@ Linux kernel driver and userspace utilities for Intel RealSense D4XX series 3D d
 - **Logging**: use `dev_err()`, `dev_warn()`, `dev_info()`, `dev_dbg()` with `&state->client->dev` as the device. Always include `__func__` in log messages.
 - **Locking**: `mutex_lock()` / `mutex_unlock()` for state synchronization.
 - **SERDES topology locking**: protect global topology scans/updates of `ds5_inited[]` and `dser_inited[]` with `serdes_lock__`. Use `struct ds5_dev::lock` for per-camera mutable fields (`ds5_primary`, `*_streaming`) and `struct dser_control::lock` for per-deserializer slot fields (`dser_dev`). For sibling checks, snapshot under lock and do I2C probing after unlocking.
-- **SERDES slot release symmetry**: any path that releases a primary camera slot must clear both sides of slot ownership in one helper (`ds5_primary`/`serdes_setup_complete` and the matching `dser_inited[*].dser_dev` when no camera slot still references that deserializer). Do not clear `ds5_primary` alone.
+- **SERDES slot release symmetry**: any path that releases a primary camera slot must clear both sides of slot ownership in one helper (`ds5_primary`/`serdes_setup_complete` and the matching `dser_inited[*].dser_dev` when no camera slot still references that deserializer). Do not clear `ds5_primary` alone. The `ds5_release_slot()` helper always acquires and releases `serdes_lock__` internally; callers must not hold the lock when calling it.
 - **Module registration**: `module_i2c_driver()` pattern.
 - **Conditional compilation**:
   - `CONFIG_VIDEO_D4XX_SERDES` — SerDes (GMSL) support vs non-SerDes path.
@@ -201,12 +201,16 @@ clarity, and architectural separation of restart readiness detection from compen
 
 ### Post-patch configuration review (mandatory)
 
+
 After every confirmed code patch, review and update this file and `CLAUDE.md`:
+
 
 1. **Stale facts**: correct or remove architectural claims, assumptions, or descriptions that the patch invalidated.
 2. **New conventions**: if the patch exposed a coding practice gap (e.g. a cleanup step that was missed), add a general coding convention so it is enforced going forward — do not just fix the specific instance.
+3. **Helper/locking contract changes**: If a patch changes the locking, usage, or API contract of a helper or utility function (e.g. moves lock acquisition inside/outside, changes required caller context, or alters error handling), immediately update all documentation and instructions to reflect the new contract. Always check for this class of change after any helper edit.
 
-Do not leave stale or incorrect claims in configuration files after changing the code they describe.
+
+Do not leave stale or incorrect claims in configuration files after changing the code they describe. Always document helper/utility contract changes (locking, usage, error handling) in both this file and `CLAUDE.md`.
 
 This review is not complete until the final response explicitly reports the outcome of both checks.
 

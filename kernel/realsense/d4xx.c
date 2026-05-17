@@ -3599,6 +3599,8 @@ static bool ds5_release_slot(struct ds5 *state)
 	if (!state->ds5_dev)
 		return false;
 
+	mutex_lock(&serdes_lock__);
+
 	mutex_lock(&state->ds5_dev->lock);
 	if (state->ds5_dev->ds5_primary == state) {
 		dser_control = state->ds5_dev->dser_control;
@@ -3611,8 +3613,10 @@ static bool ds5_release_slot(struct ds5 *state)
 	}
 	mutex_unlock(&state->ds5_dev->lock);
 
-	if (!released || !dser_control)
+	if (!released || !dser_control) {
+		mutex_unlock(&serdes_lock__);
 		return released;
+	}
 
 	for (i = 0; i < MAX_DS5_NUM; i++) {
 		bool in_use;
@@ -3634,6 +3638,7 @@ static bool ds5_release_slot(struct ds5 *state)
 		mutex_unlock(&dser_control->lock);
 	}
 
+	mutex_unlock(&serdes_lock__);
 	return released;
 }
 
@@ -6507,7 +6512,6 @@ static void ds5_remove(struct i2c_client *c)
 		int ret;
 		bool do_cleanup = false;
 
-		mutex_lock(&serdes_lock__);
 		do_cleanup = ds5_release_slot(state);
 
 		if (do_cleanup) {
@@ -6531,9 +6535,6 @@ static void ds5_remove(struct i2c_client *c)
 					"failed to %s unregister sdev\n", state->dser_ops->name);
 			state->dser_ops->power_off(state->dser_dev);
 		}
-
-		mutex_unlock(&serdes_lock__);
-
 	}
 #ifndef CONFIG_OF
 	if (state->ser_i2c)
