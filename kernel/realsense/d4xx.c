@@ -5843,8 +5843,12 @@ static void ds5_adjust_sync_mode_control(struct i2c_client *client, struct ds5 *
 
 	if (!state->ctrls.sync_mode)
 		return;
-
+#ifndef I2C_LESS
 	ret = ds5_read(state, DS5_DEVICE_TYPE, &dev_type);
+#else
+	dev_type = DS5_DEVICE_TYPE_D45X;
+	ret = 0;
+#endif
 	if (ret < 0) {
 		dev_warn(&client->dev, "%s(): Failed to read device type\n", __func__);
 		return;
