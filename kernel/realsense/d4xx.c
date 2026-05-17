@@ -4806,6 +4806,14 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 #endif
 	int cur_ds5 = atomic_read(ds5_get_reset_gen(state));
 
+#ifdef I2C_LESS
+	if (on) {
+		dev_warn(&state->client->dev, "\"Starting\" stream\n");
+	} else {
+		dev_warn(&state->client->dev, "\"Stopping\" stream\n");
+	}
+	return 0;
+#endif
 	/* Lazy invalidation after HW or deserializer reset.
 	 * Detect gen-counter bumps, clear stale streaming/config/pipe
 	 * state, then update refs.  Must run before the duplicate-call
@@ -5200,7 +5208,6 @@ static int ds5_hw_init(struct i2c_client *c, struct ds5 *state)
 #endif
 	return ret;
 #endif
-	dev_warn(&c->dev, "EHUD_DEBUG: %u\n", __LINE__);
 	return 0;
 }
 
@@ -5358,10 +5365,10 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	yh = 720;
 	dev_type = DS5_DEVICE_TYPE_D45X;
 #endif
-	dev_warn(&client->dev, "%s(): cfg0 %x %ux%u cfg0_md %x %ux%u\n", __func__,
+	dev_dbg(&client->dev, "%s(): cfg0 %x %ux%u cfg0_md %x %ux%u\n", __func__,
 		 cfg0, dw, dh, cfg0_md, yw, yh);
 
-	dev_warn(&client->dev, "%s(): cfg1 %x %ux%u cfg1_md %x %ux%u\n", __func__,
+	dev_dbg(&client->dev, "%s(): cfg1 %x %ux%u cfg1_md %x %ux%u\n", __func__,
 		 cfg1, dw, dh, cfg1_md, yw, yh);
 
 	sensor = &state->depth.sensor;
@@ -6297,7 +6304,6 @@ static int ds5_probe(struct i2c_client *c
 	}
 #else
 	state->fw_version = 0xAA;
-	dev_warn(&c->dev, "EHUD_DEBUG: %u\n", __LINE__);
 #endif
 	state->is_depth = 0;
 	state->is_y8 = 0;
@@ -6376,7 +6382,6 @@ static int ds5_probe(struct i2c_client *c
 			__func__, ret, rec_state);
 		goto e_chardev;
 	}
-	dev_warn(&c->dev, "EHUD_DEBUG: %u, rec_state: %u\n", __LINE__, rec_state);
 
 #ifndef I2C_LESS
 	ret = ds5_read(state, DS5_DFU_MAGIC_REG, &rec_state);
