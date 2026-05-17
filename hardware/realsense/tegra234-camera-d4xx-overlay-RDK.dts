@@ -179,10 +179,10 @@
 				};
 				i2c@3180000 {
 					clock-frequency = <100000>;
-					tca9546@70 {
+					tca9548@72 {
 						status = "okay";
-						reg = <0x70>;
-						compatible = "nxp,pca9546";
+						reg = <0x72>;
+						compatible = "nxp,pca9548";
 						#address-cells = <1>;
 						#size-cells = <0>;
 						skip_mux_detect = "yes";
