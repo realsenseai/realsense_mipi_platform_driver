@@ -3588,6 +3588,55 @@ static void ds5_init_ds5_dev(struct ds5 *state, struct ds5_dev *ds5_dev)
 	ds5_reset_streaming_flags(ds5_dev);
 }
 
+/* Caller must hold serdes_lock__. */
+static bool ds5_release_slot(struct ds5 *state)
+{
+	struct dser_control *dser_control;
+	bool has_other_users = false;
+	bool released = false;
+	int i;
+
+	if (!state->ds5_dev)
+		return false;
+
+	mutex_lock(&state->ds5_dev->lock);
+	if (state->ds5_dev->ds5_primary == state) {
+		dser_control = state->ds5_dev->dser_control;
+		state->ds5_dev->ds5_primary = NULL;
+		state->ds5_dev->serdes_setup_complete = false;
+		state->ds5_dev->dser_control = NULL;
+		released = true;
+	} else {
+		dser_control = NULL;
+	}
+	mutex_unlock(&state->ds5_dev->lock);
+
+	if (!released || !dser_control)
+		return released;
+
+	for (i = 0; i < MAX_DS5_NUM; i++) {
+		bool in_use;
+
+		mutex_lock(&ds5_inited[i].lock);
+		in_use = ds5_inited[i].ds5_primary &&
+			ds5_inited[i].dser_control == dser_control;
+		mutex_unlock(&ds5_inited[i].lock);
+		if (in_use) {
+			has_other_users = true;
+			break;
+		}
+	}
+
+	if (!has_other_users) {
+		mutex_lock(&dser_control->lock);
+		if (dser_control->dser_dev == state->dser_dev)
+			dser_control->dser_dev = NULL;
+		mutex_unlock(&dser_control->lock);
+	}
+
+	return released;
+}
+
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 static int ds5_setup_and_link(struct ds5 *state)
 {
@@ -4120,14 +4169,8 @@ serdes_setup_end:
 	if (ret) {
 		max9295_sdev_unpair(state->ser_dev, state->g_ctx.s_dev);
 		state->dser_ops->sdev_unregister(state->dser_dev, state->g_ctx.s_dev);
-		if (state->serdes_primary) {
-			mutex_lock(&state->ds5_dev->lock);
-			if (state->ds5_dev->ds5_primary == state) {
-				state->ds5_dev->ds5_primary = NULL;
-				state->ds5_dev->serdes_setup_complete = false;
-			}
-			mutex_unlock(&state->ds5_dev->lock);
-		}
+		if (state->serdes_primary)
+			ds5_release_slot(state);
 	} else if (state->serdes_primary) {
 		mutex_lock(&state->ds5_dev->lock);
 		if (state->ds5_dev->ds5_primary == state)
@@ -6465,15 +6508,7 @@ static void ds5_remove(struct i2c_client *c)
 		bool do_cleanup = false;
 
 		mutex_lock(&serdes_lock__);
-		mutex_lock(&state->ds5_dev->lock);
-
-		if (state->ds5_dev->ds5_primary) {
-			state->ds5_dev->ds5_primary = NULL;
-			state->ds5_dev->serdes_setup_complete = false;
-			do_cleanup = true;
-		}
-
-		mutex_unlock(&state->ds5_dev->lock);
+		do_cleanup = ds5_release_slot(state);
 
 		if (do_cleanup) {
 			ret = max9295_reset_control(state->ser_dev);

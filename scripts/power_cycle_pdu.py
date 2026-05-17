@@ -54,7 +54,10 @@ def rpc(path, method, params=None):
     if params is not None: d["params"] = params
     req = u.Request(f"https://{host}{path}", data=json.dumps(d).encode(),
                     headers={"Authorization": auth, "Content-Type": "application/json"})
-    return json.loads(u.urlopen(req, context=ctx, timeout=20).read().decode())
+    resp = json.loads(u.urlopen(req, context=ctx, timeout=20).read().decode())
+    if resp.get("error"):
+        raise RuntimeError(f"JSON-RPC error: {resp['error']}")
+    return resp
 
 try:
     outs = rpc("/model/pdu/0", "getOutlets")["result"]["_ret_"]
@@ -76,8 +79,8 @@ try:
             f"Available names: {seen_names}"
         )
 
-    result = rpc(f"/model/pdu/0/outlet/{idx}", "cyclePowerState")
-    print(f"Power-cycle result: {result}")
+    resp = rpc(f"/model/pdu/0/outlet/{idx}", "cyclePowerState")
+    print(f"Power-cycle result: {resp['result']}")
 except Exception as e:
     print(f"Error: {e}", file=sys.stderr)
     sys.exit(1)

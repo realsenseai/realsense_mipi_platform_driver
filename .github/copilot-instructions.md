@@ -25,6 +25,7 @@ Linux kernel driver and userspace utilities for Intel RealSense D4XX series 3D d
 - **Logging**: use `dev_err()`, `dev_warn()`, `dev_info()`, `dev_dbg()` with `&state->client->dev` as the device. Always include `__func__` in log messages.
 - **Locking**: `mutex_lock()` / `mutex_unlock()` for state synchronization.
 - **SERDES topology locking**: protect global topology scans/updates of `ds5_inited[]` and `dser_inited[]` with `serdes_lock__`. Use `struct ds5_dev::lock` for per-camera mutable fields (`ds5_primary`, `*_streaming`) and `struct dser_control::lock` for per-deserializer slot fields (`dser_dev`). For sibling checks, snapshot under lock and do I2C probing after unlocking.
+- **SERDES slot release symmetry**: any path that releases a primary camera slot must clear both sides of slot ownership in one helper (`ds5_primary`/`serdes_setup_complete` and the matching `dser_inited[*].dser_dev` when no camera slot still references that deserializer). Do not clear `ds5_primary` alone.
 - **Module registration**: `module_i2c_driver()` pattern.
 - **Conditional compilation**:
   - `CONFIG_VIDEO_D4XX_SERDES` — SerDes (GMSL) support vs non-SerDes path.
