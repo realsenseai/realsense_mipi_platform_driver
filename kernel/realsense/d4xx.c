@@ -2251,9 +2251,29 @@ static int ds5_hwmc_wait(struct ds5 *state)
 	u16 status = DS5_HWMC_STATUS_WIP;
 	int retries = 100;
 	int errorCode;
+	bool any_streaming = false;
+	unsigned int poll_interval_ms;
+
+	/* When any stream is active, use longer sleep between HWMC status
+	 * polls to reduce I2C bus contention with the VI capture engine.
+	 * Heavy HWMC polling during streaming can starve VI of I2C bandwidth,
+	 * causing capture timeouts and cascading error recovery failures.
+	 * Snapshot streaming state once — not updated if streams start/stop
+	 * mid-command; worst case falls back to the old 1ms interval.
+	 */
+	if (state->ds5_dev) {
+		mutex_lock(&state->ds5_dev->lock);
+		any_streaming = state->ds5_dev->depth_streaming ||
+				state->ds5_dev->ir_streaming ||
+				state->ds5_dev->rgb_streaming ||
+				state->ds5_dev->imu_streaming;
+		mutex_unlock(&state->ds5_dev->lock);
+	}
+	poll_interval_ms = any_streaming ? 10 : 1;
+
 	do {
 		if (retries != 100)
-			msleep_range(1);
+			msleep_range(poll_interval_ms);
 		ret = ds5_read_poll(state, DS5_HWMC_STATUS, &status);
 		if (ret) {
 			dev_dbg(&state->client->dev,
@@ -4782,6 +4802,28 @@ static int ds5_mux_s_frame_interval(struct v4l2_subdev *sd,
 	return 0;
 }
 
+static void ds5_stream_stop_cleanup(struct ds5 *state,
+				    struct ds5_sensor *sensor)
+{
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	if (sensor->pipe_id >= 0) {
+		mutex_lock(&serdes_lock__);
+		if (state->dser_ops->release_pipe(state->dser_dev,
+						  sensor->pipe_id) < 0)
+			dev_warn(&state->client->dev,
+				 "release pipe failed\n");
+		else
+			sensor->pipe_id = PIPE_NOT_CONFIGURED;
+		if (state->is_y8 &&
+		    state->ir.sensor.config.format->data_type ==
+		    GMSL_CSI_DT_RGB_888)
+			state->dser_ops->reset_oneshot(state->dser_dev);
+		mutex_unlock(&serdes_lock__);
+		msleep_range(100);
+	}
+#endif
+}
+
 static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 {
 	struct ds5 *state = container_of(sd, struct ds5, mux.sd.subdev);
@@ -4856,14 +4898,37 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	dev_dbg(&state->client->dev, "s_stream for stream %s, vc:%d, SENSOR=%s on = %d\n",
 			sensor->sd.name, vc_id, ds5_get_sensor_name(state), on);
 
+	restore_val = sensor->streaming;
+
 	if (on) {
 		stream_cmd = (DS5_STREAM_START | stream_id);
 		expected_streaming_state = DS5_STREAM_STREAMING;
 		status = 0;
 	} else {
+		u16 probe_val;
+
 		stream_cmd = (DS5_STREAM_STOP | stream_id);
 		expected_streaming_state = DS5_STREAM_IDLE;
 		status = DS5_STATUS_STREAMING;
+
+		/* Quick I2C health check before attempting stream stop.
+		 * If the link is dead (e.g. from failed VI error recovery
+		 * or RTCPU hang), skip I2C operations and just clean up
+		 * local state.  Continuing with I2C on a dead bus would
+		 * block for the full timeout and worsen the cascade.
+		 */
+		ret = ds5_read_poll(state, DS5_FW_VERSION, &probe_val);
+		if (ret < 0) {
+			dev_warn(&state->client->dev,
+				"stream %d stop: I2C link dead (%d), cleaning up state only\n",
+				stream_id, ret);
+			mutex_lock(&state->ds5_dev->lock);
+			*streaming_flag = false;
+			mutex_unlock(&state->ds5_dev->lock);
+			sensor->streaming = false;
+			ds5_stream_stop_cleanup(state, sensor);
+			return 0; /* best-effort stop; link already dead */
+		}
 	}
 
 	/* Verify stream is in the expected state before issuing command */
@@ -4920,7 +4985,6 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		}
 	}
 
-	restore_val = sensor->streaming;
 	mutex_lock(&state->ds5_dev->lock);
 	*streaming_flag = on;
 	mutex_unlock(&state->ds5_dev->lock);
@@ -5037,20 +5101,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	}
 	else if (!on)
 	{
-#ifdef CONFIG_VIDEO_D4XX_SERDES
-		mutex_lock(&serdes_lock__);
-		if (state->dser_ops->release_pipe(state->dser_dev, sensor->pipe_id) < 0)
-			dev_warn(&state->client->dev, "release pipe failed\n");
-		else
-			sensor->pipe_id = PIPE_NOT_CONFIGURED;
-		if (state->is_y8
-			&& (state->ir.sensor.config.format->data_type == GMSL_CSI_DT_RGB_888))
-		{
-			state->dser_ops->reset_oneshot(state->dser_dev);
-		}
-		mutex_unlock(&serdes_lock__);
-		msleep_range(100);
-#endif
+		ds5_stream_stop_cleanup(state, sensor);
 	}
 	return ret;
 }
