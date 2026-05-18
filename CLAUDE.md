@@ -126,6 +126,7 @@ The build system cross-compiles for ARM64. Toolchains vary by JetPack:
 - In SERDES builds, hold `serdes_lock__` while scanning or assigning global topology slots (`ds5_inited[]`, `dser_inited[]`).
 - Protect per-camera mutable slot state (`ds5_primary`, `depth/rgb/ir/imu_streaming`) with `struct ds5_dev::lock`.
 - Protect per-deserializer slot assignment (`dser_dev`) with `struct dser_control::lock`.
+- Any path that releases a primary camera slot must clear both camera-slot ownership and deserializer-slot ownership together; do not clear only `ds5_primary`. Use a shared helper so teardown/error paths stay symmetric. The `ds5_release_slot()` helper always acquires and releases `serdes_lock__` internally; callers must not hold the lock when calling it.
 - For sibling-health checks, snapshot pointers/flags under lock and perform I2C probing after unlocking.
 - Do not use `0x5020` as non-DFU reset-ready status; in non-DFU mode it is not a readiness source of truth. For HW reset readiness, scratch `DS5_*_CONTROL_STATUS` with a non-zero sentinel before reset and wait for FW to restore default `0x0000` after reset. Use `0x5020` only for DFU magic detection.
 - After reset completion, use `DS5_DEVICE_TYPE` validity as the operational-readiness gate for code that depends on firmware-populated stream/config state. `DS5_FW_VERSION` can come back earlier and should only be treated as basic liveness, not full post-reset readiness.
@@ -139,5 +140,6 @@ After every confirmed code patch, review both `.github/copilot-instructions.md` 
 
 - Check for stale architectural claims and remove or correct them immediately.
 - Check whether the patch exposed a reusable convention; if it did, write it down as a general rule instead of leaving it implicit in code.
+- If the patch changed the locking, usage, or API contract of a helper or utility function (e.g. moved lock acquisition inside/outside, changed required caller context, or altered error handling), immediately update all documentation and instructions to reflect the new contract. Always check for this class of change after any helper edit.
 - If no new convention was exposed, state that explicitly in the final report and include a short justification.
 - Do not treat the task as complete until that review outcome has been reported.
