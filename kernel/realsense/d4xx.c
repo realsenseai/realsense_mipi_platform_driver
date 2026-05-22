@@ -79,6 +79,8 @@ struct dser_interface {
 #define GMSL_CSI_DT_EMBED 0x12
 #endif
 
+#define I2C_LESS 1
+
 //#define DS5_DRIVER_NAME "DS5 RealSense camera driver"
 #define DS5_DRIVER_NAME "d4xx"
 #define DS5_DRIVER_NAME_AWG "d4xx-awg"
@@ -4896,6 +4898,14 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 #endif
 	int cur_ds5 = atomic_read(ds5_get_reset_gen(state));
 
+#ifdef I2C_LESS
+	if (on) {
+		dev_warn(&state->client->dev, "\"Starting\" stream\n");
+	} else {
+		dev_warn(&state->client->dev, "\"Stopping\" stream\n");
+	}
+	return 0;
+#endif
 	/* Lazy invalidation after HW or deserializer reset.
 	 * Detect gen-counter bumps, clear stale streaming/config/pipe
 	 * state, then update refs.  Must run before the duplicate-call
@@ -5254,6 +5264,7 @@ static int ds5_mux_register(struct i2c_client *c, struct ds5 *state)
 
 static int ds5_hw_init(struct i2c_client *c, struct ds5 *state)
 {
+#ifndef I2C_LESS
 	struct v4l2_subdev *sd = &state->mux.sd.subdev;
 	u16 mipi_status, n_lanes, phy, drate_min, drate_max;
 	int ret = ds5_read(state, DS5_MIPI_SUPPORT_LINES, &n_lanes);
@@ -5287,8 +5298,9 @@ static int ds5_hw_init(struct i2c_client *c, struct ds5 *state)
 	dev_dbg(sd->dev, "%s(): %d phandle %x node %s status %x\n", __func__, __LINE__,
 		 c->dev.of_node->phandle, c->dev.of_node->full_name, mipi_status);
 #endif
-
 	return ret;
+#endif
+	return 0;
 }
 
 static int ds5_mux_init(struct i2c_client *c, struct ds5 *state)
@@ -5414,7 +5426,7 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	u16 cfg0 = 0, cfg0_md = 0, cfg1 = 0, cfg1_md = 0;
 	u16 dw = 0, dh = 0, yw = 0, yh = 0, dev_type = 0;
 	int ret;
-
+#ifndef I2C_LESS
 	ret = ds5_read(state, DS5_DEPTH_STREAM_DT, &cfg0);
 	if (!ret)
 		ret = ds5_read(state, DS5_DEPTH_STREAM_MD, &cfg0_md);
@@ -5434,7 +5446,17 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 		ret = ds5_read(state, DS5_DEVICE_TYPE, &dev_type);
 	if (ret < 0)
 		return ret;
-
+#else
+	cfg0 = 0x31;
+	cfg0_md = 0;
+	dw = 1280;
+	dh = 720;
+	cfg1 = 0x2a;
+	cfg1_md = 0x200;
+	yw = 1280;
+	yh = 720;
+	dev_type = DS5_DEVICE_TYPE_D45X;
+#endif
 	dev_dbg(&client->dev, "%s(): cfg0 %x %ux%u cfg0_md %x %ux%u\n", __func__,
 		 cfg0, dw, dh, cfg0_md, yw, yh);
 
@@ -5920,8 +5942,12 @@ static void ds5_adjust_sync_mode_control(struct i2c_client *client, struct ds5 *
 
 	if (!state->ctrls.sync_mode)
 		return;
-
+#ifndef I2C_LESS
 	ret = ds5_read(state, DS5_DEVICE_TYPE, &dev_type);
+#else
+	dev_type = DS5_DEVICE_TYPE_D45X;
+	ret = 0;
+#endif
 	if (ret < 0) {
 		dev_warn(&client->dev, "%s(): Failed to read device type\n", __func__);
 		return;
@@ -6351,16 +6377,15 @@ static int ds5_probe(struct i2c_client *c
 	state->reset_ref_dser = atomic_read(dser_get_reset_gen(state));
 #else
 	ds5_init_global_slots_once();
-	mutex_lock(&ds5_inited[0].lock);
 	if (NULL == ds5_inited[0].ds5_primary) {
 		ds5_init_ds5_dev(state, &ds5_inited[0]);
 		dev_dbg(&c->dev, "%s(): set primary ds5 instance\n", __func__);
 	}
 	state->ds5_dev = &ds5_inited[0];
-	mutex_unlock(&ds5_inited[0].lock);
 #endif
 	state->reset_ref_ds5 = atomic_read(ds5_get_reset_gen(state));
 
+#ifndef I2C_LESS
 	// Verify communication
 	ret = ds5_read(state, DS5_FW_VERSION, &state->fw_version);
 	if (ret < 0) {
@@ -6369,7 +6394,9 @@ static int ds5_probe(struct i2c_client *c
 			__func__, ret, c->addr);
 		goto e_regulator;
 	}
-
+#else
+	state->fw_version = 0xAA;
+#endif
 	state->is_depth = 0;
 	state->is_y8 = 0;
 	state->is_rgb = 0;
@@ -6433,6 +6460,9 @@ static int ds5_probe(struct i2c_client *c
 			goto e_regulator;
 	}
 
+#ifdef I2C_LESS
+	WRITE_ONCE(state->ds5_dev->cached_device_type, DS5_DEVICE_TYPE_D45X);
+#endif
 	/* Verify format-discovery readiness.
 	 * FW_VERSION becomes readable earlier than DS5_DEVICE_TYPE, while later
 	 * probe code depends on DEVICE_TYPE to pick the correct format tables.
@@ -6445,7 +6475,9 @@ static int ds5_probe(struct i2c_client *c
 		goto e_chardev;
 	}
 
+#ifndef I2C_LESS
 	ret = ds5_read(state, DS5_DFU_MAGIC_REG, &rec_state);
+#endif
 	if (ret < 0)
 		rec_state = 0;
 
@@ -6457,9 +6489,13 @@ static int ds5_probe(struct i2c_client *c
 		return 0;
 	}
 
+#ifndef I2C_LESS
 	ds5_read_with_check(state, DS5_FW_VERSION, &state->fw_version);
 	ds5_read_with_check(state, DS5_FW_BUILD, &state->fw_build);
-
+#else
+	state->fw_version = 0x0A0A;
+	state->fw_build = 0x0B0B;
+#endif
 	dev_info(&c->dev, "D4XX Sensor: %s, firmware build: %d.%d.%d.%d\n",
 			ds5_get_sensor_name(state),
 			(state->fw_version >> 8) & 0xff, state->fw_version & 0xff,
