@@ -8,7 +8,7 @@
 
 /* camera control gpio definitions */
 / {
-	overlay-name = "Jetson six RealSense Cameras D4xx with max96712 Advantech for Thor";
+	overlay-name = "Jetson four RealSense Cameras D4xx with max96712 Advantech for Thor";
 	jetson-header-name = "Jetson AGX CSI Connector";
 	compatible = "nvidia,p4071-0000+p3834-0008", "nvidia,p3834-0008", "nvidia,tegra264";
 
@@ -16,17 +16,16 @@
 		target-path = "/";
 		__overlay__ {
 			tegra-capture-vi {
-				num-channels = <24>;
+				num-channels = <16>;
 				ports {
 					status = "okay";
-					/* ---- Cameras 0-3 (i2c9 / dser_a) ---- */
 					port@0 {
 						status = "okay";
 						reg = <0>;
 						d4xx_vi_in0: endpoint {
 							status = "okay";
 							vc-id = <0>;
-							port-index = <0>;
+							port-index = <4>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out0>;
 						};
@@ -37,7 +36,7 @@
 						d4xx_vi_in1: endpoint {
 							status = "okay";
 							vc-id = <1>;
-							port-index = <0>;
+							port-index = <4>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out1>;
 						};
@@ -48,7 +47,7 @@
 						d4xx_vi_in2: endpoint {
 							status = "okay";
 							vc-id = <2>;
-							port-index = <0>;
+							port-index = <4>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out2>;
 						};
@@ -59,7 +58,7 @@
 						d4xx_vi_in3: endpoint {
 							status = "okay";
 							vc-id = <3>;
-							port-index = <0>;
+							port-index = <4>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out3>;
 						};
@@ -70,7 +69,7 @@
 						d4xx_vi_in4: endpoint {
 							status = "okay";
 							vc-id = <4>;
-							port-index = <0>;
+							port-index = <4>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out4>;
 						};
@@ -81,7 +80,7 @@
 						d4xx_vi_in5: endpoint {
 							status = "okay";
 							vc-id = <5>;
-							port-index = <0>;
+							port-index = <4>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out5>;
 						};
@@ -92,7 +91,7 @@
 						d4xx_vi_in6: endpoint {
 							status = "okay";
 							vc-id = <6>;
-							port-index = <0>;
+							port-index = <4>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out6>;
 						};
@@ -103,7 +102,7 @@
 						d4xx_vi_in7: endpoint {
 							status = "okay";
 							vc-id = <7>;
-							port-index = <0>;
+							port-index = <4>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out7>;
 						};
@@ -114,7 +113,7 @@
 						d4xx_vi_in8: endpoint {
 							status = "okay";
 							vc-id = <8>;
-							port-index = <0>;
+							port-index = <4>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out8>;
 						};
@@ -125,7 +124,7 @@
 						d4xx_vi_in9: endpoint {
 							status = "okay";
 							vc-id = <9>;
-							port-index = <0>;
+							port-index = <4>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out9>;
 						};
@@ -136,7 +135,7 @@
 						d4xx_vi_in10: endpoint {
 							status = "okay";
 							vc-id = <10>;
-							port-index = <0>;
+							port-index = <4>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out10>;
 						};
@@ -147,7 +146,7 @@
 						d4xx_vi_in11: endpoint {
 							status = "okay";
 							vc-id = <11>;
-							port-index = <0>;
+							port-index = <4>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out11>;
 						};
@@ -158,7 +157,7 @@
 						d4xx_vi_in12: endpoint {
 							status = "okay";
 							vc-id = <12>;
-							port-index = <0>;
+							port-index = <4>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out12>;
 						};
@@ -169,7 +168,7 @@
 						d4xx_vi_in13: endpoint {
 							status = "okay";
 							vc-id = <13>;
-							port-index = <0>;
+							port-index = <4>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out13>;
 						};
@@ -180,7 +179,7 @@
 						d4xx_vi_in14: endpoint {
 							status = "okay";
 							vc-id = <14>;
-							port-index = <0>;
+							port-index = <4>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out14>;
 						};
@@ -191,98 +190,9 @@
 						d4xx_vi_in15: endpoint {
 							status = "okay";
 							vc-id = <15>;
-							port-index = <0>;
+							port-index = <4>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out15>;
-						};
-					};
-					/* ---- Cameras 4-5 (i2c12 / dser_b) ---- */
-					port@16 {
-						status = "okay";
-						reg = <16>;
-						d4xx_vi_in16: endpoint {
-							status = "okay";
-							vc-id = <0>;
-							port-index = <4>;
-							bus-width = <2>;
-							remote-endpoint = <&d4xx_csi_out16>;
-						};
-					};
-					port@17 {
-						status = "okay";
-						reg = <17>;
-						d4xx_vi_in17: endpoint {
-							status = "okay";
-							vc-id = <1>;
-							port-index = <4>;
-							bus-width = <2>;
-							remote-endpoint = <&d4xx_csi_out17>;
-						};
-					};
-					port@18 {
-						status = "okay";
-						reg = <18>;
-						d4xx_vi_in18: endpoint {
-							status = "okay";
-							vc-id = <2>;
-							port-index = <4>;
-							bus-width = <2>;
-							remote-endpoint = <&d4xx_csi_out18>;
-						};
-					};
-					port@19 {
-						status = "okay";
-						reg = <19>;
-						d4xx_vi_in19: endpoint {
-							status = "okay";
-							vc-id = <3>;
-							port-index = <4>;
-							bus-width = <2>;
-							remote-endpoint = <&d4xx_csi_out19>;
-						};
-					};
-					port@20 {
-						status = "okay";
-						reg = <20>;
-						d4xx_vi_in20: endpoint {
-							status = "okay";
-							vc-id = <4>;
-							port-index = <4>;
-							bus-width = <2>;
-							remote-endpoint = <&d4xx_csi_out20>;
-						};
-					};
-					port@21 {
-						status = "okay";
-						reg = <21>;
-						d4xx_vi_in21: endpoint {
-							status = "okay";
-							vc-id = <5>;
-							port-index = <4>;
-							bus-width = <2>;
-							remote-endpoint = <&d4xx_csi_out21>;
-						};
-					};
-					port@22 {
-						status = "okay";
-						reg = <22>;
-						d4xx_vi_in22: endpoint {
-							status = "okay";
-							vc-id = <6>;
-							port-index = <4>;
-							bus-width = <2>;
-							remote-endpoint = <&d4xx_csi_out22>;
-						};
-					};
-					port@23 {
-						status = "okay";
-						reg = <23>;
-						d4xx_vi_in23: endpoint {
-							status = "okay";
-							vc-id = <7>;
-							port-index = <4>;
-							bus-width = <2>;
-							remote-endpoint = <&d4xx_csi_out23>;
 						};
 					};
 				};
@@ -300,7 +210,6 @@
 				isp_bw_margin_pct = <25>;
 				modules {
 					status = "okay";
-					/* ---- Cameras 0-3 (i2c9) ---- */
 					module0 {
 						status = "okay";
 						badge = "d4xx_depth";
@@ -309,8 +218,8 @@
 						drivernode0 {
 							status = "okay";
 							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 9-001a";
-							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6a0000/ds5@1a";
+							devname = "DS5 mux 12-001a";
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6d0000/ds5@1a";
 						};
 					};
 					module1 {
@@ -321,8 +230,8 @@
 						drivernode0 {
 							status = "okay";
 							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 9-001b";
-							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6a0000/ds5@1b";
+							devname = "DS5 mux 12-001b";
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6d0000/ds5@1b";
 						};
 					};
 					module2 {
@@ -333,8 +242,8 @@
 						drivernode0 {
 							status = "okay";
 							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 9-001c";
-							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6a0000/ds5@1c";
+							devname = "DS5 mux 12-001c";
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6d0000/ds5@1c";
 						};
 					};
 					module3 {
@@ -345,8 +254,8 @@
 						drivernode0 {
 							status = "okay";
 							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 9-001d";
-							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6a0000/ds5@1d";
+							devname = "DS5 mux 12-001d";
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6d0000/ds5@1d";
 						};
 					};
 					module4 {
@@ -357,8 +266,8 @@
 						drivernode0 {
 							status = "okay";
 							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 9-002a";
-							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6a0000/ds5@2a";
+							devname = "DS5 mux 12-002a";
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6d0000/ds5@2a";
 						};
 					};
 					module5 {
@@ -369,8 +278,8 @@
 						drivernode0 {
 							status = "okay";
 							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 9-002b";
-							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6a0000/ds5@2b";
+							devname = "DS5 mux 12-002b";
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6d0000/ds5@2b";
 						};
 					};
 					module6 {
@@ -381,8 +290,8 @@
 						drivernode0 {
 							status = "okay";
 							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 9-002c";
-							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6a0000/ds5@2c";
+							devname = "DS5 mux 12-002c";
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6d0000/ds5@2c";
 						};
 					};
 					module7 {
@@ -393,8 +302,8 @@
 						drivernode0 {
 							status = "okay";
 							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 9-002d";
-							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6a0000/ds5@2d";
+							devname = "DS5 mux 12-002d";
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6d0000/ds5@2d";
 						};
 					};
 					module8 {
@@ -405,8 +314,8 @@
 						drivernode0 {
 							status = "okay";
 							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 9-003a";
-							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6a0000/ds5@3a";
+							devname = "DS5 mux 12-003a";
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6d0000/ds5@3a";
 						};
 					};
 					module9 {
@@ -417,8 +326,8 @@
 						drivernode0 {
 							status = "okay";
 							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 9-003b";
-							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6a0000/ds5@3b";
+							devname = "DS5 mux 12-003b";
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6d0000/ds5@3b";
 						};
 					};
 					module10 {
@@ -429,8 +338,8 @@
 						drivernode0 {
 							status = "okay";
 							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 9-003c";
-							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6a0000/ds5@3c";
+							devname = "DS5 mux 12-003c";
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6d0000/ds5@3c";
 						};
 					};
 					module11 {
@@ -441,8 +350,8 @@
 						drivernode0 {
 							status = "okay";
 							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 9-003d";
-							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6a0000/ds5@3d";
+							devname = "DS5 mux 12-003d";
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6d0000/ds5@3d";
 						};
 					};
 					module12 {
@@ -453,8 +362,8 @@
 						drivernode0 {
 							status = "okay";
 							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 9-004a";
-							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6a0000/ds5@4a";
+							devname = "DS5 mux 12-004a";
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6d0000/ds5@4a";
 						};
 					};
 					module13 {
@@ -465,8 +374,8 @@
 						drivernode0 {
 							status = "okay";
 							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 9-004b";
-							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6a0000/ds5@4b";
+							devname = "DS5 mux 12-004b";
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6d0000/ds5@4b";
 						};
 					};
 					module14 {
@@ -477,8 +386,8 @@
 						drivernode0 {
 							status = "okay";
 							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 9-004c";
-							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6a0000/ds5@4c";
+							devname = "DS5 mux 12-004c";
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6d0000/ds5@4c";
 						};
 					};
 					module15 {
@@ -489,105 +398,8 @@
 						drivernode0 {
 							status = "okay";
 							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 9-004d";
-							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6a0000/ds5@4d";
-						};
-					};
-					/* ---- Cameras 4-5 (i2c12) ---- */
-					module16 {
-						status = "okay";
-						badge = "d4xx_depth";
-						position = "front-left";
-						orientation = "1";
-						drivernode0 {
-							status = "okay";
-							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 12-001a";
-							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6d0000/ds5@1a";
-						};
-					};
-					module17 {
-						status = "okay";
-						badge = "d4xx_rgb";
-						position = "front-left";
-						orientation = "1";
-						drivernode0 {
-							status = "okay";
-							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 12-001b";
-							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6d0000/ds5@1b";
-						};
-					};
-					module18 {
-						status = "okay";
-						badge = "d4xx_Y8";
-						position = "front-left";
-						orientation = "1";
-						drivernode0 {
-							status = "okay";
-							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 12-001c";
-							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6d0000/ds5@1c";
-						};
-					};
-					module19 {
-						status = "okay";
-						badge = "d4xx_imu";
-						position = "front-left";
-						orientation = "1";
-						drivernode0 {
-							status = "okay";
-							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 12-001d";
-							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6d0000/ds5@1d";
-						};
-					};
-					module20 {
-						status = "okay";
-						badge = "d4xx_depth";
-						position = "front-right";
-						orientation = "1";
-						drivernode0 {
-							status = "okay";
-							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 12-002a";
-							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6d0000/ds5@2a";
-						};
-					};
-					module21 {
-						status = "okay";
-						badge = "d4xx_rgb";
-						position = "front-right";
-						orientation = "1";
-						drivernode0 {
-							status = "okay";
-							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 12-002b";
-							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6d0000/ds5@2b";
-						};
-					};
-					module22 {
-						status = "okay";
-						badge = "d4xx_Y8";
-						position = "front-right";
-						orientation = "1";
-						drivernode0 {
-							status = "okay";
-							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 12-002c";
-							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6d0000/ds5@2c";
-						};
-					};
-					module23 {
-						status = "okay";
-						badge = "d4xx_imu";
-						position = "front-right";
-						orientation = "1";
-						drivernode0 {
-							status = "okay";
-							pcl_id = "v4l2_sensor";
-							devname = "DS5 mux 12-002d";
-							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6d0000/ds5@2d";
+							devname = "DS5 mux 12-004d";
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/i2c@810c6d0000/ds5@4d";
 						};
 					};
 				};
@@ -595,8 +407,7 @@
 			bus@0 {
 				host1x@8181200000 {
 					nvcsi@8188000000 {
-						num-channels = <24>;
-						/* ---- Cameras 0-3 (i2c9 / dser_a) ---- */
+						num-channels = <16>;
 						channel@0 {
 							status = "okay";
 							reg = <0>;
@@ -607,7 +418,7 @@
 									reg = <0>;
 									d4xx_csi_in0: endpoint@0 {
 										status = "okay";
-										port-index = <0>;
+										port-index = <4>;
 										bus-width = <2>;
 										remote-endpoint = <&ds5_0_out>;
 									};
@@ -632,7 +443,7 @@
 									reg = <0>;
 									d4xx_csi_in1: endpoint@2 {
 										status = "okay";
-										port-index = <0>;
+										port-index = <4>;
 										bus-width = <2>;
 										remote-endpoint = <&ds5_1_out>;
 									};
@@ -657,7 +468,7 @@
 									reg = <0>;
 									d4xx_csi_in2: endpoint@4 {
 										status = "okay";
-										port-index = <0>;
+										port-index = <4>;
 										bus-width = <2>;
 										remote-endpoint = <&ds5_2_out>;
 									};
@@ -682,7 +493,7 @@
 									reg = <0>;
 									d4xx_csi_in3: endpoint@6 {
 										status = "okay";
-										port-index = <0>;
+										port-index = <4>;
 										bus-width = <2>;
 										remote-endpoint = <&ds5_3_out>;
 									};
@@ -707,7 +518,7 @@
 									reg = <0>;
 									d4xx_csi_in4: endpoint@8 {
 										status = "okay";
-										port-index = <0>;
+										port-index = <4>;
 										bus-width = <2>;
 										remote-endpoint = <&ds5_4_out>;
 									};
@@ -732,7 +543,7 @@
 									reg = <0>;
 									d4xx_csi_in5: endpoint@10 {
 										status = "okay";
-										port-index = <0>;
+										port-index = <4>;
 										bus-width = <2>;
 										remote-endpoint = <&ds5_5_out>;
 									};
@@ -757,7 +568,7 @@
 									reg = <0>;
 									d4xx_csi_in6: endpoint@12 {
 										status = "okay";
-										port-index = <0>;
+										port-index = <4>;
 										bus-width = <2>;
 										remote-endpoint = <&ds5_6_out>;
 									};
@@ -782,7 +593,7 @@
 									reg = <0>;
 									d4xx_csi_in7: endpoint@14 {
 										status = "okay";
-										port-index = <0>;
+										port-index = <4>;
 										bus-width = <2>;
 										remote-endpoint = <&ds5_7_out>;
 									};
@@ -807,7 +618,7 @@
 									reg = <0>;
 									d4xx_csi_in8: endpoint@16 {
 										status = "okay";
-										port-index = <0>;
+										port-index = <4>;
 										bus-width = <2>;
 										remote-endpoint = <&ds5_8_out>;
 									};
@@ -832,7 +643,7 @@
 									reg = <0>;
 									d4xx_csi_in9: endpoint@18 {
 										status = "okay";
-										port-index = <0>;
+										port-index = <4>;
 										bus-width = <2>;
 										remote-endpoint = <&ds5_9_out>;
 									};
@@ -857,7 +668,7 @@
 									reg = <0>;
 									d4xx_csi_in10: endpoint@20 {
 										status = "okay";
-										port-index = <0>;
+										port-index = <4>;
 										bus-width = <2>;
 										remote-endpoint = <&ds5_10_out>;
 									};
@@ -882,7 +693,7 @@
 									reg = <0>;
 									d4xx_csi_in11: endpoint@22 {
 										status = "okay";
-										port-index = <0>;
+										port-index = <4>;
 										bus-width = <2>;
 										remote-endpoint = <&ds5_11_out>;
 									};
@@ -907,7 +718,7 @@
 									reg = <0>;
 									d4xx_csi_in12: endpoint@24 {
 										status = "okay";
-										port-index = <0>;
+										port-index = <4>;
 										bus-width = <2>;
 										remote-endpoint = <&ds5_12_out>;
 									};
@@ -932,7 +743,7 @@
 									reg = <0>;
 									d4xx_csi_in13: endpoint@26 {
 										status = "okay";
-										port-index = <0>;
+										port-index = <4>;
 										bus-width = <2>;
 										remote-endpoint = <&ds5_13_out>;
 									};
@@ -957,7 +768,7 @@
 									reg = <0>;
 									d4xx_csi_in14: endpoint@28 {
 										status = "okay";
-										port-index = <0>;
+										port-index = <4>;
 										bus-width = <2>;
 										remote-endpoint = <&ds5_14_out>;
 									};
@@ -982,7 +793,7 @@
 									reg = <0>;
 									d4xx_csi_in15: endpoint@30 {
 										status = "okay";
-										port-index = <0>;
+										port-index = <4>;
 										bus-width = <2>;
 										remote-endpoint = <&ds5_15_out>;
 									};
@@ -997,212 +808,10 @@
 								};
 							};
 						};
-						/* ---- Cameras 4-5 (i2c12 / dser_b) ---- */
-						channel@16 {
-							status = "okay";
-							reg = <16>;
-							ports {
-								status = "okay";
-								port@0 {
-									status = "okay";
-									reg = <0>;
-									d4xx_csi_in16: endpoint@32 {
-										status = "okay";
-										port-index = <4>;
-										bus-width = <2>;
-										remote-endpoint = <&ds5_16_out>;
-									};
-								};
-								port@1 {
-									status = "okay";
-									reg = <1>;
-									d4xx_csi_out16: endpoint@33 {
-										status = "okay";
-										remote-endpoint = <&d4xx_vi_in16>;
-									};
-								};
-							};
-						};
-						channel@17 {
-							status = "okay";
-							reg = <17>;
-							ports {
-								status = "okay";
-								port@0 {
-									status = "okay";
-									reg = <0>;
-									d4xx_csi_in17: endpoint@34 {
-										status = "okay";
-										port-index = <4>;
-										bus-width = <2>;
-										remote-endpoint = <&ds5_17_out>;
-									};
-								};
-								port@1 {
-									status = "okay";
-									reg = <1>;
-									d4xx_csi_out17: endpoint@35 {
-										status = "okay";
-										remote-endpoint = <&d4xx_vi_in17>;
-									};
-								};
-							};
-						};
-						channel@18 {
-							status = "okay";
-							reg = <18>;
-							ports {
-								status = "okay";
-								port@0 {
-									status = "okay";
-									reg = <0>;
-									d4xx_csi_in18: endpoint@36 {
-										status = "okay";
-										port-index = <4>;
-										bus-width = <2>;
-										remote-endpoint = <&ds5_18_out>;
-									};
-								};
-								port@1 {
-									status = "okay";
-									reg = <1>;
-									d4xx_csi_out18: endpoint@37 {
-										status = "okay";
-										remote-endpoint = <&d4xx_vi_in18>;
-									};
-								};
-							};
-						};
-						channel@19 {
-							status = "okay";
-							reg = <19>;
-							ports {
-								status = "okay";
-								port@0 {
-									status = "okay";
-									reg = <0>;
-									d4xx_csi_in19: endpoint@38 {
-										status = "okay";
-										port-index = <4>;
-										bus-width = <2>;
-										remote-endpoint = <&ds5_19_out>;
-									};
-								};
-								port@1 {
-									status = "okay";
-									reg = <1>;
-									d4xx_csi_out19: endpoint@39 {
-										status = "okay";
-										remote-endpoint = <&d4xx_vi_in19>;
-									};
-								};
-							};
-						};
-						channel@20 {
-							status = "okay";
-							reg = <20>;
-							ports {
-								status = "okay";
-								port@0 {
-									status = "okay";
-									reg = <0>;
-									d4xx_csi_in20: endpoint@40 {
-										status = "okay";
-										port-index = <4>;
-										bus-width = <2>;
-										remote-endpoint = <&ds5_20_out>;
-									};
-								};
-								port@1 {
-									status = "okay";
-									reg = <1>;
-									d4xx_csi_out20: endpoint@41 {
-										status = "okay";
-										remote-endpoint = <&d4xx_vi_in20>;
-									};
-								};
-							};
-						};
-						channel@21 {
-							status = "okay";
-							reg = <21>;
-							ports {
-								status = "okay";
-								port@0 {
-									status = "okay";
-									reg = <0>;
-									d4xx_csi_in21: endpoint@42 {
-										status = "okay";
-										port-index = <4>;
-										bus-width = <2>;
-										remote-endpoint = <&ds5_21_out>;
-									};
-								};
-								port@1 {
-									status = "okay";
-									reg = <1>;
-									d4xx_csi_out21: endpoint@43 {
-										status = "okay";
-										remote-endpoint = <&d4xx_vi_in21>;
-									};
-								};
-							};
-						};
-						channel@22 {
-							status = "okay";
-							reg = <22>;
-							ports {
-								status = "okay";
-								port@0 {
-									status = "okay";
-									reg = <0>;
-									d4xx_csi_in22: endpoint@44 {
-										status = "okay";
-										port-index = <4>;
-										bus-width = <2>;
-										remote-endpoint = <&ds5_22_out>;
-									};
-								};
-								port@1 {
-									status = "okay";
-									reg = <1>;
-									d4xx_csi_out22: endpoint@45 {
-										status = "okay";
-										remote-endpoint = <&d4xx_vi_in22>;
-									};
-								};
-							};
-						};
-						channel@23 {
-							status = "okay";
-							reg = <23>;
-							ports {
-								status = "okay";
-								port@0 {
-									status = "okay";
-									reg = <0>;
-									d4xx_csi_in23: endpoint@46 {
-										status = "okay";
-										port-index = <4>;
-										bus-width = <2>;
-										remote-endpoint = <&ds5_23_out>;
-									};
-								};
-								port@1 {
-									status = "okay";
-									reg = <1>;
-									d4xx_csi_out23: endpoint@47 {
-										status = "okay";
-										remote-endpoint = <&d4xx_vi_in23>;
-									};
-								};
-							};
-						};
 					};
 				};
 
-				/* ---- First deserializer: cameras 0-3 on i2c9 ---- */
-				i2c@810c6a0000 {
+				i2c@810c6d0000 {
 					clock-frequency = <100000>;
 
 					dser_a: max96712@29 {
@@ -1973,413 +1582,6 @@
 									port-index = <0>;
 									bus-width = <2>;
 									remote-endpoint = <&d4xx_csi_in0>;
-								};
-							};
-						};
-						mode0 {
-							pixel_t = "grey_y16";
-							num_lanes = "2";
-							csi_pixel_bit_depth = "16";
-							active_w = "1280";
-							active_h = "720";
-							tegra_sinterface = "serial_a";
-							mclk_khz = "24000";
-							pix_clk_hz = "74250000";
-							line_length = "1280"; /* 2200 */
-							embedded_metadata_height = "1";
-						};
-						gmsl-link {
-							src-csi-port = "b";
-							dst-csi-port = "a";
-							serdes-csi-link = "a";
-							csi-mode = "1x4";
-							st-vc = <0>;
-							vc-id = <0>;
-							num-lanes = <2>;
-						};
-					};
-				};
-
-				/* ---- Second deserializer: cameras 4-5 on i2c12 ---- */
-				i2c@810c6d0000 {
-					clock-frequency = <100000>;
-
-					dser_b: max96712@29 {
-						status = "okay";
-						reg = <0x29>;
-						compatible = "maxim,max96712";
-						csi-mode = "2x4";
-						link-mask = <0x3>;
-						channel = "a";
-						force_clk0;
-					};
-
-					ser_e: max9295_a@40 {
-						status = "okay";
-						compatible = "maxim,max9295";
-						reg = <0x40>;
-						maxim,gmsl-dser-device = <&dser_b>;
-						external_addr_reassign;
-					};
-
-					ser_f: max9295_b@41 {
-						status = "okay";
-						compatible = "maxim,max9295";
-						reg = <0x41>;
-						maxim,gmsl-dser-device = <&dser_b>;
-						external_addr_reassign;
-					};
-
-					ds5_23: ds5@2d {
-						status = "okay";
-						def-addr = <0x10>;
-						reg = <0x2d>;
-						override_reg = <0x2a>;
-						compatible = "intel,d4xx";
-						use_sensor_mode_id = "true";
-						cam-type = "IMU";
-						nvidia,gmsl-ser-device = <&ser_f>;
-						nvidia,gmsl-dser-device = <&dser_b>;
-						ports {
-							#address-cells = <1>;
-							#size-cells = <0>;
-
-							port@0 {
-								reg = <0>;
-								ds5_23_out: endpoint {
-									vc-id = <7>;
-									port-index = <23>;
-									bus-width = <2>;
-									remote-endpoint = <&d4xx_csi_in23>;
-								};
-							};
-						};
-						mode0 {
-							pixel_t = "grey_y16";
-							num_lanes = "2";
-							csi_pixel_bit_depth = "16";
-							active_w = "640";
-							active_h = "480";
-							tegra_sinterface = "serial_b";
-							mclk_khz = "24000";
-							pix_clk_hz = "74250000";
-							line_length = "1280"; /* 2200 */
-							embedded_metadata_height = "0";
-						};
-						gmsl-link {
-							src-csi-port = "b";
-							dst-csi-port = "a";
-							serdes-csi-link = "a";
-							csi-mode = "1x4";
-							st-vc = <0>;
-							vc-id = <7>;
-							num-lanes = <2>;
-						};
-					};
-
-					ds5_22: ds5@2c {
-						status = "okay";
-						def-addr = <0x10>;
-						reg = <0x2c>;
-						override_reg = <0x2a>;
-						compatible = "intel,d4xx";
-						use_sensor_mode_id = "true";
-						cam-type = "Y8";
-						nvidia,gmsl-ser-device = <&ser_f>;
-						nvidia,gmsl-dser-device = <&dser_b>;
-						ports {
-							#address-cells = <1>;
-							#size-cells = <0>;
-
-							port@0 {
-								reg = <0>;
-								ds5_22_out: endpoint {
-									vc-id = <6>;
-									port-index = <22>;
-									bus-width = <2>;
-									remote-endpoint = <&d4xx_csi_in22>;
-								};
-							};
-						};
-						/* mode0: Y8, mode1: depth D16 */
-						mode0 {
-							pixel_t = "grey_y16";
-							num_lanes = "2";
-							csi_pixel_bit_depth = "16";
-							active_w = "1280";
-							active_h = "720";
-							tegra_sinterface = "serial_b";
-							mclk_khz = "24000";
-							pix_clk_hz = "74250000";
-							line_length = "1280"; /* 2200 */
-							embedded_metadata_height = "1";
-						};
-						gmsl-link {
-							src-csi-port = "b";
-							dst-csi-port = "a";
-							serdes-csi-link = "a";
-							csi-mode = "1x4";
-							st-vc = <0>;
-							vc-id = <6>;
-							num-lanes = <2>;
-						};
-					};
-
-					ds5_21: ds5@2b {
-						status = "okay";
-						def-addr = <0x10>;
-						reg = <0x2b>;
-						override_reg = <0x2a>;
-						compatible = "intel,d4xx";
-						use_sensor_mode_id = "true";
-						cam-type = "RGB";
-						nvidia,gmsl-ser-device = <&ser_f>;
-						nvidia,gmsl-dser-device = <&dser_b>;
-						ports {
-							#address-cells = <1>;
-							#size-cells = <0>;
-
-							port@0 {
-								reg = <0>;
-								ds5_21_out: endpoint {
-									vc-id = <5>;
-									port-index = <21>;
-									bus-width = <2>;
-									remote-endpoint = <&d4xx_csi_in21>;
-								};
-							};
-						};
-						mode0 {
-							pixel_t = "grey_y16";
-							num_lanes = "2";
-							csi_pixel_bit_depth = "16";
-							active_w = "1920";
-							active_h = "1080";
-							tegra_sinterface = "serial_e";
-							mclk_khz = "24000";
-							pix_clk_hz = "74250000";
-							line_length = "1280"; /* 2200 */
-							embedded_metadata_height = "1";
-						};
-						gmsl-link {
-							src-csi-port = "b";
-							dst-csi-port = "a";
-							serdes-csi-link = "a";
-							csi-mode = "1x4";
-							st-vc = <0>;
-							vc-id = <5>;
-							num-lanes = <2>;
-						};
-					};
-
-					ds5_20: ds5@2a {
-						status = "okay";
-						def-addr = <0x10>;
-						reg = <0x2a>;
-						compatible = "intel,d4xx";
-						use_sensor_mode_id = "true";
-						cam-type = "Depth";
-						nvidia,gmsl-ser-device = <&ser_f>;
-						nvidia,gmsl-dser-device = <&dser_b>;
-						ports {
-							#address-cells = <1>;
-							#size-cells = <0>;
-
-							port@0 {
-								reg = <0>;
-								ds5_20_out: endpoint {
-									vc-id = <4>;
-									port-index = <20>;
-									bus-width = <2>;
-									remote-endpoint = <&d4xx_csi_in20>;
-								};
-							};
-						};
-						mode0 {
-							pixel_t = "grey_y16";
-							num_lanes = "2";
-							csi_pixel_bit_depth = "16";
-							active_w = "1280";
-							active_h = "720";
-							tegra_sinterface = "serial_a";
-							mclk_khz = "24000";
-							pix_clk_hz = "74250000";
-							line_length = "1280"; /* 2200 */
-							embedded_metadata_height = "1";
-						};
-						gmsl-link {
-							src-csi-port = "b";
-							dst-csi-port = "a";
-							serdes-csi-link = "a";
-							csi-mode = "1x4";
-							st-vc = <0>;
-							vc-id = <4>;
-							num-lanes = <2>;
-						};
-					};
-
-					ds5_19: ds5@1d {
-						status = "okay";
-						def-addr = <0x10>;
-						reg = <0x1d>;
-						override_reg = <0x1a>;
-						compatible = "intel,d4xx";
-						use_sensor_mode_id = "true";
-						cam-type = "IMU";
-						nvidia,gmsl-ser-device = <&ser_e>;
-						nvidia,gmsl-dser-device = <&dser_b>;
-						ports {
-							#address-cells = <1>;
-							#size-cells = <0>;
-
-							port@0 {
-								reg = <0>;
-								ds5_19_out: endpoint {
-									vc-id = <3>;
-									port-index = <19>;
-									bus-width = <2>;
-									remote-endpoint = <&d4xx_csi_in19>;
-								};
-							};
-						};
-						mode0 {
-							pixel_t = "grey_y16";
-							num_lanes = "2";
-							csi_pixel_bit_depth = "16";
-							active_w = "640";
-							active_h = "480";
-							tegra_sinterface = "serial_b";
-							mclk_khz = "24000";
-							pix_clk_hz = "74250000";
-							line_length = "1280"; /* 2200 */
-							embedded_metadata_height = "0";
-						};
-						gmsl-link {
-							src-csi-port = "b";
-							dst-csi-port = "a";
-							serdes-csi-link = "a";
-							csi-mode = "1x4";
-							st-vc = <0>;
-							vc-id = <3>;
-							num-lanes = <2>;
-						};
-					};
-
-					ds5_18: ds5@1c {
-						status = "okay";
-						def-addr = <0x10>;
-						reg = <0x1c>;
-						override_reg = <0x1a>;
-						compatible = "intel,d4xx";
-						use_sensor_mode_id = "true";
-						cam-type = "Y8";
-						nvidia,gmsl-ser-device = <&ser_e>;
-						nvidia,gmsl-dser-device = <&dser_b>;
-						ports {
-							#address-cells = <1>;
-							#size-cells = <0>;
-
-							port@0 {
-								reg = <0>;
-								ds5_18_out: endpoint {
-									vc-id = <2>;
-									port-index = <18>;
-									bus-width = <2>;
-									remote-endpoint = <&d4xx_csi_in18>;
-								};
-							};
-						};
-						/* mode0: Y8, mode1: depth D16 */
-						mode0 {
-							pixel_t = "grey_y16";
-							num_lanes = "2";
-							csi_pixel_bit_depth = "16";
-							active_w = "1280";
-							active_h = "720";
-							tegra_sinterface = "serial_b";
-							mclk_khz = "24000";
-							pix_clk_hz = "74250000";
-							line_length = "1280"; /* 2200 */
-							embedded_metadata_height = "1";
-						};
-						gmsl-link {
-							src-csi-port = "b";
-							dst-csi-port = "a";
-							serdes-csi-link = "a";
-							csi-mode = "1x4";
-							st-vc = <0>;
-							vc-id = <2>;
-							num-lanes = <2>;
-						};
-					};
-
-					ds5_17: ds5@1b {
-						status = "okay";
-						def-addr = <0x10>;
-						reg = <0x1b>;
-						override_reg = <0x1a>;
-						compatible = "intel,d4xx";
-						use_sensor_mode_id = "true";
-						cam-type = "RGB";
-						nvidia,gmsl-ser-device = <&ser_e>;
-						nvidia,gmsl-dser-device = <&dser_b>;
-						ports {
-							#address-cells = <1>;
-							#size-cells = <0>;
-
-							port@0 {
-								reg = <0>;
-								ds5_17_out: endpoint {
-									vc-id = <1>;
-									port-index = <17>;
-									bus-width = <2>;
-									remote-endpoint = <&d4xx_csi_in17>;
-								};
-							};
-						};
-						mode0 {
-							pixel_t = "grey_y16";
-							num_lanes = "2";
-							csi_pixel_bit_depth = "16";
-							active_w = "1920";
-							active_h = "1080";
-							tegra_sinterface = "serial_e";
-							mclk_khz = "24000";
-							pix_clk_hz = "74250000";
-							line_length = "1280"; /* 2200 */
-							embedded_metadata_height = "1";
-						};
-						gmsl-link {
-							src-csi-port = "b";
-							dst-csi-port = "a";
-							serdes-csi-link = "a";
-							csi-mode = "1x4";
-							st-vc = <0>;
-							vc-id = <1>;
-							num-lanes = <2>;
-						};
-					};
-
-					ds5_16: ds5@1a {
-						status = "okay";
-						def-addr = <0x10>;
-						reg = <0x1a>;
-						compatible = "intel,d4xx";
-						use_sensor_mode_id = "true";
-						cam-type = "Depth";
-						nvidia,gmsl-ser-device = <&ser_e>;
-						nvidia,gmsl-dser-device = <&dser_b>;
-						ports {
-							#address-cells = <1>;
-							#size-cells = <0>;
-
-							port@0 {
-								reg = <0>;
-								ds5_16_out: endpoint {
-									vc-id = <0>;
-									port-index = <16>;
-									bus-width = <2>;
-									remote-endpoint = <&d4xx_csi_in16>;
 								};
 							};
 						};
