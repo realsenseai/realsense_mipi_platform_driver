@@ -202,7 +202,7 @@
 						reg = <16>;
 						d4xx_vi_in16: endpoint {
 							status = "okay";
-							vc-id = <16>;
+							vc-id = <0>;
 							port-index = <4>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out16>;
@@ -213,7 +213,7 @@
 						reg = <17>;
 						d4xx_vi_in17: endpoint {
 							status = "okay";
-							vc-id = <17>;
+							vc-id = <1>;
 							port-index = <4>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out17>;
@@ -224,7 +224,7 @@
 						reg = <18>;
 						d4xx_vi_in18: endpoint {
 							status = "okay";
-							vc-id = <18>;
+							vc-id = <2>;
 							port-index = <4>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out18>;
@@ -235,7 +235,7 @@
 						reg = <19>;
 						d4xx_vi_in19: endpoint {
 							status = "okay";
-							vc-id = <19>;
+							vc-id = <3>;
 							port-index = <4>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out19>;
@@ -246,7 +246,7 @@
 						reg = <20>;
 						d4xx_vi_in20: endpoint {
 							status = "okay";
-							vc-id = <20>;
+							vc-id = <4>;
 							port-index = <4>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out20>;
@@ -257,7 +257,7 @@
 						reg = <21>;
 						d4xx_vi_in21: endpoint {
 							status = "okay";
-							vc-id = <21>;
+							vc-id = <5>;
 							port-index = <4>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out21>;
@@ -268,7 +268,7 @@
 						reg = <22>;
 						d4xx_vi_in22: endpoint {
 							status = "okay";
-							vc-id = <22>;
+							vc-id = <6>;
 							port-index = <4>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out22>;
@@ -279,7 +279,7 @@
 						reg = <23>;
 						d4xx_vi_in23: endpoint {
 							status = "okay";
-							vc-id = <23>;
+							vc-id = <7>;
 							port-index = <4>;
 							bus-width = <2>;
 							remote-endpoint = <&d4xx_csi_out23>;
@@ -2047,8 +2047,8 @@
 							port@0 {
 								reg = <0>;
 								ds5_23_out: endpoint {
-									vc-id = <23>;
-									port-index = <23>;
+									vc-id = <7>;
+									port-index = <7>;
 									bus-width = <2>;
 									remote-endpoint = <&d4xx_csi_in23>;
 								};
@@ -2072,7 +2072,7 @@
 							serdes-csi-link = "a";
 							csi-mode = "1x4";
 							st-vc = <0>;
-							vc-id = <23>;
+							vc-id = <7>;
 							num-lanes = <2>;
 						};
 					};
@@ -2094,8 +2094,8 @@
 							port@0 {
 								reg = <0>;
 								ds5_22_out: endpoint {
-									vc-id = <22>;
-									port-index = <22>;
+									vc-id = <6>;
+									port-index = <6>;
 									bus-width = <2>;
 									remote-endpoint = <&d4xx_csi_in22>;
 								};
@@ -2120,7 +2120,7 @@
 							serdes-csi-link = "a";
 							csi-mode = "1x4";
 							st-vc = <0>;
-							vc-id = <22>;
+							vc-id = <6>;
 							num-lanes = <2>;
 						};
 					};
@@ -2142,8 +2142,8 @@
 							port@0 {
 								reg = <0>;
 								ds5_21_out: endpoint {
-									vc-id = <21>;
-									port-index = <21>;
+									vc-id = <5>;
+									port-index = <5>;
 									bus-width = <2>;
 									remote-endpoint = <&d4xx_csi_in21>;
 								};
@@ -2167,7 +2167,7 @@
 							serdes-csi-link = "a";
 							csi-mode = "1x4";
 							st-vc = <0>;
-							vc-id = <21>;
+							vc-id = <5>;
 							num-lanes = <2>;
 						};
 					};
@@ -2188,8 +2188,8 @@
 							port@0 {
 								reg = <0>;
 								ds5_20_out: endpoint {
-									vc-id = <20>;
-									port-index = <20>;
+									vc-id = <4>;
+									port-index = <4>;
 									bus-width = <2>;
 									remote-endpoint = <&d4xx_csi_in20>;
 								};
@@ -2213,7 +2213,7 @@
 							serdes-csi-link = "a";
 							csi-mode = "1x4";
 							st-vc = <0>;
-							vc-id = <20>;
+							vc-id = <4>;
 							num-lanes = <2>;
 						};
 					};
@@ -2235,8 +2235,8 @@
 							port@0 {
 								reg = <0>;
 								ds5_19_out: endpoint {
-									vc-id = <19>;
-									port-index = <19>;
+									vc-id = <3>;
+									port-index = <3>;
 									bus-width = <2>;
 									remote-endpoint = <&d4xx_csi_in19>;
 								};
@@ -2260,7 +2260,7 @@
 							serdes-csi-link = "a";
 							csi-mode = "1x4";
 							st-vc = <0>;
-							vc-id = <19>;
+							vc-id = <3>;
 							num-lanes = <2>;
 						};
 					};
@@ -2282,8 +2282,8 @@
 							port@0 {
 								reg = <0>;
 								ds5_18_out: endpoint {
-									vc-id = <18>;
-									port-index = <18>;
+									vc-id = <2>;
+									port-index = <2>;
 									bus-width = <2>;
 									remote-endpoint = <&d4xx_csi_in18>;
 								};
@@ -2308,7 +2308,7 @@
 							serdes-csi-link = "a";
 							csi-mode = "1x4";
 							st-vc = <0>;
-							vc-id = <18>;
+							vc-id = <2>;
 							num-lanes = <2>;
 						};
 					};
@@ -2330,8 +2330,8 @@
 							port@0 {
 								reg = <0>;
 								ds5_17_out: endpoint {
-									vc-id = <17>;
-									port-index = <17>;
+									vc-id = <1>;
+									port-index = <1>;
 									bus-width = <2>;
 									remote-endpoint = <&d4xx_csi_in17>;
 								};
@@ -2355,7 +2355,7 @@
 							serdes-csi-link = "a";
 							csi-mode = "1x4";
 							st-vc = <0>;
-							vc-id = <17>;
+							vc-id = <1>;
 							num-lanes = <2>;
 						};
 					};
@@ -2376,8 +2376,8 @@
 							port@0 {
 								reg = <0>;
 								ds5_16_out: endpoint {
-									vc-id = <16>;
-									port-index = <16>;
+									vc-id = <0>;
+									port-index = <0>;
 									bus-width = <2>;
 									remote-endpoint = <&d4xx_csi_in16>;
 								};
@@ -2401,7 +2401,7 @@
 							serdes-csi-link = "a";
 							csi-mode = "1x4";
 							st-vc = <0>;
-							vc-id = <16>;
+							vc-id = <0>;
 							num-lanes = <2>;
 						};
 					};
