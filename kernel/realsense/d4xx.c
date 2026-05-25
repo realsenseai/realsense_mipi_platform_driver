@@ -168,6 +168,18 @@ struct dser_interface {
 #define DS5_PWM_FREQUENCY		0x0028
 #define DS5_CAMERA_SYNC_MODE		0x002C
 
+/* RGB-only control offsets relative to DS5_RGB_CONTROL_BASE (0x4200).
+ * These overlap numerically with depth-block offsets (laser power, AE ROI),
+ * but the is_rgb / is_depth guards in ds5_s_ctrl()/ds5_g_volatile_ctrl()
+ * keep the per-sensor interpretations disjoint.
+ */
+#define DS5_RGB_AE_PRIORITY		0x0008
+#define DS5_RGB_SATURATION		0x0010
+#define DS5_RGB_SHARPNESS		0x0014
+#define DS5_RGB_WHITE_BALANCE_TEMP	0x0018
+#define DS5_RGB_AUTO_WHITE_BALANCE	0x001C
+#define DS5_RGB_POWER_LINE_FREQ		0x0020
+
 #define DS5_DEPTH_CONFIG_STATUS		0x4800
 #define DS5_RGB_CONFIG_STATUS		0x4802
 #define DS5_IMU_CONFIG_STATUS		0x4804
@@ -396,6 +408,12 @@ struct ds5_ctrls {
 		struct v4l2_ctrl *query_sub_stream;
 		struct v4l2_ctrl *set_sub_stream;
 		struct v4l2_ctrl *sync_mode;
+		/* RGB-only ISP controls. Only ae_priority needs a stored
+		 * pointer because it must be disabled per-SKU after probe
+		 * (D40X/D401 does not support it). The other five are owned
+		 * by the V4L2 handler and looked up by CID at dispatch.
+		 */
+		struct v4l2_ctrl *ae_priority;
 	};
 };
 
@@ -2739,6 +2757,39 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 	case V4L2_CID_EXPOSURE_ABSOLUTE:
 		ret = ds5_hw_set_exposure(state, base, ctrl->val);
 		break;
+	case V4L2_CID_SATURATION:
+		if (state->is_rgb)
+			ret = ds5_write(state, base | DS5_RGB_SATURATION,
+					ctrl->val);
+		break;
+	case V4L2_CID_SHARPNESS:
+		if (state->is_rgb)
+			ret = ds5_write(state, base | DS5_RGB_SHARPNESS,
+					ctrl->val);
+		break;
+	case V4L2_CID_WHITE_BALANCE_TEMPERATURE:
+		if (state->is_rgb)
+			ret = ds5_write(state,
+					base | DS5_RGB_WHITE_BALANCE_TEMP,
+					ctrl->val);
+		break;
+	case V4L2_CID_AUTO_WHITE_BALANCE:
+		if (state->is_rgb)
+			ret = ds5_write(state,
+					base | DS5_RGB_AUTO_WHITE_BALANCE,
+					ctrl->val);
+		break;
+	case V4L2_CID_POWER_LINE_FREQUENCY:
+		if (state->is_rgb)
+			ret = ds5_write(state,
+					base | DS5_RGB_POWER_LINE_FREQ,
+					ctrl->val);
+		break;
+	case V4L2_CID_EXPOSURE_AUTO_PRIORITY:
+		if (state->is_rgb)
+			ret = ds5_write(state, base | DS5_RGB_AE_PRIORITY,
+					ctrl->val);
+		break;
 	case DS5_CAMERA_CID_LASER_POWER:
 		if (!state->is_rgb)
 			ret = ds5_write(state, base | DS5_LASER_POWER,
@@ -3152,6 +3203,40 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		ds5_read(state, base | DS5_MANUAL_EXPOSURE_LSB, &reg);
 		data |= reg;
 		*ctrl->p_new.p_u32 = data;
+		break;
+
+	case V4L2_CID_SATURATION:
+		if (state->is_rgb)
+			ret = ds5_read(state, base | DS5_RGB_SATURATION,
+					ctrl->p_new.p_u16);
+		break;
+	case V4L2_CID_SHARPNESS:
+		if (state->is_rgb)
+			ret = ds5_read(state, base | DS5_RGB_SHARPNESS,
+					ctrl->p_new.p_u16);
+		break;
+	case V4L2_CID_WHITE_BALANCE_TEMPERATURE:
+		if (state->is_rgb)
+			ret = ds5_read(state,
+					base | DS5_RGB_WHITE_BALANCE_TEMP,
+					ctrl->p_new.p_u16);
+		break;
+	case V4L2_CID_AUTO_WHITE_BALANCE:
+		if (state->is_rgb)
+			ret = ds5_read(state,
+					base | DS5_RGB_AUTO_WHITE_BALANCE,
+					ctrl->p_new.p_u16);
+		break;
+	case V4L2_CID_POWER_LINE_FREQUENCY:
+		if (state->is_rgb)
+			ret = ds5_read(state,
+					base | DS5_RGB_POWER_LINE_FREQ,
+					ctrl->p_new.p_u16);
+		break;
+	case V4L2_CID_EXPOSURE_AUTO_PRIORITY:
+		if (state->is_rgb)
+			ret = ds5_read(state, base | DS5_RGB_AE_PRIORITY,
+					ctrl->p_new.p_u16);
 		break;
 
 	case DS5_CAMERA_CID_LASER_POWER:
@@ -4293,6 +4378,71 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 		/* override default int type to u32 to match SKU & UVC */
 		ctrls->exposure->type = V4L2_CTRL_TYPE_U32;
 	}
+
+	/* RGB-only ISP controls wired into the FW via DS5_RGB_CONTROL_BASE
+	 * (see RSDEV-5918): saturation, sharpness, white-balance temperature,
+	 * auto white-balance, power-line frequency, AE priority. The default
+	 * values mirror the FW UVC table.
+	 */
+	if (sid == RGB_SID) {
+		struct v4l2_ctrl *ctrl;
+
+		ctrl = v4l2_ctrl_new_std(hdl, ops,
+				V4L2_CID_SATURATION, 0, 100, 1, 64);
+		if (ctrl) {
+			ctrl->priv = sensor;
+			ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE |
+					V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
+		}
+
+		ctrl = v4l2_ctrl_new_std(hdl, ops,
+				V4L2_CID_SHARPNESS, 0, 100, 1, 50);
+		if (ctrl) {
+			ctrl->priv = sensor;
+			ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE |
+					V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
+		}
+
+		ctrl = v4l2_ctrl_new_std(hdl, ops,
+				V4L2_CID_WHITE_BALANCE_TEMPERATURE,
+				2800, 6500, 10, 4600);
+		if (ctrl) {
+			ctrl->priv = sensor;
+			ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE |
+					V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
+		}
+
+		ctrl = v4l2_ctrl_new_std(hdl, ops,
+				V4L2_CID_AUTO_WHITE_BALANCE, 0, 1, 1, 1);
+		if (ctrl) {
+			ctrl->priv = sensor;
+			ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE |
+					V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
+		}
+
+		ctrl = v4l2_ctrl_new_std_menu(hdl, ops,
+				V4L2_CID_POWER_LINE_FREQUENCY,
+				V4L2_CID_POWER_LINE_FREQUENCY_AUTO,
+				0,
+				V4L2_CID_POWER_LINE_FREQUENCY_AUTO);
+		if (ctrl) {
+			ctrl->priv = sensor;
+			ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE |
+					V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
+		}
+
+		/* AE priority is gated per-SKU in ds5_adjust_rgb_controls(),
+		 * called from ds5_v4l_init() once DS5_DEVICE_TYPE is readable.
+		 */
+		ctrls->ae_priority = v4l2_ctrl_new_std(hdl, ops,
+				V4L2_CID_EXPOSURE_AUTO_PRIORITY, 0, 1, 1, 0);
+		if (ctrls->ae_priority) {
+			ctrls->ae_priority->priv = sensor;
+			ctrls->ae_priority->flags |= V4L2_CTRL_FLAG_VOLATILE |
+					V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
+		}
+	}
+
 	if (hdl->error) {
 		v4l2_err(sd, "error creating controls (%d)\n", hdl->error);
 		ret = hdl->error;
@@ -5966,6 +6116,37 @@ static void ds5_adjust_sync_mode_control(struct i2c_client *client, struct ds5 *
 	}
 }
 
+/* Per-SKU adjustment of the RGB ISP controls registered in ds5_ctrl_init().
+ * Must be called after ds5_mux_init() so DS5_DEVICE_TYPE is populated. The
+ * controls themselves are registered unconditionally so callers do not race
+ * with the FW liveness probe.
+ */
+static void ds5_adjust_rgb_controls(struct i2c_client *client,
+				    struct ds5 *state)
+{
+	u16 dev_type = 0;
+	int ret;
+
+	if (!state->ctrls.ae_priority)
+		return;
+
+	ret = ds5_read(state, DS5_DEVICE_TYPE, &dev_type);
+	if (ret < 0) {
+		dev_warn(&client->dev, "%s(): Failed to read device type\n",
+			 __func__);
+		return;
+	}
+
+	dev_type = ds5_dev_type(state, dev_type);
+	if (dev_type == DS5_DEVICE_TYPE_D40X) {
+		/* D40X / D401 does not expose AE Priority. */
+		state->ctrls.ae_priority->flags |= V4L2_CTRL_FLAG_DISABLED;
+		dev_dbg(&client->dev,
+			"%s(): D40X - disabling AE Priority control\n",
+			__func__);
+	}
+}
+
 static int ds5_v4l_init(struct i2c_client *c, struct ds5 *state)
 {
 	int ret;
@@ -5997,6 +6178,10 @@ static int ds5_v4l_init(struct i2c_client *c, struct ds5 *state)
 	/* Adjust sync_mode control range based on device type - must be done
 	 * after ds5_mux_init() creates the control */
 	ds5_adjust_sync_mode_control(c, state);
+
+	/* Adjust RGB ISP controls per SKU (e.g. hide AE Priority on D40X) -
+	 * must be done after ds5_mux_init() registered them. */
+	ds5_adjust_rgb_controls(c, state);
 
 	ret = ds5_hw_init(c, state);
 	if (ret < 0)
@@ -6606,4 +6791,4 @@ MODULE_AUTHOR("Guennadi Liakhovetski <guennadi.liakhovetski@intel.com>,\n\
 				Shikun Ding <shikun.ding@intel.com>,\n\
 				Dmitry Perchanov <dmitry.perchanov@intel.com>");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("1.0.3.12");
+MODULE_VERSION("1.0.3.15");
