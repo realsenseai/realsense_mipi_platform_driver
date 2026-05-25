@@ -2010,7 +2010,7 @@
 						compatible = "maxim,max96712";
 						csi-mode = "2x4";
 						link-mask = <0x3>;
-						channel = "a";
+						channel = "b";
 						force_clk0;
 					};
 
