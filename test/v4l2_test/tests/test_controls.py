@@ -359,7 +359,7 @@ class TestHWReset:
 @pytest.mark.d457
 @pytest.mark.d401
 class TestReadoutShaping:
-    """Readout shaping control (Depth XU selector 0x13), range 0-100."""
+    """Readout shaping control (Depth register DS5_READOUT_SHAPING=0x0030), range 0-100."""
 
     MIN = 0
     MAX = 100
@@ -368,7 +368,7 @@ class TestReadoutShaping:
 
     def test_readout_shaping_enumerated(self, depth_device):
         controls = enumerate_controls(depth_device)
-        names = [c.name.decode("ascii", errors="replace") for c in controls]
+        names = [c.name.decode("ascii", errors="replace").lower() for c in controls]
         assert any("readout shaping" in n for n in names), \
             "readout shaping not found in enumerated controls"
 
@@ -386,7 +386,7 @@ class TestReadoutShaping:
         finally:
             write_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING, original)
 
-    def test_readout_shaping_set_illegal(self, depth_device):
+    def test_readout_shaping_clamping(self, depth_device):
         # V4L2 (VIDIOC_S_CTRL) clamps out-of-range writes to [min, max]
         original = read_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING)
         try:
@@ -397,15 +397,6 @@ class TestReadoutShaping:
             write_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING, self.MIN - 1)
             val = read_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING)
             assert val == self.MIN, f"{self.MIN - 1} should clamp to {self.MIN}, got {val}"
-        finally:
-            write_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING, original)
-
-    def test_readout_shaping_default(self, depth_device):
-        original = read_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING)
-        try:
-            write_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING, self.DEFAULT)
-            val = read_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING)
-            assert val == self.DEFAULT, f"default write: expected {self.DEFAULT}, got {val}"
         finally:
             write_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING, original)
 

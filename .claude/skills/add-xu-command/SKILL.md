@@ -69,7 +69,7 @@ Add a `case DS5_CAMERA_CID_*:` block that writes the value to firmware:
 
 For both handlers:
 - Reuse existing helpers (`ds5_read`, `ds5_write`, `ds5_hwmc_send`, `ds5_hwmc_wait`, `ds5_get_hwmc`).
-- Follow existing locking — the lock is already held by the caller for these switch paths.
+- Locking differs by handler: `ds5_s_ctrl()` acquires `state->lock` itself before the switch; `ds5_g_volatile_ctrl()` does NOT hold `state->lock` — do not assume it is held in GET paths.
 - Follow existing logging patterns (include `__func__`).
 - Guard depth-only controls with `if (state->is_depth)`, RGB-only with `if (state->is_rgb)`, etc.
 
