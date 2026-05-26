@@ -167,6 +167,7 @@ struct dser_interface {
 #define DS5_MANUAL_LASER_POWER		0x0024
 #define DS5_PWM_FREQUENCY		0x0028
 #define DS5_CAMERA_SYNC_MODE		0x002C
+#define DS5_READOUT_SHAPING		0x0030
 
 #define DS5_DEPTH_CONFIG_STATUS		0x4800
 #define DS5_RGB_CONFIG_STATUS		0x4802
@@ -2230,6 +2231,7 @@ enum ds5_sync_mode {
 
 /* HW reset with recovery for GMSL connections */
 #define DS5_CAMERA_CID_HW_RESET		(DS5_CAMERA_CID_BASE+33)
+#define DS5_CAMERA_CID_READOUT_SHAPING	(DS5_CAMERA_CID_BASE+34)
 
 #define DS5_HWMC_DATA			0x4900
 #define DS5_HWMC_STATUS			0x4904
@@ -3006,6 +3008,10 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 		if (state->is_depth)
 			ret = ds5_write(state, base | DS5_PWM_FREQUENCY, ctrl->val);
 		break;
+	case DS5_CAMERA_CID_READOUT_SHAPING:
+		if (state->is_depth)
+			ret = ds5_write(state, base | DS5_READOUT_SHAPING, ctrl->val);
+		break;
 	}
 
 	mutex_unlock(&state->lock);
@@ -3275,6 +3281,10 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		if (state->is_depth)
 			ds5_read(state, base | DS5_PWM_FREQUENCY, ctrl->p_new.p_u16);
 		break;
+	case DS5_CAMERA_CID_READOUT_SHAPING:
+		if (state->is_depth)
+			ds5_read(state, base | DS5_READOUT_SHAPING, ctrl->p_new.p_u16);
+		break;
 	}
 	return ret;
 }
@@ -3542,6 +3552,19 @@ static const struct v4l2_ctrl_config ds5_ctrl_pwm = {
 	.def = 1,
 	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 };
+
+static const struct v4l2_ctrl_config ds5_ctrl_readout_shaping = {
+	.ops = &ds5_ctrl_ops,
+	.id = DS5_CAMERA_CID_READOUT_SHAPING,
+	.name = "readout shaping",
+	.type = V4L2_CTRL_TYPE_INTEGER,
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+	.min = 0,
+	.max = 100,
+	.step = 1,
+	.def = 0,
+};
+
 static int ds5_mux_open(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
 {
 	struct ds5 *state = v4l2_get_subdevdata(sd);
@@ -4329,6 +4352,7 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 	if (sid == DEPTH_SID) {
 		ctrls->sync_mode = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_sync_mode, sensor);
 		v4l2_ctrl_new_custom(hdl, &ds5_ctrl_pwm, sensor);
+		v4l2_ctrl_new_custom(hdl, &ds5_ctrl_readout_shaping, sensor);
 	}
 	// IMU custom
 	if (sid == IMU_SID)
