@@ -112,6 +112,7 @@ sudo depmod
     | `tegra264-camera-d4xx-overlay-advantech-cams-4-5.dtbo` | Advantech board w/ two cameras on the bottom right and top right of the right port (i2c12) |
     | `tegra264-camera-d4xx-overlay-advantech-cams-4-5-6-7.dtbo` | Advantech board w/ four cameras on the right port (i2c12) |
     | `tegra264-camera-d4xx-overlay-advantech-cams-0-1-2-3-4-5.dtbo` | Advantech board w/ six cameras - four on the left port (i2c9) + two on the bottom right and top right of the right port (i2c12) |
+    | `tegra264-camera-d4xx-overlay-advantech-cams-0-1-2-3-4-5-6-7.dtbo` | Advantech board w/ all eight cameras - four on the left port (i2c9) + four on the right port (i2c12) |
 
 5. Verify bootloader configuration
 ```
