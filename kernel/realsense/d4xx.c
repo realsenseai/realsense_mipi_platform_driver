@@ -3638,6 +3638,8 @@ static int ds5_setup_and_link(struct ds5 *state)
 	mutex_lock(&serdes_lock__);
 	ds5_init_global_slots_once();
 	state->ds5_dev = NULL;
+	state->ser_primary = false;
+	state->dser_primary = false;
 	/* Look for existing DS5 instances */
 	for (i = 0; i < MAX_DS5_NUM; i++) {
 		bool match;
