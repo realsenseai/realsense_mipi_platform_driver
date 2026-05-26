@@ -492,7 +492,6 @@ struct ds5 {
 	bool metadata_enabled;
 	int aggregated;
 	int reset_ref_ds5;
-	int reset_ref_dser;
 	u16 fw_version;
 	u16 fw_build;
 	u16 control_base;
@@ -560,15 +559,6 @@ static bool ds5_slots_inited;
 #define MAX_DSER_NUM 4
 struct dser_control {
 	struct mutex lock;
-
-	/*
-	* Per-deserializer reset generation counter.
-	* Replaces the old global ds5_reset_gen for SERDES builds so that
-	* resetting camera A does not force camera B (on a different deserializer)
-	* to invalidate its state.  Cameras sharing the same deserializer still
-	* see each other's resets through the shared counter.
-	*/
-	atomic_t reset_gen;
 	struct device *dser_dev;
 };
 static struct dser_control dser_inited[MAX_DSER_NUM];
@@ -596,11 +586,6 @@ static void ds5_init_global_slots_once(void)
 static inline atomic_t *ds5_get_reset_gen(struct ds5 *state)
 {
 	return &state->ds5_dev->reset_gen;
-}
-
-static inline atomic_t *dser_get_reset_gen(struct ds5 *state)
-{
-	return &state->ds5_dev->dser_control->reset_gen;
 }
 
 /* MAX9296 deserializer interface implementation */
@@ -4898,11 +4883,6 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	bool ds5_config_done = !on; /* for stop, skip config */
 	bool reset_invalidated = false;
 	bool *streaming_flag = NULL;
-#ifdef CONFIG_VIDEO_D4XX_SERDES
-	int cur_dser = atomic_read(dser_get_reset_gen(state));
-#else
-	int cur_dser = 0;
-#endif
 	int cur_ds5 = atomic_read(ds5_get_reset_gen(state));
 
 	/* Lazy invalidation after HW or deserializer reset.
@@ -4910,13 +4890,11 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	 * state, then update refs.  Must run before the duplicate-call
 	 * guard so a reset-killed stream is not mistaken for "already off".
 	 */
-	if (state->reset_ref_ds5 != cur_ds5
-			|| state->reset_ref_dser != cur_dser) {
+	if (state->reset_ref_ds5 != cur_ds5) {
 		ds5_invalidate_sensor(state, sensor);
 		sensor->streaming = false;
 		reset_invalidated = true;
 		state->reset_ref_ds5 = cur_ds5;
-		state->reset_ref_dser = cur_dser;
 	}
 
 	// spare duplicate calls
@@ -6357,7 +6335,6 @@ static int ds5_probe(struct i2c_client *c
 	ret = ds5_serdes_setup(state);
 	if (ret < 0)
 		goto e_regulator;
-	state->reset_ref_dser = atomic_read(dser_get_reset_gen(state));
 #else
 	ds5_init_global_slots_once();
 	mutex_lock(&ds5_inited[0].lock);
