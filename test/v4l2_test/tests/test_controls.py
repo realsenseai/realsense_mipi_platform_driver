@@ -17,6 +17,7 @@ from ..v4l2.controls import (
 
 
 @pytest.mark.d457
+@pytest.mark.d401
 class TestFirmwareVersion:
     """Read firmware version via control interface."""
 
@@ -32,6 +33,7 @@ class TestFirmwareVersion:
 
 
 @pytest.mark.d457
+@pytest.mark.d401
 class TestLaserControl:
     """Laser on/off toggle and manual laser power."""
 
@@ -75,6 +77,7 @@ class TestLaserControl:
 
 
 @pytest.mark.d457
+@pytest.mark.d401
 class TestExposureControl:
     """Manual exposure set/get."""
 
@@ -111,6 +114,7 @@ class TestExposureControl:
 
 
 @pytest.mark.d457
+@pytest.mark.d401
 class TestAEROI:
     """Auto-exposure ROI roundtrip."""
 
@@ -133,6 +137,7 @@ class TestAEROI:
 
 
 @pytest.mark.d457
+@pytest.mark.d401
 class TestGVD:
     """GVD (General Version Data) readable."""
 
@@ -148,6 +153,7 @@ class TestGVD:
 
 
 @pytest.mark.d457
+@pytest.mark.d401
 class TestCalibration:
     """Calibration table readable."""
 
@@ -173,6 +179,7 @@ class TestCalibration:
 
 
 @pytest.mark.d457
+@pytest.mark.d401
 class TestPWM:
     """PWM control range."""
 
@@ -191,6 +198,7 @@ class TestPWM:
 
 
 @pytest.mark.d457
+@pytest.mark.d401
 class TestAutoExposure:
     """Auto-exposure mode switching and manual exposure control."""
 
@@ -286,6 +294,7 @@ class TestAutoExposure:
 
 
 @pytest.mark.d457
+@pytest.mark.d401
 class TestHWReset:
     """Hardware reset via CID_HW_RESET button control.
 
@@ -348,6 +357,52 @@ class TestHWReset:
 
 
 @pytest.mark.d457
+@pytest.mark.d401
+class TestReadoutShaping:
+    """Readout shaping control (Depth register DS5_READOUT_SHAPING=0x0030), range 0-100."""
+
+    MIN = 0
+    MAX = 100
+    MID = 50
+    DEFAULT = 0
+
+    def test_readout_shaping_enumerated(self, depth_device):
+        controls = enumerate_controls(depth_device)
+        names = [c.name.decode("ascii", errors="replace").lower() for c in controls]
+        assert any("readout shaping" in n for n in names), \
+            "readout shaping not found in enumerated controls"
+
+    def test_readout_shaping_read(self, depth_device):
+        val = read_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING)
+        assert self.MIN <= val <= self.MAX, f"readout_shaping out of range: {val}"
+
+    def test_readout_shaping_set_legal(self, depth_device):
+        original = read_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING)
+        try:
+            for v in (self.MIN, self.MID, self.MAX):
+                write_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING, v)
+                val = read_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING)
+                assert val == v, f"set {v}: got {val}"
+        finally:
+            write_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING, original)
+
+    def test_readout_shaping_clamping(self, depth_device):
+        # V4L2 (VIDIOC_S_CTRL) clamps out-of-range writes to [min, max]
+        original = read_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING)
+        try:
+            write_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING, self.MAX + 1)
+            val = read_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING)
+            assert val == self.MAX, f"{self.MAX + 1} should clamp to {self.MAX}, got {val}"
+
+            write_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING, self.MIN - 1)
+            val = read_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING)
+            assert val == self.MIN, f"{self.MIN - 1} should clamp to {self.MIN}, got {val}"
+        finally:
+            write_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING, original)
+
+
+@pytest.mark.d457
+@pytest.mark.d401
 class TestControlEnumeration:
     """Verify controls can be enumerated."""
 

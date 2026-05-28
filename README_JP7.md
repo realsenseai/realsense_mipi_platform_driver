@@ -99,8 +99,22 @@ sudo sed -i 's/search updates/search extra updates kernel/g' /etc/depmod.d/ubunt
 # update driver cache
 sudo depmod
 ```
-4.
-Verify bootloader configuration
+4. Select the correct overlay for your HW:
+
+    Currently supported overlays are -
+
+    | Overlay file | Description |
+    |---|---|
+    | `tegra264-camera-d4xx-overlay.dtbo` | max9296 deserializer board w/ one camera |
+    | `tegra264-camera-d4xx-overlay-max96712-EVB.dtbo` | max96712 evaluation board w/ one camera |
+    | `tegra264-camera-d4xx-overlay-advantech.dtbo` | Advantech board w/ one camera on the bottom right of the left port (i2c9) |
+    | `tegra264-camera-d4xx-overlay-advantech-cams-0-1-2-3.dtbo` | Advantech board w/ four cameras on the left port (i2c9) |
+    | `tegra264-camera-d4xx-overlay-advantech-cams-4-5.dtbo` | Advantech board w/ two cameras on the bottom right and top right of the right port (i2c12) |
+    | `tegra264-camera-d4xx-overlay-advantech-cams-4-5-6-7.dtbo` | Advantech board w/ four cameras on the right port (i2c12) |
+    | `tegra264-camera-d4xx-overlay-advantech-cams-0-1-2-3-4-5.dtbo` | Advantech board w/ six cameras - four on the left port (i2c9) + two on the bottom right and top right of the right port (i2c12) |
+    | `tegra264-camera-d4xx-overlay-advantech-cams-0-1-2-3-4-5-6-7.dtbo` | Advantech board w/ all eight cameras - four on the left port (i2c9) + four on the right port (i2c12) |
+
+5. Verify bootloader configuration
 ```
 cat /boot/extlinux/extlinux.conf
 ----<CUT>----

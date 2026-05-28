@@ -76,10 +76,15 @@ elif [ "${JETPACK_VERSION}" = "6.0" ] || [ "${JETPACK_VERSION}" = "6.1" ] || [ "
         echo "Error: Failed to copy modules to '/lib/modules/', DON'T REBOOT"
         exit 1
     fi
-    echo "sudo cp boot/tegra234-camera-d4xx-overlay*.dtbo /boot/."
-          sudo cp boot/tegra234-camera-d4xx-overlay*.dtbo /boot/.
-    echo "sudo cp boot/dtb/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/dtb/."
-          sudo cp boot/dtb/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/dtb/.
+    if [ "${JETPACK_VERSION}" = "7.0" ] || [ "${JETPACK_VERSION}" = "7.1" ]; then
+        echo "sudo cp boot/tegra264-camera-d4xx-overlay*.dtbo /boot/."
+              sudo cp boot/tegra264-camera-d4xx-overlay*.dtbo /boot/.
+    else
+        echo "sudo cp boot/tegra234-camera-d4xx-overlay*.dtbo /boot/."
+              sudo cp boot/tegra234-camera-d4xx-overlay*.dtbo /boot/.
+        echo "sudo cp boot/dtb/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/dtb/."
+              sudo cp boot/dtb/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/dtb/.
+    fi
 fi
 
 if [ -f boot/Image ]; then

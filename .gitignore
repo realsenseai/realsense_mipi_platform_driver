@@ -8,3 +8,5 @@
 /.vscode/*.db*
 /.vscode/compile_commands.json
 jetpack_version
+/.d4xx_build_version
+/log
