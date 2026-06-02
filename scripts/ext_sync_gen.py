@@ -54,6 +54,10 @@ def main():
         fd = os.open(CDI_TSC_DEV, os.O_RDWR)
         try:
             if args.enable:
+                try:
+                    tsc_fsync(fd, 0)
+                except OSError:
+                    pass
                 if args.fps is not None or args.duty is not None:
                     fps = args.fps if args.fps is not None else 30
                     duty = args.duty if args.duty is not None else 25
