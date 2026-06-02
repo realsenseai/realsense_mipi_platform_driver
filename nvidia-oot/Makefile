@@ -30,10 +30,21 @@ help:
 	@echo   "   make clean            # to make clean driver sources"
 	@echo   "================================================================================"
 
+# SKIP_NVIDIA_DISPLAY=1 omits building/installing the NVIDIA display stack
+# (nvidia.ko / nvidia-modeset.ko / nvidia-drm.ko). Used on JP7 (Thor), where the
+# board keeps its matched BSP display modules and the bundled nvdisplay source is
+# a non-matching pre-release. Nothing depends on nvidia-display, so dropping it is safe.
+SKIP_NVIDIA_DISPLAY ?= 0
+ifeq ($(SKIP_NVIDIA_DISPLAY),1)
+modules: hwpm nvidia-oot nvgpu
+modules_install: hwpm nvidia-oot nvgpu
+clean: hwpm nvidia-oot nvgpu nvidia-dtbs-clean
+else
 modules: hwpm nvidia-oot nvgpu nvidia-display
-dtbs: nvidia-dtbs
 modules_install: hwpm nvidia-oot nvgpu nvidia-display-install
 clean: hwpm nvidia-oot nvgpu nvidia-display-clean nvidia-dtbs-clean
+endif
+dtbs: nvidia-dtbs
 
 
 conftest:
