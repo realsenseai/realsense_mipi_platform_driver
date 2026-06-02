@@ -3,73 +3,52 @@ From: Arun-Prasad-V <arun.prasad.v@intel.com>
 Date: Mon, 4 Nov 2024 12:52:39 +0530
 Subject: [PATCH] Support for dynamic change of i2c bus-clk-rate
 
+Provide i2c_{set,get}_adapter_bus_clk_rate() for the D4XX DFU path.
+
+These accessors must NOT add a member to struct i2c_adapter. Doing so
+changes the genksyms CRC of every exported i2c-core symbol that
+references struct i2c_adapter, which breaks loading of prebuilt
+out-of-tree modules (notably the BSP NVIDIA display stack: nvidia.ko /
+nvidia-modeset.ko / nvidia-drm.ko) on the patched kernel with
+"disagrees about version of symbol" errors.
+
+On Tegra the controller clock is programmed from i2c_timings.bus_freq_hz
+via clk_set_rate(); adap->bus_clk_rate was never consumed by the bus
+driver, so the value had no hardware effect. The accessors are therefore
+ABI-neutral stubs that satisfy the D4XX call sites without touching the
+public struct.
+
 Signed-off-by: Arun Prasad V <arun.prasad.v@intel.com>
 ---
- drivers/i2c/i2c-core-base.c    | 45 ++++++++++++++++++++++++++++++++++
- include/linux/i2c.h            |  5 ++++
- 3 files changed, 92 insertions(+)
+ drivers/i2c/i2c-core-base.c | 19 +++++++++++++++++++
+ include/linux/i2c.h         |  4 ++++
+ 2 files changed, 23 insertions(+)
 
 diff --git a/drivers/i2c/i2c-core-base.c b/drivers/i2c/i2c-core-base.c
 index c232535ca8f4..2edd24973cca 100644
 --- a/drivers/i2c/i2c-core-base.c
 +++ b/drivers/i2c/i2c-core-base.c
-@@ -1285,10 +1285,33 @@ delete_device_store(struct device *dev, struct device_attribute *attr,
- static DEVICE_ATTR_IGNORE_LOCKDEP(delete_device, S_IWUSR, NULL,
- 				  delete_device_store);
- 
-+static ssize_t show_bus_clk_rate(struct device *dev,
-+		struct device_attribute *attr, char *buf)
-+{
-+	struct i2c_adapter *adap = to_i2c_adapter(dev);
-+
-+	return sprintf(buf, "%ld\n", adap->bus_clk_rate);
-+}
-+
-+static ssize_t set_bus_clk_rate(struct device *dev,
-+		struct device_attribute *attr, const char *buf, size_t count)
-+{
-+	struct i2c_adapter *adap = to_i2c_adapter(dev);
-+	char *p = (char *)buf;
-+	int bus_clk_rate;
-+
-+	bus_clk_rate = memparse(p, &p);
-+	dev_info(dev, "Setting clock rate %d on next transfer\n", bus_clk_rate);
-+	adap->bus_clk_rate = bus_clk_rate;
-+	return count;
-+}
-+static DEVICE_ATTR(bus_clk_rate, 0644, show_bus_clk_rate, set_bus_clk_rate);
-+
- static struct attribute *i2c_adapter_attrs[] = {
- 	&dev_attr_name.attr,
- 	&dev_attr_new_device.attr,
- 	&dev_attr_delete_device.attr,
-+	&dev_attr_bus_clk_rate.attr,
- 	NULL
- };
- ATTRIBUTE_GROUPS(i2c_adapter);
-@@ -1401,6 +1424,28 @@ static int i2c_setup_host_notify_irq_domain(struct i2c_adapter *adap)
+@@ -1401,6 +1401,26 @@ static int i2c_setup_host_notify_irq_domain(struct i2c_adapter *adap)
  	return 0;
  }
  
++/*
++ * i2c_{set,get}_adapter_bus_clk_rate() exist for the D4XX DFU path. They are
++ * intentionally ABI-neutral stubs: storing a rate in struct i2c_adapter would
++ * change the CRC of every exported i2c-core symbol and break loading of
++ * prebuilt modules (e.g. the BSP NVIDIA display stack). On Tegra the bus clock
++ * comes from i2c_timings.bus_freq_hz via clk_set_rate(), so this value had no
++ * hardware effect anyway.
++ */
 +int i2c_set_adapter_bus_clk_rate(struct i2c_adapter *adap, int bus_rate)
 +{
-+	i2c_lock_bus(adap, I2C_LOCK_ROOT_ADAPTER);
-+	adap->bus_clk_rate = bus_rate;
-+	i2c_unlock_bus(adap, I2C_LOCK_ROOT_ADAPTER);
-+
 +	return 0;
 +}
 +EXPORT_SYMBOL_GPL(i2c_set_adapter_bus_clk_rate);
 +
 +int i2c_get_adapter_bus_clk_rate(struct i2c_adapter *adap)
 +{
-+	int bus_clk_rate;
-+
-+	i2c_lock_bus(adap, I2C_LOCK_ROOT_ADAPTER);
-+	bus_clk_rate = adap->bus_clk_rate;
-+	i2c_unlock_bus(adap, I2C_LOCK_ROOT_ADAPTER);
-+
-+	return bus_clk_rate;
++	return 0;
 +}
 +EXPORT_SYMBOL_GPL(i2c_get_adapter_bus_clk_rate);
 +
@@ -91,14 +70,5 @@ index 2ce3efbe9198..9d876ad6373c 100644
  /* This is the very generalized SMBus access routine. You probably do not
     want to use this, though; one of the functions below may be much easier,
     and probably just as fast.
-@@ -737,6 +741,7 @@ struct i2c_adapter {
- 	const struct i2c_adapter_quirks *quirks;
- 
- 	struct irq_domain *host_notify_domain;
-+	unsigned long bus_clk_rate;
- 	struct regulator *bus_regulator;
- 
- 	struct dentry *debugfs;
--- 
+--
 2.34.1
-
