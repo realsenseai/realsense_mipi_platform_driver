@@ -6096,9 +6096,10 @@ static void ds5_adjust_sync_mode_control(struct i2c_client *client, struct ds5 *
 	dev_type = ds5_dev_type(state, dev_type);
 	switch (dev_type) {
 	case DS5_DEVICE_TYPE_D41X:
-		/* D41X does not support sync mode */
+		/* D41X does support all 6 sync modes (0-5) */
+		__v4l2_ctrl_modify_range(state->ctrls.sync_mode, 0, 5, 0, 0);
+		state->ctrls.sync_mode->qmenu = sync_mode_menu_full;
 		dev_dbg(&client->dev, "%s(): D41X does not support sync mode\n", __func__);
-		__v4l2_ctrl_modify_range(state->ctrls.sync_mode, 0, 0, 0, 0);
 		break;
 	case DS5_DEVICE_TYPE_D40X:
 		/* D401 only supports modes 0 (Default) and 2 (Slave) */
