@@ -118,7 +118,7 @@ The build system cross-compiles for ARM64. Toolchains vary by JetPack:
 ## Branching
 
 - `master` — primary/release branch
-- `dev` — active development branch
+- `dev` — active development branch; **default target for all PRs**
 - CI builds run on pushes to `master` and `dev`, and on all PRs
 
 ## Concurrency notes
