@@ -6433,6 +6433,20 @@ static int ds5_probe(struct i2c_client *c
 			goto e_regulator;
 	}
 
+	/* Check for DFU recovery before waiting for device type: a bootloader
+	 * device never serves DS5_DEVICE_TYPE (0x0310), so the wait would time
+	 * out and tear down the chardev.  The DFU I2C slave *does* serve
+	 * DS5_DFU_MAGIC_REG (0x5020) — check it first.
+	 */
+	ret = ds5_read(state, DS5_DFU_MAGIC_REG, &rec_state);
+	if (!ret && rec_state == DS5_DFU_MAGIC_LSW) {
+		dev_info(&c->dev, "%s(): D4XX recovery state\n", __func__);
+		state->dfu_dev.dfu_state_flag = DS5_DFU_RECOVERY;
+		/* Override I2C drvdata with state for use in remove function */
+		i2c_set_clientdata(c, state);
+		return 0;
+	}
+
 	/* Verify format-discovery readiness.
 	 * FW_VERSION becomes readable earlier than DS5_DEVICE_TYPE, while later
 	 * probe code depends on DEVICE_TYPE to pick the correct format tables.
@@ -6443,18 +6457,6 @@ static int ds5_probe(struct i2c_client *c
 			"%s(): device type is not valid: %d (last val 0x%x)\n",
 			__func__, ret, rec_state);
 		goto e_chardev;
-	}
-
-	ret = ds5_read(state, DS5_DFU_MAGIC_REG, &rec_state);
-	if (ret < 0)
-		rec_state = 0;
-
-	if (rec_state == DS5_DFU_MAGIC_LSW) {
-		dev_info(&c->dev, "%s(): D4XX recovery state\n", __func__);
-		state->dfu_dev.dfu_state_flag = DS5_DFU_RECOVERY;
-		/* Override I2C drvdata with state for use in remove function */
-		i2c_set_clientdata(c, state);
-		return 0;
 	}
 
 	ds5_read_with_check(state, DS5_FW_VERSION, &state->fw_version);
