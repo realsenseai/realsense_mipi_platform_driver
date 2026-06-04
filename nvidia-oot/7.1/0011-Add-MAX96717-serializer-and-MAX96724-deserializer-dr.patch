@@ -23,11 +23,11 @@ MAX96724 quad deserializer features:
 Signed-off-by: RealSense AI <realsense@realsenseai.com>
 ---
  drivers/media/i2c/Makefile   |    2 +
- drivers/media/i2c/max96717.c |  797 ++++++++++++++++
- drivers/media/i2c/max96724.c | 1690 ++++++++++++++++++++++++++++++++++
+ drivers/media/i2c/max96717.c |  779 +++++++++++++++
+ drivers/media/i2c/max96724.c | 1683 ++++++++++++++++++++++++++++++++++
  include/media/max96717.h     |  151 +++
  include/media/max96724.h     |  183 +++
- 5 files changed, 2823 insertions(+)
+ 5 files changed, 2798 insertions(+)
  create mode 100644 drivers/media/i2c/max96717.c
  create mode 100644 drivers/media/i2c/max96724.c
  create mode 100644 include/media/max96717.h
@@ -48,10 +48,10 @@ index b284938..947e6e9 100644
  
 diff --git a/drivers/media/i2c/max96717.c b/drivers/media/i2c/max96717.c
 new file mode 100644
-index 0000000..78d8a01
+index 0000000..068b90b
 --- /dev/null
 +++ b/drivers/media/i2c/max96717.c
-@@ -0,0 +1,797 @@
+@@ -0,0 +1,779 @@
 +/*
 + * max96717.c - MAX96717 GMSL2 Serializer driver (Tunnel Mode)
 + *
@@ -284,7 +284,6 @@ index 0000000..78d8a01
 +	struct max96717 *priv = dev_get_drvdata(dev);
 +	int err = 0;
 +	struct gmsl_link_ctx *g_ctx;
-+	u32 lane_count;
 +
 +	/*
 +	 * [XML] Full initialization sequence:
@@ -329,22 +328,6 @@ index 0000000..78d8a01
 +	 */
 +	max96717_write_reg(dev, MAX96717_PIPE_EN_ADDR, MAX96717_SOFT_RESET);
 +	msleep(30);
-+
-+	/*
-+	 * [PPTX slide 14] ctrl1_num_lanes at 0x0331 bits[5:4]
-+	 * [XML] 0x0331 = 0x30 for 4-lane
-+	 * MAX96717 supports 1x4 mode only (single 4-lane D-PHY input)
-+	 */
-+	lane_count = (g_ctx->num_csi_lanes == 4) ?
-+		MAX96717_CSI_4_LANES : MAX96717_CSI_2_LANES;
-+
-+	max96717_write_reg(dev, MAX96717_MIPI_RX1_ADDR, lane_count);
-+
-+	/* [XML] Lane mapping: 1x4 mode default */
-+	max96717_write_reg(dev, MAX96717_MIPI_RX2_ADDR,
-+			   MAX96717_CSI_1X4_LANE_MAP1);
-+	max96717_write_reg(dev, MAX96717_MIPI_RX3_ADDR,
-+			   MAX96717_CSI_1X4_LANE_MAP2);
 +
 +	/* Enable tunnel mode and configure video TX path */
 +	err = max96717_set_registers(dev, tunnel_init,
@@ -677,8 +660,7 @@ index 0000000..78d8a01
 +		 */
 +		{MAX96717_PIPE_EN_ADDR, MAX96717_SOFT_RESET},
 +		{MAX96717_EXT11_ADDR, MAX96717_TUN_MODE_EN},
-+		{MAX96717_PIPE_EN_ADDR, 0xF3},
-+		{MAX96717_MIPI_RX1_ADDR, MAX96717_CSI_4_LANES},
++		{MAX96717_PIPE_EN_ADDR, MAX96717_PIPE_EN_ALL},
 +	};
 +
 +	mutex_lock(&priv->lock);
@@ -851,10 +833,10 @@ index 0000000..78d8a01
 +MODULE_LICENSE("GPL v2");
 diff --git a/drivers/media/i2c/max96724.c b/drivers/media/i2c/max96724.c
 new file mode 100644
-index 0000000..7286ff4
+index 0000000..a319b5b
 --- /dev/null
 +++ b/drivers/media/i2c/max96724.c
-@@ -0,0 +1,1690 @@
+@@ -0,0 +1,1683 @@
 +/*
 + * max96724.c - MAX96724 GMSL2 Quad Deserializer driver (Tunnel Mode)
 + *
@@ -1074,7 +1056,7 @@ index 0000000..7286ff4
 +/* --- Tunnel Mode per-pipe --- */
 +
 +/*
-+ *   bit[0] = TUN_EN, Default=0x08, write 0x09 to enable
++ *   bit[0] = TUN_EN, Default=0x08, write 0x01 to enable
 + */
 +#define MAX96724_PIPE0_TUN_EN_ADDR	0x0936
 +#define MAX96724_PIPE1_TUN_EN_ADDR	0x0976
@@ -1125,24 +1107,21 @@ index 0000000..7286ff4
 +#define MAX96724_VID_RX0_CFG_VAL	0x33
 +#define MAX96724_VID_RX6_CFG_VAL	0x0A
 +
-+/* [gmsl_ser_des_guide §4.9] Tunnel mode enable (MIPI_TX54, 0x0936):
++/* [XML] Tunnel mode enable (MIPI_TX54, 0x0936):
 + *   bit[0] = TUN_EN = 1
-+ *   bit[3] = TUN_CONT (continuous tunnel mode, required per verified XML)
-+ *   XML/Guide value: 0x09
++ *   Verified value: 0x01
 + */
-+#define MAX96724_TUN_EN			0x09
++#define MAX96724_TUN_EN			0x01
 +
-+/* [gmsl_ser_des_guide §7.5] Tunnel controller destination (MIPI_TX57, 0x0939):
-+ *   bit[7]: DIS_AUTO_SER_LANE_DET (1=manual)
-+ *   bit[6]: DIS_AUTO_TUN_DET (1=manual)
++/* [XML] Tunnel controller destination (MIPI_TX57, 0x0939):
 + *   bits[5:4]: TUN_DEST (00=PHY0, 01=PHY1, 10=PHY2, 11=PHY3)
-+ *   Verified XML: 0x50 = manual detect + PHY1 destination
++ *   Verified value: 0x10 = PHY1 destination with auto-detect enabled
 + */
-+#define MAX96724_TUN_DEST_CTRL0		0x40  /* Manual detect + PHY0 */
-+#define MAX96724_TUN_DEST_CTRL1		0x50  /* Manual detect + PHY1 (Port A master) */
++#define MAX96724_TUN_DEST_CTRL0		0x00  /* Auto-detect + PHY0 */
++#define MAX96724_TUN_DEST_CTRL1		0x10  /* Auto-detect + PHY1 (Port A master) */
 +
 +/* [UG Table 12, p.25] CSI output mode values */
-+#define MAX96724_CSI_MODE_2X4_VAL	0x08  /* bit[3] = 2x4 alt: Ctrl1→PHY0+1→PortA (Aardvark-verified) */
++#define MAX96724_CSI_MODE_2X4_VAL	0x08  /* bit[3] = 1x4a + 2x2: Ctrl1 keeps Port A clock on PHY1 */
 +#define MAX96724_CSI_MODE_4X2_VAL	0x01  /* bit[0] = 4x2 mode */
 +
 +#define MAX96724_CSI_PHY_EN_ALL		0xF0
@@ -1166,15 +1145,10 @@ index 0000000..7286ff4
 +#define MAX96724_CSI_PHY_EN_2LANE	0xF0
 +
 +/* [SC20190112 2-lane] DPLL for Controller 0 (drives PHY0, 2 lanes).
-+ *   bits[4:0] = data-rate / 100 MHz.  1400 Mbps / 100 = 14 = 0x0E.
++ *   bits[4:0] = data-rate / 100 MHz.  700 Mbps / 100 = 7 = 0x07.
 + *   bit[5]    = DPLL enable = 1.
-+ *   Result: 0x2E = 1400 Mbps/lane D-PHY. */
-+#define MAX96724_DPLL_1400MBPS_CTRL0	0x2E
-+
-+/* [SC20190112 2-lane] TX49 pipeline concatenation for 2-wide mode.
-+ *   In 4x2 mode each controller drives only 2 lanes.
-+ *   UG p.30: synchronous concatenation control, 0x83 for 2W. */
-+#define MAX96724_TX49_CONCAT_2W		0x83
++ *   Result: 0x27 = 700 Mbps/lane D-PHY. */
++#define MAX96724_DPLL_700MBPS_CTRL0	0x27
 +
 +/* [UG Table 3, p.12] One-shot reset: all links */
 +#define MAX96724_ONESHOT_ALL		0x0F
@@ -1238,8 +1212,8 @@ index 0000000..7286ff4
 +/* Lane map presets */
 +#define MAX96724_LANE_MAP1_4X2		0x44
 +#define MAX96724_LANE_MAP2_4X2		0x44
-+#define MAX96724_LANE_MAP1_2X4		0xE4  /* PHY0+PHY1 lane map (Aardvark-verified) */
-+#define MAX96724_LANE_MAP2_2X4		0xE4
++#define MAX96724_LANE_MAP1_2X4		0xE4  /* SC20190112 subset: PHY0 data + PHY1 clock */
++#define MAX96724_LANE_MAP2_2X4		0x44  /* keep unused PHY2/3 straight in 0x08 mode */
 +
 +struct max96724_source_ctx {
 +	struct gmsl_link_ctx *g_ctx;
@@ -1382,6 +1356,34 @@ index 0000000..7286ff4
 +	max96724_pipes_reset(priv);
 +	for (i = 0; i < priv->num_src; i++)
 +		priv->sources[i].st_enabled = false;
++}
++
++static void max96724_apply_porta_subset(struct device *dev,
++						 struct max96724 *priv)
++{
++	/*
++	 * The SC20190112 bridge only routes PHY0 data lanes and the PHY1 clock
++	 * lane to Orin. Keep the MAX96724 in 0x08 mode so Controller 1 still
++	 * clocks Port A, but restore the live 2-lane subset on every stream path.
++	 */
++	max96724_write_reg(dev, MAX96724_CSI_OUT_CFG_ADDR,
++			   MAX96724_CSI_MODE_2X4_VAL);
++	max96724_write_reg(dev, MAX96724_CSI_PHY_EN_ADDR,
++			   MAX96724_CSI_PHY_EN_01);
++	max96724_write_reg(dev, MAX96724_CSI_LANE_MAP1_ADDR,
++			   priv->lane_mp1);
++	max96724_write_reg(dev, MAX96724_CSI_LANE_MAP2_ADDR,
++			   priv->lane_mp2);
++	max96724_write_reg(dev, MAX96724_MIPI_CTRL_SEL_ADDR,
++			   MAX96724_ALL_MAP_CTRL1);
++	max96724_write_reg(dev, MAX96724_LANE_CTRL0_ADDR,
++			   MAX96724_LANE_CTRL_2LANE);
++	max96724_write_reg(dev, MAX96724_LANE_CTRL1_ADDR,
++			   MAX96724_LANE_CTRL_2LANE);
++	max96724_write_reg(dev, MAX96724_LANE_CTRL2_ADDR,
++			   MAX96724_LANE_CTRL_2LANE);
++	max96724_write_reg(dev, MAX96724_LANE_CTRL3_ADDR,
++			   MAX96724_LANE_CTRL_2LANE);
 +}
 +
 +/* ================================================================
@@ -1919,49 +1921,19 @@ index 0000000..7286ff4
 +	max96724_write_reg(dev, MAX96724_PIPE_EN_ADDR, 0x00);
 +
 +	/*
-+	 * [SC20190112] CSI output: 2x4 alt mode (0x08) for Port A.
-+	 * In 2x4 alt: Controller 1 is master for Port A.
-+	 *   PHY0 (slave) → DA0/DA1 (data lanes to Orin)
-+	 *   PHY1 (master) → CLKA (clock to Orin)
-+	 * Both PHY0 and PHY1 must be enabled for Port A output.
-+	 * TUN_DEST=0x10 routes tunnel pipes to Controller 1.
++	 * [SC20190112] Keep 0x08 mode so PHY1 remains the Port A clock master,
++	 * but restore the live 2-lane subset used by the bridge board.
 +	 */
-+	max96724_write_reg(dev, MAX96724_CSI_OUT_CFG_ADDR,
-+			   MAX96724_CSI_MODE_2X4_VAL);
-+	max96724_write_reg(dev, MAX96724_CSI_PHY_EN_ADDR,
-+			   MAX96724_CSI_PHY_EN_01);
++	max96724_apply_porta_subset(dev, priv);
 +
-+	max96724_write_reg(dev, MAX96724_CSI_LANE_MAP1_ADDR,
-+			   priv->lane_mp1);
-+	max96724_write_reg(dev, MAX96724_CSI_LANE_MAP2_ADDR,
-+			   priv->lane_mp2);
-+
-+	/* [gmsl_ser_des_guide §6.1] MIPI_CTRL_SEL: all pipes → Controller 1.
-+	 * Guide: "in tunneling mode the MIPI_CTRL_SEL_x bits must match TUN_DEST"
-+	 * 0x55 = Pipe0→Ctrl1, Pipe1→Ctrl1, Pipe2→Ctrl1, Pipe3→Ctrl1 */
-+	max96724_write_reg(dev, MAX96724_MIPI_CTRL_SEL_ADDR, 0x55);
-+
-+	/* [gmsl_ser_des_guide §8.2] LANE_CTRL on Controller 1 register (0x094A).
-+	 * 0x40 = 2-lane. Also set Ctrl0 for completeness. */
-+	max96724_write_reg(dev, MAX96724_LANE_CTRL0_ADDR,
-+			   MAX96724_LANE_CTRL_2LANE);
-+	max96724_write_reg(dev, MAX96724_LANE_CTRL1_ADDR,
-+			   MAX96724_LANE_CTRL_2LANE);
-+	max96724_write_reg(dev, MAX96724_LANE_CTRL2_ADDR,
-+			   MAX96724_LANE_CTRL_2LANE);
-+	max96724_write_reg(dev, MAX96724_LANE_CTRL3_ADDR,
-+			   MAX96724_LANE_CTRL_2LANE);
-+
-+	/*
-+	 * [SC20190112 2-lane] DPLL for Controller 1 (drives Port A via PHY1 clock).
-+	 * FREQ1 (0x0418) = 0x2E = 1400 Mbps/lane + DPLL enable.
-+	 * 2 lanes × 1400 Mbps = 2800 Mbps total ≥ camera 2L × 700M input.
-+	 */
++	/* [XML] DPLL for the active CSI output uses 0x27 on FREQ0/FREQ1. */
 +	if (!priv->lane_setup) {
 +		max96724_write_reg(dev, MAX96724_DPLL_CSI2_ADDR,
 +				   MAX96724_DPLL_DISABLE);
++		max96724_write_reg(dev, MAX96724_DPLL_FREQ0_ADDR,
++				   MAX96724_DPLL_700MBPS_CTRL0);
 +		max96724_write_reg(dev, MAX96724_DPLL_FREQ1_ADDR,
-+				   MAX96724_DPLL_1400MBPS_CTRL0);
++				   MAX96724_DPLL_700MBPS_CTRL0);
 +		max96724_write_reg(dev, MAX96724_DPLL_CSI2_ADDR,
 +				   MAX96724_DPLL_ENABLE);
 +
@@ -2124,6 +2096,7 @@ index 0000000..7286ff4
 +void max96724_reset_oneshot(struct device *dev)
 +{
 +	struct max96724 *priv = dev_get_drvdata(dev);
++	unsigned int i;
 +
 +	mutex_lock(&priv->lock);
 +	if (priv->splitter_enabled) {
@@ -2142,38 +2115,34 @@ index 0000000..7286ff4
 +	}
 +	msleep(100);
 +
-+	/* ONESHOT resets CSI config to defaults.
-+	 * Restore 1x4a+2x2 2-lane config after every ONESHOT (per guide §7):
-+	 *   CSI_OUT_CFG=0x08  1x4a+2x2: Controller 1 → PHY0+1 → Port A
-+	 *   PHY_EN=0x30       PHY0+PHY1 (both needed for Port A)
-+	 *   MIPI_CTRL_SEL=0x55 all pipes → Controller 1 (must match TUN_DEST)
-+	 *   BACKTOP=0x02      CSIB_EN (Controller 1)
-+	 *   TUN_EN=0x09       tunnel enable (per verified XML)
-+	 *   TUN_DEST=0x50     manual detect + PHY1 (per verified XML)
-+	 *   DPLL_FREQ1=0x2E   1400Mbps (Controller 1's DPLL)
-+	 *   LANE_CTRL1=0x40   2-lane on Controller 1
-+	 *   VID_RX0=0x33      disable pkt detect for tunnel mode
-+	 */
-+	max96724_write_reg(dev, MAX96724_CSI_OUT_CFG_ADDR,
-+			   MAX96724_CSI_MODE_2X4_VAL);
-+	max96724_write_reg(dev, MAX96724_CSI_PHY_EN_ADDR,
-+			   MAX96724_CSI_PHY_EN_01);
-+	max96724_write_reg(dev, MAX96724_MIPI_CTRL_SEL_ADDR, 0x55);
++	/* ONESHOT resets CSI/tunnel state. Restore the bridge-board subset. */
++	max96724_apply_porta_subset(dev, priv);
 +	max96724_write_reg(dev, MAX96724_BACKTOP_EN_ADDR,
 +			   MAX96724_BACKTOP_CSIB_EN);
-+	/* Restore 2-lane count on all controllers (ONESHOT resets to default) */
-+	max96724_write_reg(dev, MAX96724_LANE_CTRL0_ADDR,
-+			   MAX96724_LANE_CTRL_2LANE);
-+	max96724_write_reg(dev, MAX96724_LANE_CTRL1_ADDR,
-+			   MAX96724_LANE_CTRL_2LANE);
-+	max96724_write_reg(dev, MAX96724_LANE_CTRL2_ADDR,
-+			   MAX96724_LANE_CTRL_2LANE);
-+	max96724_write_reg(dev, MAX96724_LANE_CTRL3_ADDR,
-+			   MAX96724_LANE_CTRL_2LANE);
++	max96724_write_reg(dev, MAX96724_DPLL_CSI2_ADDR,
++			   MAX96724_DPLL_DISABLE);
++	max96724_write_reg(dev, MAX96724_DPLL_FREQ0_ADDR,
++			   MAX96724_DPLL_700MBPS_CTRL0);
 +	max96724_write_reg(dev, MAX96724_DPLL_FREQ1_ADDR,
-+			   MAX96724_DPLL_1400MBPS_CTRL0);
-+	max96724_write_reg(dev, MAX96724_VID_RX0_P0_ADDR,
-+			   MAX96724_VID_RX0_CFG_VAL);
++			   MAX96724_DPLL_700MBPS_CTRL0);
++	max96724_write_reg(dev, MAX96724_DPLL_CSI2_ADDR,
++			   MAX96724_DPLL_ENABLE);
++	for (i = 0; i < MAX96724_MAX_PIPES; i++) {
++		max96724_write_reg(dev,
++				   MAX96724_PIPE_X_ST_SEL_ADDR + (0x40 * i),
++				   0x10);
++		max96724_write_reg(dev,
++				   MAX96724_VID_RX0_P0_ADDR +
++				   (MAX96724_VID_RX_STRIDE * i),
++				   MAX96724_VID_RX0_CFG_VAL);
++		max96724_write_reg(dev,
++				   MAX96724_VID_RX6_P0_ADDR +
++				   (MAX96724_VID_RX_STRIDE * i),
++				   MAX96724_VID_RX6_CFG_VAL);
++		max96724_write_reg(dev,
++				   MAX96724_TX49_PIPE_X_ADDR + (0x40 * i),
++				   MAX96724_TX49_CONCAT_4W);
++	}
 +	/* Re-enable tunnel on all pipes (ONESHOT resets TUN_EN to 0x08=disabled) */
 +	max96724_write_reg(dev, MAX96724_PIPE0_TUN_EN_ADDR, MAX96724_TUN_EN);
 +	max96724_write_reg(dev, MAX96724_PIPE1_TUN_EN_ADDR, MAX96724_TUN_EN);
@@ -2188,6 +2157,8 @@ index 0000000..7286ff4
 +			   MAX96724_TUN_DEST_CTRL1);
 +	max96724_write_reg(dev, MAX96724_PIPE3_TUN_DEST_ADDR,
 +			   MAX96724_TUN_DEST_CTRL1);
++	max96724_write_reg(dev, MAX96724_PIPE_EN_ADDR,
++			   MAX96724_PIPE_EN_4);
 +
 +	msleep(200);
 +	mutex_unlock(&priv->lock);
@@ -2229,8 +2200,8 @@ index 0000000..7286ff4
 +		{MAX96724_TX46_PIPE_X_ADDR, MAX96724_ALL_MAP_CTRL1},
 +		{MAX96724_TX47_PIPE_X_ADDR, MAX96724_ALL_MAP_CTRL1},
 +		{MAX96724_TX48_PIPE_X_ADDR, MAX96724_ALL_MAP_CTRL1},
-+		/* [SC20190112 2-lane] TX49: Pipeline concatenation 2W (2-lane output) */
-+		{MAX96724_TX49_PIPE_X_ADDR, MAX96724_TX49_CONCAT_2W},
++		/* [XML] TX49: Pipeline concatenation 0x87 */
++		{MAX96724_TX49_PIPE_X_ADDR, MAX96724_TX49_CONCAT_4W},
 +		/*
 +		 * Keep DES heartbeat handling aligned with the serializer's
 +		 * LIM_HEART-disabled tunnel mode to avoid persistent VID_SEQ_ERR.
@@ -2239,7 +2210,7 @@ index 0000000..7286ff4
 +		{0x0106, MAX96724_VID_RX6_CFG_VAL},
 +		/*
 +		 * Pipe stream control (offset 0x36 per pipe block).
-+		 * [gmsl_ser_des_guide §4.9] TUN_EN = 0x09 per verified XML.
++		 * [XML] TUN_EN = 0x01.
 +		 */
 +		{0x0936, MAX96724_TUN_EN},
 +	};
@@ -2277,7 +2248,7 @@ index 0000000..7286ff4
 +	map_pipe_control[8].val = (vc_id << 6) | data_type2;
 +	map_pipe_control[9].val = all_mapping_phy;
 +	/* TX46-TX48 keep 0x55 (Ctrl1) from initializer */
-+	/* TX49 keeps 0x83 (2W concat) from initializer */
++	/* TX49 keeps 0x87 from initializer */
 +	/* VID_RX (entry 14) and pipe stream ctrl (entry 15) keep init values */
 +
 +	err = max96724_set_registers(dev, map_pipe_control,
@@ -2381,6 +2352,10 @@ index 0000000..7286ff4
 +
 +	if (!strcmp(str_value, "2x4")) {
 +		priv->csi_mode = MAX96724_CSI_MODE_2X4;
++		/*
++		 * SC20190112 keeps the 0x08 Port-A clocking scheme but only brings
++		 * PHY0 data lanes and the PHY1 clock lane to Orin.
++		 */
 +		priv->lane_mp1 = MAX96724_LANE_MAP1_2X4;
 +		priv->lane_mp2 = MAX96724_LANE_MAP2_2X4;
 +	} else if (!strcmp(str_value, "4x2")) {

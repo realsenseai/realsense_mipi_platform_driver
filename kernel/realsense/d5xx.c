@@ -84,14 +84,19 @@ struct dser_interface {
  * Use this when the camera is already streaming MIPI data independently
  * and only the SERDES link + V4L2 registration is needed on the Orin side.
  */
-#define DS5_BYPASS_CAMERA_I2C 0   // Comment out to enable camera I2C control
+#define DS5_BYPASS_CAMERA_I2C 0
 
 //#define DS5_DRIVER_NAME "DS5 RealSense camera driver"
 #define DS5_DRIVER_NAME "d5xx"
 #define DS5_DRIVER_NAME_AWG "d5xx-awg"
 #define DS5_DRIVER_NAME_ASR "d5xx-asr"
-#define DS5_DRIVER_NAME_CLASS "d5xx-class"
-#define DS5_DRIVER_NAME_DFU "d5xx-dfu"
+/* Keep legacy d4xx sysfs names so librealsense can discover the correct node. */
+#define DS5_DRIVER_NAME_CLASS "d4xx-class"
+#define DS5_DRIVER_NAME_DFU "d4xx-dfu"
+/* Keep legacy DS5 mux naming so the installed rs-enum/udev rules still match. */
+#define DS5_DRIVER_NAME_MUX "DS5 mux"
+/* Keep legacy D4XX sensor entity naming so rs-enum media graph parsing still matches. */
+#define DS5_DRIVER_NAME_SENSOR "D4XX"
 
 #define DS5_MIPI_SUPPORT_LINES		0x0300
 #define DS5_MIPI_SUPPORT_PHY		0x0304
@@ -351,6 +356,9 @@ static const struct hwm_cmd log_prepare = {
 	.opcode = 0xf,
 	.param1 = 0x400, .param2 = 0, .param3 = 0, .param4 = 0,
 };
+
+#define DS5_HWMC_OPCODE_UAMG		0x30
+
 struct __fw_status {
 	uint32_t	spare1;
 	uint32_t	FW_lastVersion;
@@ -373,6 +381,7 @@ struct ds5_ctrls {
 	struct {
 		struct v4l2_ctrl *log;
 		struct v4l2_ctrl *fw_version;
+		struct v4l2_ctrl *device_type;
 		struct v4l2_ctrl *gvd;
 		struct v4l2_ctrl *get_depth_calib;
 		struct v4l2_ctrl *set_depth_calib;
@@ -385,6 +394,7 @@ struct ds5_ctrls {
 		struct v4l2_ctrl *erb;
 		struct v4l2_ctrl *ewb;
 		struct v4l2_ctrl *hwmc;
+		struct v4l2_ctrl *hwmc_rw;
 		struct v4l2_ctrl *laser_power;
 		struct v4l2_ctrl *manual_laser_power;
 		struct v4l2_ctrl *auto_exp;
@@ -1323,7 +1333,6 @@ static int ds5_setup_pipeline(struct ds5 *state, u8 data_type1, u8 data_type2,
 }
 #endif
 
-#ifndef DS5_BYPASS_CAMERA_I2C
 static void ds5_config_cache_clear(struct ds5_sensor *sensor)
 {
 	sensor->cached_dt_value = 0xFFFF;
@@ -1347,7 +1356,6 @@ static void ds5_invalidate_sensor(struct ds5 *state, struct ds5_sensor *sensor)
 	sensor->pipe_data_type2 = 0;
 	sensor->pipe_vc_id = 0xFFFF;
 }
-#endif /* !DS5_BYPASS_CAMERA_I2C */
 
 static int ds5_configure(struct ds5 *state)
 {
@@ -1357,7 +1365,7 @@ static int ds5_configure(struct ds5 *state)
 	u16 data_type1, data_type2;
 	bool is_calib = 0;
 #endif
-#ifndef DS5_BYPASS_CAMERA_I2C
+#if !DS5_BYPASS_CAMERA_I2C
 	u16 dt_addr, md_addr, override_addr, fps_addr, width_addr, height_addr;
 	u16 dt_value = 0;
 	u16 md_value = 0;
@@ -1369,7 +1377,7 @@ static int ds5_configure(struct ds5 *state)
 
 	if (state->is_depth) {
 		sensor = &state->depth.sensor;
-#ifndef DS5_BYPASS_CAMERA_I2C
+#if !DS5_BYPASS_CAMERA_I2C
 		dt_addr = DS5_DEPTH_STREAM_DT;
 		md_addr = DS5_DEPTH_STREAM_MD;
 		override_addr = DS5_DEPTH_OVERRIDE;
@@ -1379,7 +1387,7 @@ static int ds5_configure(struct ds5 *state)
 #endif
 	} else if (state->is_rgb) {
 		sensor = &state->rgb.sensor;
-#ifndef DS5_BYPASS_CAMERA_I2C
+#if !DS5_BYPASS_CAMERA_I2C
 		dt_addr = DS5_RGB_STREAM_DT;
 		md_addr = DS5_RGB_STREAM_MD;
 		override_addr = 0;
@@ -1389,7 +1397,7 @@ static int ds5_configure(struct ds5 *state)
 #endif
 	} else if (state->is_y8) {
 		sensor = &state->ir.sensor;
-#ifndef DS5_BYPASS_CAMERA_I2C
+#if !DS5_BYPASS_CAMERA_I2C
 		dt_addr = DS5_IR_STREAM_DT;
 		md_addr = DS5_IR_STREAM_MD;
 		override_addr = DS5_IR_OVERRIDE;
@@ -1399,7 +1407,7 @@ static int ds5_configure(struct ds5 *state)
 #endif
 	} else if (state->is_imu) {
 		sensor = &state->imu.sensor;
-#ifndef DS5_BYPASS_CAMERA_I2C
+#if !DS5_BYPASS_CAMERA_I2C
 		dt_addr = DS5_IMU_STREAM_DT;
 		md_addr = DS5_IMU_STREAM_MD;
 		override_addr = 0;
@@ -1426,7 +1434,6 @@ static int ds5_configure(struct ds5 *state)
 			sensor->pipe_data_type1 != data_type1 ||
 			sensor->pipe_data_type2 != data_type2 ||
 			sensor->pipe_vc_id != vc_id) {
-		/* Release old pipe only if it changed and was valid */
 		if (sensor->pipe_id >= 0) {
 			mutex_lock(&serdes_lock__);
 			ret = state->dser_ops->release_pipe(state->dser_dev, sensor->pipe_id);
@@ -1476,7 +1483,7 @@ static int ds5_configure(struct ds5 *state)
 	vc_id = (state->is_depth) ? 0 : (state->is_rgb) ? 1 : (state->is_y8) ? 2 : 3;
 #endif
 
-#ifdef DS5_BYPASS_CAMERA_I2C
+#if DS5_BYPASS_CAMERA_I2C
 	/* Skip camera I2C config writes - camera is already streaming */
 	return 0;
 #else
@@ -1702,6 +1709,7 @@ static int ds5_hw_set_exposure(struct ds5 *state, u32 base, s32 val)
 #define DS5_CAMERA_COEFF_CALIBRATION_TABLE_SET	(DS5_CAMERA_CID_BASE+6)
 #define DS5_CAMERA_CID_FW_VERSION		(DS5_CAMERA_CID_BASE+7)
 #define DS5_CAMERA_CID_GVD			(DS5_CAMERA_CID_BASE+8)
+#define DS5_CAMERA_CID_DEVICE_TYPE		(DS5_CAMERA_CID_BASE+23)
 #define DS5_CAMERA_CID_AE_ROI_GET		(DS5_CAMERA_CID_BASE+9)
 #define DS5_CAMERA_CID_AE_ROI_SET		(DS5_CAMERA_CID_BASE+10)
 #define DS5_CAMERA_CID_AE_SETPOINT_GET		(DS5_CAMERA_CID_BASE+11)
@@ -1740,6 +1748,15 @@ enum ds5_sync_mode {
 #define DS5_HWMC_STATUS_ERR		1
 #define DS5_HWMC_STATUS_WIP		2
 #define DS5_HWMC_BUFFER_SIZE	1024
+
+#ifdef V4L2_CTRL_FLAG_DYNAMIC_ARRAY
+#define DS5_HWMC_RW_CTRL_FLAGS	(V4L2_CTRL_FLAG_VOLATILE | \
+				 V4L2_CTRL_FLAG_EXECUTE_ON_WRITE | \
+				 V4L2_CTRL_FLAG_DYNAMIC_ARRAY)
+#else
+#define DS5_HWMC_RW_CTRL_FLAGS	(V4L2_CTRL_FLAG_VOLATILE | \
+				 V4L2_CTRL_FLAG_EXECUTE_ON_WRITE)
+#endif
 
 enum DS5_HWMC_ERR {
 	DS5_HWMC_ERR_SUCCESS = 0,
@@ -1847,6 +1864,62 @@ static int ds5_hwmc_send(struct ds5 *state,
 	ds5_write_with_check(state, DS5_HWMC_EXEC, 0x01); /* execute cmd */
 
 	return 0;
+}
+
+#ifdef V4L2_CTRL_FLAG_DYNAMIC_ARRAY
+static int ds5_prime_hwmc_rw_ctrl(struct v4l2_ctrl *ctrl)
+{
+	size_t bytes;
+	void *buffer;
+
+	if (!ctrl || !ctrl->is_array || !ctrl->is_dyn_array)
+		return -EINVAL;
+
+	bytes = DS5_HWMC_BUFFER_SIZE * ctrl->elem_size;
+	buffer = kvzalloc(2 * bytes, GFP_KERNEL);
+	if (!buffer)
+		return -ENOMEM;
+
+	kvfree(ctrl->p_array);
+	ctrl->p_array = buffer;
+	ctrl->p_new.p = buffer;
+	ctrl->p_cur.p = buffer + bytes;
+	ctrl->p_array_alloc_elems = DS5_HWMC_BUFFER_SIZE;
+	ctrl->elems = DS5_HWMC_BUFFER_SIZE;
+	ctrl->new_elems = DS5_HWMC_BUFFER_SIZE;
+
+	return 0;
+}
+#endif
+
+static u16 ds5_hwmc_rw_buf_len(const struct v4l2_ctrl *ctrl)
+{
+#ifdef V4L2_CTRL_FLAG_DYNAMIC_ARRAY
+	if (ctrl->is_dyn_array && ctrl->p_array_alloc_elems)
+		return ctrl->p_array_alloc_elems;
+#endif
+	return ctrl->dims[0];
+}
+
+static void ds5_fix_empty_uamg_response(struct ds5 *state,
+		unsigned char *data, u16 buf_len, u16 *data_len)
+{
+	if (!data || !data_len || *data_len != 4 || buf_len <= 4)
+		return;
+
+	if (data[0] != DS5_HWMC_OPCODE_UAMG || data[1] || data[2] || data[3])
+		return;
+
+	/*
+	 * D5xx MIPI firmware can acknowledge UAMG with just the opcode header.
+	 * librealsense expects a one-byte payload with the advanced-mode state,
+	 * so synthesize a disabled response to preserve device enumeration.
+	 */
+	data[4] = 0;
+	*data_len = 5;
+	dev_dbg(&state->client->dev,
+		"%s(): synthesized disabled payload for header-only UAMG response\n",
+		__func__);
 }
 
 static int ds5_set_calibration_data(struct ds5 *state,
@@ -2465,7 +2538,31 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 		if (ctrl->p_new.p_u8) {
 			struct hwm_cmd *cmd = (struct hwm_cmd *)ctrl->p_new.p_u8;
 			u16 size = *((u8 *)ctrl->p_new.p_u8 + 1) << 8;
+			u16 buf_len = ds5_hwmc_rw_buf_len(ctrl);
 			size |= *((u8 *)ctrl->p_new.p_u8 + 0);
+
+			dev_info(&state->client->dev,
+				"%s(): HWMC_RW set size=%u total=%u buf_len=%u opcode=0x%x first8=%*ph\n",
+				__func__, size, size + 4, buf_len, cmd->opcode, 8,
+				ctrl->p_new.p_u8);
+
+#ifdef V4L2_CTRL_FLAG_DYNAMIC_ARRAY
+			if (ctrl->is_dyn_array && size + 4 > ctrl->new_elems) {
+				dev_err(&state->client->dev,
+					"%s(): HWMC_RW len %u exceeds payload %u\n",
+					__func__, size + 4, ctrl->new_elems);
+				ret = -EINVAL;
+				break;
+			}
+#endif
+
+			if (size + 4 > buf_len) {
+				dev_err(&state->client->dev,
+					"%s(): HWMC_RW len %u exceeds buffer %u\n",
+					__func__, size + 4, buf_len);
+				ret = -EMSGSIZE;
+				break;
+			}
 
 			/* Check if this is a HW reset command (opcode 0x20) */
 			if (cmd->opcode == 0x20) {
@@ -2476,6 +2573,11 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			} else {
 				ret = ds5_hwmc_send(state, size + 4, cmd);
 			}
+
+#ifdef V4L2_CTRL_FLAG_DYNAMIC_ARRAY
+			if (!ret && ctrl->is_dyn_array)
+				ctrl->new_elems = buf_len;
+#endif
 		}
 		break;
 	case DS5_CAMERA_CID_HW_RESET:
@@ -2698,6 +2800,19 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		*ctrl->p_new.p_u32 = state->fw_version << 16;
 		*ctrl->p_new.p_u32 |= state->fw_build;
 		break;
+	case DS5_CAMERA_CID_DEVICE_TYPE: {
+		u16 dev_type = DS5_DEVICE_TYPE_UNKNOWN;
+
+		ret = ds5_read(state, DS5_DEVICE_TYPE, &dev_type);
+		dev_type = ds5_dev_type(state, dev_type);
+		if (ret && !ds5_is_valid_device_type(dev_type))
+			break;
+		if (ds5_is_valid_device_type(dev_type))
+			WRITE_ONCE(state->ds5_dev->cached_device_type, dev_type);
+		*ctrl->p_new.p_u32 = dev_type;
+		ret = 0;
+		break;
+	}
 	case DS5_CAMERA_CID_GVD:
 		ret = ds5_gvd(state, ctrl->p_new.p_u8);
 		break;
@@ -2756,11 +2871,16 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		if (ctrl->p_new.p_u8) {
 			unsigned char *data = (unsigned char *)ctrl->p_new.p_u8;
 			u16 dataLen = 0;
-			u16 bufLen = ctrl->dims[0];
+			u16 bufLen = ds5_hwmc_rw_buf_len(ctrl);
 			ret = ds5_get_hwmc(state, data,	bufLen, &dataLen);
+			if (!ret)
+				ds5_fix_empty_uamg_response(state, data, bufLen, &dataLen);
 			/* This is needed for librealsense, to align there code with UVC,
 		 	 * last word is length - 4 bytes header length */
-			dataLen -= 4;
+			if (dataLen >= 4)
+				dataLen -= 4;
+			else
+				dataLen = 0;
 			data[bufLen - 4] = (unsigned char)(dataLen & 0x00FF);
 			data[bufLen - 3] = (unsigned char)((dataLen & 0xFF00) >> 8);
 			data[bufLen - 2] = 0;
@@ -2823,6 +2943,17 @@ static const struct v4l2_ctrl_config ds5_ctrl_fw_version = {
 	.ops = &ds5_ctrl_ops,
 	.id = DS5_CAMERA_CID_FW_VERSION,
 	.name = "fw version",
+	.type = V4L2_CTRL_TYPE_U32,
+	.dims = {1},
+	.elem_size = sizeof(u32),
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_READ_ONLY,
+	.step = 1,
+};
+
+static const struct v4l2_ctrl_config ds5_ctrl_device_type = {
+	.ops = &ds5_ctrl_ops,
+	.id = DS5_CAMERA_CID_DEVICE_TYPE,
+	.name = "device type",
 	.type = V4L2_CTRL_TYPE_U32,
 	.dims = {1},
 	.elem_size = sizeof(u32),
@@ -2988,7 +3119,7 @@ static const struct v4l2_ctrl_config ds5_ctrl_hwmc_rw = {
 	.max = 0xFFFFFFFF,
 	.def = 240,
 	.step = 1,
-	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+	.flags = DS5_HWMC_RW_CTRL_FLAGS,
 };
 
 static const struct v4l2_ctrl_config ds5_ctrl_hw_reset = {
@@ -3767,6 +3898,8 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 	if (sid >= DEPTH_SID && sid < IMU_SID) {
 		ctrls->log = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_log, sensor);
 		ctrls->fw_version = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_fw_version, sensor);
+		ctrls->device_type =
+				v4l2_ctrl_new_custom(hdl, &ds5_ctrl_device_type, sensor);
 		ctrls->gvd = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_gvd, sensor);
 		ctrls->get_depth_calib =
 				v4l2_ctrl_new_custom(hdl, &ds5_ctrl_get_depth_calib, sensor);
@@ -3785,7 +3918,18 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 		ctrls->erb = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_erb, sensor);
 		ctrls->ewb = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_ewb, sensor);
 		ctrls->hwmc = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_hwmc, sensor);
-		v4l2_ctrl_new_custom(hdl, &ds5_ctrl_hwmc_rw, sensor);
+		ctrls->hwmc_rw = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_hwmc_rw, sensor);
+
+#ifdef V4L2_CTRL_FLAG_DYNAMIC_ARRAY
+		if (!hdl->error && ctrls->hwmc_rw) {
+			ret = ds5_prime_hwmc_rw_ctrl(ctrls->hwmc_rw);
+			if (ret) {
+				v4l2_err(sd, "cannot prime HWMC_RW control (%d)\n", ret);
+				v4l2_ctrl_handler_free(hdl);
+				return ret;
+			}
+		}
+#endif
 		v4l2_ctrl_new_custom(hdl, &ds5_ctrl_hw_reset, sensor);
 	}
 	// DEPTH custom
@@ -3858,9 +4002,9 @@ static int ds5_sensor_init(struct i2c_client *c, struct ds5 *state,
 	 */
 	if (state->aggregated & 1)
 		suffix += 4;
-	snprintf(sd->name, sizeof(sd->name), "D5XX %s %c", name, suffix);
+	snprintf(sd->name, sizeof(sd->name), DS5_DRIVER_NAME_SENSOR " %s %c", name, suffix);
 #else
-	snprintf(sd->name, sizeof(sd->name), "D5XX %s %d-%04x",
+	snprintf(sd->name, sizeof(sd->name), DS5_DRIVER_NAME_SENSOR " %s %d-%04x",
 		 name, i2c_adapter_id(c->adapter), c->addr);
 #endif
 
@@ -4340,7 +4484,7 @@ static int ds5_mux_s_frame_interval(struct v4l2_subdev *sd,
 static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 {
 	struct ds5 *state = container_of(sd, struct ds5, mux.sd.subdev);
-#ifdef DS5_BYPASS_CAMERA_I2C
+#if DS5_BYPASS_CAMERA_I2C
 	struct ds5_sensor *sensor = state->mux.last_set;
 	bool *streaming_flag = NULL;
 	int ret;
@@ -4773,7 +4917,7 @@ static int ds5_mux_register(struct i2c_client *c, struct ds5 *state)
 static int ds5_hw_init(struct i2c_client *c, struct ds5 *state)
 {
 	struct v4l2_subdev *sd = &state->mux.sd.subdev;
-#ifdef DS5_BYPASS_CAMERA_I2C
+#if DS5_BYPASS_CAMERA_I2C
 	dev_info(sd->dev, "%s(): BYPASS - skip camera MIPI config I2C\n", __func__);
 	return 0;
 #else
@@ -4832,12 +4976,12 @@ static int ds5_mux_init(struct i2c_client *c, struct ds5 *state)
 	sd->internal_ops = &ds5_mux_internal_ops;
 	v4l2_set_subdevdata(sd, state);
 #ifdef CONFIG_OF
-	snprintf(sd->name, sizeof(sd->name), "D5XX mux %d-%04x",
+	snprintf(sd->name, sizeof(sd->name), DS5_DRIVER_NAME_MUX " %d-%04x",
 		 i2c_adapter_id(c->adapter), c->addr);
 #else
 	if (state->aggregated)
 		suffix += 4;
-	snprintf(sd->name, sizeof(sd->name), "D5XX mux %c", suffix);
+	snprintf(sd->name, sizeof(sd->name), DS5_DRIVER_NAME_MUX " %c", suffix);
 #endif
 	sd->flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
 	entity->obj_type = MEDIA_ENTITY_TYPE_V4L2_SUBDEV;
@@ -4938,7 +5082,7 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	u16 dw = 0, dh = 0, yw = 0, yh = 0, dev_type = 0;
 	int ret;
 
-#ifdef DS5_BYPASS_CAMERA_I2C
+#if DS5_BYPASS_CAMERA_I2C
 	/* Hardcode D58X configuration - no camera I2C available */
 	dev_info(&client->dev, "%s(): BYPASS - using hardcoded D58X config\n", __func__);
 	cfg0 = 0x1e;   /* depth DT: GMSL_CSI_DT_YUV422_8 */
@@ -5415,14 +5559,14 @@ static int ds5_dfu_device_open(struct inode *inode, struct file *file)
 static void ds5_adjust_sync_mode_control(struct i2c_client *client, struct ds5 *state)
 {
 	u16 dev_type = 0;
-#ifndef DS5_BYPASS_CAMERA_I2C
+#if !DS5_BYPASS_CAMERA_I2C
 	int ret;
 #endif
 
 	if (!state->ctrls.sync_mode)
 		return;
 
-#ifdef DS5_BYPASS_CAMERA_I2C
+	#if DS5_BYPASS_CAMERA_I2C
 	dev_type = DS5_DEVICE_TYPE_D58X;
 #else
 	ret = ds5_read(state, DS5_DEVICE_TYPE, &dev_type);
@@ -5767,7 +5911,7 @@ static struct attribute *ds5_attributes[] = {
 static const struct attribute_group ds5_attr_group = {
 	.attrs = ds5_attributes,
 };
-#endif
+#endif /* CONFIG_SYSFS */
 
 static int ds5_probe(struct i2c_client *c
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
@@ -5843,7 +5987,7 @@ static int ds5_probe(struct i2c_client *c
 #endif
 	state->reset_ref_ds5 = atomic_read(ds5_get_reset_gen(state));
 
-#ifdef DS5_BYPASS_CAMERA_I2C
+#if DS5_BYPASS_CAMERA_I2C
 	/* Skip camera I2C verification - use hardcoded FW version */
 	state->fw_version = 0x0516;
 	dev_info(&c->dev, "%s(): BYPASS - skip camera I2C verify, fake FW 5.22\n", __func__);
@@ -5925,7 +6069,7 @@ static int ds5_probe(struct i2c_client *c
 	 * FW_VERSION becomes readable earlier than DS5_DEVICE_TYPE, while later
 	 * probe code depends on DEVICE_TYPE to pick the correct format tables.
 	 */
-#ifdef DS5_BYPASS_CAMERA_I2C
+#if DS5_BYPASS_CAMERA_I2C
 	rec_state = DS5_DEVICE_TYPE_D58X;
 	WRITE_ONCE(state->ds5_dev->cached_device_type, rec_state);
 	dev_info(&c->dev, "%s(): BYPASS - hardcode device type D58X\n", __func__);
@@ -5951,7 +6095,7 @@ static int ds5_probe(struct i2c_client *c
 	}
 #endif
 
-#ifdef DS5_BYPASS_CAMERA_I2C
+#if DS5_BYPASS_CAMERA_I2C
 	state->fw_build = 0x0100;
 #else
 	ds5_read_with_check(state, DS5_FW_VERSION, &state->fw_version);

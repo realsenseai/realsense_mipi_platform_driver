@@ -62,6 +62,11 @@ cp kernel/realsense/d4xx.c "$TARGET/${D4XX_SRC_DST}/drivers/media/i2c/"
 if [[ "$JETPACK_VERSION" == "6.x" ]]; then
     # jp6 overlay
     cp hardware/realsense/tegra234-camera-d4xx-overlay*.dts "$TARGET/hardware/nvidia/t23x/nv-public/overlay/"
+    cp hardware/realsense/tegra234-camera-d5xx-overlay*.dts "$TARGET/hardware/nvidia/t23x/nv-public/overlay/"
+    JP6_OVERLAY_MAKEFILE="$TARGET/hardware/nvidia/t23x/nv-public/overlay/Makefile"
+    if [[ -f "$JP6_OVERLAY_MAKEFILE" ]] && ! grep -q '^dtbo-y += tegra234-camera-d5xx-overlay.dtbo$' "$JP6_OVERLAY_MAKEFILE"; then
+        sed -i '/^dtbo-y += tegra234-camera-d4xx-overlay.dtbo$/a dtbo-y += tegra234-camera-d5xx-overlay.dtbo' "$JP6_OVERLAY_MAKEFILE"
+    fi
     # max96712 header
     cp nvidia-oot/max96712.h "$TARGET/nvidia-oot/include/media/"
 elif [[ "$JETPACK_VERSION" == "4.x" || "$JETPACK_VERSION" == "5.x" ]]; then

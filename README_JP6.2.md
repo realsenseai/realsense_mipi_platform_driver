@@ -98,6 +98,21 @@ Note: dev_dbg() log support will not be enabled by default. If needed, run the `
 ./build_all.sh --dev-dbg 6.2 ./Linux_for_Tegra/source
 ```
 
+## D58X / D585 userspace note
+
+Jetson's stock `librealsense` MIPI backend only recognizes `D457` and legacy D4xx GMSL PIDs. On the HKR D58X path this causes `rs-enumerate-devices` to misidentify the camera as `Intel RealSense D401`, and `realsense-viewer` can later crash after following the wrong D4xx calibration path.
+
+This repository now exposes a read-only `device type` V4L2 control from `d5xx.c`. Apply [docs/librealsense-d585-mipi.patch](./docs/librealsense-d585-mipi.patch) to the `librealsense` source tree before building userspace so Jetson can route `DEVICE_TYPE = 0x0009 (D58X)` to the D500 stack and override the D585 color native format from the stock `RS2_FORMAT_M420` to `RS2_FORMAT_YUYV`, matching the HKR/host YUV422 transport used on this MIPI path:
+
+```bash
+git clone https://github.com/IntelRealSense/librealsense.git
+cd librealsense
+git apply /path/to/realsense_mipi_platform_driver/docs/librealsense-d585-mipi.patch
+cmake -S . -B build -DFORCE_RSUSB_BACKEND=OFF -DBUILD_GRAPHICAL_EXAMPLES=OFF
+cmake --build build -j"$(nproc)"
+sudo cmake --install build
+```
+
 ## Archive JetPack 6.x build results (optional)
 Assuming 6.2 (or 6.1) build the kernel version is 5.15.148-tegra.
 - kernel image : `images/6.2/rootfs/boot/Image`

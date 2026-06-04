@@ -253,7 +253,7 @@
 							 * MAX96724 Deserializer
 							 * [DS2] MAX96724 Datasheet rev4
 							 * I2C addr: 0x27 (7-bit, user-confirmed)
-							 * csi-mode: "1x4" — 2-lane D-PHY output (SC20190112: only 2 lanes to Orin)
+							 * csi-mode: "2x4" — XML baseline, Controller1→PortA 2-lane output
 							 * max-src: 1 — single D585 camera on link B
 							 * gmsl-link-speed: 6 — 6Gbps (matching XML reference)
 							 * csi-mode: "2x4" — phy_1x4a mode, Controller1→PortA, only PHY0(2 lane) enabled
@@ -262,7 +262,7 @@
 								status = "okay";
 								reg = <0x27>;
 								compatible = "adi,max96724";
-								csi-mode = "1x4";
+								csi-mode = "2x4";
 								max-src = <1>;
 								gmsl-link-speed = <6>;
 								reset-gpios = <&gpio CAM0_RST_L GPIO_ACTIVE_HIGH>;
