@@ -136,7 +136,12 @@ if [[ "$ACTION" = "apply" ]]; then
             if [[ -f "$JP6_OVERLAY_MAKEFILE" ]] && ! grep -q '^dtbo-y += tegra234-camera-d5xx-overlay.dtbo$' "$JP6_OVERLAY_MAKEFILE"; then
                 sed -i '/^dtbo-y += tegra234-camera-d4xx-overlay.dtbo$/a dtbo-y += tegra234-camera-d5xx-overlay.dtbo' "$JP6_OVERLAY_MAKEFILE"
             fi
+            if [[ -f "$JP6_OVERLAY_MAKEFILE" ]] && ! grep -q '^dtbo-y += tegra234-camera-d5xx-overlay-fg24-4ch.dtbo$' "$JP6_OVERLAY_MAKEFILE"; then
+                sed -i '/^dtbo-y += tegra234-camera-d5xx-overlay.dtbo$/a dtbo-y += tegra234-camera-d5xx-overlay-fg24-4ch.dtbo' "$JP6_OVERLAY_MAKEFILE"
+            fi
             ln -f ${BUILD_SRCS}/hardware/nvidia/t23x/nv-public/include/platforms/dt-bindings/tegra234-p3737-0000+p3701-0000.h \
+                    ${BUILD_SRCS}/$KERNEL_DIR/include/dt-bindings/
+            ln -f ${BUILD_SRCS}/hardware/nvidia/t23x/nv-public/include/platforms/dt-bindings/tegra234-p3767-0000-common.h \
                     ${BUILD_SRCS}/$KERNEL_DIR/include/dt-bindings/
         else
             # Copy tegra264-gpio.h for Thor overlay compilation if not already present

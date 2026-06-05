@@ -207,7 +207,7 @@
 							};
 
 							ser_a: max9295_a@40 {
-								status = "okay";
+								status = "okay";	
 								compatible = "maxim,max9295";
 								reg = <0x40>;
 								maxim,gmsl-dser-device = <&dser>;

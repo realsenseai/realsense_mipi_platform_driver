@@ -23,11 +23,11 @@ MAX96724 quad deserializer features:
 Signed-off-by: RealSense AI <realsense@realsenseai.com>
 ---
  drivers/media/i2c/Makefile   |    2 +
- drivers/media/i2c/max96717.c |  779 +++++++++++++++
- drivers/media/i2c/max96724.c | 1683 ++++++++++++++++++++++++++++++++++
- include/media/max96717.h     |  151 +++
+ drivers/media/i2c/max96717.c |  855 +++++++++++++++
+ drivers/media/i2c/max96724.c | 1826 ++++++++++++++++++++++++++++++++++
+ include/media/max96717.h     |  151 ++
  include/media/max96724.h     |  183 +++
- 5 files changed, 2798 insertions(+)
+ 5 files changed, 3017 insertions(+)
  create mode 100644 drivers/media/i2c/max96717.c
  create mode 100644 drivers/media/i2c/max96724.c
  create mode 100644 include/media/max96717.h
@@ -48,10 +48,10 @@ index b284938..947e6e9 100644
  
 diff --git a/drivers/media/i2c/max96717.c b/drivers/media/i2c/max96717.c
 new file mode 100644
-index 0000000..068b90b
+index 0000000..696db0e
 --- /dev/null
 +++ b/drivers/media/i2c/max96717.c
-@@ -0,0 +1,779 @@
+@@ -0,0 +1,855 @@
 +/*
 + * max96717.c - MAX96717 GMSL2 Serializer driver (Tunnel Mode)
 + *
@@ -162,6 +162,28 @@ index 0000000..068b90b
 + */
 +#define MAX96717_EXT11_ADDR		0x383
 +
++/* [SG2 working config] SER PHY / DLL calibration registers.
++ *   These are device-level (not sensor-specific) and appear in every
++ *   SG2 sensor variant (OX03C, ISX031, etc.).  The staged write pattern
++ *   (0x80 -> 0x90) on 0x2D6/0x2C7 is a PHY calibration ramp sequence.
++ *   Without these writes the GMSL2 link trains but the DES cannot
++ *   recover a clean CSI-2 clock from the tunnel-mode data stream.
++ */
++#define MAX96717_PHY_CAL_2D6_ADDR	0x2D6
++#define MAX96717_PHY_CAL_2C7_ADDR	0x2C7
++#define MAX96717_PHY_CAL_2BE_ADDR	0x2BE
++#define MAX96717_PHY_CAL_2C1_ADDR	0x2C1
++#define MAX96717_PHY_CAL_3F0_ADDR	0x3F0
++#define MAX96717_PHY_CAL_3F1_ADDR	0x3F1
++
++/* [SG2 working config] PHY calibration stage-1 value */
++#define MAX96717_PHY_CAL_STAGE1		0x80
++/* [SG2 working config] PHY calibration stage-2 value */
++#define MAX96717_PHY_CAL_STAGE2		0x90
++/* [SG2 working config] CSI input timing / frequency config */
++#define MAX96717_CSI_TIMING_3F0		0x59
++#define MAX96717_CSI_TIMING_3F1		0x09
++
 +/* ===== Register Values ===== */
 +
 +/* [XML] Soft reset value for PIPE_EN register */
@@ -186,8 +208,10 @@ index 0000000..068b90b
 +/* [XML] VIDEO_TX1 tunnel mode config */
 +#define MAX96717_VIDEO_TX1_TUN		0x10
 +
-+/* [XML / PPTX slide 14] MIPI RX1: 4-lane CSI-2, bits[5:4]=11 */
-+#define MAX96717_CSI_4_LANES		0x30
++/* [SG2 working config] MIPI RX1: 4-lane CSI-2.
++ *   bits[5:4]=11 (4 lanes).  bits[1:0]=11 (PHY mode / lane ordering
++ *   matching SG2 working config; was 0x30, SG2 uses 0x33). */
++#define MAX96717_CSI_4_LANES		0x33
 +/* 2-lane CSI-2, bits[5:4]=01 */
 +#define MAX96717_CSI_2_LANES		0x10
 +
@@ -301,6 +325,11 @@ index 0000000..068b90b
 +	struct reg_pair tunnel_init[] = {
 +		/* [PPTX slide 7] EXT11: Tunnel Mode Enable */
 +		{MAX96717_EXT11_ADDR, MAX96717_TUN_MODE_EN},
++		/* [XML] MIPI_RX1: 4-lane CSI-2 (CTRL1_NUM_LANES[5:4]=11) */
++		{MAX96717_MIPI_RX1_ADDR, MAX96717_CSI_4_LANES},
++		/* [XML] MIPI_RX2/RX3: 1x4 lane mapping */
++		{MAX96717_MIPI_RX2_ADDR, MAX96717_CSI_1X4_LANE_MAP1},
++		{MAX96717_MIPI_RX3_ADDR, MAX96717_CSI_1X4_LANE_MAP2},
 +		/* [XML] VIDEO_TX0/TX1: tunnel data path */
 +		{MAX96717_VIDEO_TX0_ADDR, MAX96717_VIDEO_TX0_TUN},
 +		{MAX96717_VIDEO_TX1_ADDR, MAX96717_VIDEO_TX1_TUN},
@@ -322,6 +351,28 @@ index 0000000..068b90b
 +	g_ctx = priv->g_client.g_ctx;
 +
 +	/*
++	 * [SG2 working config] SER PHY/DLL pre-calibration.
++	 * These device-level registers calibrate the serializer's
++	 * differential output pairs and clock recovery.  The staged
++	 * write pattern (0x80 stage-1 now, 0x90 stage-2 after tunnel
++	 * init) matches every SG2 sensor variant's init table.
++	 * Applied BEFORE soft reset + tunnel config.
++	 */
++	max96717_write_reg(dev, MAX96717_PHY_CAL_2D6_ADDR,
++			   MAX96717_PHY_CAL_STAGE1);
++	max96717_write_reg(dev, MAX96717_PHY_CAL_2C7_ADDR,
++			   MAX96717_PHY_CAL_STAGE1);
++	max96717_write_reg(dev, MAX96717_PHY_CAL_2BE_ADDR,
++			   MAX96717_PHY_CAL_STAGE1);
++	max96717_write_reg(dev, MAX96717_PHY_CAL_2C1_ADDR,
++			   MAX96717_PHY_CAL_STAGE1);
++	max96717_write_reg(dev, MAX96717_PHY_CAL_3F0_ADDR,
++			   MAX96717_CSI_TIMING_3F0);
++	max96717_write_reg(dev, MAX96717_PHY_CAL_3F1_ADDR,
++			   MAX96717_CSI_TIMING_3F1);
++	msleep(100);
++
++	/*
 +	 * [Aardvark-verified] Soft reset before tunnel mode configuration
 +	 * Clears stale pipe/CSI state for clean initialization.
 +	 * Aardvark: 0x0002=0x03, sleep 30ms, then proceed with config.
@@ -334,6 +385,31 @@ index 0000000..068b90b
 +				     ARRAY_SIZE(tunnel_init));
 +	if (err)
 +		goto error;
++
++	/*
++	 * [FIX] Re-enable GMSL2 mode + TX after soft reset.
++	 * setup_control() previously set CTRL0=0x21 (GMSL2+TX), but the
++	 * PIPE_EN=0x03 soft reset above clears it back to the power-on
++	 * default 0x01 (TX only, GMSL2 mode disabled).  Without this
++	 * re-write the SER operates in GMSL1 mode while the DES expects
++	 * GMSL2 — the link trains but the video data path silently breaks.
++	 */
++	if (g_ctx->serdes_csi_link == GMSL_SERDES_CSI_LINK_A)
++		max96717_write_reg(dev, MAX96717_CTRL0_ADDR,
++				   MAX96717_CTRL0_LINK_A);
++	else
++		max96717_write_reg(dev, MAX96717_CTRL0_ADDR,
++				   MAX96717_CTRL0_LINK_B);
++
++	/*
++	 * [SG2 working config] PHY calibration stage-2: ramp 0x80 -> 0x90.
++	 * Applied AFTER tunnel mode + lane config, BEFORE CSI reset.
++	 */
++	max96717_write_reg(dev, MAX96717_PHY_CAL_2D6_ADDR,
++			   MAX96717_PHY_CAL_STAGE2);
++	max96717_write_reg(dev, MAX96717_PHY_CAL_2C7_ADDR,
++			   MAX96717_PHY_CAL_STAGE2);
++	msleep(20);
 +
 +	/* [Aardvark-verified] CSI reset cycle with 2ms delay */
 +	max96717_write_reg(dev, MAX96717_MIPI_RX0_ADDR,
@@ -833,10 +909,10 @@ index 0000000..068b90b
 +MODULE_LICENSE("GPL v2");
 diff --git a/drivers/media/i2c/max96724.c b/drivers/media/i2c/max96724.c
 new file mode 100644
-index 0000000..a319b5b
+index 0000000..c101312
 --- /dev/null
 +++ b/drivers/media/i2c/max96724.c
-@@ -0,0 +1,1683 @@
+@@ -0,0 +1,1826 @@
 +/*
 + * max96724.c - MAX96724 GMSL2 Quad Deserializer driver (Tunnel Mode)
 + *
@@ -981,9 +1057,20 @@ index 0000000..a319b5b
 +
 +/* --- CSI-2 Output PHY Configuration --- */
 +
-+/* [UG Table 12, p.25] MIPI PHY Mode Select register
-+ *   bit[0]: 4x2 mode, bit[2]: 2x4 mode (Port A=PHY0+1, Port B=PHY2+3)
-+ *   bit[3]: 2x4 alt mode (Port B=PHY0+1, Port A=PHY2+3)
++/* [UG rev2 Table 12 + MIPI PHY section] CSI output mode/config register.
++ * Mode bits (set exactly one of [4:0]):
++ *   bit[0]=0x01: 4x2 mode
++ *   bit[2]=0x04: 2x4 mode        (Ctrl 1 = master for Port A, Ctrl 2 = Port B)
++ *   bit[3]=0x08: 1x4a + 2x2 mode (Ctrl 1 = master for Port A)
++ *   bit[4]=0x10: 1x4b + 2x2 mode (Ctrl 2 = master for Port B)
++ * In ALL x4 D-PHY modes Port A = PHY0+PHY1 and Port B = PHY2+PHY3 (UG:
++ * "PHY 1 and PHY 2 are the master PHYs providing the MIPI clock for ports
++ * A and B").  bit[2] vs bit[3] only differ in how the OTHER port is grouped,
++ * not in which PHYs carry Port A.
++ * Clock-force bits (high nibble):
++ *   bit[7]=0x80: force ALL MIPI clocks running (continuous HS clock)
++ *   bit[6]=0x40: force PHY 3 MIPI clock running
++ *   bit[5]=0x20: force PHY 0 MIPI clock running
 + */
 +#define MAX96724_CSI_OUT_CFG_ADDR	0x08A0
 +
@@ -997,6 +1084,17 @@ index 0000000..a319b5b
 +
 +/* [UG Table 12, p.26] MIPI PHY 2 and 3 Lane Mapping */
 +#define MAX96724_CSI_LANE_MAP2_ADDR	0x08A4
++
++/* [FG24-4CH board] MIPI output lane polarity (P/N swap) registers.
++ *   0x08A5 = PHY0/PHY1 lane polarity, 0x08A6 = PHY2/PHY3 lane polarity.
++ *   The FangZhu FG24-4CH PCB swaps the differential P/N pairs on the
++ *   MAX96724 CSI output, so the deserializer must invert lane polarity
++ *   or the Orin CIL never locks the HS clock (total silence/2500ms timeout).
++ *   Per FangZhu MAX4CH_FG24_POC_Enable table: write 0x3F to both.
++ */
++#define MAX96724_CSI_PHY_POL0_ADDR	0x08A5
++#define MAX96724_CSI_PHY_POL1_ADDR	0x08A6
++#define MAX96724_CSI_PHY_POL_SWAP	0x3F
 +
 +/* [UG p.22] Pipe-to-controller mapping (Method 1) */
 +#define MAX96724_MIPI_CTRL_SEL_ADDR	0x08CA
@@ -1120,13 +1218,25 @@ index 0000000..a319b5b
 +#define MAX96724_TUN_DEST_CTRL0		0x00  /* Auto-detect + PHY0 */
 +#define MAX96724_TUN_DEST_CTRL1		0x10  /* Auto-detect + PHY1 (Port A master) */
 +
-+/* [UG Table 12, p.25] CSI output mode values */
-+#define MAX96724_CSI_MODE_2X4_VAL	0x08  /* bit[3] = 1x4a + 2x2: Ctrl1 keeps Port A clock on PHY1 */
++/* [UG rev2 Table 12] CSI output mode values written to 0x08A0.
++ *   We use bit[2] = 0x04 = clean 2x4 mode (Port A = PHY0+PHY1, Ctrl 1 master).
++ *   This matches the ADI reference "Lane Swap Programming Example"
++ *   (0x4E,0x08A0,0x04) and the FangZhu working config.  Note bit[3]=0x08
++ *   (1x4a+2x2) ALSO keeps Port A on PHY0+PHY1; for a single 4-lane Port A
++ *   output either presents a valid Port A, so 0x04 is the spec-clean choice
++ *   rather than a hard requirement.
++ */
++#define MAX96724_CSI_MODE_2X4_VAL	0x04  /* bit[2] = clean 2x4: Port A = PHY0+PHY1 */
++/* 0x84 = 2x4 mode (bit2) + bit[7] "force ALL MIPI clocks running".  The bit[7]
++ * clock-force is the key part: it keeps the D-PHY clock lane in continuous HS
++ * mode so the Orin NVCSI/CIL can lock.  Asserted LAST in setup_streaming(),
++ * matching the FangZhu End_Common 0x08A0=0x84 write. */
++#define MAX96724_CSI_OUT_EN_VAL		0x84  /* 2x4 + bit[7] force all MIPI clocks running */
 +#define MAX96724_CSI_MODE_4X2_VAL	0x01  /* bit[0] = 4x2 mode */
 +
 +#define MAX96724_CSI_PHY_EN_ALL		0xF0
-+#define MAX96724_CSI_PHY_EN_01		0x30  /* PHY0+PHY1 only */
-+#define MAX96724_CSI_PHY_EN_23		0xC0  /* PHY2+PHY3 only (Port A in 2x4 alt mode) */
++#define MAX96724_CSI_PHY_EN_01		0x30  /* PHY0+PHY1 only (Port A) */
++#define MAX96724_CSI_PHY_EN_23		0xC0  /* PHY2+PHY3 only (Port B) */
 +
 +/* [UG Table 12, p.25-26] Lane mapping default */
 +#define MAX96724_CSI_LANE_MAP_DEFAULT	0xE4
@@ -1149,6 +1259,14 @@ index 0000000..a319b5b
 + *   bit[5]    = DPLL enable = 1.
 + *   Result: 0x27 = 700 Mbps/lane D-PHY. */
 +#define MAX96724_DPLL_700MBPS_CTRL0	0x27
++
++/* [FG24-4CH working-config verified] CSI-output DPLL data rate = 1500 Mbps.
++ *   bits[4:0] = data-rate / 100 MHz -> 1500/100 = 15 = 0x0F. bit[5] = DPLL en.
++ *   Result 0x2F.  The FangZhu MAX4CH config writes this to ALL FOUR controllers
++ *   (0x0415/0x0418/0x041B/0x041E), matching DT max_lane_speed = 1500000.  The
++ *   old 0x27 (700 Mbps, 2 controllers only) is a 2-lane-variant leftover that
++ *   left the Orin CIL unable to lock the HS clock (empty rtcpu trace). */
++#define MAX96724_DPLL_1500MBPS		0x2F
 +
 +/* [UG Table 3, p.12] One-shot reset: all links */
 +#define MAX96724_ONESHOT_ALL		0x0F
@@ -1204,10 +1322,12 @@ index 0000000..a319b5b
 +#define MAX96724_CSI_CTRL_2		2
 +#define MAX96724_CSI_CTRL_3		3
 +
-+/* CSI mode values */
++/* Internal csi_mode enum flags (NOT the register value written to 0x08A0;
++ * see MAX96724_CSI_MODE_2X4_VAL for the actual register value).  These are
++ * only compared against priv->csi_mode to select a code path. */
 +#define MAX96724_CSI_MODE_4X2		0x01
-+#define MAX96724_CSI_MODE_2X4		0x08  /* 2x4 alt: Ctrl1→PHY0+1→PortA (Aardvark-verified working) */
-+#define MAX96724_CSI_MODE_2X4_ALT	0x04  /* 2x4 standard (Ctrl0→PHY0+1, not working in tunnel) */
++#define MAX96724_CSI_MODE_2X4		0x08  /* enum tag for the 4-lane Port A (Ctrl1) path */
++#define MAX96724_CSI_MODE_2X4_ALT	0x04  /* enum tag (unused alt path) */
 +
 +/* Lane map presets */
 +#define MAX96724_LANE_MAP1_4X2		0x44
@@ -1362,33 +1482,82 @@ index 0000000..a319b5b
 +						 struct max96724 *priv)
 +{
 +	/*
-+	 * The SC20190112 bridge only routes PHY0 data lanes and the PHY1 clock
-+	 * lane to Orin. Keep the MAX96724 in 0x08 mode so Controller 1 still
-+	 * clocks Port A, but restore the live 2-lane subset on every stream path.
++	 * [XML-verified 4-lane] D-PHY Port A output, 4 data lanes.
++	 * [FG24-4CH working-config verified] 0x04 = 2x4 mode so Port A
++	 * maps to PHY0+PHY1 (the lanes the FG24 PCB wires to Orin).  Output is
++	 * not yet enabled here (bit7 = 0); setup_streaming() asserts 0x84 after
++	 * the full pipeline is configured.
 +	 */
 +	max96724_write_reg(dev, MAX96724_CSI_OUT_CFG_ADDR,
 +			   MAX96724_CSI_MODE_2X4_VAL);
++	/*
++	 * [FG24-4CH working dump] Enable ALL four CSI PHYs (0x08A2=0xF0).
++	 * The working FangZhu config powers every PHY; the MAX96724 DPLL
++	 * needs all PHYs powered to lock reliably (single-PHY enable was
++	 * observed to never lock the output clock). Port A data still
++	 * leaves on PHY0/1 in 2x4 mode; PHY2/3 are just powered.
++	 */
 +	max96724_write_reg(dev, MAX96724_CSI_PHY_EN_ADDR,
-+			   MAX96724_CSI_PHY_EN_01);
++			   MAX96724_CSI_PHY_EN_ALL);
 +	max96724_write_reg(dev, MAX96724_CSI_LANE_MAP1_ADDR,
 +			   priv->lane_mp1);
++	/*
++	 * [FG24-4CH working dump] LANE_MAP2 (PHY2/3) = 0xE4 straight mapping.
++	 * The working config writes 0x08A4=0xE4 (not the chip default 0x44).
++	 */
 +	max96724_write_reg(dev, MAX96724_CSI_LANE_MAP2_ADDR,
-+			   priv->lane_mp2);
-+	max96724_write_reg(dev, MAX96724_MIPI_CTRL_SEL_ADDR,
-+			   MAX96724_ALL_MAP_CTRL1);
++			   MAX96724_CSI_LANE_MAP_DEFAULT);
++	/*
++	 * [FG24-4CH board] Switch MIPI output lane polarity (P/N swap).
++	 * The FG24-4CH PCB inverts the differential pairs on the DES->Orin
++	 * output; without this the Orin CIL never locks the HS clock.
++	 * Per FangZhu MAX4CH_FG24_POC_Enable table: 0x08A5/0x08A6 = 0x3F.
++	 */
++	max96724_write_reg(dev, MAX96724_CSI_PHY_POL0_ADDR,
++			   MAX96724_CSI_PHY_POL_SWAP);
++	max96724_write_reg(dev, MAX96724_CSI_PHY_POL1_ADDR,
++			   MAX96724_CSI_PHY_POL_SWAP);
 +	max96724_write_reg(dev, MAX96724_LANE_CTRL0_ADDR,
-+			   MAX96724_LANE_CTRL_2LANE);
++			   MAX96724_LANE_CTRL_4LANE);
 +	max96724_write_reg(dev, MAX96724_LANE_CTRL1_ADDR,
-+			   MAX96724_LANE_CTRL_2LANE);
++			   MAX96724_LANE_CTRL_4LANE);
 +	max96724_write_reg(dev, MAX96724_LANE_CTRL2_ADDR,
-+			   MAX96724_LANE_CTRL_2LANE);
++			   MAX96724_LANE_CTRL_4LANE);
 +	max96724_write_reg(dev, MAX96724_LANE_CTRL3_ADDR,
-+			   MAX96724_LANE_CTRL_2LANE);
++			   MAX96724_LANE_CTRL_4LANE);
 +}
 +
 +/* ================================================================
 + * Power Management
 + * ================================================================ */
++
++/* [FG24-4CH board] POC (Power-over-Coax) / IO enable sequence.
++ *   Per FangZhu MAX4CH_FG24_POC_Enable table. On the FG24-4CH board the
++ *   MFP8 line (0x0319 bit4) and the POC IO enable (0x0001 bit5) gate the
++ *   board-level output / POC path. Without these the DES PLL still locks
++ *   and shows internal activity, but no clock reaches the Orin connector.
++ */
++#define MAX96724_POC_IO_EN_ADDR		0x0001
++#define MAX96724_POC_IO_EN_VAL		0xE0  /* Enable POC IO (working dump: 0xE0) */
++#define MAX96724_POC_MFP8_ADDR		0x0319
++#define MAX96724_POC_MFP8_PRE		0x80  /* MFP8 pre-enable */
++#define MAX96724_POC_MFP8_HIGH		0x98  /* Enable POC MFP8 High (working dump: 0x98) */
++
++/*
++ * max96724_board_poc_enable - Apply FG24-4CH POC/IO enable (one-time).
++ * Mirrors the vendor MAX4CH_FG24_POC_Enable table.
++ */
++static void max96724_board_poc_enable(struct device *dev)
++{
++	max96724_write_reg(dev, MAX96724_POC_IO_EN_ADDR,
++			   MAX96724_POC_IO_EN_VAL);
++	max96724_write_reg(dev, MAX96724_POC_MFP8_ADDR,
++			   MAX96724_POC_MFP8_PRE);
++	msleep(100);
++	max96724_write_reg(dev, MAX96724_POC_MFP8_ADDR,
++			   MAX96724_POC_MFP8_HIGH);
++	msleep(500);
++}
 +
 +/*
 + * max96724_power_on - Power on the MAX96724 deserializer
@@ -1401,7 +1570,7 @@ index 0000000..a319b5b
 +	mutex_lock(&priv->lock);
 +	if (priv->pw_ref == 0) {
 +		usleep_range(1, 2);
-+		if (priv->reset_gpio)
++		if (gpio_is_valid(priv->reset_gpio))
 +			gpio_set_value(priv->reset_gpio, 0);
 +
 +		usleep_range(30, 50);
@@ -1415,7 +1584,7 @@ index 0000000..a319b5b
 +		usleep_range(30, 50);
 +
 +		/* exit reset mode: XCLR */
-+		if (priv->reset_gpio) {
++		if (gpio_is_valid(priv->reset_gpio)) {
 +			gpio_set_value(priv->reset_gpio, 0);
 +			usleep_range(30, 50);
 +			gpio_set_value(priv->reset_gpio, 1);
@@ -1423,6 +1592,9 @@ index 0000000..a319b5b
 +		}
 +
 +		msleep(20);
++
++		/* [FG24-4CH] Enable board POC / MFP8 output path once. */
++		max96724_board_poc_enable(dev);
 +	}
 +
 +	priv->pw_ref++;
@@ -1445,7 +1617,7 @@ index 0000000..a319b5b
 +
 +	if (priv->pw_ref == 0) {
 +		usleep_range(1, 2);
-+		if (priv->reset_gpio)
++		if (gpio_is_valid(priv->reset_gpio))
 +			gpio_set_value(priv->reset_gpio, 0);
 +
 +		if (priv->vdd_cam_1v2)
@@ -1678,7 +1850,7 @@ index 0000000..a319b5b
 +	 * [SC20190112] Enable tunnel mode and route to Controller 1.
 +	 *   - TUN_EN   (0x0936): 0x01 (TUN_EN=1)
 +	 *   - TUN_DEST (0x0939): 0x10 = Controller 1
-+	 *   CSI_OUT_CFG=0x08 (2x4 alt): Controller 1 → PHY0+1 → Port A → Orin
++	 *   CSI_OUT_CFG=0x04 (2x4 mode): Controller 1 -> PHY0+1 -> Port A -> Orin
 +	 */
 +	{
 +		for (i = 0; i < MAX96724_MAX_PIPES; i++) {
@@ -1892,6 +2064,10 @@ index 0000000..a319b5b
 +		return err;
 +
 +	mutex_lock(&priv->lock);
++
++	dev_info(dev, "=== setup_streaming ENTER src=%u st_enabled=%d ===\n",
++		 i, priv->sources[i].st_enabled);
++
 +	if (priv->sources[i].st_enabled)
 +		goto ret;
 +
@@ -1926,16 +2102,20 @@ index 0000000..a319b5b
 +	 */
 +	max96724_apply_porta_subset(dev, priv);
 +
-+	/* [XML] DPLL for the active CSI output uses 0x27 on FREQ0/FREQ1. */
++	/*
++	 * [FG24-4CH working-config verified] CSI-output DPLL data rate = 1500 Mbps
++	 * on ALL FOUR controller freq registers, matching the fzcam working SG2
++	 * board dump (0x0415/18/1B/1E=0x2F) and DT serdes_pix_clk_hz=375MHz.
++	 */
 +	if (!priv->lane_setup) {
-+		max96724_write_reg(dev, MAX96724_DPLL_CSI2_ADDR,
-+				   MAX96724_DPLL_DISABLE);
 +		max96724_write_reg(dev, MAX96724_DPLL_FREQ0_ADDR,
-+				   MAX96724_DPLL_700MBPS_CTRL0);
++				   MAX96724_DPLL_1500MBPS);
 +		max96724_write_reg(dev, MAX96724_DPLL_FREQ1_ADDR,
-+				   MAX96724_DPLL_700MBPS_CTRL0);
-+		max96724_write_reg(dev, MAX96724_DPLL_CSI2_ADDR,
-+				   MAX96724_DPLL_ENABLE);
++				   MAX96724_DPLL_1500MBPS);
++		max96724_write_reg(dev, MAX96724_DPLL_FREQ2_ADDR,
++				   MAX96724_DPLL_1500MBPS);
++		max96724_write_reg(dev, MAX96724_DPLL_FREQ3_ADDR,
++				   MAX96724_DPLL_1500MBPS);
 +
 +		priv->lane_setup = true;
 +	}
@@ -1952,10 +2132,21 @@ index 0000000..a319b5b
 +	}
 +
 +	/* BACKTOP: enable Controller 1 / CSI-B (0x02).
-+	 * In 2x4 alt mode, Controller 1 is master for Port A → Orin CSI.
++	 * In 2x4 mode, Controller 1 is master for Port A -> Orin CSI.
 +	 */
 +	max96724_write_reg(dev, MAX96724_BACKTOP_EN_ADDR,
 +			   MAX96724_BACKTOP_CSIB_EN);
++
++	dev_info(dev, "=== setup_streaming: writing 0x84 (force all MIPI clocks) ===\n");
++
++	/*
++	 * [FG24-4CH working-config verified] Assert 0x08A0=0x84 LAST: 2x4 mode +
++	 * bit[7] "force all MIPI clocks running".  The clock-force keeps the
++	 * D-PHY clock lane continuous so the Orin CIL can lock; written only
++	 * after the full pipeline is configured, matching FangZhu End_Common.
++	 */
++	max96724_write_reg(dev, MAX96724_CSI_OUT_CFG_ADDR,
++			   MAX96724_CSI_OUT_EN_VAL);
 +
 +	/* Keep all video receivers aligned with serializer heartbeat mode. */
 +	for (i = 0; i < MAX96724_MAX_PIPES; i++) {
@@ -2115,18 +2306,37 @@ index 0000000..a319b5b
 +	}
 +	msleep(100);
 +
-+	/* ONESHOT resets CSI/tunnel state. Restore the bridge-board subset. */
++	/* ONESHOT resets CSI/tunnel state. Restore the full pipeline config.
++	 * Mirror setup_streaming() order: disable pipes -> restore everything ->
++	 * BACKTOP/0x84 -> VID_RX -> final ONESHOT to latch -> enable pipes.
++	 */
++	max96724_write_reg(dev, MAX96724_PIPE_EN_ADDR, 0x00);
++
++	/* Pipe source routing (same as setup_streaming): all pipes from Link A */
++	max96724_write_reg(dev, MAX96724_PIPE_SEL0_ADDR,
++			   MAX96724_PIPE_SEL0_SINGLE);
++	max96724_write_reg(dev, MAX96724_PIPE_SEL1_ADDR,
++			   MAX96724_PIPE_SEL1_SINGLE);
++
 +	max96724_apply_porta_subset(dev, priv);
++
++	/*
++	 * [FG24-4CH working-config] CSI-output DPLL data rate = 1500 Mbps on ALL
++	 * FOUR controllers, matching the fzcam working SG2 board dump.
++	 * reset_oneshot is called by the sensor after setup_streaming, so it must
++	 * mirror the same DPLL values.
++	 */
++	max96724_write_reg(dev, MAX96724_DPLL_FREQ0_ADDR,
++			   MAX96724_DPLL_1500MBPS);
++	max96724_write_reg(dev, MAX96724_DPLL_FREQ1_ADDR,
++			   MAX96724_DPLL_1500MBPS);
++	max96724_write_reg(dev, MAX96724_DPLL_FREQ2_ADDR,
++			   MAX96724_DPLL_1500MBPS);
++	max96724_write_reg(dev, MAX96724_DPLL_FREQ3_ADDR,
++			   MAX96724_DPLL_1500MBPS);
++
 +	max96724_write_reg(dev, MAX96724_BACKTOP_EN_ADDR,
 +			   MAX96724_BACKTOP_CSIB_EN);
-+	max96724_write_reg(dev, MAX96724_DPLL_CSI2_ADDR,
-+			   MAX96724_DPLL_DISABLE);
-+	max96724_write_reg(dev, MAX96724_DPLL_FREQ0_ADDR,
-+			   MAX96724_DPLL_700MBPS_CTRL0);
-+	max96724_write_reg(dev, MAX96724_DPLL_FREQ1_ADDR,
-+			   MAX96724_DPLL_700MBPS_CTRL0);
-+	max96724_write_reg(dev, MAX96724_DPLL_CSI2_ADDR,
-+			   MAX96724_DPLL_ENABLE);
 +	for (i = 0; i < MAX96724_MAX_PIPES; i++) {
 +		max96724_write_reg(dev,
 +				   MAX96724_PIPE_X_ST_SEL_ADDR + (0x40 * i),
@@ -2148,7 +2358,7 @@ index 0000000..a319b5b
 +	max96724_write_reg(dev, MAX96724_PIPE1_TUN_EN_ADDR, MAX96724_TUN_EN);
 +	max96724_write_reg(dev, MAX96724_PIPE2_TUN_EN_ADDR, MAX96724_TUN_EN);
 +	max96724_write_reg(dev, MAX96724_PIPE3_TUN_EN_ADDR, MAX96724_TUN_EN);
-+	/* TUN_DEST: set to Controller 1 (0x10) for 2x4 alt / Port A */
++	/* TUN_DEST: set to Controller 1 (0x10) = Port A master in 2x4 mode */
 +	max96724_write_reg(dev, MAX96724_PIPE0_TUN_DEST_ADDR,
 +			   MAX96724_TUN_DEST_CTRL1);
 +	max96724_write_reg(dev, MAX96724_PIPE1_TUN_DEST_ADDR,
@@ -2159,6 +2369,14 @@ index 0000000..a319b5b
 +			   MAX96724_TUN_DEST_CTRL1);
 +	max96724_write_reg(dev, MAX96724_PIPE_EN_ADDR,
 +			   MAX96724_PIPE_EN_4);
++
++	/*
++	 * [FG24-4CH working-config verified] Assert 0x08A0=0x84 LAST:
++	 * 2x4 mode + bit[7] force all MIPI clocks running.  Must mirror
++	 * setup_streaming because the sensor's oneshot path overwrites it.
++	 */
++	max96724_write_reg(dev, MAX96724_CSI_OUT_CFG_ADDR,
++			   MAX96724_CSI_OUT_EN_VAL);
 +
 +	msleep(200);
 +	mutex_unlock(&priv->lock);
@@ -2178,7 +2396,7 @@ index 0000000..a319b5b
 +	int err = 0;
 +	int i;
 +	u8 en_mapping_num = 0x0F;
-+	u8 all_mapping_phy = MAX96724_ALL_MAP_CTRL1;  /* Controller 1 for 2x4 alt Port A mode */
++	u8 all_mapping_phy = MAX96724_ALL_MAP_CTRL1;  /* Controller 1 = Port A master (2x4 mode) */
 +
 +	struct reg_pair map_pipe_control[] = {
 +		/* Enable 4 mappings for Pipe X */
@@ -2195,7 +2413,7 @@ index 0000000..a319b5b
 +		/* Map data_type2 on vc_id */
 +		{MAX96724_PIPE_X_SRC_3_MAP_ADDR, 0x12},
 +		{MAX96724_PIPE_X_DST_3_MAP_ADDR, 0x12},
-+		/* All mappings to Controller 1 (2x4 alt: Ctrl1 drives Port A) */
++		/* All mappings to Controller 1 (2x4 mode: Ctrl1 drives Port A) */
 +		{MAX96724_TX45_PIPE_X_DST_CTRL_ADDR, MAX96724_ALL_MAP_CTRL1},
 +		{MAX96724_TX46_PIPE_X_ADDR, MAX96724_ALL_MAP_CTRL1},
 +		{MAX96724_TX47_PIPE_X_ADDR, MAX96724_ALL_MAP_CTRL1},
@@ -2378,8 +2596,9 @@ index 0000000..a319b5b
 +	/* Reset GPIO */
 +	priv->reset_gpio = of_get_named_gpio(node, "reset-gpios", 0);
 +	if (priv->reset_gpio < 0) {
-+		dev_err(&client->dev, "reset-gpios not found %d\n", err);
-+		return err;
++		dev_info(&client->dev,
++			 "reset-gpios not found, continuing without external reset\n");
++		priv->reset_gpio = -1;
 +	}
 +
 +	/* [User requirement] GMSL link speed from DT: 3 or 6 (Gbps) */
@@ -2423,7 +2642,7 @@ index 0000000..a319b5b
 +static struct regmap_config max96724_regmap_config = {
 +	.reg_bits = 16,
 +	.val_bits = 8,
-+	.cache_type = REGCACHE_RBTREE,
++	.cache_type = REGCACHE_NONE,
 +};
 +
 +static int max96724_probe(struct i2c_client *client,
