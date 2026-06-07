@@ -1,5 +1,5 @@
 From 1ce2b2e647c63724bfd1434f963eabbe4aa83941 Mon Sep 17 00:00:00 2001
-From: Dmitry Perchanov <dmitry.perchanov@intel.com>
+From: Dmitry Perchanov <dmitry.perchanov@realsenseai.com>
 Date: Mon, 20 May 2024 18:08:02 +0300
 Subject: [PATCH] max9295/max9296 SerDes support for D4xx
 
@@ -11,7 +11,7 @@ Consolidated MAX9295 serializer / MAX9296 deserializer support:
  - regmap cache-type change (was 0009)
 All hunks are verbatim copies of the originals; only regrouped.
 
-Signed-off-by: Dmitry Perchanov <dmitry.perchanov@intel.com>
+Signed-off-by: Dmitry Perchanov <dmitry.perchanov@realsenseai.com>
 ---
  drivers/media/i2c/max9295.c |  139 +++++++++++++++++++++++++++++++
  drivers/media/i2c/max9296.c |  193 +++++++++++++++++++++++++++++++++++++++++++
