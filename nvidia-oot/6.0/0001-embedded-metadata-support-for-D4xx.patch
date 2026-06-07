@@ -1,25 +1,26 @@
-From 1ce2b2e647c63724bfd1434f963eabbe4aa83941 Mon Sep 17 00:00:00 2001
-From: Dmitry Perchanov <dmitry.perchanov@intel.com>
-Date: Mon, 20 May 2024 18:08:02 +0300
+From 52fb856aadbf0c7aeec4076b1243b175cbf1ab04 Mon Sep 17 00:00:00 2001
+From: RealSense <support@realsenseai.com>
+Date: Sun, 7 Jun 2026 10:57:33 +0300
 Subject: [PATCH] embedded-metadata support for D4xx
 
-Embedded-metadata capture support in the Tegra VI/camera stack, plus
-D4XX build wiring (obj-m += d4xx.o, CONFIG_VIDEO_D4XX_SERDES,
-CONFIG_TEGRA_CAMERA_PLATFORM). Split verbatim out of the original
-"Porting nvidia driver patches to jetpack 6.0" patch; hunks unchanged.
-
-Signed-off-by: Dmitry Perchanov <dmitry.perchanov@intel.com>
+Embedded-metadata capture support in the Tegra VI/camera stack plus D4XX
+build wiring. Includes upstream-review blocker fixes:
+ - single-owner idempotent embedded teardown (no double-free / use-after-free)
+ - NULL-guard + cleanup of embedded node on graph error paths (no leak/deref)
+ - return ring-full metadata buffers to vb2 with error (no buffer leak / DQBUF hang)
+ - real S_FMT/TRY_FMT for the metadata node (V4L2 API compliance)
+ - proper init_video_embedded error ladder; remove commented-out dead code
 ---
- drivers/media/i2c/Makefile                         |    3 
- .../media/platform/tegra/camera/sensor_common.c    |    4 
- drivers/media/platform/tegra/camera/vi/channel.c   |  401 ++++++++++++++++++++
- drivers/media/platform/tegra/camera/vi/graph.c     |   38 ++
- drivers/media/platform/tegra/camera/vi/mc_common.c |   27 +
- drivers/media/platform/tegra/camera/vi/vi5_fops.c  |   36 ++
- .../media/platform/tegra/camera/vi/vi5_formats.h   |   30 +
- include/media/mc_common.h                          |   22 +
- include/media/tegra_camera_core.h                  |   10 
- 9 files changed, 559 insertions(+), 12 deletions(-)
+ drivers/media/i2c/Makefile                    |   3 +
+ .../platform/tegra/camera/sensor_common.c     |   4 +
+ .../media/platform/tegra/camera/vi/channel.c  | 440 +++++++++++++++++-
+ .../media/platform/tegra/camera/vi/graph.c    |  46 +-
+ .../platform/tegra/camera/vi/mc_common.c      |  27 ++
+ .../media/platform/tegra/camera/vi/vi5_fops.c |  36 ++
+ .../platform/tegra/camera/vi/vi5_formats.h    |  30 +-
+ include/media/mc_common.h                     |  22 +
+ include/media/tegra_camera_core.h             |  10 +-
+ 9 files changed, 599 insertions(+), 19 deletions(-)
 
 diff --git a/drivers/media/i2c/Makefile b/drivers/media/i2c/Makefile
 index 7c5913c6..396b9bc3 100644
@@ -51,7 +52,7 @@ index 92cc2fdf..69139eee 100644
  		pr_err("%s: Need to extend format%s\n", __func__, pixel_t);
  		return -EINVAL;
 diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
-index 91f8d5f8..d9be2677 100644
+index 91f8d5f8..ab3faf82 100644
 --- a/drivers/media/platform/tegra/camera/vi/channel.c
 +++ b/drivers/media/platform/tegra/camera/vi/channel.c
 @@ -202,7 +202,12 @@ static void tegra_channel_fmt_align(struct tegra_channel *chan,
@@ -151,7 +152,7 @@ index 91f8d5f8..d9be2677 100644
  };
  
  static int tegra_channel_close(struct file *fp);
-@@ -2470,6 +2535,331 @@ static int tegra_channel_csi_init(struct tegra_channel *chan)
+@@ -2470,6 +2535,362 @@ static int tegra_channel_csi_init(struct tegra_channel *chan)
  	return ret;
  }
  
@@ -235,15 +236,35 @@ index 91f8d5f8..d9be2677 100644
 +	return 0;
 +}
 +static int tegra_metadata_set_format(struct file *file, void *fh,
-+                                    struct v4l2_format *format)
++				    struct v4l2_format *format)
 +{
-+   return 0;
++	struct v4l2_fh *vfh = file->private_data;
++	struct v4l2_meta_format *fmt = &format->fmt.meta;
++
++	if (format->type != vfh->vdev->queue->type)
++		return -EINVAL;
++
++	memset(fmt, 0, sizeof(*fmt));
++	fmt->dataformat = V4L2_META_FMT_D4XX;
++	fmt->buffersize = 255;
++
++	return 0;
 +}
 +
 +static int tegra_metadata_try_format(struct file *file, void *fh,
-+                                    struct v4l2_format *format)
++				    struct v4l2_format *format)
 +{
-+    return 0;
++	struct v4l2_fh *vfh = file->private_data;
++	struct v4l2_meta_format *fmt = &format->fmt.meta;
++
++	if (format->type != vfh->vdev->queue->type)
++		return -EINVAL;
++
++	memset(fmt, 0, sizeof(*fmt));
++	fmt->dataformat = V4L2_META_FMT_D4XX;
++	fmt->buffersize = 255;
++
++	return 0;
 +}
 +static const struct v4l2_ioctl_ops tegra_metadata_ioctl_ops = {
 +	.vidioc_querycap                = tegra_metadata_querycap,
@@ -307,8 +328,16 @@ index 91f8d5f8..d9be2677 100644
 +		if (chan->embedded.head > 15)
 +			chan->embedded.head = chan->embedded.head - 16;
 +		chan->embedded.num_buffers++;
++		spin_unlock(&chan->embedded.spin_lock);
++	} else {
++		/*
++		 * Ring is full: hand the buffer back to vb2 with an error
++		 * instead of dropping it on the floor (which would leak the
++		 * buffer and hang userspace waiting on DQBUF).
++		 */
++		spin_unlock(&chan->embedded.spin_lock);
++		vb2_buffer_done(vb, VB2_BUF_STATE_ERROR);
 +	}
-+	spin_unlock(&chan->embedded.spin_lock);
 +}
 +
 +static int tegra_metadata_start_streaming(struct vb2_queue *vq, unsigned int count)
@@ -364,17 +393,18 @@ index 91f8d5f8..d9be2677 100644
 +	ret = tegra_media_entity_init(&video->entity, 1,
 +									&chan->embedded.pad, false, false);
 +	if (ret < 0) {
-+		video_device_release(video);
 +		dev_err(vi->dev, "%s(): metadata entity init: %d\n",
 +				__func__, ret);
-+		return ret;
++		goto err_release_video;
 +	}
 +
 +	ret = v4l2_ctrl_handler_init(&chan->embedded.ctrl_handler,
 +									MAX_CID_CONTROLS);
 +	if (chan->embedded.ctrl_handler.error) {
-+		dev_err(&video->dev, "failed to init control handler\n");
-+		return ret;
++		ret = chan->embedded.ctrl_handler.error;
++		dev_err(vi->dev, "%s(): failed to init control handler: %d\n",
++				__func__, ret);
++		goto err_free_ctrl;
 +	}
 +
 +	video->fops = &tegra_metadata_fops;
@@ -401,18 +431,8 @@ index 91f8d5f8..d9be2677 100644
 +	ret = tegra_vb2_dma_init(vi->dev, &chan->embedded.alloc_ctx,
 +					SZ_64K, &vi->vb2_dma_alloc_refcnt);
 +	if (ret < 0)
-+		goto ctx_alloc_error;
-+
++		goto err_free_ctrl;
 +#endif
-+//#if defined(CONFIG_VIDEOBUF2_DMA_CONTIG)
-+	/* get the buffers queue... */
-+//     chan->embedded.alloc_ctx = vb2_dma_contig_init_ctx(vi->dev);
-+//     if (IS_ERR(chan->embedded.alloc_ctx)) {
-+//             dev_err(vi->dev, "%s(): vb2 buffer init: %ld\n", __func__,
-+//                     PTR_ERR(chan->embedded.alloc_ctx));
-+//             goto ctx_alloc_error;
-+//     }
-+//#endif
 +
 +	queue->type = V4L2_BUF_TYPE_META_CAPTURE;
 +	queue->io_modes = VB2_MMAP | VB2_DMABUF | VB2_READ | VB2_USERPTR;
@@ -429,18 +449,22 @@ index 91f8d5f8..d9be2677 100644
 +	if (ret < 0) {
 +		dev_err(vi->dev, "%s(): metadata queue initialize: %d\n",
 +				__func__, ret);
-+		goto vb2_queue_error;
++		goto err_dma_cleanup;
 +	}
 +
 +	return 0;
 +
-+vb2_queue_error:
++err_dma_cleanup:
 +#if defined(CONFIG_VIDEOBUF2_DMA_CONTIG)
 +	tegra_vb2_dma_cleanup(vi->dev, chan->embedded.alloc_ctx,
 +			&vi->vb2_dma_alloc_refcnt);
-+ctx_alloc_error:
 +#endif
++err_free_ctrl:
++	v4l2_ctrl_handler_free(&chan->embedded.ctrl_handler);
 +	media_entity_cleanup(&video->entity);
++err_release_video:
++	video_device_release(video);
++	chan->embedded.video = NULL;
 +
 +	return ret;
 +}
@@ -462,12 +486,19 @@ index 91f8d5f8..d9be2677 100644
 +				chan->emb_buf_size,
 +				chan->emb_buf_addr, chan->emb_buf);
 +		chan->emb_buf_size = 0;
-+		vb2_queue_release(queue);
-+#if defined(CONFIG_VIDEOBUF2_DMA_CONTIG)
-+		tegra_vb2_dma_cleanup(vi_unit_dev, chan->embedded.alloc_ctx,
-+						&chan->vi->vb2_dma_alloc_refcnt);
-+#endif
 +	}
++
++	/*
++	 * The vb2 queue and DMA alloc ctx are initialized unconditionally in
++	 * tegra_channel_init_video_embedded(), so release them based on the node
++	 * having been created (video != NULL above), independent of emb_buf_size.
++	 * This function is the single owner of embedded teardown.
++	 */
++	vb2_queue_release(queue);
++#if defined(CONFIG_VIDEOBUF2_DMA_CONTIG)
++	tegra_vb2_dma_cleanup(vi_unit_dev, chan->embedded.alloc_ctx,
++					&chan->vi->vb2_dma_alloc_refcnt);
++#endif
 +
 +	v4l2_ctrl_handler_free(&chan->embedded.ctrl_handler);
 +
@@ -476,6 +507,7 @@ index 91f8d5f8..d9be2677 100644
 +#endif
 +
 +	video_device_release(video);
++	chan->embedded.video = NULL;
 +
 +	return 0;
 +}
@@ -483,22 +515,30 @@ index 91f8d5f8..d9be2677 100644
  int tegra_channel_init_video(struct tegra_channel *chan)
  {
  	struct tegra_mc_vi *vi = chan->vi;
-@@ -2656,6 +3046,13 @@ int tegra_channel_cleanup(struct tegra_channel *chan)
- 			chan->emb_buf_size,
- 			chan->emb_buf_addr, chan->emb_buf);
- 		chan->emb_buf_size = 0;
-+		vb2_queue_release(&chan->embedded.queue);
-+#if IS_ENABLED(CONFIG_VIDEOBUF2_DMA_CONTIG)
-+		tegra_vb2_dma_cleanup(vi_unit_dev, chan->embedded.alloc_ctx,
-+			&chan->vi->vb2_dma_alloc_refcnt);
-+		//vb2_dma_contig_cleanup_ctx(chan->embedded.alloc_ctx);
-+#endif
-+		media_entity_cleanup(&chan->embedded.video->entity);
- 	}
+@@ -2650,13 +3071,14 @@ int tegra_channel_cleanup(struct tegra_channel *chan)
+ {
+ 	struct device *vi_unit_dev = tegra_channel_get_vi_unit(chan);
+ 
+-	/* release embedded data buffer */
+-	if (chan->emb_buf_size > 0) {
+-		dma_free_coherent(vi_unit_dev,
+-			chan->emb_buf_size,
+-			chan->emb_buf_addr, chan->emb_buf);
+-		chan->emb_buf_size = 0;
+-	}
++	/*
++	 * Embedded metadata teardown (video node, vb2 queue, DMA alloc ctx,
++	 * media entity and the embedded data buffer) is owned solely by
++	 * tegra_channel_cleanup_video_embedded(). It is idempotent: a no-op once
++	 * chan->embedded.video is NULL, so calling it here is safe even when the
++	 * graph unbind path already tore the embedded node down.
++	 */
++	tegra_channel_cleanup_video_embedded(chan);
  
  	tegra_channel_dealloc_buffer_queue(chan);
+ 
 diff --git a/drivers/media/platform/tegra/camera/vi/graph.c b/drivers/media/platform/tegra/camera/vi/graph.c
-index 7c2d05e7..5e25cf6a 100644
+index 7c2d05e7..7c81889c 100644
 --- a/drivers/media/platform/tegra/camera/vi/graph.c
 +++ b/drivers/media/platform/tegra/camera/vi/graph.c
 @@ -292,6 +292,11 @@ static int tegra_vi_graph_notify_complete(struct v4l2_async_notifier *notifier)
@@ -513,7 +553,7 @@ index 7c2d05e7..5e25cf6a 100644
  	int ret;
  
  	dev_dbg(chan->vi->dev, "notify complete, all subdevs registered\n");
-@@ -325,16 +330,46 @@ static int tegra_vi_graph_notify_complete(struct v4l2_async_notifier *notifier)
+@@ -325,16 +330,54 @@ static int tegra_vi_graph_notify_complete(struct v4l2_async_notifier *notifier)
  	if (ret < 0)
  		goto graph_error;
  
@@ -555,13 +595,21 @@ index 7c2d05e7..5e25cf6a 100644
  	return 0;
  
 +register_nodes_error:
-+	video_unregister_device(chan->embedded.video);
 +register_embedded_device_error:
++	/*
++	 * Tear down the embedded metadata node if it was created/registered.
++	 * tegra_channel_cleanup_video_embedded() is idempotent: it returns early
++	 * (no-op) when chan->embedded.video is NULL (sensor has no metadata, or
++	 * init_video_embedded() already failed and NULLed it). This both avoids
++	 * the NULL-deref on the no-metadata path and fixes the resource leak when
++	 * video_register_device() for the embedded node fails.
++	 */
++	tegra_channel_cleanup_video_embedded(chan);
 +	tegra_vi_graph_remove_links(chan);
  graph_error:
  	video_unregister_device(chan->video);
  register_device_error:
-@@ -398,6 +433,7 @@ static void tegra_vi_graph_notify_unbind(struct v4l2_async_notifier *notifier,
+@@ -398,6 +441,7 @@ static void tegra_vi_graph_notify_unbind(struct v4l2_async_notifier *notifier,
  
  	/* cleanup for complete */
  	if (chan->link_status) {
@@ -780,7 +828,7 @@ index 0408ba67..1252fb3f 100644
  struct tegra_vi_fops {
  	int (*vi_power_on)(struct tegra_channel *chan);
 diff --git a/include/media/tegra_camera_core.h b/include/media/tegra_camera_core.h
-index e6d9a2b1..38634b77 100644
+index e6d9a2b1..3b63f5bc 100644
 --- a/include/media/tegra_camera_core.h
 +++ b/include/media/tegra_camera_core.h
 @@ -18,7 +18,7 @@
@@ -814,6 +862,3 @@ index e6d9a2b1..38634b77 100644
  };
  
  /* Supported CSI to VI Data Formats */
--- 
-2.34.1
-
