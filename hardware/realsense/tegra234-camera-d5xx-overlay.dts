@@ -337,7 +337,7 @@
 								 * embedded_metadata_height: 1 — depth metadata row
 								 */
 								mode0 {
-									pixel_t = "grey_y16";
+									pixel_t = "yuv_uyvy16";
 									num_lanes = "2";
 									csi_pixel_bit_depth = "16";
 									active_w = "1280";
@@ -413,7 +413,7 @@
 								 * embedded_metadata_height: 1 — RGB metadata row
 								 */
 								mode0 {
-									pixel_t = "grey_y16";
+									pixel_t = "yuv_yuyv16";
 									num_lanes = "2";
 									csi_pixel_bit_depth = "16";
 									active_w = "1920";
@@ -479,9 +479,9 @@
 								 * embedded_metadata_height: 1 — IR metadata row
 								 */
 								mode0 {
-									pixel_t = "grey_y16";
+									pixel_t = "grey_y8";
 									num_lanes = "2";
-									csi_pixel_bit_depth = "16";
+									csi_pixel_bit_depth = "8";
 									active_w = "1280";
 									active_h = "720";
 									tegra_sinterface = "serial_a";
@@ -544,9 +544,9 @@
 								 * embedded_metadata_height: 0 — IMU has no metadata row.
 								 */
 								mode0 {
-									pixel_t = "grey_y16";
+									pixel_t = "grey_y8";
 									num_lanes = "2";
-									csi_pixel_bit_depth = "16";
+									csi_pixel_bit_depth = "8";
 									active_w = "640";
 									active_h = "480";
 									tegra_sinterface = "serial_a";

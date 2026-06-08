@@ -23,11 +23,11 @@ MAX96724 quad deserializer features:
 Signed-off-by: RealSense AI <realsense@realsenseai.com>
 ---
  drivers/media/i2c/Makefile   |    2 +
- drivers/media/i2c/max96717.c |  855 +++++++++++++++
- drivers/media/i2c/max96724.c | 1826 ++++++++++++++++++++++++++++++++++
+ drivers/media/i2c/max96717.c |  917 ++++++++++++++++
+ drivers/media/i2c/max96724.c | 1927 ++++++++++++++++++++++++++++++++++
  include/media/max96717.h     |  151 ++
  include/media/max96724.h     |  183 +++
- 5 files changed, 3017 insertions(+)
+ 5 files changed, 3180 insertions(+)
  create mode 100644 drivers/media/i2c/max96717.c
  create mode 100644 drivers/media/i2c/max96724.c
  create mode 100644 include/media/max96717.h
@@ -48,10 +48,10 @@ index b284938..947e6e9 100644
  
 diff --git a/drivers/media/i2c/max96717.c b/drivers/media/i2c/max96717.c
 new file mode 100644
-index 0000000..696db0e
+index 0000000..1dd24d3
 --- /dev/null
 +++ b/drivers/media/i2c/max96717.c
-@@ -0,0 +1,855 @@
+@@ -0,0 +1,917 @@
 +/*
 + * max96717.c - MAX96717 GMSL2 Serializer driver (Tunnel Mode)
 + *
@@ -79,6 +79,7 @@ index 0000000..696db0e
 + */
 +
 +#include <media/camera_common.h>
++#include <linux/of.h>
 +#include <linux/module.h>
 +#include <media/max96717.h>
 +
@@ -202,11 +203,16 @@ index 0000000..696db0e
 +
 +/* [PPTX slide 7] EXT11 tunnel mode enable value */
 +#define MAX96717_TUN_MODE_EN		0x80
++#define MAX96717_TUN_MODE_DIS		0x00
 +
 +/* [XML] VIDEO_TX0 tunnel mode data path enable */
 +#define MAX96717_VIDEO_TX0_TUN		0xE9
 +/* [XML] VIDEO_TX1 tunnel mode config */
 +#define MAX96717_VIDEO_TX1_TUN		0x10
++#define MAX96717_VIDEO_TX0_BPP_MANUAL	0x60
++#define MAX96717_VIDEO_TX1_BPP16	0x50
++#define MAX96717_VIDEO_TX2_ADDR		0x112
++#define MAX96717_VIDEO_TX2_DRIFT_DIS	0x08
 +
 +/* [SG2 working config] MIPI RX1: 4-lane CSI-2.
 + *   bits[5:4]=11 (4 lanes).  bits[1:0]=11 (PHY mode / lane ordering
@@ -221,6 +227,13 @@ index 0000000..696db0e
 +
 +/* [PPTX slide 7] FRONTTOP_0: single port A, all VCs */
 +#define MAX96717_FRONTTOP0_PORT_A	0x12
++/* [UG Use Case Example 1] Pixel mode from Port B into Pipe Z */
++#define MAX96717_FRONTTOP0_PIXEL_PORT_B	0x64
++#define MAX96717_FRONTTOP5_ADDR		0x30D
++#define MAX96717_FRONTTOP9_ADDR		0x311
++#define MAX96717_FRONTTOP16_ADDR	0x318
++#define MAX96717_FRONTTOP17_ADDR	0x319
++#define MAX96717_FRONTTOP9_START_VIDEO	0x40
 +
 +/* [XML] MIPI_RX0: CSI reset on + non-continuous clock */
 +#define MAX96717_MIPI_RX0_RESET		0x08
@@ -249,6 +262,7 @@ index 0000000..696db0e
 +	struct regmap *regmap;
 +	struct max96717_client_ctx g_client;
 +	struct mutex lock;
++	bool pixel_mode;
 +	/* primary serializer properties */
 +	__u32 def_addr;
 +	__u32 pst2_ref;
@@ -334,6 +348,17 @@ index 0000000..696db0e
 +		{MAX96717_VIDEO_TX0_ADDR, MAX96717_VIDEO_TX0_TUN},
 +		{MAX96717_VIDEO_TX1_ADDR, MAX96717_VIDEO_TX1_TUN},
 +	};
++	struct reg_pair pixel_init[] = {
++		{MAX96717_EXT11_ADDR, MAX96717_TUN_MODE_DIS},
++		{MAX96717_MIPI_RX1_ADDR, MAX96717_CSI_4_LANES},
++		{MAX96717_MIPI_RX2_ADDR, MAX96717_CSI_1X4_LANE_MAP1},
++		{MAX96717_MIPI_RX3_ADDR, MAX96717_CSI_1X4_LANE_MAP2},
++		{MAX96717_FRONTTOP0_ADDR, MAX96717_FRONTTOP0_PIXEL_PORT_B},
++		{MAX96717_FRONTTOP9_ADDR, MAX96717_FRONTTOP9_START_VIDEO},
++		{MAX96717_VIDEO_TX0_ADDR, MAX96717_VIDEO_TX0_BPP_MANUAL},
++		{MAX96717_VIDEO_TX1_ADDR, MAX96717_VIDEO_TX1_BPP16},
++		{MAX96717_VIDEO_TX2_ADDR, MAX96717_VIDEO_TX2_DRIFT_DIS},
++	};
 +
 +	mutex_lock(&priv->lock);
 +
@@ -380,9 +405,12 @@ index 0000000..696db0e
 +	max96717_write_reg(dev, MAX96717_PIPE_EN_ADDR, MAX96717_SOFT_RESET);
 +	msleep(30);
 +
-+	/* Enable tunnel mode and configure video TX path */
-+	err = max96717_set_registers(dev, tunnel_init,
-+				     ARRAY_SIZE(tunnel_init));
++	if (priv->pixel_mode)
++		err = max96717_set_registers(dev, pixel_init,
++					 ARRAY_SIZE(pixel_init));
++	else
++		err = max96717_set_registers(dev, tunnel_init,
++					 ARRAY_SIZE(tunnel_init));
 +	if (err)
 +		goto error;
 +
@@ -680,38 +708,54 @@ index 0000000..696db0e
 +{
 +	int err = 0;
 +	u8 bpp = 0x30;
++	struct max96717 *priv = dev_get_drvdata(dev);
 +
-+	struct reg_pair map_pipe_control[] = {
-+		/* Pipe X DT addr + 0x2*pipe_id */
-+		{0x0314, 0x5E},  /* data_type1 */
-+		{0x0315, 0x52},  /* data_type2 */
-+		{0x0309, 0x01},  /* VC select */
-+		{0x030A, 0x00},
-+		{0x031C, 0x30},  /* BPP */
-+		{0x0102, 0x0E},  /* LIM_HEART: Disabled */
-+	};
++	if (priv->pixel_mode) {
++		struct reg_pair pixel_pipe_control[] = {
++			{MAX96717_FRONTTOP16_ADDR, 0x5E},
++			{MAX96717_FRONTTOP17_ADDR, 0x52},
++			{MAX96717_FRONTTOP5_ADDR, 0x01},
++		};
 +
-+	if (data_type1 == GMSL_CSI_DT_RGB_888)
-+		bpp = 0x18;
++		pixel_pipe_control[0].val = 0x40 | data_type1;
++		pixel_pipe_control[1].val = data_type2 ? (0x40 | data_type2) : 0x00;
++		pixel_pipe_control[2].val = 1 << vc_id;
 +
-+	map_pipe_control[0].addr += 0x2 * pipe_id;
-+	map_pipe_control[1].addr += 0x2 * pipe_id;
-+	map_pipe_control[2].addr += 0x2 * pipe_id;
-+	map_pipe_control[3].addr += 0x2 * pipe_id;
-+	map_pipe_control[4].addr += 0x1 * pipe_id;
-+	map_pipe_control[5].addr += 0x8 * pipe_id;
++		return max96717_set_registers(dev, pixel_pipe_control,
++					     ARRAY_SIZE(pixel_pipe_control));
++	} else {
++		struct reg_pair map_pipe_control[] = {
++			/* Pipe X DT addr + 0x2*pipe_id */
++			{0x0314, 0x5E},  /* data_type1 */
++			{0x0315, 0x52},  /* data_type2 */
++			{0x0309, 0x01},  /* VC select */
++			{0x030A, 0x00},
++			{0x031C, 0x30},  /* BPP */
++			{0x0102, 0x0E},  /* LIM_HEART: Disabled */
++		};
 +
-+	map_pipe_control[0].val = 0x40 | data_type1;
-+	map_pipe_control[1].val = 0x40 | data_type2;
-+	if (pipe_id == 0)
-+		map_pipe_control[1].val |= 0x80;
-+	map_pipe_control[2].val = 1 << vc_id;
-+	map_pipe_control[3].val = 0x00;
-+	map_pipe_control[4].val = bpp;
-+	map_pipe_control[5].val = 0x0E;
++		if (data_type1 == GMSL_CSI_DT_RGB_888)
++			bpp = 0x18;
 +
-+	err = max96717_set_registers(dev, map_pipe_control,
-+				     ARRAY_SIZE(map_pipe_control));
++		map_pipe_control[0].addr += 0x2 * pipe_id;
++		map_pipe_control[1].addr += 0x2 * pipe_id;
++		map_pipe_control[2].addr += 0x2 * pipe_id;
++		map_pipe_control[3].addr += 0x2 * pipe_id;
++		map_pipe_control[4].addr += 0x1 * pipe_id;
++		map_pipe_control[5].addr += 0x8 * pipe_id;
++
++		map_pipe_control[0].val = 0x40 | data_type1;
++		map_pipe_control[1].val = 0x40 | data_type2;
++		if (pipe_id == 0)
++			map_pipe_control[1].val |= 0x80;
++		map_pipe_control[2].val = 1 << vc_id;
++		map_pipe_control[3].val = 0x00;
++		map_pipe_control[4].val = bpp;
++		map_pipe_control[5].val = 0x0E;
++
++		err = max96717_set_registers(dev, map_pipe_control,
++					     ARRAY_SIZE(map_pipe_control));
++	}
 +
 +	return err;
 +}
@@ -738,6 +782,16 @@ index 0000000..696db0e
 +		{MAX96717_EXT11_ADDR, MAX96717_TUN_MODE_EN},
 +		{MAX96717_PIPE_EN_ADDR, MAX96717_PIPE_EN_ALL},
 +	};
++	struct reg_pair pixel_init[] = {
++		{MAX96717_PIPE_EN_ADDR, MAX96717_SOFT_RESET},
++		{MAX96717_EXT11_ADDR, MAX96717_TUN_MODE_DIS},
++		{MAX96717_FRONTTOP0_ADDR, MAX96717_FRONTTOP0_PIXEL_PORT_B},
++		{MAX96717_FRONTTOP9_ADDR, MAX96717_FRONTTOP9_START_VIDEO},
++		{MAX96717_VIDEO_TX0_ADDR, MAX96717_VIDEO_TX0_BPP_MANUAL},
++		{MAX96717_VIDEO_TX1_ADDR, MAX96717_VIDEO_TX1_BPP16},
++		{MAX96717_VIDEO_TX2_ADDR, MAX96717_VIDEO_TX2_DRIFT_DIS},
++		{MAX96717_PIPE_EN_ADDR, MAX96717_PIPE_EN_ALL},
++	};
 +
 +	mutex_lock(&priv->lock);
 +
@@ -748,11 +802,18 @@ index 0000000..696db0e
 +	 */
 +	usleep_range(5000, 6000);
 +
-+	err = max96717_set_registers(dev, map_init, ARRAY_SIZE(map_init));
++	if (priv->pixel_mode) {
++		err = max96717_set_registers(dev, pixel_init,
++					 ARRAY_SIZE(pixel_init));
++		err |= __max96717_set_pipe(dev, 0, GMSL_CSI_DT_YUV422_8,
++				   0, 0);
++	} else {
++		err = max96717_set_registers(dev, map_init, ARRAY_SIZE(map_init));
 +
-+	for (i = 0; i < MAX96717_MAX_PIPES; i++)
-+		err |= __max96717_set_pipe(dev, i, GMSL_CSI_DT_YUV422_8,
++		for (i = 0; i < MAX96717_MAX_PIPES; i++)
++			err |= __max96717_set_pipe(dev, i, GMSL_CSI_DT_YUV422_8,
 +					   GMSL_CSI_DT_EMBED, i);
++	}
 +
 +	mutex_unlock(&priv->lock);
 +
@@ -829,6 +890,7 @@ index 0000000..696db0e
 +	}
 +
 +	mutex_init(&priv->lock);
++	priv->pixel_mode = of_property_read_bool(node, "adi,pixel-mode");
 +
 +	if (of_get_property(node, "is-prim-ser", NULL)) {
 +		if (prim_priv__) {
@@ -909,10 +971,10 @@ index 0000000..696db0e
 +MODULE_LICENSE("GPL v2");
 diff --git a/drivers/media/i2c/max96724.c b/drivers/media/i2c/max96724.c
 new file mode 100644
-index 0000000..c101312
+index 0000000..4a1708c
 --- /dev/null
 +++ b/drivers/media/i2c/max96724.c
-@@ -0,0 +1,1826 @@
+@@ -0,0 +1,1927 @@
 +/*
 + * max96724.c - MAX96724 GMSL2 Quad Deserializer driver (Tunnel Mode)
 + *
@@ -933,6 +995,7 @@ index 0000000..c101312
 +
 +
 +#include <linux/gpio.h>
++#include <linux/types.h>
 +#include <linux/module.h>
 +#include <linux/of.h>
 +#include <linux/of_device.h>
@@ -1099,6 +1162,9 @@ index 0000000..c101312
 +/* [UG p.22] Pipe-to-controller mapping (Method 1) */
 +#define MAX96724_MIPI_CTRL_SEL_ADDR	0x08CA
 +
++/* [OG03C reference dump] Method-1 controller mapping */
++#define MAX96724_MIPI_CTRL_SEL_PIXEL	0xE4
++
 +/* --- Lane Control per pipe (stride 0x40) --- */
 +
 +/*
@@ -1143,9 +1209,9 @@ index 0000000..c101312
 +#define MAX96724_TX47_PIPE_X_ADDR	0x092F
 +#define MAX96724_TX48_PIPE_X_ADDR	0x0930
 +
-+/* [UG p.30 + Aardvark-verified] MIPI_TX49 synchronous concatenation control
-+ *   In tunnel mode, this register MUST be 0x87 for MIPI TX output to function.
-+ *   Verified: setting to 0x00 disables tunnel output entirely (0x8D0 all zeros).
++/* [UG p.30] MIPI_TX49 synchronous concatenation control
++ *   Set to 0x00 (no concat) for single-camera tunnel mode.
++ *   For 4W concat use 0x87.
 + *   Stride: 0x40 per pipe (base = Pipe X)
 + */
 +#define MAX96724_TX49_PIPE_X_ADDR	0x0931
@@ -1205,11 +1271,18 @@ index 0000000..c101312
 +#define MAX96724_VID_RX0_CFG_VAL	0x33
 +#define MAX96724_VID_RX6_CFG_VAL	0x0A
 +
++/* [OG03C reference dump] Pixel-mode receiver settings */
++#define MAX96724_VID_RX0_PIXEL_VAL	0x32
++#define MAX96724_VID_RX6_PIXEL_VAL	0x12
++
 +/* [XML] Tunnel mode enable (MIPI_TX54, 0x0936):
 + *   bit[0] = TUN_EN = 1
 + *   Verified value: 0x01
 + */
 +#define MAX96724_TUN_EN			0x01
++
++/* [OG03C reference dump] Default/reset state when tunnel is disabled */
++#define MAX96724_TUN_DISABLED		0x08
 +
 +/* [XML] Tunnel controller destination (MIPI_TX57, 0x0939):
 + *   bits[5:4]: TUN_DEST (00=PHY0, 01=PHY1, 10=PHY2, 11=PHY3)
@@ -1277,6 +1350,8 @@ index 0000000..c101312
 + */
 +#define MAX96724_PIPE_SEL0_SINGLE	0x22  /* All pipes from Link A (Aardvark-verified) */
 +#define MAX96724_PIPE_SEL1_SINGLE	0x22  /* All pipes from Link A (Aardvark-verified) */
++#define MAX96724_PIPE_SEL0_PIXEL	0x62  /* OG03C pixel-mode reference */
++#define MAX96724_PIPE_SEL1_PIXEL	0xEA  /* OG03C pixel-mode reference */
 +#define MAX96724_PIPE_SEL0_DUAL		0x40  /* Pipe 0 ← A/X, Pipe 1 ← B/X */
 +#define MAX96724_PIPE_SEL0_QUAD_LO	0x40  /* Pipe 0 ← A/X, Pipe 1 ← B/X */
 +#define MAX96724_PIPE_SEL1_QUAD_HI	0xC8  /* Pipe 2 ← C/X, Pipe 3 ← D/X */
@@ -1302,6 +1377,9 @@ index 0000000..c101312
 +#define MAX96724_ALL_MAP_CTRL0		0x00
 +/* Controller mapping: all mappings → Controller 1 (Aardvark-verified working) */
 +#define MAX96724_ALL_MAP_CTRL1		0x55
++
++/* [OG03C reference dump] Three mappings to controller 1 */
++#define MAX96724_MAP3_CTRL1		0x15
 +
 +/* ================================================================
 + * Data Structures
@@ -1369,6 +1447,7 @@ index 0000000..c101312
 +	int pw_ref;
 +	struct regulator *vdd_cam_1v2;
 +	u8 link_speed;  /* DT-configurable: 3 or 6 Gbps */
++	bool pixel_mode;
 +};
 +
 +struct reg_pair {
@@ -1525,6 +1604,11 @@ index 0000000..c101312
 +			   MAX96724_LANE_CTRL_4LANE);
 +	max96724_write_reg(dev, MAX96724_LANE_CTRL3_ADDR,
 +			   MAX96724_LANE_CTRL_4LANE);
++}
++
++static inline bool max96724_is_pixel_mode(struct max96724 *priv)
++{
++	return priv->pixel_mode;
 +}
 +
 +/* ================================================================
@@ -1846,6 +1930,19 @@ index 0000000..c101312
 +		msleep(100);
 +	}
 +
++	if (max96724_is_pixel_mode(priv)) {
++		for (i = 0; i < MAX96724_MAX_PIPES; i++) {
++			max96724_write_reg(dev, tun_en_addrs[i],
++					   MAX96724_TUN_DISABLED);
++		}
++		max96724_write_reg(dev, MAX96724_MIPI_CTRL_SEL_ADDR,
++				   MAX96724_MIPI_CTRL_SEL_PIXEL);
++		max96724_write_reg(dev, MAX96724_ONESHOT_ADDR,
++				   MAX96724_ONESHOT_ALL);
++		priv->sdev_ref++;
++		goto maybe_reset_splitter;
++	}
++
 +	/*
 +	 * [SC20190112] Enable tunnel mode and route to Controller 1.
 +	 *   - TUN_EN   (0x0936): 0x01 (TUN_EN=1)
@@ -1872,6 +1969,8 @@ index 0000000..c101312
 +			   MAX96724_ONESHOT_ALL);
 +
 +	priv->sdev_ref++;
++
++maybe_reset_splitter:
 +
 +	/* Reset splitter mode if not all devices found */
 +	if ((priv->sdev_ref == priv->max_src) &&
@@ -2058,6 +2157,12 @@ index 0000000..c101312
 +	int err = 0;
 +	unsigned int i = 0;
 +	unsigned int src_idx;
++	u8 vid_rx0_cfg;
++	u8 vid_rx6_cfg;
++	u8 st_sel_cfg;
++	u8 pipe_sel0;
++	u8 pipe_sel1;
++	u8 dpll_cfg;
 +
 +	err = max96724_get_sdev_idx(dev, s_dev, &i);
 +	if (err)
@@ -2073,26 +2178,29 @@ index 0000000..c101312
 +
 +	src_idx = i;
 +	g_ctx = priv->sources[src_idx].g_ctx;
++	if (max96724_is_pixel_mode(priv)) {
++		pipe_sel0 = MAX96724_PIPE_SEL0_PIXEL;
++		pipe_sel1 = MAX96724_PIPE_SEL1_PIXEL;
++		vid_rx0_cfg = MAX96724_VID_RX0_PIXEL_VAL;
++		vid_rx6_cfg = MAX96724_VID_RX6_PIXEL_VAL;
++		st_sel_cfg = 0x00;
++		dpll_cfg = MAX96724_DPLL_1500MBPS;
++	} else {
++		pipe_sel0 = MAX96724_PIPE_SEL0_PIXEL;
++		pipe_sel1 = MAX96724_PIPE_SEL1_PIXEL;
++		vid_rx0_cfg = MAX96724_VID_RX0_CFG_VAL;
++		vid_rx6_cfg = MAX96724_VID_RX6_CFG_VAL;
++		st_sel_cfg = 0x10;
++		dpll_cfg = MAX96724_DPLL_1500MBPS;
++	}
 +
 +	/*
 +	 * [Aardvark-verified] Pipe source routing
 +	 *   Single cam: all pipes from Link A (0x22/0x22)
 +	 *   Disable pipes before configuration, enable at the end
 +	 */
-+	if (priv->max_src >= 4) {
-+		max96724_write_reg(dev, MAX96724_PIPE_SEL0_ADDR,
-+				   MAX96724_PIPE_SEL0_QUAD_LO);
-+		max96724_write_reg(dev, MAX96724_PIPE_SEL1_ADDR,
-+				   MAX96724_PIPE_SEL1_QUAD_HI);
-+	} else if (priv->max_src >= 2) {
-+		max96724_write_reg(dev, MAX96724_PIPE_SEL0_ADDR,
-+				   MAX96724_PIPE_SEL0_DUAL);
-+	} else {
-+		max96724_write_reg(dev, MAX96724_PIPE_SEL0_ADDR,
-+				   MAX96724_PIPE_SEL0_SINGLE);
-+		max96724_write_reg(dev, MAX96724_PIPE_SEL1_ADDR,
-+				   MAX96724_PIPE_SEL1_SINGLE);
-+	}
++	max96724_write_reg(dev, MAX96724_PIPE_SEL0_ADDR, pipe_sel0);
++	max96724_write_reg(dev, MAX96724_PIPE_SEL1_ADDR, pipe_sel1);
 +	/* Disable all pipes during configuration */
 +	max96724_write_reg(dev, MAX96724_PIPE_EN_ADDR, 0x00);
 +
@@ -2103,22 +2211,26 @@ index 0000000..c101312
 +	max96724_apply_porta_subset(dev, priv);
 +
 +	/*
-+	 * [FG24-4CH working-config verified] CSI-output DPLL data rate = 1500 Mbps
-+	 * on ALL FOUR controller freq registers, matching the fzcam working SG2
-+	 * board dump (0x0415/18/1B/1E=0x2F) and DT serdes_pix_clk_hz=375MHz.
++	 * [D585 700Mbps fix] CSI-output DPLL data rate = 700 Mbps
++	 * on ALL FOUR controller freq registers, matching D585 native
++	 * MIPI rate (pix_clk_hz=175M, 16bpp, 4-lane).
++	 * DT serdes_pix_clk_hz=175MHz drives correct THS_SETTLE for 700Mbps.
 +	 */
 +	if (!priv->lane_setup) {
 +		max96724_write_reg(dev, MAX96724_DPLL_FREQ0_ADDR,
-+				   MAX96724_DPLL_1500MBPS);
++				   dpll_cfg);
 +		max96724_write_reg(dev, MAX96724_DPLL_FREQ1_ADDR,
-+				   MAX96724_DPLL_1500MBPS);
++				   dpll_cfg);
 +		max96724_write_reg(dev, MAX96724_DPLL_FREQ2_ADDR,
-+				   MAX96724_DPLL_1500MBPS);
++				   dpll_cfg);
 +		max96724_write_reg(dev, MAX96724_DPLL_FREQ3_ADDR,
-+				   MAX96724_DPLL_1500MBPS);
++				   dpll_cfg);
 +
 +		priv->lane_setup = true;
 +	}
++
++	max96724_write_reg(dev, MAX96724_MIPI_CTRL_SEL_ADDR,
++			   MAX96724_MIPI_CTRL_SEL_PIXEL);
 +
 +	/*
 +	 * [Aardvark-verified] Stream ID select for all pipes
@@ -2128,7 +2240,7 @@ index 0000000..c101312
 +	for (i = 0; i < MAX96724_MAX_PIPES; i++) {
 +		max96724_write_reg(dev,
 +				   MAX96724_PIPE_X_ST_SEL_ADDR + (0x40 * i),
-+				   0x10);
++				   st_sel_cfg);
 +	}
 +
 +	/* BACKTOP: enable Controller 1 / CSI-B (0x02).
@@ -2153,11 +2265,16 @@ index 0000000..c101312
 +		max96724_write_reg(dev,
 +				   MAX96724_VID_RX0_P0_ADDR +
 +				   (MAX96724_VID_RX_STRIDE * i),
-+				   MAX96724_VID_RX0_CFG_VAL);
++				   vid_rx0_cfg);
 +		max96724_write_reg(dev,
 +				   MAX96724_VID_RX6_P0_ADDR +
 +				   (MAX96724_VID_RX_STRIDE * i),
-+				   MAX96724_VID_RX6_CFG_VAL);
++				   vid_rx6_cfg);
++		if (max96724_is_pixel_mode(priv)) {
++			max96724_write_reg(dev,
++					   MAX96724_PIPE0_TUN_EN_ADDR + (0x40 * i),
++					   MAX96724_TUN_DISABLED);
++		}
 +	}
 +
 +	max96724_write_reg(dev, MAX96724_ONESHOT_ADDR,
@@ -2288,6 +2405,12 @@ index 0000000..c101312
 +{
 +	struct max96724 *priv = dev_get_drvdata(dev);
 +	unsigned int i;
++	u8 pipe_sel0;
++	u8 pipe_sel1;
++	u8 vid_rx0_cfg;
++	u8 vid_rx6_cfg;
++	u8 st_sel_cfg;
++	u8 dpll_cfg;
 +
 +	mutex_lock(&priv->lock);
 +	if (priv->splitter_enabled) {
@@ -2306,6 +2429,22 @@ index 0000000..c101312
 +	}
 +	msleep(100);
 +
++	if (max96724_is_pixel_mode(priv)) {
++		pipe_sel0 = MAX96724_PIPE_SEL0_PIXEL;
++		pipe_sel1 = MAX96724_PIPE_SEL1_PIXEL;
++		vid_rx0_cfg = MAX96724_VID_RX0_PIXEL_VAL;
++		vid_rx6_cfg = MAX96724_VID_RX6_PIXEL_VAL;
++		st_sel_cfg = 0x00;
++		dpll_cfg = MAX96724_DPLL_1500MBPS;
++	} else {
++		pipe_sel0 = MAX96724_PIPE_SEL0_PIXEL;
++		pipe_sel1 = MAX96724_PIPE_SEL1_PIXEL;
++		vid_rx0_cfg = MAX96724_VID_RX0_CFG_VAL;
++		vid_rx6_cfg = MAX96724_VID_RX6_CFG_VAL;
++		st_sel_cfg = 0x10;
++		dpll_cfg = MAX96724_DPLL_1500MBPS;
++	}
++
 +	/* ONESHOT resets CSI/tunnel state. Restore the full pipeline config.
 +	 * Mirror setup_streaming() order: disable pipes -> restore everything ->
 +	 * BACKTOP/0x84 -> VID_RX -> final ONESHOT to latch -> enable pipes.
@@ -2313,60 +2452,68 @@ index 0000000..c101312
 +	max96724_write_reg(dev, MAX96724_PIPE_EN_ADDR, 0x00);
 +
 +	/* Pipe source routing (same as setup_streaming): all pipes from Link A */
-+	max96724_write_reg(dev, MAX96724_PIPE_SEL0_ADDR,
-+			   MAX96724_PIPE_SEL0_SINGLE);
-+	max96724_write_reg(dev, MAX96724_PIPE_SEL1_ADDR,
-+			   MAX96724_PIPE_SEL1_SINGLE);
++	max96724_write_reg(dev, MAX96724_PIPE_SEL0_ADDR, pipe_sel0);
++	max96724_write_reg(dev, MAX96724_PIPE_SEL1_ADDR, pipe_sel1);
 +
 +	max96724_apply_porta_subset(dev, priv);
 +
 +	/*
-+	 * [FG24-4CH working-config] CSI-output DPLL data rate = 1500 Mbps on ALL
-+	 * FOUR controllers, matching the fzcam working SG2 board dump.
++	 * [D585 700Mbps fix] CSI-output DPLL data rate = 700 Mbps on ALL
++	 * FOUR controllers, matching D585 native MIPI rate.
 +	 * reset_oneshot is called by the sensor after setup_streaming, so it must
 +	 * mirror the same DPLL values.
 +	 */
 +	max96724_write_reg(dev, MAX96724_DPLL_FREQ0_ADDR,
-+			   MAX96724_DPLL_1500MBPS);
++			   dpll_cfg);
 +	max96724_write_reg(dev, MAX96724_DPLL_FREQ1_ADDR,
-+			   MAX96724_DPLL_1500MBPS);
++			   dpll_cfg);
 +	max96724_write_reg(dev, MAX96724_DPLL_FREQ2_ADDR,
-+			   MAX96724_DPLL_1500MBPS);
++			   dpll_cfg);
 +	max96724_write_reg(dev, MAX96724_DPLL_FREQ3_ADDR,
-+			   MAX96724_DPLL_1500MBPS);
++			   dpll_cfg);
++
++	max96724_write_reg(dev, MAX96724_MIPI_CTRL_SEL_ADDR,
++			   MAX96724_MIPI_CTRL_SEL_PIXEL);
 +
 +	max96724_write_reg(dev, MAX96724_BACKTOP_EN_ADDR,
 +			   MAX96724_BACKTOP_CSIB_EN);
 +	for (i = 0; i < MAX96724_MAX_PIPES; i++) {
 +		max96724_write_reg(dev,
 +				   MAX96724_PIPE_X_ST_SEL_ADDR + (0x40 * i),
-+				   0x10);
++				   st_sel_cfg);
 +		max96724_write_reg(dev,
 +				   MAX96724_VID_RX0_P0_ADDR +
 +				   (MAX96724_VID_RX_STRIDE * i),
-+				   MAX96724_VID_RX0_CFG_VAL);
++				   vid_rx0_cfg);
 +		max96724_write_reg(dev,
 +				   MAX96724_VID_RX6_P0_ADDR +
 +				   (MAX96724_VID_RX_STRIDE * i),
-+				   MAX96724_VID_RX6_CFG_VAL);
++				   vid_rx6_cfg);
 +		max96724_write_reg(dev,
 +				   MAX96724_TX49_PIPE_X_ADDR + (0x40 * i),
-+				   MAX96724_TX49_CONCAT_4W);
++				   0x00);
 +	}
-+	/* Re-enable tunnel on all pipes (ONESHOT resets TUN_EN to 0x08=disabled) */
-+	max96724_write_reg(dev, MAX96724_PIPE0_TUN_EN_ADDR, MAX96724_TUN_EN);
-+	max96724_write_reg(dev, MAX96724_PIPE1_TUN_EN_ADDR, MAX96724_TUN_EN);
-+	max96724_write_reg(dev, MAX96724_PIPE2_TUN_EN_ADDR, MAX96724_TUN_EN);
-+	max96724_write_reg(dev, MAX96724_PIPE3_TUN_EN_ADDR, MAX96724_TUN_EN);
-+	/* TUN_DEST: set to Controller 1 (0x10) = Port A master in 2x4 mode */
-+	max96724_write_reg(dev, MAX96724_PIPE0_TUN_DEST_ADDR,
-+			   MAX96724_TUN_DEST_CTRL1);
-+	max96724_write_reg(dev, MAX96724_PIPE1_TUN_DEST_ADDR,
-+			   MAX96724_TUN_DEST_CTRL1);
-+	max96724_write_reg(dev, MAX96724_PIPE2_TUN_DEST_ADDR,
-+			   MAX96724_TUN_DEST_CTRL1);
-+	max96724_write_reg(dev, MAX96724_PIPE3_TUN_DEST_ADDR,
-+			   MAX96724_TUN_DEST_CTRL1);
++	if (max96724_is_pixel_mode(priv)) {
++		max96724_write_reg(dev, MAX96724_PIPE0_TUN_EN_ADDR, MAX96724_TUN_DISABLED);
++		max96724_write_reg(dev, MAX96724_PIPE1_TUN_EN_ADDR, MAX96724_TUN_DISABLED);
++		max96724_write_reg(dev, MAX96724_PIPE2_TUN_EN_ADDR, MAX96724_TUN_DISABLED);
++		max96724_write_reg(dev, MAX96724_PIPE3_TUN_EN_ADDR, MAX96724_TUN_DISABLED);
++	} else {
++		/* Re-enable tunnel on all pipes (ONESHOT resets TUN_EN to 0x08=disabled) */
++		max96724_write_reg(dev, MAX96724_PIPE0_TUN_EN_ADDR, MAX96724_TUN_EN);
++		max96724_write_reg(dev, MAX96724_PIPE1_TUN_EN_ADDR, MAX96724_TUN_EN);
++		max96724_write_reg(dev, MAX96724_PIPE2_TUN_EN_ADDR, MAX96724_TUN_EN);
++		max96724_write_reg(dev, MAX96724_PIPE3_TUN_EN_ADDR, MAX96724_TUN_EN);
++		/* TUN_DEST: set to Controller 1 (0x10) = Port A master in 2x4 mode */
++		max96724_write_reg(dev, MAX96724_PIPE0_TUN_DEST_ADDR,
++				   MAX96724_TUN_DEST_CTRL1);
++		max96724_write_reg(dev, MAX96724_PIPE1_TUN_DEST_ADDR,
++				   MAX96724_TUN_DEST_CTRL1);
++		max96724_write_reg(dev, MAX96724_PIPE2_TUN_DEST_ADDR,
++				   MAX96724_TUN_DEST_CTRL1);
++		max96724_write_reg(dev, MAX96724_PIPE3_TUN_DEST_ADDR,
++				   MAX96724_TUN_DEST_CTRL1);
++	}
 +	max96724_write_reg(dev, MAX96724_PIPE_EN_ADDR,
 +			   MAX96724_PIPE_EN_4);
 +
@@ -2397,6 +2544,7 @@ index 0000000..c101312
 +	int i;
 +	u8 en_mapping_num = 0x0F;
 +	u8 all_mapping_phy = MAX96724_ALL_MAP_CTRL1;  /* Controller 1 = Port A master (2x4 mode) */
++	struct max96724 *priv = dev_get_drvdata(dev);
 +
 +	struct reg_pair map_pipe_control[] = {
 +		/* Enable 4 mappings for Pipe X */
@@ -2418,8 +2566,8 @@ index 0000000..c101312
 +		{MAX96724_TX46_PIPE_X_ADDR, MAX96724_ALL_MAP_CTRL1},
 +		{MAX96724_TX47_PIPE_X_ADDR, MAX96724_ALL_MAP_CTRL1},
 +		{MAX96724_TX48_PIPE_X_ADDR, MAX96724_ALL_MAP_CTRL1},
-+		/* [XML] TX49: Pipeline concatenation 0x87 */
-+		{MAX96724_TX49_PIPE_X_ADDR, MAX96724_TX49_CONCAT_4W},
++		/* TX49: concat disabled (single-camera) */
++		{MAX96724_TX49_PIPE_X_ADDR, 0x00},
 +		/*
 +		 * Keep DES heartbeat handling aligned with the serializer's
 +		 * LIM_HEART-disabled tunnel mode to avoid persistent VID_SEQ_ERR.
@@ -2450,7 +2598,20 @@ index 0000000..c101312
 +
 +	if (data_type2 == 0x0) {
 +		en_mapping_num = 0x07;
-+		all_mapping_phy = 0x15;  /* 3 mappings to Controller 1 */
++		all_mapping_phy = MAX96724_MAP3_CTRL1;
++	}
++
++	if (max96724_is_pixel_mode(priv)) {
++		map_pipe_control[10].val = 0x00;
++		map_pipe_control[11].val = 0x00;
++		map_pipe_control[12].val = 0x00;
++		map_pipe_control[13].val = 0x00;
++		map_pipe_control[14].val = MAX96724_VID_RX0_PIXEL_VAL;
++		map_pipe_control[15].val = MAX96724_VID_RX6_PIXEL_VAL;
++		map_pipe_control[16].val = MAX96724_TUN_DISABLED;
++	} else {
++		/* Single-RGB tunnel: no concatenation needed */
++		map_pipe_control[13].val = 0x00;
 +	}
 +
 +	map_pipe_control[0].val = en_mapping_num;
@@ -2466,7 +2627,7 @@ index 0000000..c101312
 +	map_pipe_control[8].val = (vc_id << 6) | data_type2;
 +	map_pipe_control[9].val = all_mapping_phy;
 +	/* TX46-TX48 keep 0x55 (Ctrl1) from initializer */
-+	/* TX49 keeps 0x87 from initializer */
++	/* TX49 set to 0x00 above — overridden per mode in pixel/tunnel branch */
 +	/* VID_RX (entry 14) and pipe stream ctrl (entry 15) keep init values */
 +
 +	err = max96724_set_registers(dev, map_pipe_control,
@@ -2617,6 +2778,8 @@ index 0000000..c101312
 +		}
 +		priv->link_speed = value;
 +	}
++
++	priv->pixel_mode = of_property_read_bool(node, "adi,pixel-mode");
 +
 +	/* 1.2V regulator (optional) */
 +	if (of_get_property(node, "vdd_cam_1v2-supply", NULL)) {
