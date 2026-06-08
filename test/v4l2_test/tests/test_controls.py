@@ -403,6 +403,76 @@ class TestReadoutShaping:
 
 @pytest.mark.d457
 @pytest.mark.d401
+class TestAEType:
+    """Auto-exposure algorithm type (HWMC SETAETYPE 0x87 / GETAETYPE 0x88).
+
+    Split GET ('ae type get', read-only) and SET ('ae type set') controls.
+    Values: 0=Legacy, 1=V2. FW rejects SET while streaming, so these tests
+    run on an idle device.
+    """
+
+    MIN = 0       # DS5_AE_TYPE_LEGACY
+    MAX = 1       # DS5_AE_TYPE_V2
+    DEFAULT = 0   # DS5_AE_TYPE_LEGACY
+
+    def test_ae_type_enumerated(self, depth_device):
+        controls = enumerate_controls(depth_device)
+        names = [c.name.decode("ascii", errors="replace").lower() for c in controls]
+        assert any("ae type get" in n for n in names), \
+            "ae type get not found in enumerated controls"
+        assert any("ae type set" in n for n in names), \
+            "ae type set not found in enumerated controls"
+
+    def test_ae_type_read(self, depth_device):
+        val = read_int_control(depth_device, C.DS5_CAMERA_CID_AE_TYPE_GET)
+        assert self.MIN <= val <= self.MAX, f"ae type out of range: {val}"
+
+    def test_ae_type_write_legal(self, depth_device):
+        original = read_int_control(depth_device, C.DS5_CAMERA_CID_AE_TYPE_GET)
+        try:
+            for v in (self.MIN, self.MAX):
+                write_int_control(depth_device, C.DS5_CAMERA_CID_AE_TYPE_SET, v)
+                val = read_int_control(depth_device, C.DS5_CAMERA_CID_AE_TYPE_GET)
+                assert val == v, f"set {v}: got {val}"
+        finally:
+            write_int_control(depth_device, C.DS5_CAMERA_CID_AE_TYPE_SET, original)
+
+    def test_ae_type_set_illegal(self, depth_device):
+        # V4L2 (VIDIOC_S_CTRL) clamps out-of-range writes to [min, max]
+        original = read_int_control(depth_device, C.DS5_CAMERA_CID_AE_TYPE_GET)
+        try:
+            write_int_control(depth_device, C.DS5_CAMERA_CID_AE_TYPE_SET, self.MAX + 1)
+            val = read_int_control(depth_device, C.DS5_CAMERA_CID_AE_TYPE_GET)
+            assert val == self.MAX, f"{self.MAX + 1} should clamp to {self.MAX}, got {val}"
+
+            write_int_control(depth_device, C.DS5_CAMERA_CID_AE_TYPE_SET, self.MIN - 1)
+            val = read_int_control(depth_device, C.DS5_CAMERA_CID_AE_TYPE_GET)
+            assert val == self.MIN, f"{self.MIN - 1} should clamp to {self.MIN}, got {val}"
+        finally:
+            write_int_control(depth_device, C.DS5_CAMERA_CID_AE_TYPE_SET, original)
+
+    def test_ae_type_default(self, depth_device):
+        original = read_int_control(depth_device, C.DS5_CAMERA_CID_AE_TYPE_GET)
+        try:
+            write_int_control(depth_device, C.DS5_CAMERA_CID_AE_TYPE_SET, self.DEFAULT)
+            val = read_int_control(depth_device, C.DS5_CAMERA_CID_AE_TYPE_GET)
+            assert val == self.DEFAULT, f"default {self.DEFAULT}: got {val}"
+        finally:
+            write_int_control(depth_device, C.DS5_CAMERA_CID_AE_TYPE_SET, original)
+
+    def test_ae_type_roundtrip(self, depth_device):
+        original = read_int_control(depth_device, C.DS5_CAMERA_CID_AE_TYPE_GET)
+        try:
+            for v in (self.MIN, self.MAX):
+                write_int_control(depth_device, C.DS5_CAMERA_CID_AE_TYPE_SET, v)
+                val = read_int_control(depth_device, C.DS5_CAMERA_CID_AE_TYPE_GET)
+                assert val == v, f"roundtrip {v}: got {val}"
+        finally:
+            write_int_control(depth_device, C.DS5_CAMERA_CID_AE_TYPE_SET, original)
+
+
+@pytest.mark.d457
+@pytest.mark.d401
 class TestControlEnumeration:
     """Verify controls can be enumerated."""
 
