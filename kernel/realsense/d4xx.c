@@ -31,6 +31,7 @@
 #include <linux/videodev2.h>
 #include <linux/version.h>
 #include <linux/mutex.h>
+#include <linux/workqueue.h>
 #include <media/media-entity.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
@@ -6221,6 +6222,213 @@ e_depth:
 	return ret;
 }
 
+/*
+ * RSDEV-11964: deferred recovery -> operational re-probe after a MIPI/GMSL DFU.
+ *
+ * On GMSL there is no bus hotplug: after a *successful* firmware update of a
+ * device that was in recovery, the FW reboots into application firmware but the
+ * four d4xx instances of that camera (Depth/RGB/Y8/IMU) stay bound in
+ * DS5_DFU_RECOVERY -- chardev only, no V4L2 nodes -- until the driver is
+ * reloaded or the host is rebooted.  Nothing re-probes them, so the camera
+ * never re-enumerates.  This work automates the proven "unbind + bind" recovery:
+ * once the camera is operational again it re-probes all four i2c clients (the
+ * depth/primary instance creates the full V4L2 tree; the peers must also be
+ * re-probed to leave recovery and re-establish their SERDES peer linkage), so
+ * the camera comes back without a host reboot.
+ */
+#define DS5_DFU_REBIND_SLOTS		MAX_DS5_NUM
+#define DS5_DFU_REBIND_BOOT_DELAY_MS	2000	/* let FW start its reboot first */
+#define DS5_DFU_REBIND_POLL_MS		500
+#define DS5_DFU_REBIND_TIMEOUT_MS	30000	/* max wait for app FW to come back */
+#define DS5_DFU_REBIND_MAX_SIBLINGS	4
+
+static struct i2c_driver ds5_i2c_driver;	/* defined at end of file */
+
+struct ds5_dfu_rebind_ctx {
+	struct delayed_work work;
+	struct i2c_client *depth_client;	/* primary; device ref held while pending */
+	struct ds5_dev *ds5_dev;		/* identifies this camera's sibling instances */
+	bool pending;
+};
+
+static struct ds5_dfu_rebind_ctx ds5_dfu_rebind_slots[DS5_DFU_REBIND_SLOTS];
+static DEFINE_MUTEX(ds5_dfu_rebind_lock);
+
+/* Recover the per-instance state from an i2c client that may be either an
+ * operational instance (clientdata == subdev) or a recovery instance
+ * (clientdata == state).  Mirrors the fallback in ds5_remove().
+ */
+static struct ds5 *ds5_state_from_client(struct i2c_client *c)
+{
+	void *cd = i2c_get_clientdata(c);
+	struct ds5 *state;
+
+	if (!cd)
+		return NULL;
+	state = container_of(cd, struct ds5, mux.sd.subdev);
+	if (state && !state->mux.sd.subdev.v4l2_dev)
+		state = cd;
+	return state;
+}
+
+struct ds5_dfu_sibling_collect {
+	struct ds5_dev *ds5_dev;
+	struct i2c_client *clients[DS5_DFU_REBIND_MAX_SIBLINGS];
+	int count;
+};
+
+/* driver_for_each_device() callback: collect i2c clients belonging to the same
+ * camera (same ds5_dev), taking a device reference on each.
+ */
+static int ds5_dfu_collect_sibling(struct device *dev, void *data)
+{
+	struct ds5_dfu_sibling_collect *col = data;
+	struct i2c_client *c = i2c_verify_client(dev);
+	struct ds5 *st;
+
+	if (!c)
+		return 0;
+	st = ds5_state_from_client(c);
+	if (!st || st->ds5_dev != col->ds5_dev)
+		return 0;
+	if (col->count < DS5_DFU_REBIND_MAX_SIBLINGS) {
+		get_device(dev);
+		col->clients[col->count++] = c;
+	}
+	return 0;
+}
+
+static void ds5_dfu_rebind_work_fn(struct work_struct *w)
+{
+	struct ds5_dfu_rebind_ctx *ctx =
+		container_of(to_delayed_work(w), struct ds5_dfu_rebind_ctx, work);
+	struct i2c_client *depth = ctx->depth_client;
+	struct ds5 *depth_state = ds5_state_from_client(depth);
+	struct ds5_dfu_sibling_collect col = { .ds5_dev = ctx->ds5_dev, .count = 0 };
+	unsigned long deadline;
+	bool operational = false;
+	u16 magic = 0;
+	int i, ret;
+
+	/* 1. Wait for the camera to leave the bootloader and serve app FW again.
+	 *    Mirror probe's recovery test: operational == magic reg no longer
+	 *    returns the DFU magic.  Bounded so a dead device degrades to the
+	 *    pre-fix behaviour (a warning telling the user to reload/reboot).
+	 */
+	deadline = jiffies + msecs_to_jiffies(DS5_DFU_REBIND_TIMEOUT_MS);
+	do {
+		if (depth_state) {
+			ret = ds5_read(depth_state, DS5_DFU_MAGIC_REG, &magic);
+			if (!ret && magic != DS5_DFU_MAGIC_LSW) {
+				operational = true;
+				break;
+			}
+		}
+		msleep(DS5_DFU_REBIND_POLL_MS);
+	} while (time_before(jiffies, deadline));
+
+	if (!operational) {
+		dev_warn(&depth->dev,
+			"%s(): camera did not return to operational FW; reload d4xx or reboot to enumerate\n",
+			__func__);
+		goto out;
+	}
+
+	/* 2. Collect all sibling i2c clients of this camera (still recovery-bound). */
+	ret = driver_for_each_device(&ds5_i2c_driver.driver, NULL, &col,
+			ds5_dfu_collect_sibling);
+	if (ret)
+		dev_dbg(&depth->dev, "%s(): sibling scan returned %d\n",
+				__func__, ret);
+	dev_info(&depth->dev, "%s(): re-probing %d d4xx instance(s) after DFU\n",
+			__func__, col.count);
+
+	/* 3. Unbind peers first, primary (depth) last: peers reference the
+	 *    primary's SERDES slot, so the primary must be torn down last.
+	 *    NOTE: after this, depth_state is freed -- do not deref it again.
+	 */
+	for (i = 0; i < col.count; i++)
+		if (col.clients[i] != depth)
+			device_release_driver(&col.clients[i]->dev);
+	device_release_driver(&depth->dev);
+
+	/* 4. Bind the primary first so its SERDES setup completes before the peers
+	 *    probe (peers EPROBE_DEFER until the primary's serdes_setup_complete).
+	 */
+	ret = device_attach(&depth->dev);
+	if (ret < 0)
+		dev_warn(&depth->dev, "%s(): primary re-attach failed (%d)\n",
+				__func__, ret);
+	for (i = 0; i < col.count; i++)
+		if (col.clients[i] != depth) {
+			ret = device_attach(&col.clients[i]->dev);
+			if (ret < 0)
+				dev_warn(&col.clients[i]->dev,
+					"%s(): peer re-attach failed (%d)\n",
+					__func__, ret);
+		}
+
+	for (i = 0; i < col.count; i++)
+		put_device(&col.clients[i]->dev);
+out:
+	put_device(&depth->dev);
+	mutex_lock(&ds5_dfu_rebind_lock);
+	ctx->pending = false;
+	mutex_unlock(&ds5_dfu_rebind_lock);
+}
+
+/* Schedule a deferred re-probe of the just-updated camera.  Called from the
+ * DFU chardev release with state->lock held; only the depth instance (which
+ * owns the chardev) reaches DS5_DFU_DONE, so exactly one work is queued per
+ * camera per update.
+ */
+static void ds5_dfu_schedule_rebind(struct ds5 *state)
+{
+	struct ds5_dfu_rebind_ctx *ctx = NULL;
+	int i;
+
+	if (!state->is_depth)
+		return;
+	/* Only the recovery case needs a re-probe: an operational instance updated
+	 * in place still has its V4L2 nodes registered (a normal update never tears
+	 * them down), so leave that path unchanged.  A recovery instance never ran
+	 * ds5_v4l_init(), so its mux subdev has no v4l2_dev. */
+	if (state->mux.sd.subdev.v4l2_dev)
+		return;
+
+	mutex_lock(&ds5_dfu_rebind_lock);
+	/* Reuse a slot already pending for this camera, else take a free one. */
+	for (i = 0; i < DS5_DFU_REBIND_SLOTS; i++)
+		if (ds5_dfu_rebind_slots[i].pending &&
+		    ds5_dfu_rebind_slots[i].ds5_dev == state->ds5_dev) {
+			ctx = &ds5_dfu_rebind_slots[i];
+			break;
+		}
+	if (!ctx)
+		for (i = 0; i < DS5_DFU_REBIND_SLOTS; i++)
+			if (!ds5_dfu_rebind_slots[i].pending) {
+				ctx = &ds5_dfu_rebind_slots[i];
+				break;
+			}
+	if (!ctx) {
+		mutex_unlock(&ds5_dfu_rebind_lock);
+		dev_warn(&state->client->dev,
+			"%s(): no free re-probe slot; reload d4xx or reboot to enumerate\n",
+			__func__);
+		return;
+	}
+	ctx->pending = true;
+	ctx->ds5_dev = state->ds5_dev;
+	ctx->depth_client = state->client;
+	get_device(&state->client->dev);	/* released in ds5_dfu_rebind_work_fn */
+	mutex_unlock(&ds5_dfu_rebind_lock);
+
+	dev_info(&state->client->dev,
+		"%s(): DFU done, scheduling recovery->operational re-probe\n", __func__);
+	schedule_delayed_work(&ctx->work,
+			msecs_to_jiffies(DS5_DFU_REBIND_BOOT_DELAY_MS));
+}
+
 static int ds5_dfu_device_release(struct inode *inode, struct file *file)
 {
 	struct ds5 *state = container_of(inode->i_cdev, struct ds5, dfu_dev.ds5_cdev);
@@ -6231,14 +6439,15 @@ static int ds5_dfu_device_release(struct inode *inode, struct file *file)
 	int ret = 0, retry = 10;
 	mutex_lock(&state->lock);
 	state->dfu_dev.device_open_count--;
+	/* RSDEV-11964: a completed in-recovery DFU leaves all four GMSL instances
+	 * bound in recovery with no V4L2 nodes.  Defer a re-probe (after the FW
+	 * reboots into application firmware) so the camera re-enumerates without a
+	 * host reboot.  Replaces the old in-place ds5_v4l_init() attempt below,
+	 * which could not bring back the peer instances or wait for the reboot. */
+	if (state->dfu_dev.dfu_state_flag == DS5_DFU_DONE)
+		ds5_dfu_schedule_rebind(state);
 	if (state->dfu_dev.dfu_state_flag != DS5_DFU_RECOVERY)
 		state->dfu_dev.dfu_state_flag = DS5_DFU_IDLE;
-	/* We disable this section as it has no effect when device in operational
-	   mode and has not enough effect when device in recovery mode */
-	// if (state->dfu_dev.dfu_state_flag == DS5_DFU_DONE
-	// 		&& state->dfu_dev.init_v4l_f)
-	// 	ds5_v4l_init(state->client, state);
-	// state->dfu_dev.init_v4l_f = 0;
 	if (state->dfu_dev.dfu_msg)
 		devm_kfree(&state->client->dev, state->dfu_dev.dfu_msg);
 	state->dfu_dev.dfu_msg = NULL;
@@ -6795,7 +7004,31 @@ static struct i2c_driver ds5_i2c_driver = {
 	.id_table	= ds5_id,
 };
 
-module_i2c_driver(ds5_i2c_driver);
+static int __init ds5_module_init(void)
+{
+	int i;
+
+	for (i = 0; i < DS5_DFU_REBIND_SLOTS; i++)
+		INIT_DELAYED_WORK(&ds5_dfu_rebind_slots[i].work,
+				ds5_dfu_rebind_work_fn);
+
+	return i2c_add_driver(&ds5_i2c_driver);
+}
+module_init(ds5_module_init);
+
+static void __exit ds5_module_exit(void)
+{
+	int i;
+
+	/* Cancel any pending DFU re-probe before tearing the driver down.
+	 * cancel_delayed_work_sync() waits for an in-flight work to finish, so no
+	 * re-probe runs concurrently with i2c_del_driver(). */
+	for (i = 0; i < DS5_DFU_REBIND_SLOTS; i++)
+		cancel_delayed_work_sync(&ds5_dfu_rebind_slots[i].work);
+
+	i2c_del_driver(&ds5_i2c_driver);
+}
+module_exit(ds5_module_exit);
 
 MODULE_DESCRIPTION("RealSense D4XX Camera Driver");
 MODULE_AUTHOR("Guennadi Liakhovetski <guennadi.liakhovetski@intel.com>,\n\
