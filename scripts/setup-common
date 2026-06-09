@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SUPPORTED_JP="7.1, 7.0, 6.2.2, 6.2.1, 6.2, 6.1, 6.0, 5.1.6, 5.1.2, 5.0.2, 4.6.1"
+SUPPORTED_JP="7.1, 7.0, 6.2.2, 6.2.1, 6.2, 6.1, 6.0, 5.1.6, 5.1.2, 5.0.2"
 
 JP_INPUT_VERSION="$1"
 if [[ -z "${JP_INPUT_VERSION}" || "$1" == "-h" ]]; then
@@ -64,14 +64,6 @@ elif ! version_lt "${JP_INPUT_VERSION}" 5.0; then
     KERNEL_DIR="kernel/kernel-5.10"
     JETPACK_VERSION="5.x"
     L4T_VERSION=jetson_"${REVISION}"
-elif ! version_lt "${JP_INPUT_VERSION}" 4.0; then
-	case "${JP_INPUT_VERSION}" in
-		4.6.1) REVISION=32.7.1;;
-	esac
-    KERNEL_DIR="kernel/kernel-4.9"
-    L4T_VERSION="tegra-l4t-r${REVISION}"
-    JETPACK_VERSION="4.x"
-    LICENSE=T186
 fi
 if [[ -z $REVISION ]]; then
     echo "Wrong JetPack version $JP_INPUT_VERSION! Supported version: ${SUPPORTED_JP}"

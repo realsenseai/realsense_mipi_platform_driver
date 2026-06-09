@@ -49,8 +49,6 @@ else
         CROSS_COMPILE=$DEVDIR/l4t-gcc/$JETPACK_VERSION/bin/aarch64-buildroot-linux-gnu-
     elif [[ "$JETPACK_VERSION" == "5.x" ]]; then
         CROSS_COMPILE=$DEVDIR/l4t-gcc/$JETPACK_VERSION/bin/aarch64-buildroot-linux-gnu-
-    elif [[ "$JETPACK_VERSION" == "4.x" ]]; then
-        CROSS_COMPILE=$DEVDIR/l4t-gcc/$JETPACK_VERSION/bin/aarch64-linux-gnu-
     fi
     export CROSS_COMPILE
 fi
@@ -75,7 +73,7 @@ export KERNEL_MODULES_OUT=$TEGRA_KERNEL_OUT/modules
 # following: 
 # https://docs.nvidia.com/jetson/archives/r36.2/DeveloperGuide/SD/Kernel/KernelCustomization.html#building-the-jetson-linux-kernel
 if version_lt "$JETPACK_VERSION" "6.0"; then
-    #JP4/5
+    #JP5
     cd $BUILD_SRCS/$KERNEL_DIR
     make O=$TEGRA_KERNEL_OUT tegra_defconfig
     if [[ "$DEVDBG" == "1" ]]; then

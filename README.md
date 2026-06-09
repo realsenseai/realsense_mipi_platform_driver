@@ -12,7 +12,7 @@
 # D457 MIPI on NVIDIA® Jetson AGX Xavier™ and AGX Orin™
 The RealSense™ MIPI platform driver enables the user to control and stream RealSense™ 3D MIPI cameras.
 The system shall include:
-* NVIDIA® Jetson platform (Currently Supported JetPack versions are: 7.1, 7.0, 6.2.1, 6.2, 6.1, 6.0, 5.1.2, 5.0.2, 4.6.1)
+* NVIDIA® Jetson platform (Currently Supported JetPack versions are: 7.1, 7.0, 6.2.1, 6.2, 6.1, 6.0, 5.1.2, 5.0.2)
 * RealSense™ De-Serialize board
 * NVIDIA® Jetson AGX Orin™ Passive adapter board from [Leopard Imaging LI-JTX1-SUB-ADPT](https://leopardimaging.com/product/accessories/adapters-carrier-boards/for-nvidia-jetson/li-jtx1-sub-adpt/)
 * RS MIPI camera (e.g. https://store.realsenseai.com/buy-intel-realsense-depth-camera-d457.html)
@@ -27,7 +27,6 @@ The system shall include:
 - NVIDIA® Jetson AGX Orin™ board setup - AGX Orin™ [JetPack 7.x](./README_JP7.md) setup guide
 - NVIDIA® Jetson AGX Orin™ board setup - AGX Orin™ [JetPack 6.0](./README_JP6.0.md) setup guide
 - NVIDIA® Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 5.x.2](./README_JP5.md) setup guide
-- NVIDIA® Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 4.6.1](./README_JP4.md) setup guide
 - Build Tools manual page [Build Manual page](./README_tools.md)
 - Driver API manual page [Driver API page](./README_driver.md)
 
@@ -43,15 +42,13 @@ Please follow the [instruction](https://docs.nvidia.com/sdk-manager/install-with
 - [JetPack 6.2](./README_JP6.2.md#build-environment-prerequisites)
 - [JetPack 6.0](./README_JP6.0.md#build-environment-prerequisites)
 - [JetPack 5.x.2](./README_JP5.md#build-kernel-dtb-and-d457-driver)
-- [JetPack 4.6.1](./README_JP4.md#build-kernel-dtb-and-d457-driver)
 
 ### Verify driver after installation
 - Driver API manual page [Driver API page](./README_driver.md)
 
 **NOTE**
 
-- Each JetPack version's kernel may be different, the user needs to change the kernel version in file names and paths accordingly, for example for JetPack 4.6.1 the version is `4.9.253-d457` or `4.9.253-tegra`, depending on the build method applied.
-- For JetPack 4.6.1, the dtb file is not included in the deb package. User needs to manually copy `images/4.6.1/arch/arm64/boot/dts/tegra194-p2888-0001-p2822-0000.dtb` file to board and edit `extlinux.conf` to point to it.
+- Each JetPack version's kernel may be different, the user needs to change the kernel version in file names and paths accordingly.
 - It's recommended to save the original kernel image as backup boot option in `/boot/extlinux/extlinux.conf`.
 
   
