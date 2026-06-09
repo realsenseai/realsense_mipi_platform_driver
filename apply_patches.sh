@@ -33,23 +33,10 @@ done
 
 . scripts/setup-common
 
-# set JP4 devicetree
-if [[ "$JETPACK_VERSION" == "4.x" ]]; then
-    JP5_D4XX_DTSI="tegra194-camera-d4xx.dtsi"
-fi
 if version_lt "$JETPACK_VERSION" "6.0"; then
     D4XX_SRC_DST=kernel/nvidia
 else
     D4XX_SRC_DST=nvidia-oot
-fi
-
-# NVIDIA SDK Manager's JetPack 4.6.1 source_sync.sh doesn't set the right folder name, it mismatches with the direct tar
-# package source code. Correct the folder name.
-if [[ "$ACTION" == apply && -d "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen-industrial-dts" ]]; then
-    mv ${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen-industrial-dts ${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen-industrial
-fi
-if [[ "$ACTION" == reset && -d "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen-industrial" ]]; then
-    rm -rfv "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen-industrial" > /dev/null
 fi
 
 # Create nvethernetrm symlink for JP 6.x (moved from source_sync_6.x.sh)
@@ -175,10 +162,5 @@ if [[ "$ACTION" = "apply" ]]; then
     fi
     if [[ -d "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen/kernel-dts" ]]; then
         git -C "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen/kernel-dts" commit -m "RS patched" || true
-    fi
-elif [[ "$ACTION" = "reset" ]]; then
-    if version_lt "$JP_INPUT_VERSION" "5.0"; then
-        rm "${BUILD_SRCS}/${D4XX_SRC_DST}/drivers/media/i2c/d4xx.c" || true
-        rm "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen/kernel-dts/common/tegra194-camera-d4xx.dtsi" || true
     fi
 fi

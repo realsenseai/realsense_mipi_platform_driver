@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Linux kernel driver and userspace utilities for Intel RealSense D4XX series 3D depth cameras operating over GMSL (Gigabit Multimedia Serial Link) MIPI CSI-2 interface on NVIDIA Jetson platforms. Licensed under GPL-2.0.
 
-**Supported platforms:** Jetson AGX Xavier (JetPack 4.6.1, 5.0.2, 5.1.2) and AGX Orin (JetPack 6.0, 6.1, 6.2, 6.2.1)
+**Supported platforms:** Jetson AGX Xavier (JetPack 5.0.2, 5.1.2) and AGX Orin (JetPack 6.0, 6.1, 6.2, 6.2.1)
 **Supported cameras:** D457 (primary), D401, D40x, D41x, D43x, D45x, D46x series
 
 ## Build Commands
@@ -75,7 +75,7 @@ RealSense D4XX camera module
 ### Key directories
 
 - **`kernel/realsense/d4xx.c`** — The main driver. Single-file V4L2 subdevice driver handling I2C communication, MIPI CSI-2 stream config, firmware control (DFU), calibration data, metadata capture, and V4L2 controls (exposure, laser power, AE ROI, etc.). Registers four sensor subdevices per camera: Depth, RGB, IR (Y8/Y8I/Y12I), and IMU.
-- **`kernel/kernel-4.9/`, `kernel/kernel-5.10/`, `kernel/kernel-jammy-src/`** — Kernel patches organized by JetPack generation: 4.6.1 uses kernel 4.9, 5.x uses kernel 5.10, 6.x uses kernel-jammy-src.
+- **`kernel/kernel-5.10/`, `kernel/kernel-jammy-src/`, `kernel/kernel-noble-src/`** — Kernel patches organized by JetPack generation: 5.x uses kernel 5.10, 6.x uses kernel-jammy-src, 7.x uses kernel-noble-src.
 - **`kernel/nvidia/`** — NVIDIA driver patches (max9295/max9296 SerDes, VI capture engine) organized by JetPack version.
 - **`nvidia-oot/`** — Out-of-tree NVIDIA module patches for JetPack 6.x (subdirs `6.0/`, `6.1/`, `6.2/`, `6.2.1/`). Has its own Makefile for building conftest, hwpm, nvidia-oot, nvgpu, nvidia-display modules.
 - **`hardware/realsense/`** — Device tree source files. Xavier uses `.dtsi` includes (`tegra194-camera-d4xx-*.dtsi`), Orin uses DT overlays (`tegra234-camera-d4xx-overlay*.dts`). Single-camera and dual-camera variants exist, plus `.calib.` variants for calibration.
@@ -97,7 +97,6 @@ Each camera creates 6 V4L2 video devices:
 ### Cross-compilation
 
 The build system cross-compiles for ARM64. Toolchains vary by JetPack:
-- JP 4.6.1: Linaro GCC 7.3
 - JP 5.x: Bootlin GCC 9.3
 - JP 6.x: Bootlin GCC 11.3 (`aarch64-buildroot-linux-gnu`)
 
@@ -107,7 +106,6 @@ The build system cross-compiles for ARM64. Toolchains vary by JetPack:
 
 | JetPack | L4T Revision | Kernel Dir |
 |---------|-------------|------------|
-| 4.6.1   | 32.7.1      | kernel/kernel-4.9 |
 | 5.0.2   | 35.1        | kernel/kernel-5.10 |
 | 5.1.2   | 35.4.1      | kernel/kernel-5.10 |
 | 6.0     | 36.3        | kernel/kernel-jammy-src |

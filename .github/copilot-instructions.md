@@ -4,7 +4,7 @@
 
 Linux kernel driver and userspace utilities for Intel RealSense D4XX series 3D depth cameras operating over GMSL (Gigabit Multimedia Serial Link) MIPI CSI-2 interface on NVIDIA Jetson platforms. Licensed under GPL-2.0.
 
-- **Supported platforms:** Jetson AGX Xavier (JetPack 4.6.1, 5.0.2, 5.1.2) and AGX Orin (JetPack 6.0, 6.1, 6.2, 6.2.1)
+- **Supported platforms:** Jetson AGX Xavier (JetPack 5.0.2, 5.1.2) and AGX Orin (JetPack 6.0, 6.1, 6.2, 6.2.1)
 - **Supported cameras:** D457 (primary), D401, D40x, D41x, D43x, D45x, D46x series
 
 ## Coding Conventions
@@ -106,7 +106,6 @@ Build outputs go to `images/<version>/`.
 
 | JetPack | L4T Revision | Kernel Dir                    | Normalized |
 |---------|-------------|-------------------------------|------------|
-| 4.6.1   | 32.7.1      | `kernel/kernel-4.9`           | 4.6.1      |
 | 5.0.2   | 35.1        | `kernel/kernel-5.10`          | 5.x        |
 | 5.1.2   | 35.4.1      | `kernel/kernel-5.10`          | 5.x        |
 | 6.0     | 36.3        | `kernel/kernel-jammy-src`     | 6.x        |
@@ -116,7 +115,6 @@ Build outputs go to `images/<version>/`.
 
 ### Cross-Compilation Toolchains
 
-- JP 4.6.1: Linaro GCC 7.3
 - JP 5.x: Bootlin GCC 9.3
 - JP 6.x: Bootlin GCC 11.3 (`aarch64-buildroot-linux-gnu`)
 
@@ -134,7 +132,6 @@ Camera variant flags: `--one-cam`, `--dual-cam`, `--max96712-EVB`, `--fg12-16ch`
 | Path | Description |
 |------|-------------|
 | `kernel/realsense/d4xx.c` | Main V4L2 I2C subdevice driver (~6900 lines) |
-| `kernel/kernel-4.9/` | Kernel patches for JetPack 4.6.1 |
 | `kernel/kernel-5.10/` | Kernel patches for JetPack 5.x |
 | `kernel/kernel-jammy-src/` | Kernel patches for JetPack 6.x |
 | `kernel/nvidia/` | NVIDIA driver patches (MAX9295/9296 SerDes, VI capture) |
