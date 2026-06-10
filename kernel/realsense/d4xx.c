@@ -44,6 +44,7 @@
 #include <media/max9296.h>
 #include <media/max96712.h>
 
+
 /* Deserializer interface structure for abstraction */
 struct dser_interface {
 	/* Pipeline management */
