@@ -164,7 +164,7 @@ else
         # Sync FG24 DTS into build tree before make dtbs (apply_patches ln may fail cross-fs)
         if [[ "$FG24" == "1" ]]; then
             cp -f "$DEVDIR/hardware/realsense/tegra234-camera-d5xx-overlay-fg24-4ch.dts" \
-                  "$BUILD_SRCS/hardware/nvidia/t23x/nv-public/overlay/"
+                  "$BUILD_SRCS/hardware/nvidia/t23x/nv-public/overlay/" 2>/dev/null || true
         fi
         make RS_USE_D5XX=$RS_USE_D5XX RS_CSI_LANES=$RS_CSI_LANES dtbs
         cp $BUILD_SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/ 2>/dev/null || true

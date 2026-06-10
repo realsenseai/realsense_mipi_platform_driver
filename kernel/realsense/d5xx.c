@@ -72,10 +72,10 @@ struct dser_interface {
 
 #else
 #include <media/gmsl-link.h>
-#define GMSL_CSI_DT_YUV422_8 0x1E
-#define GMSL_CSI_DT_RGB_888 0x24
-#define GMSL_CSI_DT_RAW_8 0x2A
-#define GMSL_CSI_DT_EMBED 0x12
+#define GMSL_CSI_DT_YUV422_8        0x1E
+#define GMSL_CSI_DT_RGB_888         0x24
+#define GMSL_CSI_DT_RAW_8           0x2A
+#define GMSL_CSI_DT_EMBED           0x12
 #endif
 
 /*
@@ -102,13 +102,13 @@ struct dser_interface {
 #define DS5_MIPI_SUPPORT_PHY		0x0304
 #define DS5_MIPI_DATARATE_MIN		0x0308
 #define DS5_MIPI_DATARATE_MAX		0x030A
-#define DS5_FW_VERSION			0x030C
-#define DS5_FW_BUILD			0x030E
-#define DS5_DEVICE_TYPE			0x0310
+#define DS5_FW_VERSION				0x030C
+#define DS5_FW_BUILD				0x030E
+#define DS5_DEVICE_TYPE				0x0310
 #define DS5_DEVICE_TYPE_D58X		9
 #define DS5_DEVICE_TYPE_UNKNOWN		0
 
-#define DS5_MIPI_LANE_NUMS		0x0400
+#define DS5_MIPI_LANE_NUMS			0x0400
 #define DS5_MIPI_LANE_DATARATE		0x0402
 #define DS5_MIPI_CONF_STATUS		0x0500
 
@@ -118,58 +118,58 @@ struct dser_interface {
 #define DS5_IMU_STREAM_STATUS		0x100C
 #define DS5_IR_STREAM_STATUS		0x1014
 
-#define DS5_STREAM_DEPTH		0x0
-#define DS5_STREAM_RGB			0x1
-#define DS5_STREAM_IMU			0x2
-#define DS5_STREAM_IR			0x4
-#define DS5_STREAM_STOP			0x100
-#define DS5_STREAM_START		0x200
-#define DS5_STREAM_IDLE			0x1
+#define DS5_STREAM_DEPTH			0x0
+#define DS5_STREAM_RGB				0x1
+#define DS5_STREAM_IMU				0x2
+#define DS5_STREAM_IR				0x4
+#define DS5_STREAM_STOP				0x100
+#define DS5_STREAM_START			0x200
+#define DS5_STREAM_IDLE				0x1
 #define DS5_STREAM_STREAMING		0x2
 
-#define DS5_DEPTH_STREAM_DT		 0x4000
-#define DS5_DEPTH_STREAM_MD		 0x4002
-#define DS5_DEPTH_RES_WIDTH		 0x4004
-#define DS5_DEPTH_RES_HEIGHT	 0x4008
-#define DS5_DEPTH_FPS			 0x400C
-#define DS5_DEPTH_OVERRIDE		 0x401C
-#define DS5_DEPTH_CONTROL_STATUS 0x401E
+#define DS5_DEPTH_STREAM_DT		 	0x4000
+#define DS5_DEPTH_STREAM_MD		 	0x4002
+#define DS5_DEPTH_RES_WIDTH		 	0x4004
+#define DS5_DEPTH_RES_HEIGHT	 	0x4008
+#define DS5_DEPTH_FPS			 	0x400C
+#define DS5_DEPTH_OVERRIDE		 	0x401C
+#define DS5_DEPTH_CONTROL_STATUS 	0x401E
 
-#define DS5_RGB_STREAM_DT		0x4020
-#define DS5_RGB_STREAM_MD		0x4022
-#define DS5_RGB_RES_WIDTH		0x4024
-#define DS5_RGB_RES_HEIGHT		0x4028
-#define DS5_RGB_FPS				0x402C
-#define DS5_RGB_CONTROL_STATUS 	0x402E
+#define DS5_RGB_STREAM_DT			0x4020
+#define DS5_RGB_STREAM_MD			0x4022
+#define DS5_RGB_RES_WIDTH			0x4024
+#define DS5_RGB_RES_HEIGHT			0x4028
+#define DS5_RGB_FPS					0x402C
+#define DS5_RGB_CONTROL_STATUS 		0x402E
 
-#define DS5_IMU_STREAM_DT		0x4040
-#define DS5_IMU_STREAM_MD		0x4042
-#define DS5_IMU_RES_WIDTH		0x4044
-#define DS5_IMU_RES_HEIGHT		0x4048
-#define DS5_IMU_FPS				0x404C
-#define DS5_IMU_CONTROL_STATUS 	0x404E
+#define DS5_IMU_STREAM_DT			0x4040
+#define DS5_IMU_STREAM_MD			0x4042
+#define DS5_IMU_RES_WIDTH			0x4044
+#define DS5_IMU_RES_HEIGHT			0x4048
+#define DS5_IMU_FPS					0x404C
+#define DS5_IMU_CONTROL_STATUS 		0x404E
 
-#define DS5_IR_STREAM_DT		0x4080
-#define DS5_IR_STREAM_MD		0x4082
-#define DS5_IR_RES_WIDTH		0x4084
-#define DS5_IR_RES_HEIGHT		0x4088
-#define DS5_IR_FPS				0x408C
-#define DS5_IR_OVERRIDE			0x409C
-#define DS5_IR_CONTROL_STATUS 	0x409E
+#define DS5_IR_STREAM_DT			0x4080
+#define DS5_IR_STREAM_MD			0x4082
+#define DS5_IR_RES_WIDTH			0x4084
+#define DS5_IR_RES_HEIGHT			0x4088
+#define DS5_IR_FPS					0x408C
+#define DS5_IR_OVERRIDE				0x409C
+#define DS5_IR_CONTROL_STATUS 		0x409E
 
 #define DS5_DEPTH_CONTROL_BASE		0x4100
 #define DS5_RGB_CONTROL_BASE		0x4200
 #define DS5_MANUAL_EXPOSURE_LSB		0x0000
 #define DS5_MANUAL_EXPOSURE_MSB		0x0002
-#define DS5_MANUAL_GAIN			0x0004
-#define DS5_LASER_POWER			0x0008
+#define DS5_MANUAL_GAIN				0x0004
+#define DS5_LASER_POWER				0x0008
 #define DS5_AUTO_EXPOSURE_MODE		0x000C
 #define DS5_EXPOSURE_ROI_TOP		0x0010
 #define DS5_EXPOSURE_ROI_LEFT		0x0014
 #define DS5_EXPOSURE_ROI_BOTTOM		0x0018
 #define DS5_EXPOSURE_ROI_RIGHT		0x001C
 #define DS5_MANUAL_LASER_POWER		0x0024
-#define DS5_PWM_FREQUENCY		0x0028
+#define DS5_PWM_FREQUENCY			0x0028
 #define DS5_CAMERA_SYNC_MODE		0x002C
 
 #define DS5_DEPTH_CONFIG_STATUS		0x4800
@@ -182,12 +182,12 @@ struct dser_interface {
 #define DS5_STATUS_INVALID_RES		0x4
 #define DS5_STATUS_INVALID_FPS		0x8
 
-#define MIPI_LANE_RATE			1000
+#define MIPI_LANE_RATE				1000
 
-#define MAX_DEPTH_EXP			200000
-#define MAX_RGB_EXP			10000
-#define DEF_DEPTH_EXP			33000
-#define DEF_RGB_EXP			1660
+#define MAX_DEPTH_EXP				200000
+#define MAX_RGB_EXP					10000
+#define DEF_DEPTH_EXP				33000
+#define DEF_RGB_EXP					1660
 
 enum ds5_mux_pad {
 	DS5_MUX_PAD_EXTERNAL,
@@ -198,22 +198,22 @@ enum ds5_mux_pad {
 	DS5_MUX_PAD_COUNT,
 };
 
-#define DS5_N_CONTROLS			8
+#define DS5_N_CONTROLS		 		8
 
-#define DS5_MAX_STREAMS	4
+#define DS5_MAX_STREAMS				4
 
-#define PIPE_NOT_CONFIGURED	-1
+#define PIPE_NOT_CONFIGURED			-1
 
-#define DFU_WAIT_RET_LEN 6
+#define DFU_WAIT_RET_LEN 			6
 
-#define DS5_START_POLL_TIME	10
-#define DS5_START_MAX_TIME	2000
+#define DS5_START_POLL_TIME			10
+#define DS5_START_MAX_TIME			2000
 #define DS5_START_MAX_COUNT	(DS5_START_MAX_TIME / DS5_START_POLL_TIME)
-#define MAX_DS5_CONFIG_RETRIES	5
+#define MAX_DS5_CONFIG_RETRIES		5
 
 /* I2C retry configuration */
-#define DS5_I2C_RETRY_COUNT	5
-#define DS5_I2C_RETRY_DELAY_US	5000
+#define DS5_I2C_RETRY_COUNT			5
+#define DS5_I2C_RETRY_DELAY_US		5000
 
 /* DFU definition section */
 #define DFU_MAGIC_NUMBER "/0x01/0x02/0x03/0x04"
@@ -468,7 +468,6 @@ struct ds5_dfu_dev {
 	enum dfu_state dfu_state_flag;
 	unsigned char *dfu_msg;
 	u16 msg_write_once;
-	// unsigned char init_v4l_f; // need refactoring
 	u32 bus_clk_rate;
 };
 
@@ -531,7 +530,8 @@ struct ds5_dev {
 	*/
 	atomic_t reset_gen;
 
-	/* Cached device type from post-reset device-type polling.
+	/* 
+	* Cached device type from post-reset device-type polling.
 	* During probe the first instance resets the camera, causing DS5_DEVICE_TYPE
 	* to temporarily return 0. The reset path polls until the register is valid
 	* and stores the result here so that all four probe instances (and any
@@ -540,7 +540,8 @@ struct ds5_dev {
 	*/
 	u16 cached_device_type;
 
-	/* Timestamp (jiffies) of last completed HW reset.
+	/* 
+	* Timestamp (jiffies) of last completed HW reset.
 	* Used to enforce DS5_HW_RESET_COOLDOWN_MS between consecutive resets
 	* and prevent GMSL link degradation from rapid reset cycles.
 	*/
@@ -580,7 +581,7 @@ struct dser_control {
 };
 static struct dser_control dser_inited[MAX_DSER_NUM];
 
-#define MAX_DS5_NUM (MAX_DSER_NUM * 4) /* assuming max 4 DS5 cameras per deserializer (true for max96724) */
+#define MAX_DS5_NUM (MAX_DSER_NUM * 4) /* assuming max 4 DS5 cameras per deserializer */
 static struct ds5_dev ds5_inited[MAX_DS5_NUM];
 
 static void ds5_init_global_slots_once(void)
@@ -637,7 +638,7 @@ static inline atomic_t *ds5_get_reset_gen(struct ds5 *state)
 	return &ds5_reset_gen;
 }
 
-#define MAX_DS5_NUM (1) /* assuming max 1 DS5 camera with RDK(?) */
+#define MAX_DS5_NUM (1)
 static struct ds5_dev ds5_inited[MAX_DS5_NUM];
 static bool ds5_slots_inited;
 static DEFINE_MUTEX(ds5_slots_lock__);
@@ -990,9 +991,6 @@ static void ds5_set_state_last_set(struct ds5 *state)
 		state->mux.last_set = &state->imu.sensor;
 }
 
-/* This is needed for .get_fmt()
- * and if streaming is started without .set_fmt()
- */
 static void ds5_sensor_format_init(struct ds5_sensor *sensor)
 {
 	const struct ds5_format *fmt;
@@ -1199,7 +1197,6 @@ static const struct ds5_format *ds5_sensor_find_format(
 	ffmt->height = (*best)->height;
 
 	ffmt->field = V4L2_FIELD_NONE;
-	/* Should we use V4L2_COLORSPACE_RAW for Y12I? */
 	ffmt->colorspace = V4L2_COLORSPACE_SRGB;
 
 	return fmt;
@@ -1246,10 +1243,6 @@ static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 
 	sensor->config.format = ds5_sensor_find_format(sensor, mf,
 						&sensor->config.resolution);
-	//r = DS5_FRAMERATE_DEFAULT_IDX < sensor->config.resolution->n_framerates ?
-	//	DS5_FRAMERATE_DEFAULT_IDX : 0;
-	/* FIXME: check if a framerate has been set */
-	//sensor->config.framerate = sensor->config.resolution->framerates[r];
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
 	if (cfg && fmt->which == V4L2_SUBDEV_FORMAT_TRY)
@@ -1270,7 +1263,6 @@ static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 #endif
 
 	else
-// FIXME: use this format in .s_stream()
 		sensor->format = *mf;
 
 	state->mux.last_set = sensor;
@@ -1346,7 +1338,8 @@ static void ds5_config_cache_clear(struct ds5_sensor *sensor)
 static void ds5_invalidate_sensor(struct ds5 *state, struct ds5_sensor *sensor)
 {
 	ds5_config_cache_clear(sensor);
-	/* Do NOT release SERDES pipes or clear pipe_id here.
+	/* 
+	 * Do NOT release SERDES pipes or clear pipe_id here.
 	 * Preserve the existing pipe_id so that ds5_configure() can
 	 * release-then-reallocate the pipe at stream-start time.
 	 * Clearing pipe_data_type forces ds5_configure() to enter the
@@ -1458,7 +1451,7 @@ static int ds5_configure(struct ds5 *state)
 		mutex_lock(&serdes_lock__);
 		ret = ds5_setup_pipeline(state, data_type1, data_type2,
 					 sensor->pipe_id, vc_id);
-		// reset data path when switching to Y12I
+		/* reset data path when switching to Y12I */
 		if (is_calib)
 			state->dser_ops->reset_oneshot(state->dser_dev);
 		mutex_unlock(&serdes_lock__);
@@ -1697,7 +1690,6 @@ static int ds5_hw_set_exposure(struct ds5 *state, u32 base, s32 val)
 #define DS5_MAX_LOG_SLEEP 10
 #define DS5_MAX_LOG_POLL (DS5_MAX_LOG_WAIT / DS5_MAX_LOG_SLEEP)
 
-// TODO: why to use DS5_DEPTH_Y_STREAMS_DT?
 #define DS5_CAMERA_CID_BASE	(V4L2_CTRL_CLASS_CAMERA | DS5_DEPTH_STREAM_DT)
 
 #define DS5_CAMERA_CID_LOG			(DS5_CAMERA_CID_BASE+0)
@@ -1731,7 +1723,8 @@ enum ds5_sync_mode {
 
 #define DS5_CAMERA_CID_PWM			(DS5_CAMERA_CID_BASE+22)
 
-/* the HWMC will remain for legacy tools compatibility,
+/* 
+ * The HWMC will remain for legacy tools compatibility,
  * HWMC_RW used for UVC compatibility
  */
 #define DS5_CAMERA_CID_HWMC_RW		(DS5_CAMERA_CID_BASE+32)
@@ -1944,13 +1937,14 @@ static int ds5_set_calibration_data(struct ds5 *state,
 /* HW reset timeout and polling parameters */
 #define DS5_HW_RESET_INITIAL_DELAY_MS	500
 #define DS5_HW_RESET_POLL_INTERVAL_MS	200
-#define DS5_HW_RESET_TIMEOUT_MS		10000
+#define DS5_HW_RESET_TIMEOUT_MS			10000
 #define DS5_HW_RESET_MAX_RETRIES	(DS5_HW_RESET_TIMEOUT_MS / DS5_HW_RESET_POLL_INTERVAL_MS)
 
-/* Minimum interval between consecutive HW resets (ms).
+/* 
+ * Minimum interval between consecutive HW resets (ms).
  * Rapid back-to-back resets degrade the GMSL link.
  */
-#define DS5_HW_RESET_COOLDOWN_MS	2000
+#define DS5_HW_RESET_COOLDOWN_MS		2000
 
 /* Reset readiness handshake:
  * 1) write scratch value before reset,
@@ -1964,8 +1958,8 @@ static int ds5_set_calibration_data(struct ds5 *state,
  * In non-DFU mode this register is not defined.
  * - 0x04030201: Device in DFU mode (DFU magic bytes, little-endian)
  */
-#define DS5_DFU_MAGIC_REG	0x5020
-#define DS5_DFU_MAGIC_LSW		0x0201  /* Lower 16 bits of 0x04030201 */
+#define DS5_DFU_MAGIC_REG				0x5020
+#define DS5_DFU_MAGIC_LSW				0x0201
 
 static int ds5_wait_device_type(struct ds5 *state, u16 *dev_type)
 {
@@ -2529,7 +2523,7 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 				break;
 			}
 			/*This is needed for legacy hwmc */
-			size += 4; // SIZE_OF_HW_MONITOR_HEADER
+			size += 4;
 			cmd->Data[1000] = (unsigned char)((size) & 0x00FF);
 			cmd->Data[1001] = (unsigned char)(((size) & 0xFF00) >> 8);
 		}
@@ -2647,14 +2641,14 @@ static int ds5_get_calibration_data(struct ds5 *state, enum table_id id,
 		return ret;
 	}
 
-	// get table length from fw
+	/* get table length from fw */
 	ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN,
-			&table_length, sizeof(table_length)); /* Read response length */
+			&table_length, sizeof(table_length));
 
-	// read table
-	ds5_raw_read_with_check(state, DS5_HWMC_DATA, cmd->Data, table_length); /* Read table data */
+	/* read table */
+	ds5_raw_read_with_check(state, DS5_HWMC_DATA, cmd->Data, table_length);
 
-	// first 4 bytes are opcode HWM, not part of calibration table
+	/* first 4 bytes are opcode HWM, not part of calibration table */
 	memcpy(table, cmd->Data + 4, length);
 	devm_kfree(&state->client->dev, cmd);
 	return 0;
@@ -2678,9 +2672,10 @@ static int ds5_gvd(struct ds5 *state, unsigned char *data)
 			__func__, ret);
 		return -EIO;
 	}
-
-	ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN, &length, sizeof(length)); /* Read response length */
-	ds5_raw_read_with_check(state, DS5_HWMC_DATA, data, length); /* Read response data */
+	/* Read response length */
+	ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN, &length, sizeof(length));
+	/* Read response data */
+	ds5_raw_read_with_check(state, DS5_HWMC_DATA, data, length);
 
 	return ret;
 }
@@ -2775,7 +2770,8 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		if (ret)
 			return ret;
 
-		ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN, &data, sizeof(data)); /* Read response length */
+		/* Read response length */
+		ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN, &data, sizeof(data));
 		dev_dbg(&state->client->dev, "%s(): log size 0x%x\n", __func__, data);
 		if (ret < 0)
 			return ret;
@@ -3237,7 +3233,7 @@ static int ds5_setup_and_link(struct ds5 *state)
 		}
 	}
 	if (NULL == state->ds5_dev) {
-	/* First stream instance for this camera, setup and link new DS5. */
+		/* First stream instance for this camera, setup and link new DS5. */
 		for (i = 0; i < MAX_DS5_NUM; i++) {
 			bool free_slot;
 
@@ -3462,16 +3458,6 @@ error:
 	return err;
 }
 #else /* CONFIG_OF */
-// ds5mux i2c ser des
-// mux a - 2 0x42 0x48
-// mux b - 2 0x44 0x4a
-// mux c - 4 0x42 0x48
-// mux d - 4 0x44 0x4a
-// axiomtek
-// mux a - 2 0x42 0x48
-// mux b - 2 0x44 0x4a
-// mux c - 4 0x62 0x68
-// mux d - 4 0x64 0x6a
 
 static int ds5_board_setup(struct ds5 *state)
 {
@@ -3500,10 +3486,10 @@ static int ds5_board_setup(struct ds5 *state)
 		.platform_data = &max96717_pdata,
 	};
 
-	i2c_info_ser.addr = pdata->subdev_info[0].ser_alias; //0x42, 0x44, 0x62, 0x64
+	i2c_info_ser.addr = pdata->subdev_info[0].ser_alias;
 	state->ser_i2c = i2c_new_client_device(adapter, &i2c_info_ser);
 
-	i2c_info_des.addr = pdata->subdev_info[0].board_info.addr; //0x48, 0x4a, 0x68, 0x6a
+	i2c_info_des.addr = pdata->subdev_info[0].board_info.addr;
 
 	/* look for already registered max96724, use same context if found */
 	mutex_lock(&serdes_lock__);
@@ -3557,15 +3543,13 @@ static int ds5_board_setup(struct ds5 *state)
 		goto error;
 	}
 
-	// reg
-
 	state->g_ctx.sdev_reg = state->client->addr;
 	state->g_ctx.sdev_def = 0x10;// def-addr TODO: configurable
-	// Address reassignment for d5xx-a 0x10->0x12
+	/* Address reassignment for d5xx-a 0x10->0x12 */
 	dev_info(dev, "Address reassignment for %s-%c 0x%x->0x%x\n",
 		pdata->subdev_info[0].board_info.type, suffix,
 		state->g_ctx.sdev_def, state->g_ctx.sdev_reg);
-	//0x42, 0x44, 0x62, 0x64
+
 	state->g_ctx.ser_reg = pdata->subdev_info[0].ser_alias;
 	dev_info(dev,  "serializer: i2c-%d@0x%x\n",
 		state->ser_i2c->adapter->nr, state->g_ctx.ser_reg);
@@ -3590,7 +3574,7 @@ static int ds5_board_setup(struct ds5 *state)
 	state->g_ctx.dst_csi_port = GMSL_CSI_PORT_A;
 	state->g_ctx.src_csi_port = GMSL_CSI_PORT_B;
 	state->g_ctx.csi_mode = GMSL_CSI_1X4_MODE;
-	if (state->aggregated) { // aggregation
+	if (state->aggregated) {
 		dev_info(dev,  "configure GMSL port B\n");
 		state->g_ctx.serdes_csi_link = GMSL_SERDES_CSI_LINK_B;
 	} else {
@@ -3639,7 +3623,7 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 		goto error;
 	}
 	/*
-	 * [HW requirement] After GMSL link locks, I2C pass-through to the
+	 * After GMSL link locks, I2C pass-through to the
 	 * remote serializer requires settling time before the first I2C
 	 * write is ACKed.  Shorter delays result in -121 (EREMOTEIO).
 	 */
@@ -3651,7 +3635,7 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 	}
 
 	/*
-	 * [Ordering critical] Configure serializer registers (PIPE_EN,
+	 * Configure serializer registers (PIPE_EN,
 	 * EXT11 tunnel mode, FRONTTOP) BEFORE the deserializer one-shot
 	 * reset.  The one-shot in setup_control(dser) briefly disrupts
 	 * the GMSL link; if init_settings runs after it, the first
@@ -3687,7 +3671,8 @@ static int ds5_serdes_setup(struct ds5 *state)
 		return ret;
 	}
 
-	/* Peer instance of an already-initialized camera.
+	/* 
+	 * Peer instance of an already-initialized camera.
 	 * ds5_setup_and_link() found that another instance already set up
 	 * this serializer and marked us non-primary.  Skip SERDES setup
 	 * (pair, register, gmsl init) — the primary already did it.
@@ -3731,7 +3716,7 @@ static int ds5_serdes_setup(struct ds5 *state)
 	}
 
 	/*
-	 * [Aardvark-verified] Setup CSI output pipeline on deserializer
+	 * Setup CSI output pipeline on deserializer
 	 * and enable tunnel mode + CSI input on serializer.
 	 * These calls configure PHY, DPLL, lane mapping, CSI output enable,
 	 * and serializer tunnel mode — without them, no CSI output occurs.
@@ -3744,7 +3729,7 @@ static int ds5_serdes_setup(struct ds5 *state)
 	}
 	
 	/*
-	 * [HW requirement] max96724_setup_streaming issues a one-shot reset
+	 * max96724_setup_streaming issues a one-shot reset
 	 * (reg 0x0018=0x0F) which briefly disrupts the GMSL link.
 	 * I2C pass-through to the remote serializer requires the link to
 	 * re-lock first.  Without this delay, writes to MAX96717 fail
@@ -3760,7 +3745,7 @@ static int ds5_serdes_setup(struct ds5 *state)
 	}
 
 	/*
-	 * [Timing fix] SER setup includes a soft reset (0x0002=0x03) which
+	 * SER setup includes a soft reset (0x0002=0x03) which
 	 * disrupts the GMSL link. After SER final enable (0x0002=0x43),
 	 * the link re-trains. DES needs ONESHOT to resync CSI TX controller
 	 * to the now-active tunnel data stream.
@@ -3894,7 +3879,7 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 		return ret;
 	}
 
-	// Add these after v4l2_ctrl_handler_setup so they won't be set up
+	/* Add these after v4l2_ctrl_handler_setup so they won't be set up */
 	if (sid >= DEPTH_SID && sid < IMU_SID) {
 		ctrls->log = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_log, sensor);
 		ctrls->fw_version = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_fw_version, sensor);
@@ -3932,12 +3917,12 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 #endif
 		v4l2_ctrl_new_custom(hdl, &ds5_ctrl_hw_reset, sensor);
 	}
-	// DEPTH custom
+	/* DEPTH custom */
 	if (sid == DEPTH_SID) {
 		ctrls->sync_mode = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_sync_mode, sensor);
 		v4l2_ctrl_new_custom(hdl, &ds5_ctrl_pwm, sensor);
 	}
-	// IMU custom
+	/* IMU custom */
 	if (sid == IMU_SID)
 		ctrls->fw_version = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_fw_version, sensor);
 
@@ -3990,8 +3975,8 @@ static int ds5_sensor_init(struct i2c_client *c, struct ds5 *state,
 #endif
 	sensor->pipe_id = PIPE_NOT_CONFIGURED;
 	v4l2_i2c_subdev_init(sd, c, ops);
-	// See tegracam_v4l2.c tegracam_v4l2subdev_register()
-	// Set owner to NULL so we can unload the driver module
+	/* See tegracam_v4l2.c tegracam_v4l2subdev_register() */
+	/* Set owner to NULL so we can unload the driver module */
 	sd->owner = NULL;
 	sd->internal_ops = &ds5_sensor_internal_ops;
 	sd->grp_id = *dev_num;
@@ -4022,7 +4007,7 @@ static int ds5_sensor_register(struct ds5 *state, struct ds5_sensor *sensor)
 	struct media_entity *entity = &sensor->sd.entity;
 	int ret = -1;
 
-	// FIXME: is async needed?
+	/* FIXME: is async needed? */
 	ret = v4l2_device_register_subdev(state->mux.sd.subdev.v4l2_dev, sd);
 	if (ret < 0) {
 		dev_err(sd->dev, "%s(): %d: %d\n", __func__, __LINE__, ret);
@@ -4557,7 +4542,8 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 #endif
 	int cur_ds5 = atomic_read(ds5_get_reset_gen(state));
 
-	/* Lazy invalidation after HW or deserializer reset.
+	/* 
+	 * Lazy invalidation after HW or deserializer reset.
 	 * Detect gen-counter bumps, clear stale streaming/config/pipe
 	 * state, then update refs.  Must run before the duplicate-call
 	 * guard so a reset-killed stream is not mistaken for "already off".
@@ -4571,7 +4557,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		state->reset_ref_dser = cur_dser;
 	}
 
-	// spare duplicate calls
+	/* spare duplicate calls */
 	if (sensor->streaming == on)
 		return 0;
 	if (state->is_depth) {
@@ -4635,7 +4621,8 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			"stream %d in expected state, toggling to %d (status: 0x%04x) %dms\n",
 			stream_id, on, status, jiffies_to_msecs(jiffies - ts));
 	} else {
-		/* If state was invalidated by reset-generation bump and FW still
+		/* 
+		 * If state was invalidated by reset-generation bump and FW still
 		 * reports this stream as active, force a stop to guarantee next
 		 * start goes through full reconfiguration.
 		 */
@@ -4656,7 +4643,8 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			mutex_unlock(&state->ds5_dev->lock);
 			sensor->streaming = false;
 		} else {
-			/* After HW reset the FW reboots and all streams return to
+			/* 
+			 * After HW reset the FW reboots and all streams return to
 			 * idle.  If VI error recovery tries to stop a stream that
 			 * is already stopped (or start one already started), treat
 			 * it as a no-op so the upper layer can proceed with
@@ -4842,7 +4830,6 @@ static const struct v4l2_subdev_pad_ops ds5_mux_pad_ops = {
 };
 
 static const struct v4l2_subdev_core_ops ds5_mux_core_ops = {
-	//.s_power = ds5_mux_set_power,
 	.log_status = v4l2_ctrl_subdev_log_status,
 };
 
@@ -4970,8 +4957,8 @@ static int ds5_mux_init(struct i2c_client *c, struct ds5 *state)
 	char suffix = dpdata->suffix;
 #endif
 	v4l2_i2c_subdev_init(sd, c, &ds5_mux_subdev_ops);
-	// See tegracam_v4l2.c tegracam_v4l2subdev_register()
-	// Set owner to NULL so we can unload the driver module
+	/* See tegracam_v4l2.c tegracam_v4l2subdev_register() */
+	/* Set owner to NULL so we can unload the driver module */
 	sd->owner = NULL;
 	sd->internal_ops = &ds5_mux_internal_ops;
 	v4l2_set_subdevdata(sd, state);
@@ -5158,9 +5145,11 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 
 	sensor = &state->imu.sensor;
 
-	/* For fimware version starting from: 5.16,
-	   IMU will have 32bit axis values.
- 	   5.16.x.y = firmware version: 0x0510 */
+	/* 
+	 * For fimware version starting from: 5.16,
+	 * IMU will have 32bit axis values.
+ 	 * 5.16.x.y = firmware version: 0x0510
+	 */
 	if (state->fw_version >= 0x510)
 		sensor->formats = ds5_imu_formats_extended;
 	else
@@ -5291,7 +5280,8 @@ static int ds5_dfu_wait_for_get_dfu_status(struct ds5 *state,
 	unsigned int dfu_wr_wait_msec = 0;
 
 	do {
-		ds5_write_with_check(state, 0x5008, 0x0003); // Get Write state
+		/* Get Write state */
+		ds5_write_with_check(state, 0x5008, 0x0003);
 		do {
 			ds5_read_with_check(state, 0x5000, &status);
 			if (status == 0x0001) {
@@ -5445,9 +5435,6 @@ static ssize_t ds5_dfu_device_write(struct file *flip,
 			goto dfu_write_error;
 		}
 		state->dfu_dev.dfu_state_flag = DS5_DFU_IN_PROGRESS;
-	/* find a better way to reinitialize driver from recovery to operational */
-		// state->dfu_dev.init_v4l_f = 1;
-	/* fallthrough - procceed to download */
 	__attribute__((__fallthrough__));
 	case DS5_DFU_IN_PROGRESS: {
 		unsigned int dfu_full_blocks = len / DFU_BLOCK_SIZE;
@@ -5501,7 +5488,7 @@ static ssize_t ds5_dfu_device_write(struct file *flip,
 
 dfu_write_error:
 	state->dfu_dev.dfu_state_flag = DS5_DFU_ERROR;
-	// Reset DFU device to IDLE states
+	/* Reset DFU device to IDLE states */
 	if (!ds5_write(state, 0x5010, 0x0))
 		state->dfu_dev.dfu_state_flag = DS5_DFU_IDLE;
 	mutex_unlock(&state->lock);
@@ -5532,7 +5519,7 @@ static int ds5_dfu_device_open(struct inode *inode, struct file *file)
 	}
 	file->private_data = state;
 #ifdef CONFIG_TEGRA_CAMERA_PLATFORM
-	/* get i2c controller and set dfu bus clock rate */
+	/* Get i2c controller and set dfu bus clock rate */
 	while (parent && i2c_parent_is_i2c_adapter(parent))
 		parent = i2c_parent_is_i2c_adapter(state->client->adapter);
 
@@ -5553,7 +5540,8 @@ static int ds5_dfu_device_open(struct inode *inode, struct file *file)
 	return 0;
 };
 
-/* Adjust sync_mode control range based on device type.
+/* 
+ * Adjust sync_mode control range based on device type.
  * Must be called after ds5_mux_init() which creates the control.
  */
 static void ds5_adjust_sync_mode_control(struct i2c_client *client, struct ds5 *state)
@@ -5620,8 +5608,10 @@ static int ds5_v4l_init(struct i2c_client *c, struct ds5 *state)
 	if (ret < 0)
 		goto e_imu;
 
-	/* Adjust sync_mode control range based on device type - must be done
-	 * after ds5_mux_init() creates the control */
+	/* 
+	 * Adjust sync_mode control range based on device type - must be done
+	 * after ds5_mux_init() creates the control
+	 */
 	ds5_adjust_sync_mode_control(c, state);
 
 	ret = ds5_hw_init(c, state);
@@ -5815,11 +5805,12 @@ static DEVICE_ATTR_RO(ds5_fw_ver);
 /* Derive 'device_attribute' structure for a read register's attribute */
 struct dev_ds5_reg_attribute {
 	struct device_attribute attr;
-	u16 reg;	// register
-	u8 valid;	// validity of above data
+	u16 reg;
+	u8 valid;
 };
 
-/** Read DS5 register.
+/*
+ * Read DS5 register.
  * ds5_read_reg_show will actually read register from ds5 while
  * ds5_read_reg_store will store register to read
  * Example:
@@ -5849,7 +5840,8 @@ static ssize_t ds5_read_reg_show(struct device *dev,
 	return n;
 }
 
-/** Read DS5 register - Store reg to attr struct pointer
+/* 
+ * Read DS5 register - Store reg to attr struct pointer
  * ds5_read_reg_show will actually read register from ds5 while
  * ds5_read_reg_store will store module, offset and length
  */
@@ -5941,7 +5933,7 @@ static int ds5_probe(struct i2c_client *c
 #ifdef CONFIG_OF
 	ret = of_property_read_u32(c->dev.of_node, "override_reg", &override_addr);
 	if (!ret) {
-		// Override probed address
+		/* Override probed address */
 		dev_dbg(&c->dev, "Using override addr 0x%x\n", override_addr);
 		c->addr = override_addr;
 	}
@@ -5992,7 +5984,7 @@ static int ds5_probe(struct i2c_client *c
 	state->fw_version = 0x0516;
 	dev_info(&c->dev, "%s(): BYPASS - skip camera I2C verify, fake FW 5.22\n", __func__);
 #else
-	// Verify communication
+	/* Verify communication */
 	ret = ds5_read(state, DS5_FW_VERSION, &state->fw_version);
 	if (ret < 0) {
 		dev_err(&c->dev,
@@ -6065,7 +6057,8 @@ static int ds5_probe(struct i2c_client *c
 			goto e_regulator;
 	}
 
-	/* Verify format-discovery readiness.
+	/* 
+	 * Verify format-discovery readiness.
 	 * FW_VERSION becomes readable earlier than DS5_DEVICE_TYPE, while later
 	 * probe code depends on DEVICE_TYPE to pick the correct format tables.
 	 */
@@ -6249,9 +6242,15 @@ static struct i2c_driver ds5_i2c_driver = {
 module_i2c_driver(ds5_i2c_driver);
 
 MODULE_DESCRIPTION("RealSense D5XX Camera Driver");
-MODULE_AUTHOR("Pinquan Wang <pinquan.wang@realsenseai.com>,\n\
-				Gang Hu <gang.a.hu@realsenseai.com>,\n\
-				Shengyong Zhou <shengyong.zhou@realsenseai.com>,\n\
-				Shuai Liu <shuai2.liu@realsenseai.com>");
+MODULE_AUTHOR("Guennadi Liakhovetski <guennadi.liakhovetski@intel.com>,\n\
+				Nael Masalha <nael.masalha@intel.com>,\n\
+				Alexander Gantman <alexander.gantman@intel.com>,\n\
+				Emil Jahshan <emil.jahshan@intel.com>,\n\
+				Xin Zhang <xin.x.zhang@intel.com>,\n\
+				Qingwu Zhang <qingwu.zhang@intel.com>,\n\
+				Evgeni Raikhel <evgeni.raikhel@intel.com>,\n\
+				Shikun Ding <shikun.ding@intel.com>,\n\
+				Dmitry Perchanov <dmitry.perchanov@intel.com>,\n\
+				Pinquan Wang <pinquan.wang@realsenseai.com>");
 MODULE_LICENSE("GPL v2");
 MODULE_VERSION("1.0.3.9");
