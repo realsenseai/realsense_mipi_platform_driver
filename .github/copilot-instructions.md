@@ -5,7 +5,7 @@
 Linux kernel driver and userspace utilities for Intel RealSense D4XX series 3D depth cameras operating over GMSL (Gigabit Multimedia Serial Link) MIPI CSI-2 interface on NVIDIA Jetson platforms. Licensed under GPL-2.0.
 
 - **Supported platforms:** Jetson AGX Xavier (JetPack 5.0.2, 5.1.2) and AGX Orin (JetPack 6.0, 6.1, 6.2, 6.2.1)
-- **Supported cameras:** D457 (primary), D401, D40x, D41x, D43x, D45x, D46x series
+- **Supported cameras:** D457 (primary), D401, D40x, D41x, D43x, D45x series
 
 ## Coding Conventions
 
