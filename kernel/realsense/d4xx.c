@@ -97,7 +97,6 @@ struct dser_interface {
 #define DS5_DEVICE_TYPE_D41X		7
 #define DS5_DEVICE_TYPE_D45X		6
 #define DS5_DEVICE_TYPE_D43X		5
-#define DS5_DEVICE_TYPE_D46X		4
 #define DS5_DEVICE_TYPE_UNKNOWN		0
 
 #define DS5_MIPI_LANE_NUMS		0x0400
@@ -702,7 +701,6 @@ static bool ds5_is_valid_device_type(u16 dev_type)
 	case DS5_DEVICE_TYPE_D41X:
 	case DS5_DEVICE_TYPE_D43X:
 	case DS5_DEVICE_TYPE_D45X:
-	case DS5_DEVICE_TYPE_D46X:
 		return true;
 	default:
 		return false;
@@ -995,20 +993,6 @@ static const struct ds5_resolution d43x_depth_sizes[] = {
 	},
 };
 
-static const struct ds5_resolution d46x_depth_sizes[] = {
-	{
-		.width = 1280,
-		.height = 960,
-		.framerates = ds5_framerates,
-		.n_framerates = ARRAY_SIZE(ds5_framerates),
-	}, {
-		.width =  640,
-		.height = 480,
-		.framerates = ds5_framerates,
-		.n_framerates = ARRAY_SIZE(ds5_framerates),
-	},
-};
-
 static const struct ds5_resolution y8_sizes[] = {
 	{
 		.width = 1280,
@@ -1243,15 +1227,6 @@ static const struct ds5_resolution d45x_calibration_sizes[] = {
 	},
 };
 
-static const struct ds5_resolution d46x_calibration_sizes[] = {
-	{
-		.width =  1600,
-		.height = 1300,
-		.framerates = ds5_framerate_15_30,
-		.n_framerates = ARRAY_SIZE(ds5_framerate_15_30),
-	},
-};
-
 static const struct ds5_resolution ds5_size_imu[] = {
 	{
 	.width = 32,
@@ -1330,29 +1305,6 @@ static const struct ds5_format ds5_depth_formats_d43x[] = {
 		.resolutions = d43x_calibration_sizes,
 	},
 };
-
-static const struct ds5_format ds5_depth_formats_d46x[] = {
-	{
-		// TODO: 0x31 is replaced with 0x1e since it caused low FPS in Jetson.
-		.data_type = GMSL_CSI_DT_YUV422_8,	/* Z16 */
-		.mbus_code = MEDIA_BUS_FMT_UYVY8_1X16,
-		.n_resolutions = ARRAY_SIZE(d46x_depth_sizes),
-		.resolutions = d46x_depth_sizes,
-	}, {
-		/* First format: default */
-		.data_type = GMSL_CSI_DT_RAW_8,	/* Y8 */
-		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
-		.n_resolutions = ARRAY_SIZE(d46x_depth_sizes),
-		.resolutions = d46x_depth_sizes,
-	}, {
-		.data_type = GMSL_CSI_DT_RGB_888,	/* 24-bit Calibration */
-		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,	/* FIXME */
-		.n_resolutions = ARRAY_SIZE(d46x_calibration_sizes),
-		.resolutions = d46x_calibration_sizes,
-	},
-};
-
-#define DS5_DEPTH_N_FORMATS 1
 
 static const struct ds5_format ds5_y_formats_ds5u[] = {
 	{
@@ -5720,9 +5672,6 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	case DS5_DEVICE_TYPE_D45X:
 		sensor->formats = ds5_depth_formats_d43x;
 		break;
-	case DS5_DEVICE_TYPE_D46X:
-		sensor->formats = ds5_depth_formats_d46x;
-		break;
 	default:
 		dev_warn(&client->dev,
 			"%s(): unknown device type 0x%x, using D43X format tables\n",
@@ -5755,7 +5704,6 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	sensor = &state->rgb.sensor;
 	switch (dev_type) {
 	case DS5_DEVICE_TYPE_D43X:
-	case DS5_DEVICE_TYPE_D46X:
 		sensor->formats = &ds5_onsemi_rgb_format;
 		sensor->n_formats = DS5_ONSEMI_RGB_N_FORMATS;
 		break;
@@ -6216,11 +6164,6 @@ static void ds5_adjust_sync_mode_control(struct i2c_client *client, struct ds5 *
 		__v4l2_ctrl_modify_range(state->ctrls.sync_mode, 0, 5, 0, 0);
 		state->ctrls.sync_mode->qmenu = sync_mode_menu_full;
 		dev_dbg(&client->dev, "%s(): D450 sync mode: all modes 0-5 supported\n", __func__);
-		break;
-	case DS5_DEVICE_TYPE_D46X:
-		/* D46X does not support sync mode */
-		dev_dbg(&client->dev, "%s(): D46X does not support sync mode\n", __func__);
-		__v4l2_ctrl_modify_range(state->ctrls.sync_mode, 0, 0, 0, 0);
 		break;
 	default:
 		/* Unknown device - disable sync mode */

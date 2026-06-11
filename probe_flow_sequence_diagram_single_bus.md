@@ -410,7 +410,7 @@ sequenceDiagram
     V4L2->>V4L2: ds5_parse_cam(client, state)
     V4L2->>HW: ds5_fixed_configuration()
     HW->>HW: Read DS5_DEVICE_TYPE (0x0310)
-    HW-->>V4L2: Device type (D41X/D43X/D45X/D46X)
+    HW-->>V4L2: Device type (D41X/D43X/D45X)
     V4L2->>V4L2: Set format arrays based on device type
     V4L2->>V4L2: ds5_sensor_format_init(depth)
     V4L2->>V4L2: ds5_sensor_format_init(ir)
@@ -443,9 +443,6 @@ switch (device_type) {
         break;
     case DS5_DEVICE_TYPE_D45X:  // D455/D457
         // Configure for D45X formats
-        break;
-    case DS5_DEVICE_TYPE_D46X:  // D465
-        // Configure for D46X formats
         break;
 }
 ```
