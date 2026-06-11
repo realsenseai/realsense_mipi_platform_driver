@@ -56,6 +56,8 @@ pytest -vs -m d457 test/                   # Direct pytest invocation
 
 Pytest marker: `d457` (defined in `test/pytest.ini`). Test timeout: 200 seconds.
 
+CI also runs a V4L2 test workflow on a self-hosted Jetson runner when `kernel/realsense/**` or `test/v4l2_test/**` paths change.
+
 ## Architecture
 
 ### Driver stack (top to bottom)
@@ -113,6 +115,32 @@ The build system cross-compiles for ARM64. Toolchains vary by JetPack:
 | 6.2     | 36.4.3      | kernel/kernel-jammy-src |
 | 6.2.1   | 36.4.4      | kernel/kernel-jammy-src |
 
+## Coding conventions
+
+### Kernel driver (C — `kernel/realsense/d4xx.c`)
+
+- **Keep changes minimal**: no code inflation. Prefer concise single-line forms; reuse existing helpers and paths instead of adding new ones.
+- **Before adding new code, check callers**: verify equivalent logic doesn't already exist in the call chain. If a function has one caller, put the logic there. Never duplicate logic — consolidate first.
+- **After removing code, clean up stale references**: immediately remove defines, variables, struct fields, forward declarations, and comments that were only used by the removed code. Do not leave dead code behind.
+- **Naming**: functions prefixed `ds5_` (mux functions `ds5_mux_`), structs prefixed `ds5_`, macros prefixed `DS5_`. Driver name `DS5_DRIVER_NAME = "d4xx"` with variants `-awg`, `-asr`, `-class`, `-dfu`.
+- **I2C helpers**: `ds5_read()` / `ds5_write()` — retry wrappers (`DS5_I2C_RETRY_COUNT=5`, `DS5_I2C_RETRY_DELAY_US=5000`). `ds5_read_with_check()` / `ds5_write_with_check()` / `ds5_raw_read_with_check()` / `ds5_raw_write_with_check()` — return on error. `ds5_read_poll()` — single-shot no-retry for polling loops (see Concurrency notes).
+- **Logging**: `dev_err()`, `dev_warn()`, `dev_info()`, `dev_dbg()` with `&state->client->dev`. Always include `__func__` in log messages.
+- **Conditional compilation**: `CONFIG_VIDEO_D4XX_SERDES` (GMSL vs. non-SerDes path), `CONFIG_TEGRA_CAMERA_PLATFORM` (Tegra integration), `LINUX_VERSION_CODE` checks for kernel API differences.
+- **Lazy invalidation over explicit loops**: when state must be invalidated across instances (e.g. after a deserializer reset), increment an atomic generation counter (`atomic_inc()`) and let instances detect the bump lazily in `ds5_configure()`. Avoid O(N) loops over `ds5_inited[]`. Add new invalidation logic to an existing mismatch-detection site rather than introducing a separate check.
+
+### V4L2 subdev architecture
+
+- **SerDes pipe configuration**: the **driver** configures all four SerDes pipes (Depth, RGB, IR, IMU) at stream start via `ds5_configure()`. The D457 firmware does **not** configure any pipes. Do not add probe-time pipe setup or special-case individual pipes in `ds5_probe()`.
+- **Device tree assumptions**: all supported device trees include all four sensor instances (Depth, RGB, IR, IMU). Do not add DT-scanning logic to check for the presence of individual sensor types.
+- **Unsupported device types are DFU-only, not probe failures**: `ds5_probe()` must not tear down the DFU chardev just because the device reports a type the driver does not operationally support (e.g. legacy/old firmware such as D430 GS reporting type 3, which reports type 5 once updated). The probe device-type wait calls `ds5_wait_device_type(state, &type, /*require_supported=*/false)` — it returns as soon as the type register is **populated** (non-zero), accepting unknown types. Probe then checks `ds5_is_valid_device_type(type)`: supported → full `ds5_v4l_init()`; unsupported → early `return 0` (DFU-only, before `ds5_v4l_init()`). Mirror the recovery early-return: `i2c_set_clientdata(c, state)` so `ds5_remove()` can recover `state`, but leave `dfu_state_flag` at `IDLE` (do **not** set `DS5_DFU_RECOVERY` — the device is in app mode, so opening the chardev must drive `DS5_DFU_OPEN` → `ds5_dfu_switch_to_dfu()`). Keep `ds5_is_valid_device_type()` as the list of *operationally-supported* types only — do not add legacy/DFU-only types to it, and do not add per-type cases to the format/sync `switch(dev_type)` blocks; for such types the goal is FW update only.
+- **`ds5_wait_device_type()` contract**: takes `require_supported`. Pass `true` from the reset/recovery path (`ds5_hw_reset_with_recovery()`) — only an operationally-supported type confirms GMSL link recovery for a known device. Pass `false` from `ds5_probe()` — any FW-populated (non-zero) type satisfies the wait so unknown/legacy types reach the DFU-only routing above. Non-zero is treated as "FW populated the type"; this assumes the register transitions `0 → final value` without transient non-zero garbage (by probe time the device has settled via prior FW_VERSION/SerDes/DFU-magic reads).
+- **DFU download finalizes once, at `close()`**: the firmware-image chardev download follows standard size-agnostic USB DFU — block transfers carry data, and a single zero-length `DFU_DNLOAD` (`ds5_write(0x4a04, 0)`) is the *sole* end-of-transfer marker that drives `DOWNLOAD_IDLE → MANIFEST → flash-commit → reboot`. `ds5_dfu_device_write()` is **transfer-only**: it streams blocks (with per-block `dfuDNLOAD_IDLE` sync) and stays in `DS5_DFU_IN_PROGRESS` — it must **not** emit `0x4a04=0`/manifest. The finalize lives only in `ds5_dfu_device_release()` (gated on `DS5_DFU_IN_PROGRESS`), because `close()` is the only reliable end-of-image signal — a `write()` length is not (userspace buffering, e.g. `std::ofstream`, splits the image across syscalls in arbitrary, possibly non-`DFU_BLOCK_SIZE`-aligned chunks; finalizing on a partial block both stalls 1024-aligned images and prematurely commits truncated ones). Do not reintroduce finalization into the write path.
+
+### Patches
+
+- **Separate patches per kernel module**: when changes span different kernel modules (e.g. max9295, max9296, max96712, d4xx), each module must get its own patch file. Do not combine changes to different modules in a single patch.
+- **Signed-off-by in every patch**: every `.patch` file must include a `Signed-off-by:` trailer. When modifying a patch, add your own using the current `git config user.name` / `user.email`.
+
 ## Branching
 
 - `master` — primary/release branch
@@ -131,11 +159,15 @@ The build system cross-compiles for ARM64. Toolchains vary by JetPack:
 - On each HW reset, clear cached values for firmware-populated readiness registers before polling readiness (for example clear `cached_device_type` before waiting for `DS5_DEVICE_TYPE`). Do not let pre-reset cache values short-circuit post-reset readiness checks.
 - For polling loops expecting transient I2C failures (HWMC status checks, reset readiness polls, DFU timeout checks), use `ds5_read_poll()` which performs a single-shot regmap read without retry or logging. This prevents false warnings and excessive log spam. Reserve `ds5_read()` for normal I2C operations where retry semantics are desired.
 - In `ds5_mux_s_stream()`, treat pre-toggle "already streaming" as no-op only when state is coherent; after reset-generation invalidation on start path, force stop + state clear and proceed with normal reconfiguration flow.
-- In `ds5_probe()`, the DFU-magic recovery check (`DS5_DFU_MAGIC_REG` 0x5020 → `DS5_DFU_MAGIC_LSW` 0x0201) must run **before** `ds5_wait_device_type()`. A device sitting in the bootloader after an interrupted FW upgrade never serves `DS5_DEVICE_TYPE` (0x0310) — placing the device-type wait first causes a ~10 s timeout followed by `goto e_chardev` which tears down the `/dev/d4xx-dfu*` chardev, leaving the device unrecoverable over MIPI. Early-return `DS5_DFU_RECOVERY` on magic match; only then proceed to the device-type wait for operational devices.
+- In `ds5_probe()`, the DFU-magic recovery check (`DS5_DFU_MAGIC_REG` 0x5020 → `DS5_DFU_MAGIC_LSW` 0x0201) must run **before** `ds5_wait_device_type()`. A device sitting in the bootloader after an interrupted FW upgrade never serves `DS5_DEVICE_TYPE` (0x0310) — placing the device-type wait first causes a ~10 s timeout followed by `goto e_chardev` which tears down the `/dev/d4xx-dfu*` chardev, leaving the device unrecoverable over MIPI. Early-return `DS5_DFU_RECOVERY` on magic match; only then proceed to the device-type wait for operational devices. Additionally, the initial `DS5_FW_VERSION` communication check (before the cam-type DT parsing) must also probe `DS5_DFU_MAGIC_REG` on failure before issuing `goto e_regulator`: the DFU bootloader does not respond to app registers (0x030c NAKs with -EREMOTEIO), so an unconditional abort on FW_VERSION failure prevents probe from ever reaching the DFU magic check.
+
+## Workflow rules
+
+- When the user establishes requirements during a conversation, treat them as fixed. Do not modify, reinterpret, or drop requirements on your own initiative. Only change requirements when the user explicitly requests it. If a requirement seems wrong or conflicting, raise it as a question — do not silently adjust.
 
 ## Post-patch instruction hygiene
 
-After every confirmed code patch, review both `.github/copilot-instructions.md` and `CLAUDE.md` against the final net diff, including any follow-up tuning edits.
+After every confirmed code patch, review `CLAUDE.md` against the final net diff, including any follow-up tuning edits.
 
 - Check for stale architectural claims and remove or correct them immediately.
 - Check whether the patch exposed a reusable convention; if it did, write it down as a general rule instead of leaving it implicit in code.

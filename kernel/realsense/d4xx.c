@@ -2424,7 +2424,17 @@ static int ds5_set_calibration_data(struct ds5 *state,
 #define DS5_DFU_MAGIC_REG	0x5020
 #define DS5_DFU_MAGIC_LSW		0x0201  /* Lower 16 bits of 0x04030201 */
 
-static int ds5_wait_device_type(struct ds5 *state, u16 *dev_type)
+/*
+ * Wait for DS5_DEVICE_TYPE to become usable.
+ * @require_supported: when true, only an operationally-supported type
+ *   (ds5_is_valid_device_type()) satisfies the wait — used by the reset path
+ *   to confirm GMSL link recovery for a known device.  When false, any
+ *   FW-populated (non-zero) type satisfies the wait — used by probe so an
+ *   alive device reporting an unknown/legacy type can be routed to a DFU-only
+ *   path instead of failing probe; the caller validates the type afterwards.
+ */
+static int ds5_wait_device_type(struct ds5 *state, u16 *dev_type,
+				bool require_supported)
 {
 	int ret = -ETIMEDOUT;
 	int retry;
@@ -2434,13 +2444,16 @@ static int ds5_wait_device_type(struct ds5 *state, u16 *dev_type)
 	for (retry = 0; retry < DS5_HW_RESET_MAX_RETRIES;
 	     retry++, msleep(DS5_HW_RESET_POLL_INTERVAL_MS)) {
 		cached_type = READ_ONCE(state->ds5_dev->cached_device_type);
-		if (ds5_is_valid_device_type(cached_type)) {
+		if (require_supported ? ds5_is_valid_device_type(cached_type)
+				      : cached_type != DS5_DEVICE_TYPE_UNKNOWN) {
 			*dev_type = cached_type;
 			return 0;
 		}
 
 		ret = ds5_read_poll(state, DS5_DEVICE_TYPE, &probed_type);
-		if (!ret && ds5_is_valid_device_type(probed_type)) {
+		if (!ret &&
+		    (require_supported ? ds5_is_valid_device_type(probed_type)
+				       : probed_type != DS5_DEVICE_TYPE_UNKNOWN)) {
 			WRITE_ONCE(state->ds5_dev->cached_device_type, probed_type);
 			*dev_type = probed_type;
 			return 0;
@@ -2669,7 +2682,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	 *    handled by ds5_configure()->ds5_setup_pipeline()
 	 *    at the next STREAMON for each stream.
 	 */
-	ret = ds5_wait_device_type(state, &dev_type);
+	ret = ds5_wait_device_type(state, &dev_type, true);
 	if (ret < 0) {
 		dev_err(&state->client->dev,
 			"%s(): device type not ready after reset (ret=%d, val=0x%x)\n",
@@ -6097,14 +6110,15 @@ static ssize_t ds5_dfu_device_write(struct file *flip,
 					state->dfu_dev.dfu_msg, dfu_part_blocks);
 			if (!ret)
 				ret = ds5_dfu_wait_for_get_dfu_status(state, dfuDNLOAD_IDLE);
-			if (!ret)
-				ret = ds5_write(state, 0x4a04, 0x00); /*Download complete */
-			if (!ret)
-				ret = ds5_dfu_wait_for_get_dfu_status(state, dfuMANIFEST);
 			if (ret < 0)
 				goto dfu_write_error;
-			state->dfu_dev.dfu_state_flag = DS5_DFU_DONE;
 		}
+		/* Do not finalize here: a write() length is not a reliable
+		 * end-of-image marker (userspace buffering splits the image across
+		 * syscalls in arbitrary, possibly non-DFU_BLOCK_SIZE-aligned chunks).
+		 * Stay in DS5_DFU_IN_PROGRESS and let ds5_dfu_device_release() send
+		 * the single zero-length DFU_DNLOAD (0x4a04=0) at close().
+		 */
 		if (len)
 			dev_notice(&state->client->dev, "%s(): DFU block (%d) bytes written\n",
 				__func__, (int)len);
@@ -6330,6 +6344,22 @@ static int ds5_dfu_device_release(struct inode *inode, struct file *file)
 	int ret = 0, retry = 10;
 	mutex_lock(&state->lock);
 	state->dfu_dev.device_open_count--;
+	/* Finalize the download here, at close(). The write handler is
+	 * transfer-only: it streams blocks but never commits, because a write()
+	 * length is not a reliable end-of-image marker (userspace buffering,
+	 * e.g. std::ofstream, splits the image across syscalls in arbitrary,
+	 * possibly non-DFU_BLOCK_SIZE-aligned chunks). close() unambiguously
+	 * marks end-of-image, so issue the single zero-length DFU_DNLOAD
+	 * (0x4a04=0) to drive DOWNLOAD_IDLE -> MANIFEST -> flash-commit -> reboot.
+	 */
+	if (state->dfu_dev.dfu_state_flag == DS5_DFU_IN_PROGRESS) {
+		ret = ds5_write(state, 0x4a04, 0x00); /* zero-length DFU_DNLOAD */
+		if (!ret)
+			ret = ds5_dfu_wait_for_get_dfu_status(state, dfuMANIFEST);
+		if (ret < 0)
+			dev_err(&state->client->dev,
+				"%s(): DFU finalize failed (%d)\n", __func__, ret);
+	}
 	if (state->dfu_dev.dfu_state_flag != DS5_DFU_RECOVERY)
 		state->dfu_dev.dfu_state_flag = DS5_DFU_IDLE;
 	/* We disable this section as it has no effect when device in operational
@@ -6663,10 +6693,19 @@ static int ds5_probe(struct i2c_client *c
 	// Verify communication
 	ret = ds5_read(state, DS5_FW_VERSION, &state->fw_version);
 	if (ret < 0) {
-		dev_err(&c->dev,
-			"%s(): cannot communicate with D4XX: %d on addr: 0x%x\n",
-			__func__, ret, c->addr);
-		goto e_regulator;
+		u16 dfu_magic = 0;
+		if (!ds5_read(state, DS5_DFU_MAGIC_REG, &dfu_magic) &&
+		    dfu_magic == DS5_DFU_MAGIC_LSW) {
+			dev_info(&c->dev,
+				"%s(): D4XX in DFU recovery (FW_VERSION not served)\n",
+				__func__);
+			/* fall through — DFU chardev init + DFU magic check below handles it */
+		} else {
+			dev_err(&c->dev,
+				"%s(): cannot communicate with D4XX: %d on addr: 0x%x\n",
+				__func__, ret, c->addr);
+			goto e_regulator;
+		}
 	}
 
 	state->is_depth = 0;
@@ -6750,12 +6789,29 @@ static int ds5_probe(struct i2c_client *c
 	 * FW_VERSION becomes readable earlier than DS5_DEVICE_TYPE, while later
 	 * probe code depends on DEVICE_TYPE to pick the correct format tables.
 	 */
-	ret = ds5_wait_device_type(state, &rec_state);
+	ret = ds5_wait_device_type(state, &rec_state, false);
 	if (ret < 0) {
 		dev_err(&c->dev,
-			"%s(): device type is not valid: %d (last val 0x%x)\n",
+			"%s(): device type not populated: %d (last val 0x%x)\n",
 			__func__, ret, rec_state);
 		goto e_chardev;
+	}
+
+	/* Device responded with a populated type but this driver does not
+	 * operationally support it (e.g. legacy/old firmware such as D430 GS
+	 * reporting type 3, which reports type 5 once updated). Expose only the
+	 * DFU chardev (already created above) so the user can flash supported
+	 * firmware; skip V4L2 init. Leave dfu_state_flag at IDLE: the device is
+	 * in app mode, so opening the chardev drives DS5_DFU_OPEN ->
+	 * ds5_dfu_switch_to_dfu().
+	 */
+	if (!ds5_is_valid_device_type(rec_state)) {
+		dev_info(&c->dev,
+			"%s(): unsupported device type 0x%x - DFU-only, skipping V4L2 init\n",
+			__func__, rec_state);
+		/* Override I2C drvdata with state for use in remove function */
+		i2c_set_clientdata(c, state);
+		return 0;
 	}
 
 	ds5_read_with_check(state, DS5_FW_VERSION, &state->fw_version);
