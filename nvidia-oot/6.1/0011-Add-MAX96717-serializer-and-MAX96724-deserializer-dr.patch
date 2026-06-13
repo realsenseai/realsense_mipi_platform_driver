@@ -22,11 +22,11 @@ MAX96724 quad deserializer features:
 
 Signed-off-by: RealSense AI <realsense@realsenseai.com>
 ---
- drivers/media/i2c/max96717.c |  791 ++++++++++++++
+ drivers/media/i2c/max96717.c |  835 ++++++++++++++
  drivers/media/i2c/max96724.c | 1905 ++++++++++++++++++++++++++++++++++
  include/media/max96717.h     |  151 ++
  include/media/max96724.h     |  183 +++
- 4 files changed, 3030 insertions(+)
+ 4 files changed, 3074 insertions(+)
  create mode 100644 drivers/media/i2c/max96717.c
  create mode 100644 drivers/media/i2c/max96724.c
  create mode 100644 include/media/max96717.h
@@ -34,10 +34,10 @@ Signed-off-by: RealSense AI <realsense@realsenseai.com>
 
 diff --git a/drivers/media/i2c/max96717.c b/drivers/media/i2c/max96717.c
 new file mode 100644
-index 0000000..c26c24b
+index 0000000..70d25a3
 --- /dev/null
 +++ b/drivers/media/i2c/max96717.c
-@@ -0,0 +1,791 @@
+@@ -0,0 +1,835 @@
 +/*
 + * max96717.c - MAX96717 GMSL2 Serializer driver (Tunnel Mode)
 + *
@@ -224,6 +224,30 @@ index 0000000..c26c24b
 +#define MAX96717_EXT11_TUN_PRE		0x80
 +
 +#define MAX96717_MAX_PIPES		4
++
++/*
++ * MFP8 (GPIO8) high-impedance release.
++ *
++ * At power-up GPIO8 comes up with GPIO_OUT_DIS=0 (output driver enabled,
++ * GPIO8_A=0x9c observed live), so the serializer actively drives the M2_I2C
++ * line and wedges the bus: any IMU I2C access by the camera FW times out
++ * whenever the serializer is powered.  This was confirmed on hardware -
++ * tri-stating GPIO8 alone immediately restored IMU I2C reads.
++ *
++ * GPIO8 is the ONLY serializer pin left driving its net (all other GPIOs,
++ * including MFP3/MFP4 interrupt lines, are already high-Z).  Release GPIO8
++ * (output driver off, no link TX/RX, no pull) so only the M2_I2C bus
++ * masters own the line.
++ *
++ * GPIO_n registers are a 3-byte group (A/B/C) starting at 0x02BE:
++ *   GPIO_n_A = 0x02BE + 3*n
++ */
++#define MAX96717_GPIO8_A_ADDR		0x02D6	/* MFP8 / M2_I2C (pass-through SCL1) */
++#define MAX96717_GPIO8_B_ADDR		0x02D7
++/* GPIO_A: GPIO_OUT_DIS=1 (high-Z), GPIO_TX_EN=0, GPIO_RX_EN=0 */
++#define MAX96717_GPIO_A_HIGH_Z		0x01
++/* GPIO_B: PULL_UPDN_SEL=None, TX_ID=0 */
++#define MAX96717_GPIO_B_NO_PULL		0x00
 +
 +/* ===== Data Structures ===== */
 +
@@ -652,6 +676,15 @@ index 0000000..c26c24b
 +		{MAX96717_VIDEO_TX2_ADDR, MAX96717_VIDEO_TX2_DRIFT_DIS},
 +		{MAX96717_PIPE_EN_ADDR, MAX96717_PIPE_EN_ALL},
 +	};
++	/*
++	 * Release MFP8 (GPIO8) before any other config so the serializer
++	 * stops driving the camera-side M2_I2C bus shared with the BMI088
++	 * IMU. Confirmed on HW: tri-stating GPIO8 restores IMU I2C access.
++	 */
++	struct reg_pair gpio_release[] = {
++		{MAX96717_GPIO8_A_ADDR, MAX96717_GPIO_A_HIGH_Z},
++		{MAX96717_GPIO8_B_ADDR, MAX96717_GPIO_B_NO_PULL},
++	};
 +
 +	mutex_lock(&priv->lock);
 +
@@ -661,6 +694,17 @@ index 0000000..c26c24b
 +	 * accepting writes to PIPE_EN (0x02) and FRONTTOP registers.
 +	 */
 +	usleep_range(5000, 6000);
++
++	/*
++	 * Tri-state MFP8 (GPIO8) first to release the camera-side M2_I2C
++	 * bus shared with the BMI088 IMU before configuring the rest of
++	 * the SER.
++	 */
++	err = max96717_set_registers(dev, gpio_release,
++				    ARRAY_SIZE(gpio_release));
++	if (err)
++		dev_warn(dev, "%s: failed to release MFP8 (IMU M2_I2C bus)\n",
++			 __func__);
 +
 +	if (priv->pixel_mode) {
 +		err = max96717_set_registers(dev, pixel_init,

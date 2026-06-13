@@ -1262,8 +1262,22 @@ static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 #endif
 #endif
 
-	else
+	else {
 		sensor->format = *mf;
+#ifdef CONFIG_TEGRA_CAMERA_PLATFORM
+		/* Update mode_prop_idx so the Tegra framework uses the correct
+		 * DT mode (pixel_t) for NVCSI/VI pixel parser configuration.
+		 * Only the IR sensor has multiple DT modes (mode0=grey_y8, mode1=grey_y16).
+		 * Other sensors (depth/rgb/imu) have a single mode0 and must stay at 0.
+		 */
+		if (state->is_y8) {
+			if (sensor->config.format->mbus_code == MEDIA_BUS_FMT_Y8_1X8)
+				state->mux.sd.mode_prop_idx = 0;
+			else
+				state->mux.sd.mode_prop_idx = 1;
+		}
+#endif
+	}
 
 	state->mux.last_set = sensor;
 
