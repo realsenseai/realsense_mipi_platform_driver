@@ -1,0 +1,614 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-FileCopyrightText: Copyright (c) 2026, RealSense CORPORATION.  All rights reserved.
+
+/*
+ * Device tree overlay for RealSense D585 depth camera on FangZhu FG24-4CH board:
+ *   Serializer:   MAX96717
+ *   Deserializer: MAX96724
+ *   Camera SoC:   HKR
+ *   I2C Mux:      GPIO-based (i2c-mux-gpio)
+ *   Board:        FangZhu FG24-4CH (Orin Nano/NX P3767+P3768)
+ *
+ * VC assignment:
+ *   VC0 = Depth  (Z16,  1280x720  @60fps)
+ *   VC1 = RGB    (YUY2, 1920x1080 @30fps)
+ *   VC2 = IR     (Y8/Y8I/Y12I, 1280x720 @60fps)
+ *   VC3 = IMU    (RAW8)
+ *
+ * GMSL link:
+ *   GMSL2 Tunnel Mode, 6 Gbps
+ *   HKR MIPI Tx → MAX96717: 4-lane CSI-2
+ *   MAX96724 → Orin NVCSI:  4-lane CSI-2 (FG24-4CH → Orin CAM1 / CSI-C / serial_c)
+ *
+ * CSI port / control I2C:
+ *   Orin CAM1 connector control I2C = board "IIC-10" = GPIO mux channel 1 = mux node i2c@1
+ *   (mux-gpio AON_GPIO(CC,3) driven HIGH). NOTE: Linux runtime i2c-10 is HDMI DDC,
+ *   unrelated; the camera control bus is cam_i2c (i2c@3180000) + GPIO mux.
+ *   Orin CAM1 connector = CSI-C brick = port-index 2 = serial_c (per fzcam ref: i2c mux
+ *   channel 1 pairs with serial_c). I2C control on GPIO mux channel 1 (i2c@1).
+ *
+ * I2C address map (7-bit):
+ *   GPIO mux:     AON_GPIO(CC, 3)
+ *   MAX96724 deser:  0x27
+ *   MAX96717 ser:    0x40 (default), 0x60 (aliased)
+ *   HKR camera SoC:  0x42 (def-addr)
+ *   Sensor aliases:   0x1a (Depth), 0x1b (RGB), 0x1c (IR), 0x1d (IMU)
+ */
+
+/dts-v1/;
+/plugin/;
+
+#include <dt-bindings/clock/tegra234-clock.h>
+#include <dt-bindings/gpio/tegra234-gpio.h>
+#include <dt-bindings/tegra234-p3767-0000-common.h>
+
+#define CAM_I2C_MUX	TEGRA234_AON_GPIO(CC, 3)
+
+/ {
+	overlay-name = "Jetson RealSense Camera D5xx with max96724 on FG24-4CH";
+	jetson-header-name = "Jetson 22pin CSI Connector";
+	compatible = JETSON_COMPATIBLE_P3768;
+
+	fragment@0 {
+		target-path = "/";
+		__overlay__ {
+			tegra-capture-vi {
+				num-channels = <4>;
+				ports {
+					#address-cells = <1>;
+					#size-cells = <0>;
+
+					/* VC0: Depth — Z16 1280x720 @60fps */
+					port@0 {
+						status = "okay";
+						reg = <0>;
+						d5xx_vi_in0: endpoint {
+							status = "okay";
+							vc-id = <0>;
+							port-index = <2>;
+							bus-width = <4>;
+							remote-endpoint = <&d5xx_csi_out0>;
+						};
+					};
+
+					/* VC1: RGB — YUY2 1920x1080 @30fps */
+					port@1 {
+						status = "okay";
+						reg = <1>;
+						d5xx_vi_in1: endpoint {
+							status = "okay";
+							vc-id = <1>;
+							port-index = <2>;
+							bus-width = <4>;
+							remote-endpoint = <&d5xx_csi_out1>;
+						};
+					};
+
+					/* VC2: IR — Y8/Y8I/Y12I 1280x720 @60fps */
+					port@2 {
+						status = "okay";
+						reg = <2>;
+						d5xx_vi_in2: endpoint {
+							status = "okay";
+							vc-id = <2>;
+							port-index = <2>;
+							bus-width = <4>;
+							remote-endpoint = <&d5xx_csi_out2>;
+						};
+					};
+
+					/* VC3: IMU — RAW8 */
+					port@3 {
+						status = "okay";
+						reg = <3>;
+						d5xx_vi_in3: endpoint {
+							status = "okay";
+							vc-id = <3>;
+							port-index = <2>;
+							bus-width = <4>;
+							remote-endpoint = <&d5xx_csi_out3>;
+						};
+					};
+				};
+			};
+
+			/*
+			 * tegra-camera-platform is REQUIRED. Without it the
+			 * tegra_camera_platform driver never probes, leaving
+			 * tegra_camera_misc.parent == NULL. At STREAMON,
+			 * vi5_power_on() -> tegra_camera_emc_clk_enable() calls
+			 * dev_get_drvdata(NULL) -> NULL deref at offset 0x78 ->
+			 * kernel panic / instant reboot. The 4 modules below map
+			 * the 4 D5xx streams (Depth/RGB/IR/IMU) for bandwidth calc.
+			 */
+			tegra-camera-platform {
+				status = "okay";
+				compatible = "nvidia, tegra-camera-platform";
+				num_csi_lanes = <4>;
+				max_lane_speed = <1500000>;
+				min_bits_per_pixel = <10>;
+				vi_peak_byte_per_pixel = <2>;
+				vi_bw_margin_pct = <25>;
+				max_pixel_rate = <7500000>;
+				isp_peak_byte_per_pixel = <5>;
+				isp_bw_margin_pct = <25>;
+
+				modules {
+					cam_module0: module0 {
+						badge = "d5xx_depth";
+						position = "bottomleft";
+						orientation = "1";
+						cam_module0_drivernode0: drivernode0 {
+							pcl_id = "v4l2_sensor";
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/cam_i2cmux/i2c@1/d5xx@1a";
+						};
+					};
+					cam_module1: module1 {
+						badge = "d5xx_rgb";
+						position = "centerleft";
+						orientation = "1";
+						cam_module1_drivernode0: drivernode0 {
+							pcl_id = "v4l2_sensor";
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/cam_i2cmux/i2c@1/d5xx@1b";
+						};
+					};
+					cam_module2: module2 {
+						badge = "d5xx_ir";
+						position = "topleft";
+						orientation = "1";
+						cam_module2_drivernode0: drivernode0 {
+							pcl_id = "v4l2_sensor";
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/cam_i2cmux/i2c@1/d5xx@1c";
+						};
+					};
+					cam_module3: module3 {
+						badge = "d5xx_imu";
+						position = "frontcenter";
+						orientation = "1";
+						cam_module3_drivernode0: drivernode0 {
+							pcl_id = "v4l2_sensor";
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/cam_i2cmux/i2c@1/d5xx@1d";
+						};
+					};
+				};
+			};
+
+			bus@0 {
+				host1x@13e00000 {
+					nvcsi@15a00000 {
+						num-channels = <4>;
+						#address-cells = <1>;
+						#size-cells = <0>;
+
+						/* NVCSI channel 0: Depth (VC0) */
+						channel@0 {
+							status = "okay";
+							reg = <0>;
+							ports {
+                                status = "okay";
+								#address-cells = <1>;
+								#size-cells = <0>;
+								port@0 {
+									status = "okay";
+									reg = <0>;
+									d5xx_csi_in0: endpoint@0 {
+										status = "okay";
+										port-index = <2>;
+										bus-width = <4>;
+                                        vc-id = <0>;
+										remote-endpoint = <&d5xx_depth_out>;
+									};
+								};
+								port@1 {
+									status = "okay";
+									reg = <1>;
+									d5xx_csi_out0: endpoint@1 {
+										status = "okay";
+										remote-endpoint = <&d5xx_vi_in0>;
+									};
+								};
+							};
+						};
+
+						/* NVCSI channel 1: RGB (VC1) */
+						channel@1 {
+							status = "okay";
+							reg = <1>;
+							ports {
+                                status = "okay";
+								#address-cells = <1>;
+								#size-cells = <0>;
+								port@0 {
+									status = "okay";
+									reg = <0>;
+									d5xx_csi_in1: endpoint@2 {
+										status = "okay";
+										port-index = <2>;
+										bus-width = <4>;
+                                        vc-id = <1>;
+										remote-endpoint = <&d5xx_rgb_out>;
+									};
+								};
+								port@1 {
+									status = "okay";
+									reg = <1>;
+									d5xx_csi_out1: endpoint@3 {
+										status = "okay";
+										remote-endpoint = <&d5xx_vi_in1>;
+									};
+								};
+							};
+						};
+
+						/* NVCSI channel 2: IR (VC2) */
+						channel@2 {
+							status = "okay";
+							reg = <2>;
+							ports {
+                                status = "okay";
+								#address-cells = <1>;
+								#size-cells = <0>;
+								port@0 {
+									status = "okay";
+									reg = <0>;
+									d5xx_csi_in2: endpoint@4 {
+										status = "okay";
+										port-index = <2>;
+										bus-width = <4>;
+                                        vc-id = <2>;
+										remote-endpoint = <&d5xx_ir_out>;
+									};
+								};
+								port@1 {
+									status = "okay";
+									reg = <1>;
+									d5xx_csi_out2: endpoint@5 {
+										status = "okay";
+										remote-endpoint = <&d5xx_vi_in2>;
+									};
+								};
+							};
+						};
+
+						/* NVCSI channel 3: IMU (VC3) */
+						channel@3 {
+							status = "okay";
+							reg = <3>;
+							ports {
+                                status = "okay";
+								#address-cells = <1>;
+								#size-cells = <0>;
+								port@0 {
+									status = "okay";
+									reg = <0>;
+									d5xx_csi_in3: endpoint@6 {
+										status = "okay";
+										port-index = <2>;
+										bus-width = <4>;
+                                        vc-id = <3>;
+										remote-endpoint = <&d5xx_imu_out>;
+									};
+								};
+								port@1 {
+									status = "okay";
+									reg = <1>;
+									d5xx_csi_out3: endpoint@7 {
+										status = "okay";
+										remote-endpoint = <&d5xx_vi_in3>;
+									};
+								};
+							};
+						};
+					};
+				};
+
+				cam_i2cmux {
+					compatible = "i2c-mux-gpio";
+					#address-cells = <1>;
+					#size-cells = <0>;
+					i2c-parent = <&cam_i2c>;
+					mux-gpios = <&gpio_aon CAM_I2C_MUX GPIO_ACTIVE_HIGH>;
+
+					/*
+					 * Orin CAM1 control path = board "IIC-10" = GPIO mux channel 1
+					 * (mux-gpio driven HIGH). DES/SER/D585 live here.
+					 */
+					i2c@1 {
+						reg = <1>;
+						#address-cells = <1>;
+						#size-cells = <0>;
+
+						/*
+						 * MAX96724 Deserializer
+						 * I2C addr: 0x27 (7-bit)
+						 * csi-mode: "2x4" — Controller1→PortA, 4-lane output
+						 * max-src: 1 — single D585 camera on link
+						 * gmsl-link-speed: 6 — 6Gbps GMSL2
+						 */
+						dser: max96724@27 {
+							status = "okay";
+							reg = <0x27>;
+							compatible = "adi,max96724";
+							csi-mode = "2x4";
+							max-src = <1>;
+							gmsl-link-speed = <3>;
+						};
+
+						/*
+						 * MAX96717 primary serializer at power-on address.
+						 * Used by max96717_setup_control() to move the
+						 * serializer from 0x40 to aliased 0x60.
+						 */
+						ser_prim: max96717_prim@40 {
+							status = "okay";
+							compatible = "adi,max96717";
+							reg = <0x40>;
+							is-prim-ser;
+						};
+
+						/*
+						 * MAX96717 Serializer alias after address reassignment.
+						 * Single 4-lane CSI-2 D-PHY input.
+						 */
+						ser_a: max96717_a@60 {
+							status = "okay";
+							compatible = "adi,max96717";
+							reg = <0x60>;
+							maxim,gmsl-dser-device = <&dser>;
+						};
+
+						/*
+						 * D585 Depth stream — VC0
+						 * Z16, 1280x720, 60fps
+						 */
+						d5xx_depth: d5xx@1a {
+							status = "okay";
+							def-addr = <0x42>;
+							reg = <0x1a>;
+							compatible = "realsense,d5xx";
+							use_sensor_mode_id = "true";
+							cam-type = "Depth";
+							nvidia,gmsl-ser-device = <&ser_a>;
+							nvidia,gmsl-dser-device = <&dser>;
+
+							ports {
+								#address-cells = <1>;
+								#size-cells = <0>;
+
+								port@0 {
+									reg = <0>;
+									d5xx_depth_out: endpoint {
+										vc-id = <0>;
+										port-index = <2>;
+										bus-width = <4>;
+										remote-endpoint = <&d5xx_csi_in0>;
+									};
+								};
+							};
+
+							mode0 {
+								pixel_t = "yuv_uyvy16";
+								num_lanes = "4";
+								csi_pixel_bit_depth = "16";
+								active_w = "1280";
+								active_h = "720";
+								tegra_sinterface = "serial_c";
+								phy_mode = "DPHY";
+								discontinuous_clk = "no";
+								cil_settletime = "0";
+								mclk_khz = "24000";
+								pix_clk_hz = "175000000";
+							serdes_pix_clk_hz = "175000000";
+								line_length = "1280";
+								embedded_metadata_height = "1";
+							};
+
+							gmsl-link {
+								src-csi-port = "a";
+								dst-csi-port = "a";
+								serdes-csi-link = "a";
+								csi-mode = "1x4";
+								st-vc = <0>;
+								vc-id = <0>;
+								num-lanes = <4>;
+							};
+						};
+
+						/*
+						 * D585 RGB stream — VC1
+						 * YUY2, 1920x1080, 30fps
+						 */
+						d5xx_rgb: d5xx@1b {
+							status = "okay";
+							def-addr = <0x42>;
+							reg = <0x1b>;
+							override_reg = <0x1a>;
+							compatible = "realsense,d5xx";
+							use_sensor_mode_id = "true";
+							cam-type = "RGB";
+							nvidia,gmsl-ser-device = <&ser_a>;
+							nvidia,gmsl-dser-device = <&dser>;
+
+							ports {
+								#address-cells = <1>;
+								#size-cells = <0>;
+
+								port@0 {
+									reg = <0>;
+									d5xx_rgb_out: endpoint {
+										vc-id = <1>;
+										port-index = <2>;
+										bus-width = <4>;
+										remote-endpoint = <&d5xx_csi_in1>;
+									};
+								};
+							};
+
+							mode0 {
+								pixel_t = "yuv_yuyv16";
+								num_lanes = "4";
+								csi_pixel_bit_depth = "16";
+								active_w = "1920";
+								active_h = "1080";
+								tegra_sinterface = "serial_c";
+								phy_mode = "DPHY";
+								discontinuous_clk = "no";
+								cil_settletime = "0";
+								mclk_khz = "24000";
+								pix_clk_hz = "175000000";
+							serdes_pix_clk_hz = "175000000";
+								line_length = "1920";
+								embedded_metadata_height = "1";
+							};
+
+							gmsl-link {
+								src-csi-port = "a";
+								dst-csi-port = "a";
+								serdes-csi-link = "a";
+								csi-mode = "1x4";
+								st-vc = <1>;
+								vc-id = <1>;
+								num-lanes = <4>;
+							};
+						};
+
+						/*
+						 * D585 IR stream — VC2
+						 * Y8/Y8I/Y12I, 1280x720, 60fps
+						 */
+						d5xx_ir: d5xx@1c {
+							status = "okay";
+							def-addr = <0x42>;
+							reg = <0x1c>;
+							override_reg = <0x1a>;
+							compatible = "realsense,d5xx";
+							use_sensor_mode_id = "true";
+							cam-type = "Y8";
+							nvidia,gmsl-ser-device = <&ser_a>;
+							nvidia,gmsl-dser-device = <&dser>;
+
+							ports {
+								#address-cells = <1>;
+								#size-cells = <0>;
+
+								port@0 {
+									reg = <0>;
+									d5xx_ir_out: endpoint {
+										vc-id = <2>;
+										port-index = <2>;
+										bus-width = <4>;
+										remote-endpoint = <&d5xx_csi_in2>;
+									};
+								};
+							};
+
+							mode0 {
+								/* Y8: 8-bit raw IR */
+								pixel_t = "grey_y8";
+								num_lanes = "4";
+								csi_pixel_bit_depth = "8";
+								active_w = "1280";
+								active_h = "720";
+								tegra_sinterface = "serial_c";
+								phy_mode = "DPHY";
+								discontinuous_clk = "no";
+								cil_settletime = "0";
+								mclk_khz = "24000";
+								pix_clk_hz = "175000000";
+								serdes_pix_clk_hz = "175000000";
+								line_length = "1280";
+								embedded_metadata_height = "1";
+							};
+
+							mode1 {
+								/* Y8I: 16-bit Raw IR interleaved */
+								pixel_t = "grey_y16";
+								num_lanes = "4";
+								csi_pixel_bit_depth = "16";
+								active_w = "1280";
+								active_h = "720";
+								tegra_sinterface = "serial_c";
+								phy_mode = "DPHY";
+								discontinuous_clk = "no";
+								cil_settletime = "0";
+								mclk_khz = "24000";
+								pix_clk_hz = "175000000";
+								serdes_pix_clk_hz = "175000000";
+								line_length = "1280";
+								embedded_metadata_height = "1";
+							};
+
+							gmsl-link {
+								src-csi-port = "a";
+								dst-csi-port = "a";
+								serdes-csi-link = "a";
+								csi-mode = "1x4";
+								st-vc = <2>;
+								vc-id = <2>;
+								num-lanes = <4>;
+							};
+						};
+
+						/*
+						 * D585 IMU stream — VC3
+						 * RAW8 logical stream
+						 */
+						d5xx_imu: d5xx@1d {
+							status = "okay";
+							def-addr = <0x42>;
+							reg = <0x1d>;
+							override_reg = <0x1a>;
+							compatible = "realsense,d5xx";
+							use_sensor_mode_id = "true";
+							cam-type = "IMU";
+							nvidia,gmsl-ser-device = <&ser_a>;
+							nvidia,gmsl-dser-device = <&dser>;
+
+							ports {
+								#address-cells = <1>;
+								#size-cells = <0>;
+
+								port@0 {
+									reg = <0>;
+									d5xx_imu_out: endpoint {
+										vc-id = <3>;
+										port-index = <2>;
+										bus-width = <4>;
+										remote-endpoint = <&d5xx_csi_in3>;
+									};
+								};
+							};
+
+							mode0 {
+								pixel_t = "grey_y8";
+								num_lanes = "4";
+								csi_pixel_bit_depth = "8";
+								active_w = "640";
+								active_h = "480";
+								tegra_sinterface = "serial_c";
+								phy_mode = "DPHY";
+								discontinuous_clk = "no";
+								cil_settletime = "0";
+								mclk_khz = "24000";
+								pix_clk_hz = "175000000";
+							serdes_pix_clk_hz = "175000000";
+								line_length = "1280";
+								embedded_metadata_height = "0";
+							};
+
+							gmsl-link {
+								src-csi-port = "a";
+								dst-csi-port = "a";
+								serdes-csi-link = "a";
+								csi-mode = "1x4";
+								st-vc = <3>;
+								vc-id = <3>;
+								num-lanes = <4>;
+							};
+						};
+					};
+				};
+			};
+		};
+	};
+};
