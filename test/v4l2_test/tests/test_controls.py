@@ -473,6 +473,51 @@ class TestAEType:
 
 @pytest.mark.d457
 @pytest.mark.d401
+class TestSyncMode:
+    """Sync mode control (RSDEV-6449): simplified 3-value public API.
+
+    Public values: 0=Default, 1=Master, 2=External Sync.
+    FW maps External Sync to Slave (D401) or SlaveFull (D457) internally.
+    """
+
+    SYNC_MODE_DEFAULT  = 0
+    SYNC_MODE_MASTER   = 1
+    SYNC_MODE_EXTERNAL = 2
+
+    def test_sync_mode_range(self, depth_device):
+        """Control must advertise min=0, max=2."""
+        qc = depth_device.query_ctrl(C.DS5_CAMERA_CID_SYNC_MODE)
+        assert qc.minimum == 0, f"Expected min=0, got {qc.minimum}"
+        assert qc.maximum == self.SYNC_MODE_EXTERNAL, \
+            f"Expected max={self.SYNC_MODE_EXTERNAL}, got {qc.maximum}"
+
+    def test_sync_mode_set_get_roundtrip(self, depth_device):
+        """SET/GET roundtrip for each valid public value."""
+        original = read_int_control(depth_device, C.DS5_CAMERA_CID_SYNC_MODE)
+        try:
+            for mode in (self.SYNC_MODE_DEFAULT,
+                         self.SYNC_MODE_MASTER,
+                         self.SYNC_MODE_EXTERNAL):
+                write_int_control(depth_device, C.DS5_CAMERA_CID_SYNC_MODE, mode)
+                val = read_int_control(depth_device, C.DS5_CAMERA_CID_SYNC_MODE)
+                assert val == mode, f"SET {mode} → GET returned {val}"
+        finally:
+            write_int_control(depth_device, C.DS5_CAMERA_CID_SYNC_MODE,
+                              self.SYNC_MODE_DEFAULT)
+
+    def test_sync_mode_default_after_reset(self, depth_device):
+        """After writing DEFAULT, readback must be DEFAULT."""
+        write_int_control(depth_device, C.DS5_CAMERA_CID_SYNC_MODE,
+                          self.SYNC_MODE_MASTER)
+        write_int_control(depth_device, C.DS5_CAMERA_CID_SYNC_MODE,
+                          self.SYNC_MODE_DEFAULT)
+        val = read_int_control(depth_device, C.DS5_CAMERA_CID_SYNC_MODE)
+        assert val == self.SYNC_MODE_DEFAULT, \
+            f"Expected DEFAULT(0) after reset, got {val}"
+
+
+@pytest.mark.d457
+@pytest.mark.d401
 class TestControlEnumeration:
     """Verify controls can be enumerated."""
 

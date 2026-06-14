@@ -2182,14 +2182,12 @@ static int ds5_hw_set_exposure(struct ds5 *state, u32 base, s32 val)
 #define DS5_CAMERA_CID_HWMC			(DS5_CAMERA_CID_BASE+15)
 #define DS5_CAMERA_CID_SYNC_MODE		(DS5_CAMERA_CID_BASE+16)
 
-/* Sync mode values — indices into sync_mode_menu_full[] */
+/* Sync mode public values (RSDEV-6449).  FW maps EXTERNAL → Slave or SlaveFull
+ * per platform; the driver passes the public value through unchanged. */
 enum ds5_sync_mode {
-	DS5_SYNC_MODE_DEFAULT,
-	DS5_SYNC_MODE_MASTER,
-	DS5_SYNC_MODE_SLAVE,
-	DS5_SYNC_MODE_FULL_SLAVE,
-	DS5_SYNC_MODE_SUB_PREMASTER,
-	DS5_SYNC_MODE_FULL_MASTER,
+	DS5_SYNC_MODE_DEFAULT  = 0,
+	DS5_SYNC_MODE_MASTER   = 1,
+	DS5_SYNC_MODE_EXTERNAL = 2,
 };
 
 #define DS5_CAMERA_CID_PWM			(DS5_CAMERA_CID_BASE+22)
@@ -2657,8 +2655,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	/* Re-apply ESYNC tunneling to match cached sync_mode control */
 	if (state->ctrls.sync_mode) {
 		int sync_val = state->ctrls.sync_mode->cur.val;
-		bool need_esync = (sync_val == DS5_SYNC_MODE_SLAVE ||
-				   sync_val == DS5_SYNC_MODE_FULL_SLAVE);
+		bool need_esync = (sync_val == DS5_SYNC_MODE_EXTERNAL);
 
 		ret = ds5_set_ser_esync_tunneling(state, need_esync);
 		if (ret)
@@ -3020,8 +3017,7 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			dev_info(&state->client->dev, "%s(): SYNC_MODE command passed to FW, addr: 0x%x, value: %d, ret: %d\n",
 				__func__, base | DS5_CAMERA_SYNC_MODE, ctrl->val, ret);
 			if (!ret) {
-				bool need_esync = (ctrl->val == DS5_SYNC_MODE_SLAVE ||
-						   ctrl->val == DS5_SYNC_MODE_FULL_SLAVE);
+				bool need_esync = (ctrl->val == DS5_SYNC_MODE_EXTERNAL);
 
 				dev_dbg(&state->client->dev,
 					"%s(): sync_mode=%d -> serializer ESYNC %s\n",
@@ -3633,20 +3629,11 @@ static const struct v4l2_ctrl_config ds5_ctrl_hw_reset = {
 	.flags = V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 };
 
-/* Sync mode menu arrays for different camera platforms */
-static const char * const sync_mode_menu_full[] = {
-	[DS5_SYNC_MODE_DEFAULT]       = "Default",
-	[DS5_SYNC_MODE_MASTER]        = "Master",
-	[DS5_SYNC_MODE_SLAVE]         = "Slave",
-	[DS5_SYNC_MODE_FULL_SLAVE]    = "Full Slave",
-	[DS5_SYNC_MODE_SUB_PREMASTER] = "Sub Pre-Master",
-	[DS5_SYNC_MODE_FULL_MASTER]   = "Full Master",
-};
-
-static const char * const sync_mode_menu_d401[] = {
-	"Default",           /* 0 */
-	"(unsupported)",     /* 1 - rejected in s_ctrl for D401 */
-	"Slave",             /* 2 */
+/* Unified 3-value sync mode menu (RSDEV-6449). */
+static const char * const sync_mode_menu[] = {
+	[DS5_SYNC_MODE_DEFAULT]  = "Default",
+	[DS5_SYNC_MODE_MASTER]   = "Master",
+	[DS5_SYNC_MODE_EXTERNAL] = "External Sync",
 };
 
 static struct v4l2_ctrl_config ds5_ctrl_sync_mode = {
@@ -3655,9 +3642,9 @@ static struct v4l2_ctrl_config ds5_ctrl_sync_mode = {
 	.name = "Camera Sync Mode",
 	.type = V4L2_CTRL_TYPE_MENU,
 	.min = 0,
-	.max = 5,
+	.max = DS5_SYNC_MODE_EXTERNAL,
 	.def = 0,
-	.qmenu = sync_mode_menu_full,
+	.qmenu = sync_mode_menu,
 	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 };
 
@@ -6141,29 +6128,16 @@ static void ds5_adjust_sync_mode_control(struct i2c_client *client, struct ds5 *
 
 	dev_type = ds5_dev_type(state, dev_type);
 	switch (dev_type) {
-	case DS5_DEVICE_TYPE_D41X:
-		/* D41X does support all 6 sync modes (0-5) */
-		__v4l2_ctrl_modify_range(state->ctrls.sync_mode, 0, 5, 0, 0);
-		state->ctrls.sync_mode->qmenu = sync_mode_menu_full;
-		dev_dbg(&client->dev, "%s(): D41X does not support sync mode\n", __func__);
-		break;
 	case DS5_DEVICE_TYPE_D40X:
-		/* D401 only supports modes 0 (Default) and 2 (Slave) */
-		__v4l2_ctrl_modify_range(state->ctrls.sync_mode, 0, 2, 0, 0);
-		state->ctrls.sync_mode->qmenu = sync_mode_menu_d401;
-		dev_dbg(&client->dev, "%s(): D401 sync mode: 0 (Default), 2 (Slave)\n", __func__);
-		break;
+	case DS5_DEVICE_TYPE_D41X:
 	case DS5_DEVICE_TYPE_D43X:
-		/* D430 GMSL supports all 6 sync modes (0-5) */
-		__v4l2_ctrl_modify_range(state->ctrls.sync_mode, 0, 5, 0, 0);
-		state->ctrls.sync_mode->qmenu = sync_mode_menu_full;
-		dev_dbg(&client->dev, "%s(): D430 GMSL sync mode: all modes 0-5 supported\n", __func__);
-		break;
 	case DS5_DEVICE_TYPE_D45X:
-		/* D450 supports all 6 sync modes (0-5) */
-		__v4l2_ctrl_modify_range(state->ctrls.sync_mode, 0, 5, 0, 0);
-		state->ctrls.sync_mode->qmenu = sync_mode_menu_full;
-		dev_dbg(&client->dev, "%s(): D450 sync mode: all modes 0-5 supported\n", __func__);
+		/* Unified 3-value public interface (RSDEV-6449): Default/Master/External */
+		__v4l2_ctrl_modify_range(state->ctrls.sync_mode,
+					 0, DS5_SYNC_MODE_EXTERNAL, 0, 0);
+		state->ctrls.sync_mode->qmenu = sync_mode_menu;
+		dev_dbg(&client->dev, "%s(): sync mode: 0-2 (Default/Master/External)\n",
+			__func__);
 		break;
 	default:
 		/* Unknown device - disable sync mode */
