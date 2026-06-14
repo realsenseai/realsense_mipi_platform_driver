@@ -7,7 +7,7 @@ if [ "$#" -lt 1 ] || [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
       echo "Update the kernel modules and boot files on the local device for a specific JetPack version."
       echo ""
       echo "Arguments:"
-      echo "  JETPACK_VERSION   JetPack version (e.g., 5.0.2, 5.1.2, 6.0, 6.1, 6.2, 6.2.1, 7.0, 7.1)"
+      echo "  JETPACK_VERSION   JetPack version (e.g., 5.0.2, 5.1.2, 6.0, 6.1, 6.2, 6.2.1, 7.0, 7.1, 7.2)"
       echo "  BOOT_FOLDER       Folder name under /boot to copy Image (default: dev)"
       echo "  DELAY_SECONDS     Delay before reboot in seconds (default: 0)"
       echo ""
@@ -55,7 +55,7 @@ if [ "${JETPACK_VERSION}" = "5.0.2" ]; then
           sudo cp videobuf-core.ko /lib/modules/$(uname -r)/updates/
     echo "sudo cp videobuf-vmalloc.ko /lib/modules/$(uname -r)/updates/"
           sudo cp videobuf-vmalloc.ko /lib/modules/$(uname -r)/updates/
-elif [ "${JETPACK_VERSION}" = "6.0" ] || [ "${JETPACK_VERSION}" = "6.1" ] || [ "${JETPACK_VERSION}" = "6.2" ] || [ "${JETPACK_VERSION}" = "6.2.1" ] || [ "${JETPACK_VERSION}" = "7.0" ] || [ "${JETPACK_VERSION}" = "7.1" ]; then
+elif [ "${JETPACK_VERSION}" = "6.0" ] || [ "${JETPACK_VERSION}" = "6.1" ] || [ "${JETPACK_VERSION}" = "6.2" ] || [ "${JETPACK_VERSION}" = "6.2.1" ] || [ "${JETPACK_VERSION}" = "7.0" ] || [ "${JETPACK_VERSION}" = "7.1" ] || [ "${JETPACK_VERSION}" = "7.2" ]; then
     MODULES_DIR="lib/modules/$(uname -r)"
     echo "Extracting rootfs.tar.gz..."
     if ! tar xf rootfs.tar.gz; then
@@ -69,7 +69,7 @@ elif [ "${JETPACK_VERSION}" = "6.0" ] || [ "${JETPACK_VERSION}" = "6.1" ] || [ "
     # JP7 overlays onto the existing module tree (keeps the BSP NVIDIA display
     # stack: nvidia.ko / nvidia-modeset.ko / nvidia-drm.ko, which the build no
     # longer produces). JP6 keeps the full replace.
-    if [ "${JETPACK_VERSION}" != "7.0" ] && [ "${JETPACK_VERSION}" != "7.1" ]; then
+    if [ "${JETPACK_VERSION}" != "7.0" ] && [ "${JETPACK_VERSION}" != "7.1" ] && [ "${JETPACK_VERSION}" != "7.2" ]; then
         echo "sudo rm -rf /${MODULES_DIR}"
         if ! sudo rm -rf /${MODULES_DIR}; then
             echo "Error: Failed to remove existing modules directory '${MODULES_DIR}', DON'T REBOOT"
@@ -83,7 +83,7 @@ elif [ "${JETPACK_VERSION}" = "6.0" ] || [ "${JETPACK_VERSION}" = "6.1" ] || [ "
         echo "Error: Failed to copy modules to '/lib/modules/', DON'T REBOOT"
         exit 1
     fi
-    if [ "${JETPACK_VERSION}" = "7.0" ] || [ "${JETPACK_VERSION}" = "7.1" ]; then
+    if [ "${JETPACK_VERSION}" = "7.0" ] || [ "${JETPACK_VERSION}" = "7.1" ] || [ "${JETPACK_VERSION}" = "7.2" ]; then
         echo "sudo cp boot/tegra264-camera-d4xx-overlay*.dtbo /boot/."
               sudo cp boot/tegra264-camera-d4xx-overlay*.dtbo /boot/.
     else

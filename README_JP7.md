@@ -4,8 +4,9 @@
 The RealSense™ MIPI platform driver enables the user to control and stream RealSense™ 3D MIPI cameras.
 The system shall include:
 * NVIDIA® Jetson™ platform Supported JetPack versions are:
-    - 7.1 production release
-    - 7.0 production release
+    - 7.2 production release (Jetson Linux R39.2)
+    - 7.1 production release (Jetson Linux R38.4)
+    - 7.0 production release (Jetson Linux R38.2)
 * RealSense™ De-Serialize board
 * Jetson AGX Orin™ Passive adapter board from [Leopard Imaging® LI-JTX1-SUB-ADPT](https://leopardimaging.com/product/accessories/adapters-carrier-boards/for-nvidia-jetson/li-jtx1-sub-adpt/)
 * RS MIPI camera [D457](https://store.realsenseai.com/buy-intel-realsense-depth-camera-d457.html)
@@ -42,7 +43,7 @@ These are descriptiver steps. Bash commands to be issued follow:
 6. Apply build results to target (Jetson).
 7. Configure target.
 
-Assuming building for 7.1. One can also build for 7.0 just replace the last parameter.
+Assuming building for 7.1. One can also build for 7.0 or 7.2 just replace the last parameter.
 Build version can be specified only once. It will be written to jetpack_version.txt file and used for later steps.
 You can display the current version cating the file jetpack_version. It will be show at the beginning of each script.
 ```
