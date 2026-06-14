@@ -98,6 +98,9 @@ if [[ "$ACTION" = "apply" ]]; then
     else
         # max96712 header
         ln -f nvidia-oot/max96712.h "${BUILD_SRCS}/nvidia-oot/include/media/"
+        # max96717 header and source
+        ln -f nvidia-oot/max96717.h "${BUILD_SRCS}/nvidia-oot/include/media/"
+        ln -f nvidia-oot/max96717.c "${BUILD_SRCS}/nvidia-oot/drivers/media/i2c/"
         if version_lt "$JETPACK_VERSION" "7.0"; then
             # jp6 overlay
             ln -f hardware/realsense/tegra234-camera-d4xx-overlay*.dts "${BUILD_SRCS}/hardware/nvidia/t23x/nv-public/overlay/"

@@ -11,7 +11,7 @@ index fdf09df6..b1042aa3 100644
 +obj-m += d4xx.o
  ifndef CONFIG_TEGRA_SYSTEM_TYPE_ACK
  obj-m += max96712.o
- 
+
 diff --git a/drivers/media/i2c/max9295.c b/drivers/media/i2c/max9295.c
 index b363d5f6..e7c77845 100644
 --- a/drivers/media/i2c/max9295.c
