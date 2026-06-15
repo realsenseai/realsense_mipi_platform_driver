@@ -96,7 +96,7 @@
 							status = "okay";
 							vc-id = <0>;
 							port-index = <0>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out0>;
 						};
 					};
@@ -107,7 +107,7 @@
 							status = "okay";
 							vc-id = <1>;
 							port-index = <0>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out1>;
 						};
 					};
@@ -118,7 +118,7 @@
 							status = "okay";
 							vc-id = <2>;
 							port-index = <0>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out2>;
 						};
 					};
@@ -129,7 +129,7 @@
 							status = "okay";
 							vc-id = <3>;
 							port-index = <0>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out3>;
 						};
 					};
@@ -151,7 +151,7 @@
 									d4xx_csi_in0: endpoint@0 {
 										status = "okay";
 										port-index = <0>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_0_out>;
 									};
 								};
@@ -176,7 +176,7 @@
 									d4xx_csi_in1: endpoint@2 {
 										status = "okay";
 										port-index = <0>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_1_out>;
 									};
 								};
@@ -201,7 +201,7 @@
 									d4xx_csi_in2: endpoint@4 {
 										status = "okay";
 										port-index = <0>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_2_out>;
 									};
 								};
@@ -226,7 +226,7 @@
 									d4xx_csi_in3: endpoint@6 {
 										status = "okay";
 										port-index = <0>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_3_out>;
 									};
 								};
@@ -299,14 +299,14 @@
 										ds5_3_out: endpoint {
 											vc-id = <3>;
 											port-index = <3>;
-											bus-width = <2>;
+											bus-width = <4>;
 											remote-endpoint = <&d4xx_csi_in3>;
 										};
 									};
 								};
 								mode0 {
 									pixel_t = "grey_y16";
-									num_lanes = "2";
+									num_lanes = "4";
 									csi_pixel_bit_depth = "16";
 									active_w = "640";
 									active_h = "480";
@@ -323,7 +323,7 @@
 									csi-mode = "1x4";
 									st-vc = <0>;
 									vc-id = <3>;
-									num-lanes = <2>;
+									num-lanes = <4>;
 								};
 							};
 
@@ -347,7 +347,7 @@
 										ds5_2_out: endpoint {
 											vc-id = <2>;
 											port-index = <2>;
-											bus-width = <2>;
+											bus-width = <4>;
 											remote-endpoint = <&d4xx_csi_in2>;
 										};
 									};
@@ -355,7 +355,7 @@
 								/* mode0: Y8, mode1: depth D16 */
 								mode0 {
 									pixel_t = "grey_y16";
-									num_lanes = "2";
+									num_lanes = "4";
 									csi_pixel_bit_depth = "16";
 									active_w = "1280";
 									active_h = "720";
@@ -372,7 +372,7 @@
 									csi-mode = "1x4";
 									st-vc = <0>;
 									vc-id = <2>;
-									num-lanes = <2>;
+									num-lanes = <4>;
 								};
 							};
 
@@ -396,14 +396,14 @@
 										ds5_1_out: endpoint {
 											vc-id = <1>;
 											port-index = <1>;
-											bus-width = <2>;
+											bus-width = <4>;
 											remote-endpoint = <&d4xx_csi_in1>;
 										};
 									};
 								};
 								mode0 {
 									pixel_t = "grey_y16";
-									num_lanes = "2";
+									num_lanes = "4";
 									csi_pixel_bit_depth = "16";
 									active_w = "1920";
 									active_h = "1080";
@@ -420,7 +420,7 @@
 									csi-mode = "1x4";
 									st-vc = <0>;
 									vc-id = <1>;
-									num-lanes = <2>;
+									num-lanes = <4>;
 								};
 							};
 
@@ -443,14 +443,14 @@
 										ds5_0_out: endpoint {
 											vc-id = <0>;
 											port-index = <0>;
-											bus-width = <2>;
+											bus-width = <4>;
 											remote-endpoint = <&d4xx_csi_in0>;
 										};
 									};
 								};
 								mode0 {
 									pixel_t = "grey_y16";
-									num_lanes = "2";
+									num_lanes = "4";
 									csi_pixel_bit_depth = "16";
 									active_w = "1280";
 									active_h = "720";
@@ -467,7 +467,7 @@
 									csi-mode = "1x4";
 									st-vc = <0>;
 									vc-id = <0>;
-									num-lanes = <2>;
+									num-lanes = <4>;
 								};
 							};
 						};
