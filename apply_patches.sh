@@ -110,6 +110,10 @@ if [[ "$ACTION" = "apply" ]]; then
                     "${BUILD_SRCS}/$KERNEL_DIR/include/dt-bindings/gpio/" 2>/dev/null || true
             fi
             ln -f hardware/realsense/tegra264-camera-d4xx-overlay*.dtso "${BUILD_SRCS}/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/"
+            # tegra234 (Orin) single-camera Fangzhu overlay for JP7.2 on Orin.
+            # Uses dt-bindings headers already present in the noble tree
+            # (tegra234-gpio.h/-clock.h, pinctrl-tegra.h); no extra header link needed.
+            ln -f hardware/realsense/tegra234-camera-d4xx-overlay-fg12-16ch-cams-0.dtso "${BUILD_SRCS}/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/"
         fi
     fi
 
