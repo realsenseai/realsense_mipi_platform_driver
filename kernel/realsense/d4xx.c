@@ -217,6 +217,13 @@ enum ds5_mux_pad {
 #define DS5_START_POLL_TIME	10
 #define DS5_START_MAX_TIME	2000
 #define DS5_START_MAX_COUNT	(DS5_START_MAX_TIME / DS5_START_POLL_TIME)
+/*
+ * RSDEV-12089: max wall-clock to wait for an HWMC command to complete. Must cover
+ * a worst-case low-fps stream re-arm (ds5_mux_s_stream, bounded by
+ * DS5_START_MAX_TIME) that monopolises the shared I2C bus while an HWMC is in
+ * flight; a shorter budget makes the HWMC falsely time out (-110 to the host).
+ */
+#define DS5_HWMC_MAX_TIME	2000
 #define MAX_DS5_CONFIG_RETRIES	5
 
 /* I2C retry configuration */
@@ -2234,18 +2241,27 @@ static int ds5_hwmc_wait(struct ds5 *state)
 {
 	int ret = 0;
 	u16 status = DS5_HWMC_STATUS_WIP;
-	int retries = 100;
 	int errorCode;
+	/*
+	 * RSDEV-12089: bound the poll by wall-clock (DS5_HWMC_MAX_TIME) rather than a
+	 * fixed retry count. The old ~100 ms budget was too short on MIPI: a concurrent
+	 * stream re-arm at low fps hogs the shared I2C bus for up to DS5_START_MAX_TIME,
+	 * starving this poll so the FW's completion was missed and the command falsely
+	 * returned -ETIMEDOUT (-110 in librealsense). Matches the s_stream/hw-reset
+	 * deadline idiom; the happy path still returns as soon as status leaves WIP.
+	 */
+	unsigned long timeout = jiffies + msecs_to_jiffies(DS5_HWMC_MAX_TIME);
+	bool first = true;
 	do {
-		if (retries != 100)
+		if (!first)
 			msleep_range(1);
+		first = false;
 		ret = ds5_read_poll(state, DS5_HWMC_STATUS, &status);
 		if (ret) {
 			dev_dbg(&state->client->dev,
-				"%s(): I2C read failed (%d), retries left: %d\n",
-				__func__, ret, retries);
+				"%s(): I2C read failed (%d)\n", __func__, ret);
 		}
-	} while (retries-- && (ret || status == DS5_HWMC_STATUS_WIP));
+	} while (time_before(jiffies, timeout) && (ret || status == DS5_HWMC_STATUS_WIP));
 	dev_dbg(&state->client->dev,
 		"%s(): ret: 0x%x, status: 0x%x\n",
 		__func__, ret, status);
