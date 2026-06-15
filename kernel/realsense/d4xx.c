@@ -3945,7 +3945,7 @@ static int ds5_board_setup(struct ds5 *state)
 	struct device_node *gmsl;
 	int value = 0xFFFF;
 	const char *str_value;
-	int err;
+	int err = -ENODEV;
 
 	state->g_ctx.sdev_reg = state->client->addr;
 
@@ -3973,7 +3973,6 @@ static int ds5_board_setup(struct ds5 *state)
 	}
 
 	ser_i2c = of_find_i2c_device_by_node(ser_node);
-	of_node_put(ser_node);
 
 	if (ser_i2c == NULL) {
 		err = -EPROBE_DEFER;
@@ -3985,8 +3984,21 @@ static int ds5_board_setup(struct ds5 *state)
 	}
 
 	state->ser_dev = &ser_i2c->dev;
-	/* Initialize serializer interface (max9295 is the only supported ser) */
-	state->ser_ops = &max9295_interface;
+	/* Initialize serializer interface */
+	if (!strcmp(ser_node->name, "max9295")) {
+		state->ser_ops = &max9295_interface;
+	} else if (!strcmp(ser_node->name, "max96717")) {
+		state->ser_ops = &max96717_interface;
+	} else {
+		dev_err(dev, "%s: Unsupported serializer = %s\n", __func__, ser_node->name);
+		/* Should not be used, this is just to make sure we don't have NULL pointers */
+		state->ser_ops = &max9295_interface;
+		of_node_put(ser_node);
+		err = -ENODEV;
+		goto error;
+	}
+	dev_info(dev, "Using serializer %s\n", state->ser_ops->name);
+	of_node_put(ser_node);
 
 	dser_node = of_parse_phandle(node, "maxim,gmsl-dser-device", 0);
 	if (dser_node == NULL) {

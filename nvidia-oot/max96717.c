@@ -399,6 +399,8 @@ int max96717_init_settings(struct device *dev)
 	struct reg_pair ser_cfg_pre[] = {
 		{0x0002, 0x03}, /* REG2: VID_TX_EN=0, INIT=1 */
 		{0x0010, 0x21}, /* CTRL0: RESET_ONESHOT, GMSL2 link A */
+	};
+	struct reg_pair ser_cfg_mid[] = {
 		{0x0029, 0x00}, /* FEC OFF */
 		{0x0383, 0x00}, /* Pixel mode */
 		{0x0331, 0x30}, /* MIPI_RX1: 4-lane */
@@ -413,6 +415,9 @@ int max96717_init_settings(struct device *dev)
 
 	err |= max96717_set_registers(dev, ser_cfg_pre,
 				     ARRAY_SIZE(ser_cfg_pre));
+	msleep(100);
+	err |= max96717_set_registers(dev, ser_cfg_mid,
+				     ARRAY_SIZE(ser_cfg_mid));
 	/* XML waits 2ms between MIPI_RX0 reset assert and release */
 	usleep_range(2000, 2100);
 	err |= max96717_set_registers(dev, ser_cfg_post,
