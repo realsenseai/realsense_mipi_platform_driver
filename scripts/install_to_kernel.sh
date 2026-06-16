@@ -66,10 +66,17 @@ elif [ "${JETPACK_VERSION}" = "6.0" ] || [ "${JETPACK_VERSION}" = "6.1" ] || [ "
         echo "Error: Extracted modules directory '${MODULES_DIR}' is missing or empty; not modifying kernel modules."
         exit 1
     fi
-    echo "sudo rm -rf /${MODULES_DIR}"
-    if ! sudo rm -rf /${MODULES_DIR}; then
-        echo "Error: Failed to remove existing modules directory '${MODULES_DIR}', DON'T REBOOT"
-        exit 1
+    # JP7 overlays onto the existing module tree (keeps the BSP NVIDIA display
+    # stack: nvidia.ko / nvidia-modeset.ko / nvidia-drm.ko, which the build no
+    # longer produces). JP6 keeps the full replace.
+    if [ "${JETPACK_VERSION}" != "7.0" ] && [ "${JETPACK_VERSION}" != "7.1" ]; then
+        echo "sudo rm -rf /${MODULES_DIR}"
+        if ! sudo rm -rf /${MODULES_DIR}; then
+            echo "Error: Failed to remove existing modules directory '${MODULES_DIR}', DON'T REBOOT"
+            exit 1
+        fi
+    else
+        echo "JP7: overlay install - keeping existing /${MODULES_DIR} (incl. BSP NVIDIA display modules)"
     fi
     echo "sudo cp -r ${MODULES_DIR} /lib/modules/."
     if ! sudo cp -r ${MODULES_DIR} /lib/modules/.; then

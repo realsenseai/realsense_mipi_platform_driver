@@ -107,7 +107,12 @@ else
         # Building the Image with default defconfig
         make -C kernel
     fi
-    make modules
+    # JP7 (Thor): don't build/install the NVIDIA display stack - keep the BSP's
+    # matched nvidia.ko/nvidia-modeset.ko/nvidia-drm.ko (the bundled nvdisplay
+    # source is a non-matching pre-release that breaks the GPU/display init).
+    DISPLAY_SKIP=""
+    version_lt "$JETPACK_VERSION" "7.0" || DISPLAY_SKIP="SKIP_NVIDIA_DISPLAY=1"
+    make modules $DISPLAY_SKIP
     D4XX_CMD_FILE="$BUILD_SRCS/nvidia-oot/drivers/media/i2c/.d4xx.o.cmd"
     mkdir -p $TEGRA_KERNEL_OUT/rootfs/boot/dtb
     if version_lt "$JETPACK_VERSION" "7.0"; then
@@ -120,7 +125,7 @@ else
     fi
     export INSTALL_MOD_PATH=$TEGRA_KERNEL_OUT/rootfs/
     make -C kernel install
-    make modules_install
+    make modules_install $DISPLAY_SKIP
     # iio support
     KERNELVERSION=$(cat $KERNEL_HEADERS/include/config/kernel.release)
     KERNEL_MODULES_OUT=$INSTALL_MOD_PATH/lib/modules/${KERNELVERSION}

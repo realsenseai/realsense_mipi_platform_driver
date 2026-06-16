@@ -59,6 +59,16 @@ Note: dev_dbg() log support will not be enabled by default. If needed, run the `
 
 ## Install kernel drivers, extra modules and device-tree to Jetson AGX Orin
 
+> **Note (JP7 / Thor — NVIDIA display stack):** On JetPack 7.x the build intentionally does **not**
+> produce the NVIDIA display/GPU modules (`nvidia.ko`, `nvidia-modeset.ko`, `nvidia-drm.ko`) — the
+> bundled `nvdisplay` source is a pre-release that does not match the board's flashed BSP userspace
+> driver and cannot initialize the GPU. The board therefore keeps its **matched BSP display modules**.
+> Because of this, the module copy must **overlay** (merge) onto the existing
+> `/lib/modules/6.8.12-tegra` — **do not delete it first.** The `cp -r ... /lib/modules/` commands below
+> already merge, and `scripts/install_to_kernel.sh` likewise overlays on JP7 (no `rm -rf`). Installing
+> a full rebuilt module tree that *replaces* the BSP `nvidia*.ko` results in a black screen / blinking
+> text cursor with no GUI (see Known issues).
+
 Following steps required:
 
 1. Copy build artifacts:
@@ -159,6 +169,21 @@ nvidia@ubuntu:~$ sudo dmesg | grep d4xx
 ```
 
 ### Known issues
+- No GUI after installing the driver — black screen / blinking text cursor (SSH still works)
+
+This means the BSP NVIDIA display modules were overwritten by rebuilt ones that don't match the
+board's userspace driver. Check:
+```
+# kernel module must report the BSP release (e.g. 580.00), NOT "TempVersion"
+cat /proc/driver/nvidia/version
+# X fails to bring up the GPU:
+grep "Failed to initialize the NVIDIA graphics device" /var/log/Xorg.0.log
+```
+Fix: keep the BSP display stack. With a current build (which no longer produces `nvidia.ko` /
+`nvidia-modeset.ko` / `nvidia-drm.ko` on JP7) just re-overlay the modules — do not wipe
+`/lib/modules`. If they were already clobbered, restore the three `nvidia*.ko` from the board's BSP
+rootfs, then `sudo depmod` and reboot. See the Note at the top of the install section.
+
 - Camera not recognized
 Verify I2C MUX detected. If "probe failed" reported, replace extension board adapter (LI-JTX1-SUB-ADPT).
 ```

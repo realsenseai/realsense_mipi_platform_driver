@@ -6068,7 +6068,7 @@ static int ds5_dfu_device_open(struct inode *inode, struct file *file)
 {
 	struct ds5 *state = container_of(inode->i_cdev, struct ds5,
 			dfu_dev.ds5_cdev);
-#ifdef CONFIG_TEGRA_CAMERA_PLATFORM
+#if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)
 	struct i2c_adapter *parent = i2c_parent_is_i2c_adapter(
 			state->client->adapter);
 #endif
@@ -6087,7 +6087,7 @@ static int ds5_dfu_device_open(struct inode *inode, struct file *file)
 		return -ENOMEM;
 	}
 	file->private_data = state;
-#ifdef CONFIG_TEGRA_CAMERA_PLATFORM
+#if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)
 	/* get i2c controller and set dfu bus clock rate */
 	while (parent && i2c_parent_is_i2c_adapter(parent))
 		parent = i2c_parent_is_i2c_adapter(state->client->adapter);
@@ -6240,7 +6240,7 @@ e_depth:
 static int ds5_dfu_device_release(struct inode *inode, struct file *file)
 {
 	struct ds5 *state = container_of(inode->i_cdev, struct ds5, dfu_dev.ds5_cdev);
-#ifdef CONFIG_TEGRA_CAMERA_PLATFORM
+#if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)
 	struct i2c_adapter *parent = i2c_parent_is_i2c_adapter(
 			state->client->adapter);
 #endif
@@ -6258,7 +6258,7 @@ static int ds5_dfu_device_release(struct inode *inode, struct file *file)
 	if (state->dfu_dev.dfu_msg)
 		devm_kfree(&state->client->dev, state->dfu_dev.dfu_msg);
 	state->dfu_dev.dfu_msg = NULL;
-#ifdef CONFIG_TEGRA_CAMERA_PLATFORM
+#if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)
 	/* get i2c controller and restore bus clock rate */
 	while (parent && i2c_parent_is_i2c_adapter(parent))
 		parent = i2c_parent_is_i2c_adapter(state->client->adapter);

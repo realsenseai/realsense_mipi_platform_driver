@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Linux kernel driver and userspace utilities for Intel RealSense D4XX series 3D depth cameras operating over GMSL (Gigabit Multimedia Serial Link) MIPI CSI-2 interface on NVIDIA Jetson platforms. Licensed under GPL-2.0.
 
-**Supported platforms:** Jetson AGX Xavier (JetPack 5.0.2, 5.1.2) and AGX Orin (JetPack 6.0, 6.1, 6.2, 6.2.1)
+**Supported platforms:** Jetson AGX Xavier (JetPack 5.0.2, 5.1.2) and AGX Orin (JetPack 6.0, 6.1, 6.2, 6.2.1) and AGX Thor (JetPack 7.0, 7.1)
 **Supported cameras:** D457 (primary), D401, D40x, D41x, D43x, D45x series
 
 ## Build Commands
@@ -77,7 +77,7 @@ RealSense D4XX camera module
 - **`kernel/realsense/d4xx.c`** — The main driver. Single-file V4L2 subdevice driver handling I2C communication, MIPI CSI-2 stream config, firmware control (DFU), calibration data, metadata capture, and V4L2 controls (exposure, laser power, AE ROI, etc.). Registers four sensor subdevices per camera: Depth, RGB, IR (Y8/Y8I/Y12I), and IMU.
 - **`kernel/kernel-5.10/`, `kernel/kernel-jammy-src/`, `kernel/kernel-noble-src/`** — Kernel patches organized by JetPack generation: 5.x uses kernel 5.10, 6.x uses kernel-jammy-src, 7.x uses kernel-noble-src.
 - **`kernel/nvidia/`** — NVIDIA driver patches (max9295/max9296 SerDes, VI capture engine) organized by JetPack version.
-- **`nvidia-oot/`** — Out-of-tree NVIDIA module patches for JetPack 6.x (subdirs `6.0/`, `6.1/`, `6.2/`, `6.2.1/`). Has its own Makefile for building conftest, hwpm, nvidia-oot, nvgpu, nvidia-display modules.
+- **`nvidia-oot/`** — Out-of-tree NVIDIA module patches for JetPack 6.x/7.x (subdirs `6.0/`, `6.1/`, `6.2/`, `6.2.1/`, `7.0/`, `7.1/`). Has its own Makefile for building conftest, hwpm, nvidia-oot, nvgpu, and (except on JP7) nvidia-display modules. **JP7/Thor:** the build passes `SKIP_NVIDIA_DISPLAY=1` so it does **not** produce `nvidia.ko`/`nvidia-modeset.ko`/`nvidia-drm.ko` — the bundled `nvdisplay` source is a pre-release that doesn't match the board's BSP userspace driver and breaks GPU/display init. The board keeps its matched BSP display modules, and `scripts/install_to_kernel.sh` overlays modules on JP7 (no `rm -rf /lib/modules`) so those BSP modules survive.
 - **`hardware/realsense/`** — Device tree source files. Xavier uses `.dtsi` includes (`tegra194-camera-d4xx-*.dtsi`), Orin uses DT overlays (`tegra234-camera-d4xx-overlay*.dts`). Single-camera and dual-camera variants exist, plus `.calib.` variants for calibration.
 - **`hardware/nvidia/`** — Platform-level DT patches (`t19x/galen/` for Xavier, `t23x/` for Orin T234).
 - **`scripts/`** — Build orchestration. `setup-common` defines version-to-revision mappings and kernel directory selection. `source_sync_*.sh` scripts clone NVIDIA kernel repos. `SerDes_D457_*.sh` scripts configure serializer/deserializer registers.
@@ -99,6 +99,7 @@ Each camera creates 6 V4L2 video devices:
 The build system cross-compiles for ARM64. Toolchains vary by JetPack:
 - JP 5.x: Bootlin GCC 9.3
 - JP 6.x: Bootlin GCC 11.3 (`aarch64-buildroot-linux-gnu`)
+- JP 7.x: ARM GNU toolchain (`aarch64-none-linux-gnu`)
 
 `setup_workspace.sh` automatically downloads the appropriate toolchain.
 
@@ -112,12 +113,20 @@ The build system cross-compiles for ARM64. Toolchains vary by JetPack:
 | 6.1     | 36.4        | kernel/kernel-jammy-src |
 | 6.2     | 36.4.3      | kernel/kernel-jammy-src |
 | 6.2.1   | 36.4.4      | kernel/kernel-jammy-src |
+| 7.0     | 38.2        | kernel/kernel-noble-src |
+| 7.1     | 38.4        | kernel/kernel-noble-src |
 
 ## Branching
 
 - `master` — primary/release branch
 - `dev` — active development branch; **default target for all PRs**
 - CI builds run on pushes to `master` and `dev`, and on all PRs
+
+## Kernel ABI / module compatibility notes
+
+- Never add a member to a public kernel struct referenced by exported symbols (e.g. `struct i2c_adapter` in `include/linux/i2c.h`). genksyms recomputes the CRC of every exported symbol referencing that struct, so prebuilt out-of-tree modules built against the unpatched headers — notably the BSP NVIDIA display stack (`nvidia.ko`/`nvidia-modeset.ko`/`nvidia-drm.ko`) — fail to load with "disagrees about version of symbol". Add only new exported functions; keep private state out of public headers. After any kernel-header patch, diff the rebuilt `vmlinux.symvers`/`Module.symvers` against what the BSP modules require (`modprobe --dump-modversions <module>.ko`).
+- The i2c bus-clk-rate feature (kernel patch `0005`) is functional only on 5.x/6.x, where `tegra_i2c_xfer()` reprograms the clock from `adap->bus_clk_rate`. On 7.x the noble i2c-tegra rewrite ignores it, so `0005` is removed for 7.x and the d4xx DFU call sites are version-guarded (`#if ... LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)`). Do not re-add or stub `0005` on 5.x/6.x.
+- JP7/Thor: do not rebuild/replace the BSP NVIDIA display stack — the bundled `nvdisplay` is a non-matching pre-release that breaks GPU/display init (black screen / blinking cursor; `/proc/driver/nvidia/version` shows `TempVersion`). `build_all.sh` passes `SKIP_NVIDIA_DISPLAY=1` for `>= 7.0`, and `install_to_kernel.sh` overlays modules on JP7 (no `rm -rf /lib/modules`).
 
 ## Concurrency notes
 
