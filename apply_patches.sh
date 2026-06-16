@@ -102,7 +102,7 @@ fi
 echo "Patches applied successfully"
 
 if [[ "$ACTION" = "apply" ]]; then
-    version_lt "$JETPACK_VERSION" "5.0" || ln -f kernel/realsense/d4xx.c "${BUILD_SRCS}/${D4XX_SRC_DST}/drivers/media/i2c/"
+    version_lt "$JETPACK_VERSION" "5.0" || ln -f -s "$(pwd)/kernel/realsense/d4xx.c" "${BUILD_SRCS}/${D4XX_SRC_DST}/drivers/media/i2c/"
     if version_lt "$JETPACK_VERSION" "6.0"; then
         # device tree
         cp "hardware/realsense/${JP5_D4XX_DTSI}" "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen/kernel-dts/common/tegra194-camera-d4xx.dtsi"

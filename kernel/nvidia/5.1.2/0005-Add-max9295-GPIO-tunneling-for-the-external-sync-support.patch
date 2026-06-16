@@ -6,13 +6,14 @@ Subject: [PATCH] Add max9295 GPIO tunneling for the external sync support
 Add MAX9295A serializer GPIO tunneling / ESYNC register configuration
 for MAX96712A external sync support.
 
-Includes max9295_setup_gpio_tunneling() export for MAX96712A usage.
+Includes max9295_enable_gpio_tunneling() export for MAX96712A usage.
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
+Signed-off-by: ipilchin1 <inga.pilchin@realsenseai.com>
 ---
- drivers/media/i2c/max9295.c | 69 +++++++++++++++++++++++++++++++++++++++++++++
- include/media/max9295.h     |  3 +++
- 2 files changed, 72 insertions(+)
+ drivers/media/i2c/max9295.c | 71 +++++++++++++++++++++++++++++++++++++++++++++
+ include/media/max9295.h     |  4 +++
+ 2 files changed, 75 insertions(+)
 
 diff --git a/drivers/media/i2c/max9295.c b/drivers/media/i2c/max9295.c
 index 6311d97d7..d7226af6e 100644
@@ -45,64 +46,66 @@ index 6311d97d7..d7226af6e 100644
  
  #define MAX9295_MAX_PIPES 0x4
  
-@@ -383,6 +395,61 @@ error:
+@@ -383,6 +395,63 @@ error:
  }
  EXPORT_SYMBOL(max9295_setup_control);
  
-+int max9295_setup_gpio_tunneling(struct device *dev)
++static int max9295_write_acc(struct device *dev, struct regmap *regmap,
++			     u16 addr, u8 val, int *err)
++{
++	unsigned int readback = 0;
++
++	if (*err)
++		return *err;
++	*err = max9295_write_reg(dev, addr, val);
++	if (!*err)
++		regmap_read(regmap, addr, &readback);
++	dev_dbg(dev, "%s: reg 0x%04x written 0x%02x readback 0x%02x\n",
++		__func__, addr, val, readback);
++	return *err;
++}
++
++int max9295_enable_gpio_tunneling(struct device *dev)
 +{
 +	struct max9295 *priv = dev_get_drvdata(dev);
 +	int err = 0;
-+	unsigned int readback = 0;
 +
 +	mutex_lock(&priv->lock);
 +
-+	dev_info(dev, "%s: writing GPIO tunneling registers\n", __func__);
-+
 +	/* Configure ESYNC registers for MAX96712A deserializer */
-+	max9295_write_reg(dev, MAX9295_SRC_PWDN_ADDR, MAX9295_PWDN_ESYNC_EXT);
-+	regmap_read(priv->regmap, MAX9295_SRC_PWDN_ADDR, &readback);
-+	dev_info(dev, "%s: reg 0x%04x written 0x%02x readback 0x%02x %s\n",
-+		__func__, MAX9295_SRC_PWDN_ADDR, MAX9295_PWDN_ESYNC_EXT,
-+		readback, (readback == MAX9295_PWDN_ESYNC_EXT) ? "OK" : "MISMATCH");
-+
-+	max9295_write_reg(dev, MAX9295_SRC_CTRL_ADDR, MAX9295_RESET_ESYNC);
-+	regmap_read(priv->regmap, MAX9295_SRC_CTRL_ADDR, &readback);
-+	dev_info(dev, "%s: reg 0x%04x written 0x%02x readback 0x%02x %s\n",
-+		__func__, MAX9295_SRC_CTRL_ADDR, MAX9295_RESET_ESYNC,
-+		readback, (readback == MAX9295_RESET_ESYNC) ? "OK" : "MISMATCH");
-+
-+	max9295_write_reg(dev, MAX9295_2C0_ADDR, MAX9295_2C0_ESYNC);
-+	regmap_read(priv->regmap, MAX9295_2C0_ADDR, &readback);
-+	dev_info(dev, "%s: reg 0x%04x written 0x%02x readback 0x%02x %s\n",
-+		__func__, MAX9295_2C0_ADDR, MAX9295_2C0_ESYNC,
-+		readback, (readback == MAX9295_2C0_ESYNC) ? "OK" : "MISMATCH");
-+
-+	max9295_write_reg(dev, MAX9295_2C1_ADDR, MAX9295_2C1_ESYNC);
-+	regmap_read(priv->regmap, MAX9295_2C1_ADDR, &readback);
-+	dev_info(dev, "%s: reg 0x%04x written 0x%02x readback 0x%02x %s\n",
-+		__func__, MAX9295_2C1_ADDR, MAX9295_2C1_ESYNC,
-+		readback, (readback == MAX9295_2C1_ESYNC) ? "OK" : "MISMATCH");
-+
-+	max9295_write_reg(dev, MAX9295_2C2_ADDR, MAX9295_2C2_ESYNC);
-+	regmap_read(priv->regmap, MAX9295_2C2_ADDR, &readback);
-+	dev_info(dev, "%s: reg 0x%04x written 0x%02x readback 0x%02x %s\n",
-+		__func__, MAX9295_2C2_ADDR, MAX9295_2C2_ESYNC,
-+		readback, (readback == MAX9295_2C2_ESYNC) ? "OK" : "MISMATCH");
-+
-+	max9295_write_reg(dev, MAX9295_2C3_ADDR, MAX9295_2C3_ESYNC);
-+	regmap_read(priv->regmap, MAX9295_2C3_ADDR, &readback);
-+	dev_info(dev, "%s: reg 0x%04x written 0x%02x readback 0x%02x %s\n",
-+		__func__, MAX9295_2C3_ADDR, MAX9295_2C3_ESYNC,
-+		readback, (readback == MAX9295_2C3_ESYNC) ? "OK" : "MISMATCH");
-+
-+	dev_info(dev, "%s: GPIO tunneling register config done\n", __func__);
++	max9295_write_acc(dev, priv->regmap, MAX9295_SRC_PWDN_ADDR, MAX9295_PWDN_ESYNC_EXT, &err);
++	max9295_write_acc(dev, priv->regmap, MAX9295_SRC_CTRL_ADDR, MAX9295_RESET_ESYNC, &err);
++	max9295_write_acc(dev, priv->regmap, MAX9295_2C0_ADDR, MAX9295_2C0_ESYNC, &err);
++	max9295_write_acc(dev, priv->regmap, MAX9295_2C1_ADDR, MAX9295_2C1_ESYNC, &err);
++	max9295_write_acc(dev, priv->regmap, MAX9295_2C2_ADDR, MAX9295_2C2_ESYNC, &err);
++	max9295_write_acc(dev, priv->regmap, MAX9295_2C3_ADDR, MAX9295_2C3_ESYNC, &err);
 +
 +	mutex_unlock(&priv->lock);
 +
 +	return err;
 +}
-+EXPORT_SYMBOL(max9295_setup_gpio_tunneling);
++EXPORT_SYMBOL(max9295_enable_gpio_tunneling);
++
++int max9295_disable_gpio_tunneling(struct device *dev)
++{
++	struct max9295 *priv = dev_get_drvdata(dev);
++	int err = 0;
++
++	mutex_lock(&priv->lock);
++
++	/* Restore default SRC pin function — plain GPIO, no ESYNC tunneling */
++	max9295_write_acc(dev, priv->regmap, MAX9295_SRC_PWDN_ADDR, MAX9295_PWDN_GPIO, &err);
++	max9295_write_acc(dev, priv->regmap, MAX9295_SRC_CTRL_ADDR, MAX9295_RESET_SRC, &err);
++	max9295_write_acc(dev, priv->regmap, MAX9295_2C0_ADDR, 0x00, &err);
++	max9295_write_acc(dev, priv->regmap, MAX9295_2C1_ADDR, 0x00, &err);
++	max9295_write_acc(dev, priv->regmap, MAX9295_2C2_ADDR, 0x00, &err);
++	max9295_write_acc(dev, priv->regmap, MAX9295_2C3_ADDR, 0x00, &err);
++
++	mutex_unlock(&priv->lock);
++
++	return err;
++}
++EXPORT_SYMBOL(max9295_disable_gpio_tunneling);
 +
  int max9295_reset_control(struct device *dev)
  {
@@ -125,12 +128,13 @@ diff --git a/include/media/max9295.h b/include/media/max9295.h
 index bea15c414..6099859d2 100644
 --- a/include/media/max9295.h
 +++ b/include/media/max9295.h
-@@ -99,6 +99,9 @@ int max9295_sdev_unpair(struct device *dev, struct device *s_dev);
+@@ -99,6 +99,10 @@ int max9295_sdev_unpair(struct device *dev, struct device *s_dev);
  int max9295_setup_streaming(struct device *dev);
  
  int max9295_init_settings(struct device *dev);
 +
-+int max9295_setup_gpio_tunneling(struct device *dev);
++int max9295_enable_gpio_tunneling(struct device *dev);
++int max9295_disable_gpio_tunneling(struct device *dev);
 +
  /** @} */
  

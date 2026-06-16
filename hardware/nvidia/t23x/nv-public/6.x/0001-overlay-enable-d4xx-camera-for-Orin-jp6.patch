@@ -1,18 +1,18 @@
-From 456afa3e46b2ac917892ca738b0e5db883d03782 Mon Sep 17 00:00:00 2001
+From e3fe6eac640e62ddaa1b13a171a0bdd6ed3cb53e Mon Sep 17 00:00:00 2001
 From: ejgoldik <ehud.joseph.goldik@realsenseai.com>
-Date: Mon, 6 Apr 2026 11:56:35 +0300
+Date: Sun, 26 Apr 2026 10:03:11 +0300
 Subject: [PATCH] overlay: enable d4xx camera for Orin jp6
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- overlay/Makefile | 18 ++++++++++++++++++
- 1 file changed, 18 insertions(+)
+ overlay/Makefile | 21 +++++++++++++++++++++
+ 1 file changed, 21 insertions(+)
 
 diff --git a/overlay/Makefile b/overlay/Makefile
-index c88bbe2..bbfcea7 100644
+index c88bbe2..cdd125f 100644
 --- a/overlay/Makefile
 +++ b/overlay/Makefile
-@@ -60,6 +60,24 @@ dtbo-y += tegra234-p3767-camera-p3768-imx219-A.dtbo
+@@ -60,6 +60,27 @@ dtbo-y += tegra234-p3767-camera-p3768-imx219-A.dtbo
  dtbo-y += tegra234-p3767-camera-p3768-imx219-imx477.dtbo
  dtbo-y += tegra234-p3767-camera-p3768-imx477-C.dtbo
  dtbo-y += tegra234-p3767-camera-p3768-imx477-A.dtbo
@@ -28,6 +28,9 @@ index c88bbe2..bbfcea7 100644
 +dtbo-y += tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-4-8-12.dtbo
 +dtbo-y += tegra234-camera-d4xx-overlay-advantech.dtbo
 +dtbo-y += tegra234-camera-d4xx-overlay-avermedia.dtbo
++dtbo-y += tegra234-camera-d4xx-overlay-seeed.dtbo
++dtbo-y += tegra234-camera-d4xx-overlay-seeed-cams-0-1.dtbo
++dtbo-y += tegra234-camera-d4xx-overlay-seeed-cams-0-1-2-3.dtbo
 +dtbo-y += tegra234-camera-d4xx-overlay.calib.dtbo
 +dtbo-y += tegra234-camera-d4xx-overlay-dual.calib.dtbo
 +dtbo-y += tegra234-camera-d4xx-overlay-max96712-EVB.calib.dtbo

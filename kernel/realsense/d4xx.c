@@ -134,6 +134,10 @@ struct dser_interface {
 #define DS5_RGB_FPS				0x402C
 #define DS5_RGB_CONTROL_STATUS 	0x402E
 
+/* SerDes startup I2C readiness polling (defer probe if not responsive) */
+#define DS5_SERDES_STARTUP_TIMEOUT_MS 2000
+#define DS5_SERDES_STARTUP_RETRY_DELAY_MS 100
+
 #define DS5_IMU_STREAM_DT		0x4040
 #define DS5_IMU_STREAM_MD		0x4042
 #define DS5_IMU_RES_WIDTH		0x4044
@@ -540,14 +544,13 @@ struct ds5_dev {
 
 	/* Pointer to the primary DS5 struct */
 	struct ds5 *ds5_primary;
+	bool serdes_setup_complete;
 
 	bool depth_streaming;
 	bool ir_streaming;
 	bool rgb_streaming;
 	bool imu_streaming;
-	atomic_t ds5_probe_reset_once;
 };
-
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 static DEFINE_MUTEX(serdes_lock__);
@@ -1859,8 +1862,7 @@ static void ds5_invalidate_sensor(struct ds5 *state, struct ds5_sensor *sensor)
 	ds5_config_cache_clear(sensor);
 	/* Do NOT release SERDES pipes or clear pipe_id here.
 	 * Preserve the existing pipe_id so that ds5_configure() can
-	 * release-then-reallocate the pipe at stream-start time, when
-	 * the camera FW has finished its post-boot serializer init.
+	 * release-then-reallocate the pipe at stream-start time.
 	 * Clearing pipe_data_type forces ds5_configure() to enter the
 	 * re-allocation path (data_type mismatch triggers pipe setup).
 	 */
@@ -1872,7 +1874,7 @@ static void ds5_invalidate_sensor(struct ds5 *state, struct ds5_sensor *sensor)
 static int ds5_configure(struct ds5 *state)
 {
 	struct ds5_sensor *sensor;
-	u16 fmt, md_fmt, vc_id;
+	u16 md_fmt, vc_id;
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	u16 data_type1, data_type2;
 	bool is_calib = 0;
@@ -1955,11 +1957,13 @@ static int ds5_configure(struct ds5 *state)
 			dev_err(&state->client->dev, "No free pipe in %s\n",state->dser_ops->name);
 			return -ENOSR;
 		}
+		mutex_lock(&serdes_lock__);
 		ret = ds5_setup_pipeline(state, data_type1, data_type2,
 					 sensor->pipe_id, vc_id);
 		// reset data path when switching to Y12I
 		if (is_calib)
 			state->dser_ops->reset_oneshot(state->dser_dev);
+		mutex_unlock(&serdes_lock__);
 		if (ret < 0)
 			return ret;
 		dev_dbg(&state->client->dev,
@@ -1977,21 +1981,19 @@ static int ds5_configure(struct ds5 *state)
 	vc_id = (state->is_depth) ? 0 : (state->is_rgb) ? 1 : (state->is_y8) ? 2 : 3;
 #endif
 
-	fmt = sensor->streaming ? sensor->config.format->data_type : 0;
-
 	/* Determine desired data-type (special cases for depth/IR), then write
 	 * it only when it differs from cached value. This avoids overwriting a
 	 * correct DT with 0 (which caused INVALID_DT on subsequent attempts).
 	 */
-	dt_value = fmt;
-	if (state->is_depth && fmt != 0)
+	dt_value = sensor->config.format->data_type;
+	if (state->is_depth && dt_value != 0)
 		dt_value = 0x31;
-	else if (state->is_y8 && fmt != 0 &&
-		 sensor->config.format->data_type == GMSL_CSI_DT_YUV422_8)
+	else if (state->is_y8 && dt_value == GMSL_CSI_DT_YUV422_8)
 		dt_value = 0x32;
 
-	dev_dbg(&state->client->dev, "sensor %p: dt_value=0x%x, cached_dt_value=0x%x, cached_fps_value=%u, framerate=%u\n",
-			sensor, dt_value, sensor->cached_dt_value, sensor->cached_fps_value, sensor->config.framerate);
+	dev_dbg(&state->client->dev,
+		"sensor %p: dt_value=0x%x, cached_dt_value=0x%x, cached_fps_value=%u, framerate=%u\n",
+		sensor, dt_value, sensor->cached_dt_value, sensor->cached_fps_value, sensor->config.framerate);
 
 	if (sensor->cached_dt_value != dt_value) {
 		ret = ds5_write(state, dt_addr, dt_value);
@@ -2008,15 +2010,13 @@ static int ds5_configure(struct ds5 *state)
 		sensor->cached_md_value = md_value;
 	}
 
-	if (!sensor->streaming)
-		return ret;
-
 	if (override_addr != 0) {
-		if (sensor->cached_override_value != fmt) {
-			ret = ds5_write(state, override_addr, fmt);
+		dt_value = sensor->config.format->data_type;
+		if (sensor->cached_override_value != dt_value) {
+			ret = ds5_write(state, override_addr, dt_value);
 			if (ret < 0)
 				return ret;
-			sensor->cached_override_value = fmt;
+			sensor->cached_override_value = dt_value;
 		}
 	}
 
@@ -2211,6 +2211,16 @@ static int ds5_hw_set_exposure(struct ds5 *state, u32 base, s32 val)
 #define DS5_CAMERA_CID_HWMC			(DS5_CAMERA_CID_BASE+15)
 #define DS5_CAMERA_CID_SYNC_MODE		(DS5_CAMERA_CID_BASE+16)
 
+/* Sync mode values — indices into sync_mode_menu_full[] */
+enum ds5_sync_mode {
+	DS5_SYNC_MODE_DEFAULT,
+	DS5_SYNC_MODE_MASTER,
+	DS5_SYNC_MODE_SLAVE,
+	DS5_SYNC_MODE_FULL_SLAVE,
+	DS5_SYNC_MODE_SUB_PREMASTER,
+	DS5_SYNC_MODE_FULL_MASTER,
+};
+
 #define DS5_CAMERA_CID_PWM			(DS5_CAMERA_CID_BASE+22)
 
 /* the HWMC will remain for legacy tools compatibility,
@@ -2359,20 +2369,13 @@ static int ds5_set_calibration_data(struct ds5 *state,
 }
 
 /* HW reset timeout and polling parameters */
-#define DS5_HW_RESET_INITIAL_DELAY_MS	100
+#define DS5_HW_RESET_INITIAL_DELAY_MS	500
 #define DS5_HW_RESET_POLL_INTERVAL_MS	200
 #define DS5_HW_RESET_TIMEOUT_MS		10000
 #define DS5_HW_RESET_MAX_RETRIES	(DS5_HW_RESET_TIMEOUT_MS / DS5_HW_RESET_POLL_INTERVAL_MS)
 
-/* Post-reset I2C stability verification parameters used by SERDES recovery. */
-#define DS5_HW_RESET_STABILITY_READS	3	/* consecutive successful reads */
-#define DS5_HW_RESET_STABILITY_INTERVAL_MS 200	/* between each check */
-#define DS5_HW_RESET_STABILITY_TIMEOUT_MS 3000	/* max wait for stable link */
-
 /* Minimum interval between consecutive HW resets (ms).
- * Rapid back-to-back resets degrade the GMSL link because each
- * serializer re-init (Phase 1) conflicts with the camera FW's own
- * I2C bus reconfiguration after reboot.
+ * Rapid back-to-back resets degrade the GMSL link.
  */
 #define DS5_HW_RESET_COOLDOWN_MS	2000
 
@@ -2418,22 +2421,6 @@ static int ds5_wait_device_type(struct ds5 *state, u16 *dev_type)
 	return ret ? ret : -ETIMEDOUT;
 }
 
-/*
- * ds5_hw_reset_serdes_recovery - Tiered SERDES recovery after HW reset.
- * @state: Driver state
- * @force_phase2: When true, skip Phase 1 and go straight to Phase 2
- *                (full deserializer reset).  Used by Step 10 when the
- *                I2C link is unstable despite Phase 1 having passed.
- *
- * Phase 1: Re-init serializer only (per-camera, non-disruptive).
- * Phase 2: If I2C still fails (or force_phase2), perform a full deserializer
- *          reset_oneshot (chip-wide, disruptive) only when no sibling camera
- *          on the same deserializer is currently reachable over I2C and
- *          streaming.
- *
- * Returns 0 on success, negative errno on failure.
- */
-
 static void ds5_reset_streaming_flags(struct ds5_dev *ds5_dev)
 {
 	mutex_lock(&ds5_dev->lock);
@@ -2444,266 +2431,50 @@ static void ds5_reset_streaming_flags(struct ds5_dev *ds5_dev)
 	mutex_unlock(&ds5_dev->lock);
 }
 
-#ifdef CONFIG_VIDEO_D4XX_SERDES
-static int ds5_hw_reset_serdes_recovery(struct ds5 *state, bool force_phase2)
+static int ds5_set_ser_esync_tunneling(struct ds5 *state, bool enable)
 {
+#ifdef CONFIG_VIDEO_D4XX_SERDES
 	int ret;
-	int i;
-	u16 tmp = 0;
-	bool sibling_alive = false;
-	struct ds5 *sib_primary[MAX_DS5_NUM];
-	bool sib_streaming[MAX_DS5_NUM];
-	int sib_cnt = 0;
-	struct ds5 *primary;
 
-	mutex_lock(&state->ds5_dev->lock);
-	primary = state->ds5_dev->ds5_primary; /* the instance that ran SERDES setup */
-	mutex_unlock(&state->ds5_dev->lock);
-
-	if (!primary) {
-		dev_err(&state->client->dev,
-			"%s(): ds5_primary is NULL, cannot perform SERDES recovery\n",
-			__func__);
-		return -ENODEV;
-	}
-
-	dev_dbg(&state->client->dev,
-		"%s(): using primary instance %s for SERDES API calls\n",
-		__func__, dev_name(&primary->client->dev));
-
-	if (!state->ser_dev || !state->dser_dev)
+	if (!state || !state->ser_dev)
+		return -EINVAL;
+	if (state->dser_ops != &max96712_interface)
 		return 0;
 
-	if (!force_phase2) {
-		/* Phase 1 — serializer-only re-init (per-camera, safe) */
-		dev_info(&state->client->dev,
-			"%s(): Phase 1 - re-initializing serializer\n", __func__);
-		ret = max9295_init_settings(state->ser_dev);
-		if (ret < 0)
-			dev_warn(&state->client->dev,
-				"%s(): serializer init_settings failed: %d\n",
-				__func__, ret);
+	dev_dbg(&state->client->dev,
+		"%s(): serializer ESYNC %s requested\n",
+		__func__, enable ? "enable" : "disable");
 
-		msleep(100);
+	if (enable)
+		ret = max9295_enable_gpio_tunneling(state->ser_dev);
+	else
+		ret = max9295_disable_gpio_tunneling(state->ser_dev);
 
-		/* Verify I2C link to camera is working AND stable.
-		 * A single successful read is not enough — the D457 FW can
-		 * momentarily restore the GMSL link during its late-boot
-		 * serializer reconfiguration, only to kill it again ~100 ms
-		 * later.  Do multiple reads with delays to catch oscillation.
-		 */
-		ret = ds5_read_poll(state, DS5_FW_VERSION, &tmp);
-		if (ret == 0) {
-			int k;
-			bool stable = true;
-
-			for (k = 0; k < DS5_HW_RESET_STABILITY_READS; k++) {
-				msleep(DS5_HW_RESET_STABILITY_INTERVAL_MS);
-				ret = ds5_read_poll(state, DS5_FW_VERSION, &tmp);
-				if (ret < 0) {
-					dev_warn(&state->client->dev,
-						"%s(): Phase 1 stability check %d/%d failed (err %d)\n",
-						__func__, k + 1, DS5_HW_RESET_STABILITY_READS, ret);
-					stable = false;
-					break;
-				}
-			}
-			if (stable) {
-				dev_info(&state->client->dev,
-					"%s(): Phase 1 succeeded, I2C link stable (%d consecutive reads OK)\n",
-					__func__, DS5_HW_RESET_STABILITY_READS);
-				return 0;
-			}
-			dev_warn(&state->client->dev,
-				"%s(): Phase 1 link unstable, escalating to Phase 2\n",
-				__func__);
-		} else {
-			/* Phase 2 — I2C still broken; consider full deserializer reset */
-			dev_warn(&state->client->dev,
-				"%s(): Phase 1 failed (I2C err %d), checking siblings before deser reset\n",
-				__func__, ret);
-		}
-	} else {
-		dev_info(&state->client->dev,
-			"%s(): Phase 2 forced (I2C link unstable after Phase 1), checking siblings\n",
-			__func__);
-	}
-
-	/*
-	 * In the D4XX architecture each physical camera has upto 4 driver instances
-	 * (Depth, RGB, IR, IMU) sharing the same ser_dev.  A "true sibling" is
-	 * a different physical camera on the same deserializer: same dser_dev
-	 * but different ser_dev.
-	 *
-	 * Same-camera instances are always safe to reset together since they
-	 * share the same camera ASIC — the HW reset already killed them all.
-	 */
-	mutex_lock(&serdes_lock__);
-	for (i = 0; i < MAX_DS5_NUM; i++) {
-		struct ds5_dev *sib = &ds5_inited[i];
-		struct ds5 *sib_p;
-		bool streaming;
-
-		mutex_lock(&sib->lock);
-		sib_p = sib->ds5_primary;
-		streaming = sib->depth_streaming || sib->rgb_streaming ||
-			sib->ir_streaming || sib->imu_streaming;
-		mutex_unlock(&sib->lock);
-
-		if (!sib_p || sib == state->ds5_dev)
-			continue;
-		if (sib_p->dser_dev != state->dser_dev)
-			continue;
-
-		sib_primary[sib_cnt] = sib_p;
-		sib_streaming[sib_cnt] = streaming;
-		sib_cnt++;
-	}
-	mutex_unlock(&serdes_lock__);
-
-	for (i = 0; i < sib_cnt; i++) {
-		if (!sib_streaming[i])
-			continue;
-
-		if (0 == ds5_read_poll(sib_primary[i], DS5_FW_VERSION, &tmp)) {
-			sibling_alive = true;
-			dev_warn(&state->client->dev,
-				"%s(): true sibling %s alive & streaming, skipping deser reset\n",
-				__func__, dev_name(&sib_primary[i]->client->dev));
-			break;
-		}
-	}
-
-	if (sibling_alive) {
-		dev_err(&state->client->dev,
-			"%s(): GMSL link broken but sibling camera streaming — "
-			"cannot reset deserializer. Manual recovery "
-			"(driver reload / camera power cycle) may be needed.\n",
-			__func__);
-		return -EIO;
-	}
-
-	/* All true siblings dead or none streaming — safe to reset entire deserializer */
-	dev_info(&state->client->dev,
-		"%s(): Phase 2 - performing full deserializer reset\n", __func__);
-
-	/* Use reset_oneshot (software GMSL link reset) rather than a full
-	 * GPIO power cycle.  reset_oneshot preserves the MAX9296's I2C
-	 * pass-through table and per-pipe config while re-initializing the
-	 * GMSL link channels.  Testing shows the GMSL link reliably
-	 * re-establishes after reset_oneshot (typically 2-4 s), whereas a
-	 * full power_off/power_on GPIO reset destroys all deserializer
-	 * state and the link does NOT come back.
-	 */
-	mutex_lock(&serdes_lock__);
-	state->dser_ops->reset_oneshot(state->dser_dev);
-	msleep(300);
-
-	/* setup_link writes to deserializer registers via host I2C (always
-	 * reachable, no GMSL needed).  This configures the link mode so
-	 * GMSL auto-negotiation can proceed.
-	 */
-	ret = state->dser_ops->setup_link(state->dser_dev, &primary->client->dev);
 	if (ret)
 		dev_warn(&state->client->dev,
-			"%s(): deser setup_link failed: %d\n", __func__, ret);
-	mutex_unlock(&serdes_lock__);
+			"%s(): serializer ESYNC %s failed (%d)\n",
+			__func__, enable ? "enable" : "disable", ret);
+	else
+		dev_dbg(&state->client->dev,
+			"%s(): serializer ESYNC %s OK\n",
+			__func__, enable ? "enable" : "disable");
 
-	/* The GMSL link may take several seconds to fully re-establish
-	 * after reset_oneshot.  In testing, the D457 camera's serializer
-	 * becomes reachable 2-4 s after the reset.  Poll for I2C recovery
-	 * before attempting serializer/deserializer control setup.
-	 */
-	for (i = 0; i < 8; i++) {
-		msleep(500);
-		ret = ds5_read_poll(state, DS5_FW_VERSION, &tmp);
-		if (ret == 0) {
-			dev_info(&state->client->dev,
-				"%s(): Phase 2: I2C link up after %d ms\n",
-				__func__, (i + 1) * 500 + 300);
-			break;
-		}
-	}
-
-	if (ret < 0) {
-		dev_err(&state->client->dev,
-			"%s(): Phase 2 failed, I2C unrecoverable after %d ms\n",
-			__func__, 8 * 500 + 300);
-		return ret;
-	}
-
-	/* GMSL link is up — now configure serializer and deserializer.
-	 * Use the primary instance's device for deserializer API calls
-	 * (the one paired via sdev_pair/sdev_register during probe).
-	 */
-	mutex_lock(&serdes_lock__);
-
-	ret = max9295_setup_control(state->ser_dev);
-	if (ret)
-		dev_warn(&state->client->dev,
-			"%s(): ser setup_control failed: %d\n", __func__, ret);
-
-	ret = state->dser_ops->setup_control(state->dser_dev, &primary->client->dev);
-	if (ret)
-		dev_warn(&state->client->dev,
-			"%s(): deser setup_control failed: %d\n", __func__, ret);
-
-	ret = max9295_init_settings(state->ser_dev);
-	if (ret)
-		dev_warn(&state->client->dev,
-			"%s(): ser init_settings failed: %d\n", __func__, ret);
-
-	ret = state->dser_ops->init_settings(state->dser_dev);
-	if (ret)
-		dev_warn(&state->client->dev,
-			"%s(): deser init_settings failed: %d\n", __func__, ret);
-
-	mutex_unlock(&serdes_lock__);
-
-	/* Final stability check — ensure the link is reliably up */
-	{
-		int k;
-		bool stable = true;
-
-		for (k = 0; k < 3; k++) {
-			msleep(200);
-			ret = ds5_read_poll(state, DS5_FW_VERSION, &tmp);
-			if (ret < 0) {
-				stable = false;
-				break;
-			}
-		}
-		if (!stable) {
-			dev_err(&state->client->dev,
-				"%s(): Phase 2 setup done but I2C unstable: %d\n",
-				__func__, ret);
-			return ret;
-		}
-	}
-
-	dev_info(&state->client->dev,
-		"%s(): Phase 2 succeeded, full deser recovery complete\n", __func__);
-
-	/* Increment deserializer reset generation
-	 *	This results in all cameras connected to this deserializer
-	 *	invalidating serializer and ds5 caches,
-	 *	ensuring any stale state from the reset is cleared.
-	*/
-	atomic_inc(dser_get_reset_gen(state));
-
+	return ret;
+#else
 	return 0;
+#endif
 }
-#endif /* CONFIG_VIDEO_D4XX_SERDES */
 
 /*
- * ds5_hw_reset_with_recovery - Perform hardware reset with GMSL recovery
+ * ds5_hw_reset_with_recovery - Perform hardware reset with readiness polling
  * @state: Driver state structure
  *
  * Sends a hardware reset command to the D4XX device and waits for it to
  * come back online.  Before resetting, stops active streams and invalidates
  * all driver-side sensor state (streaming flags, SERDES pipes, config cache).
- * After the device responds, performs tiered SERDES recovery (serializer-only
- * first, full deserializer reset only when all siblings are also dead).
+ * After the device responds, waits for DEVICE_TYPE to become valid (GMSL
+ * link recovery).  Per-pipe SERDES reconfiguration is deferred to
+ * ds5_configure() at the next stream start.
  *
  * Returns 0 on success, negative error code on failure.
  */
@@ -2720,15 +2491,15 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	bool ir_streaming;
 	bool imu_streaming;
 	unsigned long ds5_last_reset_jiffies = READ_ONCE(state->ds5_dev->last_reset_jiffies);
+	unsigned long ts, timeout;
 
 	dev_info(&state->client->dev, "%s(): Initiating HW reset with recovery\n",
 		__func__);
 
 	/* 0. Reset cooldown — prevent rapid consecutive resets.
-	 *    Repeated HW reset + Phase-1 serializer re-init without letting
-	 *    the camera FW finish its post-boot I2C bus reconfiguration
-	 *    progressively degrades the GMSL link until even SERDES pipe
-	 *    setup fails.  Enforce a minimum interval between resets.
+	 *    Repeated HW resets without sufficient recovery time
+	 *    progressively degrade the GMSL link.  Enforce a minimum
+	 *    interval between resets.
 	 *    Skip check on the very first reset (ds5_last_reset_jiffies == 0).
 	 */
 	if (ds5_last_reset_jiffies) {
@@ -2817,95 +2588,57 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	dev_info(&state->client->dev, "%s(): HW reset command sent, waiting for device...\n",
 		__func__);
 
-	/* 5. Brief delay to allow reset to begin */
+	/* 5. Delay to allow reset to complete */
+	ts = jiffies;
 	msleep(DS5_HW_RESET_INITIAL_DELAY_MS);
 
 	/* 6. Poll for control-status defaults to confirm reset completion. */
-	for (retry = 0; retry < DS5_HW_RESET_MAX_RETRIES; retry++, msleep(DS5_HW_RESET_POLL_INTERVAL_MS)) {
-		ret = ds5_read_poll(state, ready_reg, &ready_status);
+	for (retry = 0, timeout = ts + msecs_to_jiffies(DS5_HW_RESET_TIMEOUT_MS);
+			; retry++, msleep_range(DS5_HW_RESET_POLL_INTERVAL_MS)) {
+		if (!time_before(jiffies, timeout)) {
+			dev_err(&state->client->dev,
+				"%s(): Device isn't ready after %d ms (last control-status: 0x%04x, i2c ret: %d)\n",
+				__func__, jiffies_to_msecs(jiffies - ts), ready_status, ret);
 
+			return -ETIMEDOUT;
+		}
+
+		ret = ds5_read_poll(state, ready_reg, &ready_status);
 		if (ret < 0) {
 			dev_dbg(&state->client->dev,
 				"%s(): Device not responding (resetting), retry %d\n",
 				__func__, retry);
 			continue;
 		}
-
 		if (ready_status == DS5_HW_RESET_READY_EXPECTED_VAL) {
 			dev_info(&state->client->dev,
 				"%s(): Device ready after %d ms (control-status default restored)\n",
-				__func__,
-				DS5_HW_RESET_INITIAL_DELAY_MS +
-				(retry + 1) * DS5_HW_RESET_POLL_INTERVAL_MS);
+				__func__, jiffies_to_msecs(jiffies - ts));
 			break;
 		}
-	}
 
-	if (retry >= DS5_HW_RESET_MAX_RETRIES) {
-		u16 dfu_magic = 0;
-
-		dev_err(&state->client->dev,
-			"%s(): Device did not become ready after %d ms (last control-status: 0x%04x, i2c ret: %d)\n",
-			__func__, DS5_HW_RESET_INITIAL_DELAY_MS + DS5_HW_RESET_TIMEOUT_MS,
-			ready_status, ret);
-
-		ret = ds5_read_poll(state, DS5_DFU_MAGIC_REG, &dfu_magic);
-		if (!ret && dfu_magic == DS5_DFU_MAGIC_LSW) {
+		ret = ds5_read_poll(state, DS5_DFU_MAGIC_REG, &ready_status);
+		if (!ret && ready_status == DS5_DFU_MAGIC_LSW) {
 			dev_warn(&state->client->dev,
 				"%s(): Device in DFU/recovery mode after reset\n", __func__);
 			state->dfu_dev.dfu_state_flag = DS5_DFU_RECOVERY;
 			return 0;
 		}
-
-		return -ETIMEDOUT;
 	}
 
-#ifdef CONFIG_VIDEO_D4XX_SERDES
-	/* 7. SERDES recovery (conditional).
+
+	/* 7. Wait for DEVICE_TYPE to confirm GMSL link recovery.
 	 *    Step 6 confirmed reset completion via control-status defaults.
 	 *    Wait for DEVICE_TYPE: if the register becomes valid,
-	 *    the GMSL link recovered naturally and the firmware progressed far
-	 *    enough for format-dependent paths — no
-	 *    full tiered SERDES recovery needed (the common case for D4xx).
+	 *    the GMSL link recovered naturally and the firmware progressed
+	 *    far enough for format-dependent paths (the common case).
 	 *
 	 *    Do NOT call max9295_init_settings() here.  That function writes
 	 *    global serializer registers (0x02, 0x308, 0x311, 0x331) that
 	 *    disrupt the active GMSL link.  Per-pipe reconfiguration is
 	 *    handled by ds5_configure()->ds5_setup_pipeline()
 	 *    at the next STREAMON for each stream.
-	 *
-	 *    Only run full tiered recovery (including init_settings +
-	 *    stability checks + Phase 2 escalation) when the I2C link
-	 *    is actually broken.
 	 */
-	{
-		ret = ds5_wait_device_type(state, &dev_type);
-		if (ret < 0) {
-			dev_info(&state->client->dev,
-				"%s(): device type not ready after reset (ret=%d, val=0x%x), running full SERDES recovery\n",
-				__func__, ret, dev_type);
-			ret = ds5_hw_reset_serdes_recovery(state, false);
-			if (ret < 0) {
-				dev_err(&state->client->dev,
-					"%s(): SERDES recovery failed: %d\n",
-					__func__, ret);
-				return ret;
-			}
-
-			ret = ds5_wait_device_type(state, &dev_type);
-			if (ret < 0) {
-				dev_err(&state->client->dev,
-					"%s(): device type still not ready after SERDES recovery (ret=%d, val=0x%x)\n",
-					__func__, ret, dev_type);
-				return ret;
-			}
-		} else {
-			dev_info(&state->client->dev,
-				"%s(): GMSL link recovered naturally (device type 0x%04x), no SERDES intervention needed\n",
-				__func__, dev_type);
-		}
-	}
-#else
 	ret = ds5_wait_device_type(state, &dev_type);
 	if (ret < 0) {
 		dev_err(&state->client->dev,
@@ -2913,7 +2646,9 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 			__func__, ret, dev_type);
 		return ret;
 	}
-#endif
+	dev_info(&state->client->dev,
+		"%s(): GMSL link recovered (device type 0x%04x)\n",
+		__func__, dev_type);
 
 	/* 8. Verify device is operational by reading firmware version */
 	ret = ds5_read(state, DS5_FW_VERSION, &state->fw_version);
@@ -2936,6 +2671,19 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 		dev_type,
 		(state->fw_version >> 8) & 0xff, state->fw_version & 0xff,
 		(state->fw_build >> 8) & 0xff, state->fw_build & 0xff);
+
+	/* Re-apply ESYNC tunneling to match cached sync_mode control */
+	if (state->ctrls.sync_mode) {
+		int sync_val = state->ctrls.sync_mode->cur.val;
+		bool need_esync = (sync_val == DS5_SYNC_MODE_SLAVE ||
+				   sync_val == DS5_SYNC_MODE_FULL_SLAVE);
+
+		ret = ds5_set_ser_esync_tunneling(state, need_esync);
+		if (ret)
+			dev_warn(&state->client->dev,
+				"%s(): serializer ESYNC %s after HW reset failed (%d)\n",
+				__func__, need_esync ? "enable" : "disable", ret);
+	}
 
 	WRITE_ONCE(state->ds5_dev->last_reset_jiffies, jiffies);
 
@@ -3242,6 +2990,16 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			ret = ds5_write(state, base | DS5_CAMERA_SYNC_MODE, ctrl->val);
 			dev_info(&state->client->dev, "%s(): SYNC_MODE command passed to FW, addr: 0x%x, value: %d, ret: %d\n",
 				__func__, base | DS5_CAMERA_SYNC_MODE, ctrl->val, ret);
+			if (!ret) {
+				bool need_esync = (ctrl->val == DS5_SYNC_MODE_SLAVE ||
+						   ctrl->val == DS5_SYNC_MODE_FULL_SLAVE);
+
+				dev_dbg(&state->client->dev,
+					"%s(): sync_mode=%d -> serializer ESYNC %s\n",
+					__func__, ctrl->val,
+					need_esync ? "enable" : "disable");
+				ret = ds5_set_ser_esync_tunneling(state, need_esync);
+			}
 		}
 		break;
 	case DS5_CAMERA_CID_PWM:
@@ -3747,12 +3505,12 @@ static const struct v4l2_ctrl_config ds5_ctrl_hw_reset = {
 
 /* Sync mode menu arrays for different camera platforms */
 static const char * const sync_mode_menu_full[] = {
-	"Default",           /* 0 */
-	"Master",            /* 1 */
-	"Slave",             /* 2 */
-	"Full Slave",        /* 3 */
-	"Sub Pre-Master",    /* 4 */
-	"Full Master",       /* 5 */
+	[DS5_SYNC_MODE_DEFAULT]       = "Default",
+	[DS5_SYNC_MODE_MASTER]        = "Master",
+	[DS5_SYNC_MODE_SLAVE]         = "Slave",
+	[DS5_SYNC_MODE_FULL_SLAVE]    = "Full Slave",
+	[DS5_SYNC_MODE_SUB_PREMASTER] = "Sub Pre-Master",
+	[DS5_SYNC_MODE_FULL_MASTER]   = "Full Master",
 };
 
 static const char * const sync_mode_menu_d401[] = {
@@ -3824,10 +3582,64 @@ static void ds5_init_ds5_dev(struct ds5 *state, struct ds5_dev *ds5_dev)
 	state->ds5_dev = ds5_dev;
 	mutex_lock(&ds5_dev->lock);
 	ds5_dev->ds5_primary = state;
-	atomic_set(&ds5_dev->ds5_probe_reset_once, 0);
+	ds5_dev->serdes_setup_complete = false;
 	ds5_dev->cached_device_type = DS5_DEVICE_TYPE_UNKNOWN;
 	mutex_unlock(&ds5_dev->lock);
 	ds5_reset_streaming_flags(ds5_dev);
+}
+
+/* Caller must hold serdes_lock__. */
+static bool ds5_release_slot(struct ds5 *state)
+{
+	struct dser_control *dser_control;
+	bool has_other_users = false;
+	bool released = false;
+	int i;
+
+	if (!state->ds5_dev)
+		return false;
+
+	mutex_lock(&serdes_lock__);
+
+	mutex_lock(&state->ds5_dev->lock);
+	if (state->ds5_dev->ds5_primary == state) {
+		dser_control = state->ds5_dev->dser_control;
+		state->ds5_dev->ds5_primary = NULL;
+		state->ds5_dev->serdes_setup_complete = false;
+		state->ds5_dev->dser_control = NULL;
+		released = true;
+	} else {
+		dser_control = NULL;
+	}
+	mutex_unlock(&state->ds5_dev->lock);
+
+	if (!released || !dser_control) {
+		mutex_unlock(&serdes_lock__);
+		return released;
+	}
+
+	for (i = 0; i < MAX_DS5_NUM; i++) {
+		bool in_use;
+
+		mutex_lock(&ds5_inited[i].lock);
+		in_use = ds5_inited[i].ds5_primary &&
+			ds5_inited[i].dser_control == dser_control;
+		mutex_unlock(&ds5_inited[i].lock);
+		if (in_use) {
+			has_other_users = true;
+			break;
+		}
+	}
+
+	if (!has_other_users) {
+		mutex_lock(&dser_control->lock);
+		if (dser_control->dser_dev == state->dser_dev)
+			dser_control->dser_dev = NULL;
+		mutex_unlock(&dser_control->lock);
+	}
+
+	mutex_unlock(&serdes_lock__);
+	return released;
 }
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
@@ -3843,12 +3655,18 @@ static int ds5_setup_and_link(struct ds5 *state)
 	/* Look for existing DS5 instances */
 	for (i = 0; i < MAX_DS5_NUM; i++) {
 		bool match;
+		bool ready;
 
 		mutex_lock(&ds5_inited[i].lock);
 		match = ds5_inited[i].ds5_primary &&
 			ds5_inited[i].ds5_primary->ser_dev == state->ser_dev;
+		ready = ds5_inited[i].serdes_setup_complete;
 		mutex_unlock(&ds5_inited[i].lock);
 		if (match) { /* Same camera, different stream instance. */
+			if (!ready) {
+				err = -EPROBE_DEFER;
+				goto out_unlock;
+			}
 			state->serdes_primary = false;
 			state->ds5_dev = &ds5_inited[i];
 			break;
@@ -4234,6 +4052,8 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 {
 	int err = 0;
 	int des_err = 0;
+	int attempts;
+	int retry;
 	struct device *dev;
 
 	if (!state || !state->ser_dev || !state->dser_dev || !state->client)
@@ -4260,19 +4080,25 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 		goto error;
 	}
 	msleep(100);
-	err = max9295_setup_control(state->ser_dev);
-
-	/* proceed even if ser setup failed, to setup deser correctly */
-	if (err)
-		dev_err(dev, "gmsl serializer setup failed\n");
-
-	/* Extended GPIO tunneling for MAX96712A deserializer */
-	if (state->dser_ops == &max96712_interface) {
-		int tun_err = max9295_setup_gpio_tunneling(state->ser_dev);
-		if (tun_err)
-			dev_err(dev, "gmsl serializer GPIO tunneling setup failed\n");
+	attempts = (DS5_SERDES_STARTUP_TIMEOUT_MS +
+		DS5_SERDES_STARTUP_RETRY_DELAY_MS - 1) /
+		DS5_SERDES_STARTUP_RETRY_DELAY_MS;
+	for (retry = 0; retry < attempts; retry++) {
+		err = max9295_setup_control(state->ser_dev);
+		if (!err)
+			break;
+		if (retry < attempts - 1)
+			msleep(DS5_SERDES_STARTUP_RETRY_DELAY_MS);
+	}
+	if (err) {
+		dev_err(dev,
+			"%s(): serializer setup failed (err=%d) after %d ms, deferring probe\n",
+			__func__, err, DS5_SERDES_STARTUP_TIMEOUT_MS);
+		err = -EPROBE_DEFER;
+		goto error;
 	}
 
+	/* proceed even if ser setup failed, to setup deser correctly */
 	des_err = state->dser_ops->setup_control(state->dser_dev, &state->client->dev);
 	if (des_err) {
 		dev_err(dev, "gmsl deserializer setup failed\n");
@@ -4341,9 +4167,20 @@ static int ds5_serdes_setup(struct ds5 *state)
 	}
 
 serdes_setup_end:
+	/* Set/clear serdes_setup_complete from the same exit gate: error branch
+	 * clears it, success branch sets it. This ensures flag state is
+	 * synchronized with actual setup completion status.
+	 */
 	if (ret) {
 		max9295_sdev_unpair(state->ser_dev, state->g_ctx.s_dev);
 		state->dser_ops->sdev_unregister(state->dser_dev, state->g_ctx.s_dev);
+		if (state->serdes_primary)
+			ds5_release_slot(state);
+	} else if (state->serdes_primary) {
+		mutex_lock(&state->ds5_dev->lock);
+		if (state->ds5_dev->ds5_primary == state)
+			state->ds5_dev->serdes_setup_complete = true;
+		mutex_unlock(&state->ds5_dev->lock);
 	}
 
 	return ret;
@@ -5053,7 +4890,6 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	bool reset_invalidated = false;
 	bool *streaming_flag = NULL;
 #ifdef CONFIG_VIDEO_D4XX_SERDES
-	int serdes_recovery_attempts = 0;
 	int cur_dser = atomic_read(dser_get_reset_gen(state));
 #else
 	int cur_dser = 0;
@@ -5122,9 +4958,6 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		status = DS5_STATUS_STREAMING;
 	}
 
-#ifdef CONFIG_VIDEO_D4XX_SERDES
-retry_after_serdes_recovery:
-#endif
 	/* Verify stream is in the expected state before issuing command */
 	ts = jiffies;
 	for (timeout = ts + msecs_to_jiffies(DS5_START_MAX_TIME), i = 0;
@@ -5201,8 +5034,8 @@ retry_after_serdes_recovery:
 					/* No recovery can help if no resources are available */
 					return ret;
 				}
-				dev_warn(&state->client->dev, "stream %d config failed, retry %d\n",
-					stream_id, i);
+				dev_warn(&state->client->dev, "stream %d config failed, retry %d, %dms\n",
+					stream_id, i, jiffies_to_msecs(jiffies - ts));
 				continue;
 			}
 			ds5_config_done = true;
@@ -5211,22 +5044,29 @@ retry_after_serdes_recovery:
 		if (streaming != expected_streaming_state) {
 			ret = ds5_write(state, DS5_START_STOP_STREAM, stream_cmd);
 			if (ret < 0) {
-				dev_warn(&state->client->dev, "stream %d cmd 0x%x write failed, retry %d\n",
-					stream_id, stream_cmd, i);
-				continue;
+				dev_warn(&state->client->dev, "stream %d cmd 0x%x write failed, retry %d, %dms\n",
+					stream_id, stream_cmd, i, jiffies_to_msecs(jiffies - ts));
 			}
-			ret = ds5_read(state, stream_status_base, &streaming);
-			if (ret < 0) {
-				dev_warn(&state->client->dev,
-					"stream %d status i2c read failed (%d), retry %u\n", stream_id, ret, i);
-			}
+		}
+
+		ret = ds5_read(state, stream_status_base, &streaming);
+		if (ret < 0) {
+			dev_warn(&state->client->dev,
+				"stream %d status i2c read failed (%d), retry %u, %dms\n",
+				stream_id, ret, i, jiffies_to_msecs(jiffies - ts));
+		}
+
+		if (streaming != expected_streaming_state) {
+			dev_warn(&state->client->dev, "stream %d status not as expected (%d != %d), retry %d, %dms\n",
+				stream_id, streaming, expected_streaming_state, i, jiffies_to_msecs(jiffies - ts));
 			continue;
 		}
 
 		ret = ds5_read(state, config_status_base, &status);
 		if (ret < 0) {
 			dev_warn(&state->client->dev,
-				"stream %d config status i2c read failed (%d), retry %u\n", stream_id, ret, i);
+				"stream %d config status i2c read failed (%d), retry %u, %dms\n",
+				stream_id, ret, i, jiffies_to_msecs(jiffies - ts));
 			continue;
 		}
 
@@ -5235,14 +5075,16 @@ retry_after_serdes_recovery:
 								DS5_STATUS_INVALID_FPS)))
 		{
 			dev_warn(&state->client->dev,
-				"stream %d config rejected, status 0x%04x, retry %u\n", stream_id, status, i);
+				"stream %d config rejected, status 0x%04x, retry %u, %dms\n",
+				stream_id, status, i, jiffies_to_msecs(jiffies - ts));
 			if (ds5_config_retries > 0) {
 				ds5_config_retries--;
 				ds5_config_done = false;
 				ds5_config_cache_clear(sensor);
 			} else {
 				dev_warn(&state->client->dev,
-					"stream %d config failed after %d retries, aborting\n", stream_id, i);
+					"stream %d config failed after %d retries, aborting, %dms\n",
+					stream_id, i, jiffies_to_msecs(jiffies - ts));
 				break;
 			}
 			continue;
@@ -5250,7 +5092,7 @@ retry_after_serdes_recovery:
 
 		if (!on == !(status & DS5_STATUS_STREAMING))
 		{
-			dev_dbg(&state->client->dev,
+			dev_info(&state->client->dev,
 				"stream %d toggle ok to %d in %dms, retries %d\n",
 				stream_id, on, jiffies_to_msecs(jiffies - ts), i);
 			break;
@@ -5262,60 +5104,6 @@ retry_after_serdes_recovery:
 		dev_warn(&state->client->dev,
 			"stream %d toggle to %d timeout in %dms, retries %d\n",
 			stream_id, on, jiffies_to_msecs(jiffies - ts), i);
-
-#ifdef CONFIG_VIDEO_D4XX_SERDES
-		/* Stream start timed out.  Probe the I2C link: if it is dead
-		 * (EREMOTEIO / -121), the GMSL link dropped — possibly a
-		 * delayed secondary failure after a prior HW reset.  Attempt
-		 * SerDes recovery (Phase 1: serializer re-init, Phase 2: full
-		 * deserializer reset if serializer is also unreachable) and
-		 * retry the stream start once.
-		 */
-		if (on && serdes_recovery_attempts < 2 &&
-		    state->ser_dev && state->dser_dev) {
-			u16 probe_val;
-			int probe_ret = ds5_read(state, DS5_FW_VERSION, &probe_val);
-
-			if (probe_ret < 0) {
-				serdes_recovery_attempts++;
-				dev_warn(&state->client->dev,
-					"stream %d: I2C link dead (err %d), "
-					"attempting GMSL recovery (attempt %d/2)\n",
-					stream_id, probe_ret,
-					serdes_recovery_attempts);
-
-				/* Clean up partial state from the failed attempt */
-				mutex_lock(&state->ds5_dev->lock);
-				*streaming_flag = restore_val;
-				mutex_unlock(&state->ds5_dev->lock);
-				sensor->streaming = restore_val;
-				ds5_invalidate_sensor(state, sensor);
-
-				/* 1st attempt: Phase 1 (ser re-init), escalate to
-				 *   Phase 2 (reset_oneshot + poll) if unstable.
-				 * 2nd attempt: skip Phase 1, go straight to Phase 2.
-				 *   The reset_oneshot from attempt 1 may have already
-				 *   started the link recovery — Phase 2 polling will
-				 *   detect it.
-				 */
-				if (ds5_hw_reset_serdes_recovery(state,
-						serdes_recovery_attempts > 1) == 0) {
-					dev_info(&state->client->dev,
-						"stream %d: GMSL recovery OK, "
-						"retrying stream start\n",
-						stream_id);
-					ds5_config_done = false;
-					ds5_config_retries = MAX_DS5_CONFIG_RETRIES;
-					status = on ? 0 : DS5_STATUS_STREAMING;
-					goto retry_after_serdes_recovery;
-				}
-				dev_err(&state->client->dev,
-					"stream %d: GMSL recovery failed "
-					"(attempt %d/2), stream start aborted\n",
-					stream_id, serdes_recovery_attempts);
-			}
-		}
-#endif
 
 		if (streaming == expected_streaming_state) { /* try to toggle stream back on timeout  */
 			ds5_write(state, DS5_START_STOP_STREAM,
@@ -6645,54 +6433,30 @@ static int ds5_probe(struct i2c_client *c
 			goto e_regulator;
 	}
 
-	if (atomic_cmpxchg(&state->ds5_dev->ds5_probe_reset_once, 0, 1) == 0) {
-		dev_info(&c->dev, "%s(): first probe instance, running HW reset recovery\n",
-			__func__);
-
-		/* Initialize sensor pipe_ids to PIPE_NOT_CONFIGURED before
-		 * hw_reset_with_recovery, otherwise the kzalloc default of 0
-		 * causes a spurious release_pipe(0) in step 2.
-		 */
-		state->depth.sensor.pipe_id = PIPE_NOT_CONFIGURED;
-		state->ir.sensor.pipe_id = PIPE_NOT_CONFIGURED;
-		state->rgb.sensor.pipe_id = PIPE_NOT_CONFIGURED;
-		state->imu.sensor.pipe_id = PIPE_NOT_CONFIGURED;
-
-		ret = ds5_hw_reset_with_recovery(state);
-		if (ret < 0) {
-			dev_err(&c->dev, "%s(): probe HW reset recovery failed: %d\n",
-				__func__, ret);
-			goto e_chardev;
-		}
-
-		/* Wait after HW reset before touching MAX9295 serializer registers.
-		 * This delay helps ensure the device is ready.
-		 */
-		msleep(200);
+	/* Check for DFU recovery before waiting for device type: a bootloader
+	 * device never serves DS5_DEVICE_TYPE (0x0310), so the wait would time
+	 * out and tear down the chardev.  The DFU I2C slave *does* serve
+	 * DS5_DFU_MAGIC_REG (0x5020) — check it first.
+	 */
+	ret = ds5_read(state, DS5_DFU_MAGIC_REG, &rec_state);
+	if (!ret && rec_state == DS5_DFU_MAGIC_LSW) {
+		dev_info(&c->dev, "%s(): D4XX recovery state\n", __func__);
+		state->dfu_dev.dfu_state_flag = DS5_DFU_RECOVERY;
+		/* Override I2C drvdata with state for use in remove function */
+		i2c_set_clientdata(c, state);
+		return 0;
 	}
 
-	/* Verify post-reset format-discovery readiness.
+	/* Verify format-discovery readiness.
 	 * FW_VERSION becomes readable earlier than DS5_DEVICE_TYPE, while later
 	 * probe code depends on DEVICE_TYPE to pick the correct format tables.
 	 */
 	ret = ds5_wait_device_type(state, &rec_state);
 	if (ret < 0) {
 		dev_err(&c->dev,
-			"%s(): device type not ready after reset: %d (last val 0x%x)\n",
+			"%s(): device type is not valid: %d (last val 0x%x)\n",
 			__func__, ret, rec_state);
 		goto e_chardev;
-	}
-
-	ret = ds5_read(state, DS5_DFU_MAGIC_REG, &rec_state);
-	if (ret < 0)
-		rec_state = 0;
-
-	if (rec_state == DS5_DFU_MAGIC_LSW) {
-		dev_info(&c->dev, "%s(): D4XX recovery state\n", __func__);
-		state->dfu_dev.dfu_state_flag = DS5_DFU_RECOVERY;
-		/* Override I2C drvdata with state for use in remove function */
-		i2c_set_clientdata(c, state);
-		return 0;
 	}
 
 	ds5_read_with_check(state, DS5_FW_VERSION, &state->fw_version);
@@ -6750,15 +6514,7 @@ static void ds5_remove(struct i2c_client *c)
 		int ret;
 		bool do_cleanup = false;
 
-		mutex_lock(&serdes_lock__);
-		mutex_lock(&state->ds5_dev->lock);
-
-		if (state->ds5_dev->ds5_primary) {
-			state->ds5_dev->ds5_primary = NULL;
-			do_cleanup = true;
-		}
-
-		mutex_unlock(&state->ds5_dev->lock);
+		do_cleanup = ds5_release_slot(state);
 
 		if (do_cleanup) {
 			ret = max9295_reset_control(state->ser_dev);
@@ -6781,9 +6537,6 @@ static void ds5_remove(struct i2c_client *c)
 					"failed to %s unregister sdev\n", state->dser_ops->name);
 			state->dser_ops->power_off(state->dser_dev);
 		}
-
-		mutex_unlock(&serdes_lock__);
-
 	}
 #ifndef CONFIG_OF
 	if (state->ser_i2c)
@@ -6855,4 +6608,4 @@ MODULE_AUTHOR("Guennadi Liakhovetski <guennadi.liakhovetski@intel.com>,\n\
 				Shikun Ding <shikun.ding@intel.com>,\n\
 				Dmitry Perchanov <dmitry.perchanov@intel.com>");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("1.0.2.34");
+MODULE_VERSION("1.0.3.18");
