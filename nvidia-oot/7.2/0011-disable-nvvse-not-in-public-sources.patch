@@ -1,0 +1,16 @@
+diff --git a/drivers/crypto/Makefile b/drivers/crypto/Makefile
+index 2e2a00c3..cc4cda13 100644
+--- a/drivers/crypto/Makefile
++++ b/drivers/crypto/Makefile
+@@ -4,7 +4,10 @@
+ ifdef CONFIG_TEGRA_HOST1X
+ obj-m += tegra-hv-vse-safety.o
+ obj-m += tegra-nvvse-cryptodev.o
+-obj-m += nvvse/
++# nvvse OSI sources (nvvse_osi/) are gitignored and shipped separately by
++# NVIDIA, not in the public kernel tree, so nvvse cannot be built from
++# source. Disabled for JetPack 7.2 (L4T R39.2). Unrelated to d4xx.
++# obj-m += nvvse/
+ ifdef CONFIG_CRYPTO_ENGINE
+ obj-m += tegra/
+ endif
