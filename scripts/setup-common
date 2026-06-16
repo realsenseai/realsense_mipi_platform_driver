@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SUPPORTED_JP="7.1, 7.0, 6.2.2, 6.2.1, 6.2, 6.1, 6.0, 5.1.6, 5.1.2, 5.0.2"
+SUPPORTED_JP="7.2, 7.1, 7.0, 6.2.2, 6.2.1, 6.2, 6.1, 6.0, 5.1.6, 5.1.2, 5.0.2"
 
 JP_INPUT_VERSION="$1"
 if [[ -z "${JP_INPUT_VERSION}" || "$1" == "-h" ]]; then
@@ -36,13 +36,17 @@ function version_lt {
 echo "JetPack version ${JP_INPUT_VERSION}..."
 
 if ! version_lt "$JP_INPUT_VERSION" 7.0; then
+	L4T_TAG=
 	case "${JP_INPUT_VERSION}" in
+		# JP7.2 ships as L4T R39.2; its git tag is jetson_39.2.0 (the
+		# jetson_<rev> default form, jetson_39.2, does not exist upstream).
+		7.2) REVISION=39.2; L4T_TAG=jetson_39.2.0;;
 		7.1) REVISION=38.4;;
 		7.0) REVISION=38.2;;
 	esac
     KERNEL_DIR="kernel/kernel-noble-src"
     JETPACK_VERSION="7.x"
-    L4T_VERSION=jetson_"${REVISION}"
+    L4T_VERSION="${L4T_TAG:-jetson_${REVISION}}"
 elif ! version_lt "$JP_INPUT_VERSION" 6.0; then
 	case "${JP_INPUT_VERSION}" in
 		6.2.2) REVISION=36.5;;
