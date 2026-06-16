@@ -93,23 +93,13 @@ sudo cp -r ./lib/modules/6.8.12-tegra /lib/modules/
 sudo cp    ./boot/tegra264-camera-d4xx-overlay-Advantech.dtbo /boot/
 sudo cp    ./boot/Image /boot/dev/
 ```
-2.	Run  $ `sudo /opt/nvidia/jetson-io/jetson-io.py`, to exit choose save & reboot:
-	1.	Configure Jetson AGX CSI Connector
-	2.	Configure for compatible hardware
-	3.	Choose appropriate configuration:
- 		i.	Jetson RealSense Camera D457
-		ii. Jetson RealSense Camera D457 dual
-    5.	Choose to save & reboot
 
-3.	Enable and run depmod scan for "extra" & "kernel" modules
+2.	Enable and run depmod
 ```
-# enable extra & kernel modules
-# original file content: cat /etc/depmod.d/ubuntu.conf -- search updates ubuntu built-in
-sudo sed -i 's/search updates/search extra updates kernel/g' /etc/depmod.d/ubuntu.conf
 # update driver cache
 sudo depmod
 ```
-4. Select the correct overlay for your HW:
+3. Select the correct overlay for your HW:
 
     Currently supported overlays are -
 
@@ -124,7 +114,7 @@ sudo depmod
     | `tegra264-camera-d4xx-overlay-advantech-cams-0-1-2-3-4-5.dtbo` | Advantech board w/ six cameras - four on the left port (i2c9) + two on the bottom right and top right of the right port (i2c12) |
     | `tegra264-camera-d4xx-overlay-advantech-cams-0-1-2-3-4-5-6-7.dtbo` | Advantech board w/ all eight cameras - four on the left port (i2c9) + four on the right port (i2c12) |
 
-5. Verify bootloader configuration
+4. Edit bootloader configuration
 ```
 cat /boot/extlinux/extlinux.conf
 ----<CUT>----
@@ -187,8 +177,10 @@ sudo sed -i 's/search updates/search extra updates kernel/g' /etc/depmod.d/ubunt
 sudo depmod 6.8.12-tegra
 # Build an initrd for the new kernel (pulls in the nvme module):
 sudo update-initramfs -c -k 6.8.12-tegra
+sudo rm -f /boot/initrd
+sudo ln -s /boot/initrd.img-6.8.12-tegra /boot/initrd
 # Install the kernel under a new name so the stock /boot/Image stays intact:
-sudo cp boot/Image /boot/Image.d4xx
+sudo cp boot/Image /boot/dev/Image
 sudo cp boot/tegra264-camera-d4xx-overlay*.dtbo /boot/
 ```
 
@@ -199,8 +191,8 @@ and `FDT` lines verbatim:
 ```
 LABEL d4xx
       MENU LABEL d4xx kernel (JP7.2 RealSense D457)
-      LINUX /boot/Image.d4xx
-      INITRD /boot/initrd.img-6.8.12-tegra
+      LINUX /boot/dev/Image
+      INITRD /boot/initrd
       APPEND ${cbootargs} root=PARTUUID=<as in primary> rw rootwait rootfstype=ext4 ...
       FDT /boot/dtb/kernel_tegra264-p4071-0000+p3834-0008-nv.dtb
       OVERLAYS /boot/tegra264-camera-d4xx-overlay-advantech.dtbo
