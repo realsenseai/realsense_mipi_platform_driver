@@ -111,8 +111,14 @@ else
     # matched nvidia.ko/nvidia-modeset.ko/nvidia-drm.ko (the bundled nvdisplay
     # source is a non-matching pre-release that breaks the GPU/display init).
     DISPLAY_SKIP=""
-    version_lt "$JETPACK_VERSION" "7.0" || DISPLAY_SKIP="SKIP_NVIDIA_DISPLAY=1"
-    make modules $DISPLAY_SKIP
+    # JP7.2 (R39.2): the nvvse security-engine module needs nvvse_osi/ sources that
+    # NVIDIA gitignores/ships separately, so it cannot be built from the public tree.
+    # NVIDIA's own switch (NV_OOT_NVVSE_SKIP_BUILD) gates the synced nvvse/Makefile;
+    # pass it as a command-line override so it reaches the kbuild M= descent (the
+    # configs/Makefile.config.l4t export does not apply via this build path).
+    NVVSE_SKIP=""
+    version_lt "$JETPACK_VERSION" "7.0" || { DISPLAY_SKIP="SKIP_NVIDIA_DISPLAY=1"; NVVSE_SKIP="NV_OOT_NVVSE_SKIP_BUILD=y"; }
+    make modules $DISPLAY_SKIP $NVVSE_SKIP
     D4XX_CMD_FILE="$BUILD_SRCS/nvidia-oot/drivers/media/i2c/.d4xx.o.cmd"
     mkdir -p $TEGRA_KERNEL_OUT/rootfs/boot/dtb
     if version_lt "$JETPACK_VERSION" "7.0"; then
@@ -125,7 +131,7 @@ else
     fi
     export INSTALL_MOD_PATH=$TEGRA_KERNEL_OUT/rootfs/
     make -C kernel install
-    make modules_install $DISPLAY_SKIP
+    make modules_install $DISPLAY_SKIP $NVVSE_SKIP
     # iio support
     KERNELVERSION=$(cat $KERNEL_HEADERS/include/config/kernel.release)
     KERNEL_MODULES_OUT=$INSTALL_MOD_PATH/lib/modules/${KERNELVERSION}
