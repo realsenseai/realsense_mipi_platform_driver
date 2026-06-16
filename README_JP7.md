@@ -169,6 +169,46 @@ nvidia@ubuntu:~$ sudo dmesg | grep d4xx
 
 ```
 
+### JP7.2 on AGX Thor — first deploy after a fresh SDK flash
+
+JP7.2 (L4T R39.2) was validated on the Advantech AGX Thor Developer Kit with a D457
+(single camera on the left port, `i2c9`, overlay `tegra264-camera-d4xx-overlay-advantech.dtbo`;
+DEPTH/RGB/Y8/IMU all bound).
+
+A freshly SDK-flashed Thor runs the stock kernel (`6.8.12-1021-tegra`) while this build
+produces `6.8.12-tegra`. Because the NVMe root driver is a **module** (`CONFIG_BLK_DEV_NVME=m`),
+a full kernel swap needs a matching initrd or the root filesystem will not mount. Deploy
+additively and keep the stock kernel as a fallback boot entry:
+
+```
+# After copying the rootfs (boot/ + lib/) to the target:
+sudo cp -r lib/modules/6.8.12-tegra /lib/modules/
+sudo sed -i 's/search updates/search extra updates kernel/g' /etc/depmod.d/ubuntu.conf
+sudo depmod 6.8.12-tegra
+# Build an initrd for the new kernel (pulls in the nvme module):
+sudo update-initramfs -c -k 6.8.12-tegra
+# Install the kernel under a new name so the stock /boot/Image stays intact:
+sudo cp boot/Image /boot/Image.d4xx
+sudo cp boot/tegra264-camera-d4xx-overlay*.dtbo /boot/
+```
+
+Then add a new boot entry to `/boot/extlinux/extlinux.conf` (do not overwrite the stock
+`primary` entry) and point `DEFAULT` at it. Reuse the stock entry's `APPEND` (`root=PARTUUID=...`)
+and `FDT` lines verbatim:
+
+```
+LABEL d4xx
+      MENU LABEL d4xx kernel (JP7.2 RealSense D457)
+      LINUX /boot/Image.d4xx
+      INITRD /boot/initrd.img-6.8.12-tegra
+      APPEND ${cbootargs} root=PARTUUID=<as in primary> rw rootwait rootfstype=ext4 ...
+      FDT /boot/dtb/kernel_tegra264-p4071-0000+p3834-0008-nv.dtb
+      OVERLAYS /boot/tegra264-camera-d4xx-overlay-advantech.dtbo
+```
+
+Keep the stock `primary` entry so the device can fall back to it from the serial-console boot
+menu (`TIMEOUT`) if the custom kernel fails to boot.
+
 ### Known issues
 - No GUI after installing the driver — black screen / blinking text cursor (SSH still works)
 
