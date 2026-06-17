@@ -22,11 +22,12 @@ MAX96724 quad deserializer features:
 
 Signed-off-by: RealSense AI <realsense@realsenseai.com>
 ---
+ drivers/media/i2c/Makefile   |    2 +
  drivers/media/i2c/max96717.c |  835 ++++++++++++++
- drivers/media/i2c/max96724.c | 1905 ++++++++++++++++++++++++++++++++++
+ drivers/media/i2c/max96724.c | 1916 ++++++++++++++++++++++++++++++++++
  include/media/max96717.h     |  151 ++
  include/media/max96724.h     |  183 +++
- 4 files changed, 3074 insertions(+)
+ 4 files changed, 3085 insertions(+)
  create mode 100644 drivers/media/i2c/max96717.c
  create mode 100644 drivers/media/i2c/max96724.c
  create mode 100644 include/media/max96717.h
@@ -875,10 +876,10 @@ index 0000000..70d25a3
 +MODULE_LICENSE("GPL v2");
 diff --git a/drivers/media/i2c/max96724.c b/drivers/media/i2c/max96724.c
 new file mode 100644
-index 0000000..7882ee0
+index 0000000..22bfb47
 --- /dev/null
 +++ b/drivers/media/i2c/max96724.c
-@@ -0,0 +1,1905 @@
+@@ -0,0 +1,1916 @@
 +/*
 + * max96724.c - MAX96724 GMSL2 Quad Deserializer driver (Tunnel Mode)
 + *
@@ -1350,6 +1351,7 @@ index 0000000..7882ee0
 +	struct regulator *vdd_cam_1v2;
 +	u8 link_speed;  /* DT-configurable: 3 or 6 Gbps */
 +	bool pixel_mode;
++	bool poc_enabled; /* FG24-4CH board POC/IO enable applied once */
 +};
 +
 +struct reg_pair {
@@ -1578,9 +1580,6 @@ index 0000000..7882ee0
 +		}
 +
 +		msleep(20);
-+
-+		/* [FG24-4CH] Enable board POC / MFP8 output path once. */
-+		max96724_board_poc_enable(dev);
 +	}
 +
 +	priv->pw_ref++;
@@ -1733,6 +1732,19 @@ index 0000000..7882ee0
 +	err = max96724_get_sdev_idx(dev, s_dev, &i);
 +	if (err)
 +		return err;
++
++	/*
++	 * [FG24-4CH] Enable board POC / MFP8 output path BEFORE the GMSL
++	 * link is brought up.  The camera draws power over coax (PoC), so
++	 * without this the remote camera never powers on and the link can
++	 * never lock.  NOTE: this must live here (a path d5xx actually
++	 * invokes via dser_ops->setup_link) and NOT in max96724_power_on(),
++	 * which ds5_gmsl_serdes_setup() deliberately skips.  Run once.
++	 */
++	if (!priv->poc_enabled) {
++		max96724_board_poc_enable(dev);
++		priv->poc_enabled = true;
++	}
 +
 +	mutex_lock(&priv->lock);
 +
