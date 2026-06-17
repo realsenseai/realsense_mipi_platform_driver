@@ -41,6 +41,8 @@
 #include <media/max9295.h>
 #include <media/max9296.h>
 #include <media/max96712.h>
+#include <media/max96717.h>
+#include <media/max96724.h>
 
 /* Deserializer interface structure for abstraction */
 struct dser_interface {
@@ -67,7 +69,46 @@ struct dser_interface {
 	void (*power_off)(struct device *dev);
 	int (*init_settings)(struct device *dev);
 
+	/*
+	 * Optional CSI output streaming setup (PHY/DPLL/lane-map/CSI enable).
+	 * Only required by tunnel-mode deserializers (e.g. max96724); NULL for
+	 * deserializers (max9296/max96712) that need no explicit streaming setup.
+	 */
+	int (*setup_streaming)(struct device *dev, struct device *s_dev);
+
 	/* Identification */
+	const char *name;
+};
+
+/*
+ * Serializer interface abstraction. D4xx-family cameras use max9295; the
+ * D5xx (D58x) family uses max96717 in GMSL tunnel mode. Callers go through
+ * state->ser_ops so the single driver supports both serializer chips.
+ */
+struct ser_interface {
+	int (*set_pipe)(struct device *dev, int pipe_id, u8 data_type1,
+			u8 data_type2, u32 vc_id);
+	int (*setup_control)(struct device *dev);
+	int (*init_settings)(struct device *dev);
+	int (*reset_control)(struct device *dev);
+	int (*sdev_pair)(struct device *dev, struct gmsl_link_ctx *g_ctx);
+	int (*sdev_unpair)(struct device *dev, struct device *s_dev);
+
+	/*
+	 * ESYNC GPIO tunneling. max9295 has explicit enable/disable; max96717
+	 * has a single setup (enable-only). Implementations hide the difference
+	 * behind the @enable flag.
+	 */
+	int (*set_esync_tunneling)(struct device *dev, bool enable);
+
+	/*
+	 * Tunnel-mode-only hooks (max96717). NULL for max9295.
+	 * retrigger_tx re-acquires the tunnel TX after a deserializer one-shot
+	 * reset; setup_streaming enables CSI input + tunnel mode.
+	 */
+	void (*retrigger_tx)(struct device *dev);
+	int (*setup_streaming)(struct device *dev);
+
 	const char *name;
 };
 
@@ -98,6 +139,7 @@ struct dser_interface {
 #define DS5_DEVICE_TYPE_D45X		6
 #define DS5_DEVICE_TYPE_D43X		5
 #define DS5_DEVICE_TYPE_D46X		4
+#define DS5_DEVICE_TYPE_D58X		9
 #define DS5_DEVICE_TYPE_UNKNOWN		0
 
 #define DS5_MIPI_LANE_NUMS		0x0400
@@ -387,6 +429,7 @@ struct ds5_ctrls {
 	struct {
 		struct v4l2_ctrl *log;
 		struct v4l2_ctrl *fw_version;
+		struct v4l2_ctrl *device_type;
 		struct v4l2_ctrl *gvd;
 		struct v4l2_ctrl *get_depth_calib;
 		struct v4l2_ctrl *set_depth_calib;
@@ -522,6 +565,7 @@ struct ds5 {
 	struct i2c_client *ser_i2c;
 	struct i2c_client *dser_i2c;
 	const struct dser_interface *dser_ops;
+	const struct ser_interface *ser_ops;
 	bool ser_primary; /* true for the first instance per serializer (first stream of a specific camera) */
 	bool dser_primary; /* true for the first instance per deserializer (first camera of a specific dser) */
 #endif
@@ -645,6 +689,70 @@ static const struct dser_interface max96712_interface = {
 	.name = "max96712",
 };
 
+/* MAX96724 (D5xx / tunnel mode) deserializer interface implementation */
+static const struct dser_interface max96724_interface = {
+	.get_available_pipe_id = max96724_get_available_pipe_id,
+	.get_ser_pipe_id = max96724_get_ser_pipe_id,
+	.bind_ser_to_dser_pipe = max96724_bind_ser_to_dser_pipe,
+	.set_pipe = max96724_set_pipe,
+	.release_pipe = max96724_release_pipe,
+	.reset_oneshot = max96724_reset_oneshot,
+	.setup_link = max96724_setup_link,
+	.setup_control = max96724_setup_control,
+	.reset_control = max96724_reset_control,
+	.sdev_register = max96724_sdev_register,
+	.sdev_unregister = max96724_sdev_unregister,
+	.power_on = max96724_power_on,
+	.power_off = max96724_power_off,
+	.init_settings = max96724_init_settings,
+	.setup_streaming = max96724_setup_streaming,
+	.name = "max96724",
+};
+
+/*
+ * Serializer ESYNC tunneling adapters: unify max9295's enable/disable pair and
+ * max96717's enable-only setup behind the common set_esync_tunneling(@enable).
+ */
+static int max9295_set_esync_tunneling(struct device *dev, bool enable)
+{
+	return enable ? max9295_enable_gpio_tunneling(dev)
+		      : max9295_disable_gpio_tunneling(dev);
+}
+
+static int max96717_set_esync_tunneling(struct device *dev, bool enable)
+{
+	/* MAX96717 GPIO tunneling has no disable path. */
+	return enable ? max96717_setup_gpio_tunneling(dev) : 0;
+}
+
+/* MAX9295 (D4xx family) serializer interface implementation */
+static const struct ser_interface max9295_interface = {
+	.set_pipe = max9295_set_pipe,
+	.setup_control = max9295_setup_control,
+	.init_settings = max9295_init_settings,
+	.reset_control = max9295_reset_control,
+	.sdev_pair = max9295_sdev_pair,
+	.sdev_unpair = max9295_sdev_unpair,
+	.set_esync_tunneling = max9295_set_esync_tunneling,
+	.retrigger_tx = NULL,
+	.setup_streaming = NULL,
+	.name = "max9295",
+};
+
+/* MAX96717 (D5xx / tunnel mode) serializer interface implementation */
+static const struct ser_interface max96717_interface = {
+	.set_pipe = max96717_set_pipe,
+	.setup_control = max96717_setup_control,
+	.init_settings = max96717_init_settings,
+	.reset_control = max96717_reset_control,
+	.sdev_pair = max96717_sdev_pair,
+	.sdev_unpair = max96717_sdev_unpair,
+	.set_esync_tunneling = max96717_set_esync_tunneling,
+	.retrigger_tx = max96717_retrigger_tx,
+	.setup_streaming = max96717_setup_streaming,
+	.name = "max96717",
+};
+
 #else /* !CONFIG_VIDEO_D4XX_SERDES */
 
 static atomic_t ds5_reset_gen = ATOMIC_INIT(0);
@@ -689,6 +797,7 @@ static bool ds5_is_valid_device_type(u16 dev_type)
 	case DS5_DEVICE_TYPE_D43X:
 	case DS5_DEVICE_TYPE_D45X:
 	case DS5_DEVICE_TYPE_D46X:
+	case DS5_DEVICE_TYPE_D58X:
 		return true;
 	default:
 		return false;
@@ -1450,6 +1559,78 @@ static const struct ds5_format ds5_onsemi_rgb_format = {
 };
 #define DS5_ONSEMI_RGB_N_FORMATS 1
 
+/*
+ * D58x (D5xx) family resolution and format tables. The D5xx camera reports
+ * DS5_DEVICE_TYPE_D58X and uses a single, simplified set of resolutions
+ * compared to the per-SKU D4xx tables above.
+ */
+static const struct ds5_resolution d58x_depth_sizes[] = {
+	DS5_RES(640, 360, ds5_framerate_to_60)
+	DS5_RES(1280, 720, ds5_framerate_to_60)
+	DS5_RES(1280, 960, ds5_depth_framerate_to_30)
+};
+
+static const struct ds5_resolution d58x_y8_sizes[] = {
+	DS5_RES(1280, 720, ds5_framerate_to_60)
+	DS5_RES(1280, 960, ds5_depth_framerate_to_30)
+};
+
+static const struct ds5_resolution d58x_calibration_sizes[] = {
+	DS5_RES(1600, 1300, ds5_framerate_15_30)
+};
+
+static const struct ds5_resolution d58x_rgb_sizes[] = {
+	DS5_RES(640, 360, ds5_depth_framerate_to_30)
+	DS5_RES(1280, 720, ds5_depth_framerate_to_30)
+};
+
+static const struct ds5_format ds5_depth_formats_d58x[] = {
+	{
+		.data_type = GMSL_CSI_DT_YUV422_8,	/* Z16 */
+		.mbus_code = MEDIA_BUS_FMT_UYVY8_1X16,
+		.n_resolutions = ARRAY_SIZE(d58x_depth_sizes),
+		.resolutions = d58x_depth_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_RAW_8,		/* Y8 */
+		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
+		.n_resolutions = ARRAY_SIZE(d58x_depth_sizes),
+		.resolutions = d58x_depth_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_RGB_888,	/* 24-bit Calibration */
+		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,
+		.n_resolutions = ARRAY_SIZE(d58x_calibration_sizes),
+		.resolutions = d58x_calibration_sizes,
+	},
+};
+
+static const struct ds5_format ds5_y_formats_d58x[] = {
+	{
+		/* First format: default */
+		.data_type = GMSL_CSI_DT_RAW_8,		/* Y8 */
+		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
+		.n_resolutions = ARRAY_SIZE(d58x_y8_sizes),
+		.resolutions = d58x_y8_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_YUV422_8,	/* Y8I */
+		.mbus_code = MEDIA_BUS_FMT_VYUY8_1X16,
+		.n_resolutions = ARRAY_SIZE(d58x_y8_sizes),
+		.resolutions = d58x_y8_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_RGB_888,	/* Y12I, 24-bit Calibration */
+		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,
+		.n_resolutions = ARRAY_SIZE(d58x_calibration_sizes),
+		.resolutions = d58x_calibration_sizes,
+	},
+};
+
+static const struct ds5_format ds5_d58x_rgb_format = {
+	.data_type = GMSL_CSI_DT_YUV422_8,	/* UYVY */
+	.mbus_code = MEDIA_BUS_FMT_YUYV8_1X16,
+	.n_resolutions = ARRAY_SIZE(d58x_rgb_sizes),
+	.resolutions = d58x_rgb_sizes,
+};
+#define DS5_D58X_RGB_N_FORMATS 1
+
 static const struct ds5_variant ds5_variants[] = {
 	[DS5_DS5U] = {
 		.formats = ds5_y_formats_ds5u,
@@ -1839,10 +2020,20 @@ static int ds5_setup_pipeline(struct ds5 *state, u8 data_type1, u8 data_type2,
 	dev_dbg(&state->client->dev,
 			"set ser pipe %d, dser pipe %d, data_type1: 0x%x, data_type2: 0x%x, ser_vc_id: %u, vc_id: %u\n",
 			ser_pipe_id, pipe_id, data_type1, data_type2, ser_vc_id, vc_id);
-	ret |= max9295_set_pipe(state->ser_dev, ser_pipe_id,
+	ret |= state->ser_ops->set_pipe(state->ser_dev, ser_pipe_id,
 				data_type1, data_type2, ser_vc_id);
 	ret |= state->dser_ops->set_pipe(state->dser_dev, pipe_id,
 				data_type1, data_type2, vc_id);
+	if (state->ser_ops->retrigger_tx) {
+		/*
+		 * Tunnel mode (max96717/max96724): the deserializer one-shot
+		 * reset clears the data path, so the serializer must retrigger
+		 * TX for the deserializer to re-acquire the tunnel stream.
+		 */
+		state->dser_ops->reset_oneshot(state->dser_dev);
+		state->ser_ops->retrigger_tx(state->ser_dev);
+		msleep(200);
+	}
 	if (ret)
 		dev_warn(&state->client->dev,
 			 "failed to set pipe %d, data_type1: 0x%x, data_type2: 0x%x, vc_id: %u\n",
@@ -2207,6 +2398,8 @@ static int ds5_hw_set_exposure(struct ds5 *state, u32 base, s32 val)
 #define DS5_CAMERA_COEFF_CALIBRATION_TABLE_SET	(DS5_CAMERA_CID_BASE+6)
 #define DS5_CAMERA_CID_FW_VERSION		(DS5_CAMERA_CID_BASE+7)
 #define DS5_CAMERA_CID_GVD			(DS5_CAMERA_CID_BASE+8)
+/* RO device-type exposure (used by D5xx/D58x; harmless for D4xx). */
+#define DS5_CAMERA_CID_DEVICE_TYPE		(DS5_CAMERA_CID_BASE+23)
 #define DS5_CAMERA_CID_AE_ROI_GET		(DS5_CAMERA_CID_BASE+9)
 #define DS5_CAMERA_CID_AE_ROI_SET		(DS5_CAMERA_CID_BASE+10)
 #define DS5_CAMERA_CID_AE_SETPOINT_GET		(DS5_CAMERA_CID_BASE+11)
@@ -2442,19 +2635,18 @@ static int ds5_set_ser_esync_tunneling(struct ds5 *state, bool enable)
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	int ret;
 
-	if (!state || !state->ser_dev)
+	if (!state || !state->ser_dev || !state->ser_ops)
 		return -EINVAL;
-	if (state->dser_ops != &max96712_interface)
+	/* ESYNC tunneling is only used on the max96712 / max96724 stacks. */
+	if (state->dser_ops != &max96712_interface &&
+	    state->dser_ops != &max96724_interface)
 		return 0;
 
 	dev_dbg(&state->client->dev,
 		"%s(): serializer ESYNC %s requested\n",
 		__func__, enable ? "enable" : "disable");
 
-	if (enable)
-		ret = max9295_enable_gpio_tunneling(state->ser_dev);
-	else
-		ret = max9295_disable_gpio_tunneling(state->ser_dev);
+	ret = state->ser_ops->set_esync_tunneling(state->ser_dev, enable);
 
 	if (ret)
 		dev_warn(&state->client->dev,
@@ -3278,6 +3470,19 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		*ctrl->p_new.p_u32 = state->fw_version << 16;
 		*ctrl->p_new.p_u32 |= state->fw_build;
 		break;
+	case DS5_CAMERA_CID_DEVICE_TYPE: {
+		u16 dev_type = DS5_DEVICE_TYPE_UNKNOWN;
+
+		ret = ds5_read(state, DS5_DEVICE_TYPE, &dev_type);
+		dev_type = ds5_dev_type(state, dev_type);
+		if (ret && !ds5_is_valid_device_type(dev_type))
+			break;
+		if (ds5_is_valid_device_type(dev_type))
+			WRITE_ONCE(state->ds5_dev->cached_device_type, dev_type);
+		*ctrl->p_new.p_u32 = dev_type;
+		ret = 0;
+		break;
+	}
 	case DS5_CAMERA_CID_GVD:
 		ret = ds5_gvd(state, ctrl->p_new.p_u8);
 		break;
@@ -3407,6 +3612,17 @@ static const struct v4l2_ctrl_config ds5_ctrl_fw_version = {
 	.ops = &ds5_ctrl_ops,
 	.id = DS5_CAMERA_CID_FW_VERSION,
 	.name = "fw version",
+	.type = V4L2_CTRL_TYPE_U32,
+	.dims = {1},
+	.elem_size = sizeof(u32),
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_READ_ONLY,
+	.step = 1,
+};
+
+static const struct v4l2_ctrl_config ds5_ctrl_device_type = {
+	.ops = &ds5_ctrl_ops,
+	.id = DS5_CAMERA_CID_DEVICE_TYPE,
+	.name = "device type",
 	.type = V4L2_CTRL_TYPE_U32,
 	.dims = {1},
 	.elem_size = sizeof(u32),
@@ -3874,6 +4090,24 @@ static int ds5_board_setup(struct ds5 *state)
 	}
 
 	ser_i2c = of_find_i2c_device_by_node(ser_node);
+
+	/*
+	 * Initialize serializer interface based on serializer DT node name.
+	 * Node names carry a link suffix (e.g. "max9295_a", "max96717_a",
+	 * "max96717_prim"), so match on the chip-name prefix.
+	 */
+	if (!strncmp(ser_node->name, "max9295", strlen("max9295"))) {
+		state->ser_ops = &max9295_interface;
+	} else if (!strncmp(ser_node->name, "max96717", strlen("max96717"))) {
+		state->ser_ops = &max96717_interface;
+	} else {
+		dev_err(dev, "%s: Unsupported serializer = %s\n",
+			__func__, ser_node->name);
+		state->ser_ops = &max9295_interface;
+		of_node_put(ser_node);
+		goto error;
+	}
+	dev_info(dev, "Using serializer %s\n", state->ser_ops->name);
 	of_node_put(ser_node);
 
 	if (ser_i2c == NULL) {
@@ -3913,6 +4147,8 @@ static int ds5_board_setup(struct ds5 *state)
 		state->dser_ops = &max9296_interface;
 	} else if (!strcmp(dser_node->name, "max96712")) {
 		state->dser_ops = &max96712_interface;
+	} else if (!strcmp(dser_node->name, "max96724")) {
+		state->dser_ops = &max96724_interface;
 	} else {
 		dev_err(dev, "%s: Unsupported deserializer = %s\n", __func__, dser_node->name);
 		/* Should not be used, this is just to make sure we don't have NULL pointers */
@@ -4121,9 +4357,10 @@ static int ds5_board_setup(struct ds5 *state)
 
 
 	state->dser_dev = &state->dser_i2c->dev;
-	/* Initialize deserializer interface */
+	/* Initialize SerDes interfaces (non-OF fallback: D4xx/max9295+max9296) */
 	state->dser_ops = &max9296_interface;
-	
+	state->ser_ops = &max9295_interface;
+
 
 	/* populate g_ctx from pdata */
 	state->g_ctx.dst_csi_port = GMSL_CSI_PORT_A;
@@ -4187,7 +4424,7 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 		DS5_SERDES_STARTUP_RETRY_DELAY_MS - 1) /
 		DS5_SERDES_STARTUP_RETRY_DELAY_MS;
 	for (retry = 0; retry < attempts; retry++) {
-		err = max9295_setup_control(state->ser_dev);
+		err = state->ser_ops->setup_control(state->ser_dev);
 		if (!err)
 			break;
 		if (retry < attempts - 1)
@@ -4238,7 +4475,7 @@ static int ds5_serdes_setup(struct ds5 *state)
 	}
 
 	/* Pair sensor to serializer dev */
-	ret = max9295_sdev_pair(state->ser_dev, &state->g_ctx);
+	ret = state->ser_ops->sdev_pair(state->ser_dev, &state->g_ctx);
 	if (ret) {
 		dev_err(&c->dev, "gmsl ser pairing failed\n");
 		goto serdes_setup_end;
@@ -4257,10 +4494,10 @@ static int ds5_serdes_setup(struct ds5 *state)
 		goto serdes_setup_end;
 	}
 
-	ret = max9295_init_settings(state->ser_dev);
+	ret = state->ser_ops->init_settings(state->ser_dev);
 	if (ret) {
-		dev_warn(&c->dev, "%s, failed to init max9295 settings\n",
-			__func__);
+		dev_warn(&c->dev, "%s, failed to init %s settings\n",
+			__func__, state->ser_ops->name);
 		goto serdes_setup_end;
 	}
 
@@ -4273,13 +4510,52 @@ static int ds5_serdes_setup(struct ds5 *state)
 		}
 	}
 
+	/*
+	 * Tunnel-mode SerDes (max96717/max96724) needs explicit CSI streaming
+	 * setup (PHY/DPLL/lane-map/CSI-enable + serializer tunnel mode) on both
+	 * ends. For max9295/max9296/max96712 these ops are NULL and the block
+	 * is skipped, preserving the legacy D4xx flow.
+	 */
+	if (state->dser_ops->setup_streaming) {
+		ret = state->dser_ops->setup_streaming(state->dser_dev,
+						       state->g_ctx.s_dev);
+		if (ret) {
+			dev_warn(&c->dev, "%s, failed to setup %s streaming\n",
+				__func__, state->dser_ops->name);
+			goto serdes_setup_end;
+		}
+		/*
+		 * The deserializer streaming setup issues a one-shot reset that
+		 * briefly drops the GMSL link; I2C pass-through to the remote
+		 * serializer needs the link to re-lock first.
+		 */
+		msleep(1000);
+
+		if (state->ser_ops->setup_streaming) {
+			ret = state->ser_ops->setup_streaming(state->ser_dev);
+			if (ret) {
+				dev_warn(&c->dev,
+					"%s, failed to setup %s streaming\n",
+					__func__, state->ser_ops->name);
+				goto serdes_setup_end;
+			}
+		}
+		/*
+		 * Serializer enable re-trains the link; the deserializer needs a
+		 * one-shot reset to resync its CSI TX to the now-active tunnel
+		 * stream. Delay first to let the link re-lock.
+		 */
+		msleep(500);
+		state->dser_ops->reset_oneshot(state->dser_dev);
+	}
+
 serdes_setup_end:
 	/* Set/clear serdes_setup_complete from the same exit gate: error branch
 	 * clears it, success branch sets it. This ensures flag state is
 	 * synchronized with actual setup completion status.
 	 */
 	if (ret) {
-		max9295_sdev_unpair(state->ser_dev, state->g_ctx.s_dev);
+		state->ser_ops->sdev_unpair(state->ser_dev, state->g_ctx.s_dev);
 		state->dser_ops->sdev_unregister(state->dser_dev, state->g_ctx.s_dev);
 		if (state->ser_primary)
 			ds5_release_slot(state);
@@ -4476,6 +4752,8 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 	if (sid >= DEPTH_SID && sid < IMU_SID) {
 		ctrls->log = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_log, sensor);
 		ctrls->fw_version = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_fw_version, sensor);
+		ctrls->device_type =
+				v4l2_ctrl_new_custom(hdl, &ds5_ctrl_device_type, sensor);
 		ctrls->gvd = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_gvd, sensor);
 		ctrls->get_depth_calib =
 				v4l2_ctrl_new_custom(hdl, &ds5_ctrl_get_depth_calib, sensor);
@@ -5625,6 +5903,9 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	case DS5_DEVICE_TYPE_D46X:
 		sensor->formats = ds5_depth_formats_d46x;
 		break;
+	case DS5_DEVICE_TYPE_D58X:
+		sensor->formats = ds5_depth_formats_d58x;
+		break;
 	default:
 		dev_warn(&client->dev,
 			"%s(): unknown device type 0x%x, using D43X format tables\n",
@@ -5647,6 +5928,10 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	case DS5_DEVICE_TYPE_D45X:
 		sensor->formats = ds5_y_formats_45x;
 		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_45x);
+		break;
+	case DS5_DEVICE_TYPE_D58X:
+		sensor->formats = ds5_y_formats_d58x;
+		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_d58x);
 		break;
 	default:
 		sensor->formats = state->variant->formats;
@@ -5672,6 +5957,10 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	case DS5_DEVICE_TYPE_D45X:
 		sensor->formats = &ds5_rlt_rgb_format;
 		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
+		break;
+	case DS5_DEVICE_TYPE_D58X:
+		sensor->formats = &ds5_d58x_rgb_format;
+		sensor->n_formats = DS5_D58X_RGB_N_FORMATS;
 		break;
 	default:
 		sensor->formats = &ds5_onsemi_rgb_format;
@@ -6122,6 +6411,12 @@ static void ds5_adjust_sync_mode_control(struct i2c_client *client, struct ds5 *
 		/* D46X does not support sync mode */
 		dev_dbg(&client->dev, "%s(): D46X does not support sync mode\n", __func__);
 		__v4l2_ctrl_modify_range(state->ctrls.sync_mode, 0, 0, 0, 0);
+		break;
+	case DS5_DEVICE_TYPE_D58X:
+		/* D58X supports all 6 sync modes (0-5) */
+		__v4l2_ctrl_modify_range(state->ctrls.sync_mode, 0, 5, 0, 0);
+		state->ctrls.sync_mode->qmenu = sync_mode_menu_full;
+		dev_dbg(&client->dev, "%s(): D58X sync mode: all modes 0-5 supported\n", __func__);
 		break;
 	default:
 		/* Unknown device - disable sync mode */
@@ -6717,16 +7012,17 @@ static void ds5_remove(struct i2c_client *c)
 		do_cleanup = ds5_release_slot(state);
 
 		if (do_cleanup) {
-			ret = max9295_reset_control(state->ser_dev);
+			ret = state->ser_ops->reset_control(state->ser_dev);
 			if (ret)
 				dev_warn(&c->dev,
-					"failed in 9295 reset control\n");
+					"failed in %s reset control\n",
+					state->ser_ops->name);
 			ret = state->dser_ops->reset_control(state->dser_dev,
 				state->g_ctx.s_dev);
 			if (ret)
 				dev_warn(&c->dev,
 					"failed in %s reset control\n", state->dser_ops->name);
-			ret = max9295_sdev_unpair(state->ser_dev,
+			ret = state->ser_ops->sdev_unpair(state->ser_dev,
 				state->g_ctx.s_dev);
 			if (ret)
 				dev_warn(&c->dev, "failed to unpair sdev\n");
@@ -6780,6 +7076,8 @@ MODULE_DEVICE_TABLE(i2c, ds5_id);
 
 static const struct of_device_id d4xx_of_match[] = {
 	{ .compatible = "intel,d4xx", },
+	/* D5xx (D58x) family: same unified driver, different SerDes/family. */
+	{ .compatible = "realsense,d5xx", },
 	{ },
 };
 MODULE_DEVICE_TABLE(of, d4xx_of_match);

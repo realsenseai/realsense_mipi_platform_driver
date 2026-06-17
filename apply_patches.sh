@@ -63,6 +63,24 @@ if ! version_lt "$JETPACK_VERSION" 6.0; then
     fi
 fi
 
+cleanup_reset_artifacts() {
+    local source="$1"
+    # Patch-created files that are untracked in the subrepo and would survive a
+    # hard reset. The unified d4xx driver builds both SerDes families, so the
+    # MAX96717/MAX96724 sources/headers (added by the 0011 patch) are cleaned
+    # alongside d4xx.c so a re-apply starts from a clean tree.
+    local -a reset_artifacts=(
+        "drivers/media/i2c/d4xx.c"
+        "drivers/media/i2c/max96717.c"
+        "drivers/media/i2c/max96724.c"
+        "include/media/max96712.h"
+        "include/media/max96717.h"
+        "include/media/max96724.h"
+    )
+
+    git -C "${source}" clean -f -- "${reset_artifacts[@]}" > /dev/null 2>&1 || true
+}
+
 apply_external_patches() {
 	local source="${BUILD_SRCS}/$2"
     git -C "${source}" status > /dev/null
@@ -79,6 +97,7 @@ apply_external_patches() {
             read -p "Repo ${source} has changes that will be hard reset. Continue (Y/n)? " confirm
             [[ -n "$confirm" && "$confirm" != "y" && "$confirm" != "Y" ]] && exit 1
         fi
+        cleanup_reset_artifacts "${source}"
         echo -n "$(ls -d ${source}): "
         git -C "${source}" reset --hard $L4T_VERSION
     fi
@@ -114,7 +133,18 @@ if [[ "$ACTION" = "apply" ]]; then
         if version_lt "$JETPACK_VERSION" "7.0"; then
             # jp6 overlay
             ln -f hardware/realsense/tegra234-camera-d4xx-overlay*.dts "${BUILD_SRCS}/hardware/nvidia/t23x/nv-public/overlay/"
+            # d5xx (D58x) overlays share the unified driver; wire them into the overlay Makefile.
+            ln -f hardware/realsense/tegra234-camera-d5xx-overlay*.dts "${BUILD_SRCS}/hardware/nvidia/t23x/nv-public/overlay/"
+            JP6_OVERLAY_MAKEFILE="${BUILD_SRCS}/hardware/nvidia/t23x/nv-public/overlay/Makefile"
+            if [[ -f "$JP6_OVERLAY_MAKEFILE" ]] && ! grep -q '^dtbo-y += tegra234-camera-d5xx-overlay.dtbo$' "$JP6_OVERLAY_MAKEFILE"; then
+                sed -i '/^dtbo-y += tegra234-camera-d4xx-overlay.dtbo$/a dtbo-y += tegra234-camera-d5xx-overlay.dtbo' "$JP6_OVERLAY_MAKEFILE"
+            fi
+            # NOTE: the FG24-4CH d5xx overlay variant has no committed .dts source
+            # yet, so it is intentionally NOT wired into the overlay Makefile
+            # (doing so breaks `make dtbs`). Re-add once the .dts is committed.
             ln -f ${BUILD_SRCS}/hardware/nvidia/t23x/nv-public/include/platforms/dt-bindings/tegra234-p3737-0000+p3701-0000.h \
+                    ${BUILD_SRCS}/$KERNEL_DIR/include/dt-bindings/
+            ln -f ${BUILD_SRCS}/hardware/nvidia/t23x/nv-public/include/platforms/dt-bindings/tegra234-p3767-0000-common.h \
                     ${BUILD_SRCS}/$KERNEL_DIR/include/dt-bindings/
         else
             # Copy tegra264-gpio.h for Thor overlay compilation if not already present

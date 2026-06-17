@@ -4,6 +4,8 @@ set -e
 
 CLEAN=0
 DEVDBG=0
+FG24=0
+CSI_LANES=4
 
 # Parse optional flags
 while [[ "$1" == --* ]]; do
@@ -14,6 +16,19 @@ while [[ "$1" == --* ]]; do
             ;;
         --dev-dbg)
             DEVDBG=1
+            shift
+            ;;
+        --fg)
+            FG24=1
+            shift
+            ;;
+        --lane)
+            shift
+            CSI_LANES="$1"
+            if [[ "$CSI_LANES" != "2" && "$CSI_LANES" != "4" ]]; then
+                echo "Error: --lane must be 2 or 4 (got: $CSI_LANES)"
+                exit 1
+            fi
             shift
             ;;
         *)
@@ -27,7 +42,10 @@ export DEVDIR=$(cd `dirname $0` && pwd)
 NPROC=$(nproc)
 
 if [[ "$1" == "-h" ]]; then
-    echo "build_all.sh [--clean] [--dev-dbg] [JetPack_version [JetPack_Linux_source]]"
+    echo "build_all.sh [--clean] [--dev-dbg] [--fg] [--lane 2|4] [JetPack_version [JetPack_Linux_source]]"
+    echo "  --fg       Build D5xx overlay for FangZhu FG24-4CH board (4-lane CSI-C)"
+    echo "  --lane 2   Build with 2-lane CSI output (SC20190112 adapter, experimental)"
+    echo "  --lane 4   Build with 4-lane CSI output (default, verified working)"
     echo "build_all.sh -h"
 fi
 
@@ -57,6 +75,16 @@ fi
 
 export LOCALVERSION=-tegra
 export TEGRA_KERNEL_OUT="$DEVDIR/images/${JP_INPUT_VERSION}"
+
+# FG24-4CH board selection (D5xx overlay variant)
+export RS_FG24=$FG24
+if [[ "$FG24" == "1" ]]; then
+    echo "Building for FangZhu FG24-4CH board (4-lane CSI-C)"
+    CSI_LANES=4
+fi
+
+# CSI lane configuration (consumed by the D5xx overlay build)
+export RS_CSI_LANES=$CSI_LANES
 
 # Clean if requested
 if [[ $CLEAN == 1 ]]; then
@@ -109,20 +137,33 @@ else
         # Building the Image with default defconfig
         make -C kernel
     fi
-    make modules
+    make RS_CSI_LANES=$RS_CSI_LANES modules
+    # Unified driver: always a single d4xx.o (no separate d5xx.o).
     D4XX_CMD_FILE="$BUILD_SRCS/nvidia-oot/drivers/media/i2c/.d4xx.o.cmd"
     mkdir -p $TEGRA_KERNEL_OUT/rootfs/boot/dtb
     if version_lt "$JETPACK_VERSION" "7.0"; then
-        make dtbs
-        cp $BUILD_SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/
-        cp $BUILD_SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-p3737-0000+p3701-0000-nv.dtb $TEGRA_KERNEL_OUT/rootfs/boot/dtb/
-        cp $BUILD_SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-p3737-0000+p3701-0005-nv.dtb $TEGRA_KERNEL_OUT/rootfs/boot/dtb/
+        # Sync FG24 DTS into build tree before make dtbs (apply_patches ln may fail cross-fs)
+        if [[ "$FG24" == "1" ]]; then
+            cp -f "$DEVDIR/hardware/realsense/tegra234-camera-d5xx-overlay-fg24-4ch.dts" \
+                  "$BUILD_SRCS/hardware/nvidia/t23x/nv-public/overlay/" 2>/dev/null || true
+        fi
+        make RS_CSI_LANES=$RS_CSI_LANES dtbs
+        cp $BUILD_SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/ 2>/dev/null || true
+        # D5xx overlays build from the same tree; copy them when present.
+        cp $BUILD_SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-camera-d5xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/ 2>/dev/null || true
+        if [[ "$FG24" == "1" ]]; then
+            cp $BUILD_SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-p3768-0000+p3767-0005-nv-super.dtb $TEGRA_KERNEL_OUT/rootfs/boot/dtb/kernel_tegra234-p3768-0000+p3767-0005-nv-super.dtb 2>/dev/null || true
+        else
+            cp $BUILD_SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-p3737-0000+p3701-0000-nv.dtb $TEGRA_KERNEL_OUT/rootfs/boot/dtb/
+            cp $BUILD_SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-p3737-0000+p3701-0005-nv.dtb $TEGRA_KERNEL_OUT/rootfs/boot/dtb/
+        fi
     else
-        cp $BUILD_SRCS/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/tegra2[36]4-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/
+        cp $BUILD_SRCS/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/tegra2[36]4-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/ 2>/dev/null || true
+        cp $BUILD_SRCS/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/tegra2[36]4-camera-d5xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/ 2>/dev/null || true
     fi
     export INSTALL_MOD_PATH=$TEGRA_KERNEL_OUT/rootfs/
     make -C kernel install
-    make modules_install
+    make RS_CSI_LANES=$RS_CSI_LANES modules_install
     # iio support
     KERNELVERSION=$(cat $KERNEL_HEADERS/include/config/kernel.release)
     KERNEL_MODULES_OUT=$INSTALL_MOD_PATH/lib/modules/${KERNELVERSION}

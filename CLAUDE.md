@@ -65,19 +65,21 @@ V4L2 userspace (v4l2-ctl, gstreamer, etc.)
     ↓
 Kernel V4L2 / media framework
     ↓
-D4XX kernel driver (kernel/realsense/d4xx.c, ~6200 lines)
+D4XX kernel driver (kernel/realsense/d4xx.c, ~6500 lines) — unified D4xx + D5xx
     ↓ I2C
-SerDes (MAX9295 serializer / MAX9296 deserializer)
+SerDes — D4xx: MAX9295 ser / MAX9296|MAX96712 deser
+         D5xx: MAX96717 ser / MAX96724 deser (tunnel mode)
     ↓ GMSL link
-RealSense D4XX camera module
+RealSense D4XX (D40x–D46x) / D5XX (D58x) camera module
 ```
 
 ### Key directories
 
-- **`kernel/realsense/d4xx.c`** — The main driver. Single-file V4L2 subdevice driver handling I2C communication, MIPI CSI-2 stream config, firmware control (DFU), calibration data, metadata capture, and V4L2 controls (exposure, laser power, AE ROI, etc.). Registers four sensor subdevices per camera: Depth, RGB, IR (Y8/Y8I/Y12I), and IMU.
+- **`kernel/realsense/d4xx.c`** — The main driver, a single unified V4L2 subdevice driver for **both** the D4xx (D40x–D46x) and D5xx (D58x) camera families. Handles I2C communication, MIPI CSI-2 stream config, firmware control (DFU), calibration data, metadata capture, and V4L2 controls (exposure, laser power, AE ROI, device_type, etc.). Registers four sensor subdevices per camera: Depth, RGB, IR (Y8/Y8I/Y12I), and IMU. Family behavior is abstracted behind ops tables and device-type-keyed format tables — see the SerDes-abstraction note below. Probes both `intel,d4xx` and `realsense,d5xx` compatibles (one module, `d4xx.ko`).
+  - **SerDes abstraction:** the deserializer is selected at runtime via `struct dser_interface *dser_ops` (`max9296_interface` / `max96712_interface` / `max96724_interface`), and the serializer via `struct ser_interface *ser_ops` (`max9295_interface` / `max96717_interface`). Both are picked in `ds5_board_setup()` from the DT serializer/deserializer node-name (serializer matched by **prefix** with `strncmp`, since DT names carry a link suffix like `max96717_a`). Tunnel-mode-only steps (`ser_ops->retrigger_tx`, `ser_ops->setup_streaming`, `dser_ops->setup_streaming`) are NULL for the D4xx chips, so the legacy D4xx flow is unchanged. **Add any new SerDes chip by adding an ops-table instance, not by branching on chip name.**
 - **`kernel/kernel-4.9/`, `kernel/kernel-5.10/`, `kernel/kernel-jammy-src/`** — Kernel patches organized by JetPack generation: 4.6.1 uses kernel 4.9, 5.x uses kernel 5.10, 6.x uses kernel-jammy-src.
 - **`kernel/nvidia/`** — NVIDIA driver patches (max9295/max9296 SerDes, VI capture engine) organized by JetPack version.
-- **`nvidia-oot/`** — Out-of-tree NVIDIA module patches for JetPack 6.x (subdirs `6.0/`, `6.1/`, `6.2/`, `6.2.1/`). Has its own Makefile for building conftest, hwpm, nvidia-oot, nvgpu, nvidia-display modules.
+- **`nvidia-oot/`** — Out-of-tree NVIDIA module patches for JetPack 6.x (subdirs `6.0/`, `6.1/`, `6.2/`, `6.2.1/`; `7.0/`, `7.1/`). Has its own Makefile for building conftest, hwpm, nvidia-oot, nvgpu, nvidia-display modules. The `0001-Porting-...` patch wires the `drivers/media/i2c/Makefile` to build a single `d4xx.o` plus **all five** SerDes modules: `max9295`, `max9296`, `max96712` (D4xx) and `max96717`, `max96724` (D5xx, added by the `0011-Add-MAX96717-...` patch). There is no separate `d5xx.o`.
 - **`hardware/realsense/`** — Device tree source files. Xavier uses `.dtsi` includes (`tegra194-camera-d4xx-*.dtsi`), Orin uses DT overlays (`tegra234-camera-d4xx-overlay*.dts`). Single-camera and dual-camera variants exist, plus `.calib.` variants for calibration.
 - **`hardware/nvidia/`** — Platform-level DT patches (`t19x/galen/` for Xavier, `t23x/` for Orin T234).
 - **`scripts/`** — Build orchestration. `setup-common` defines version-to-revision mappings and kernel directory selection. `source_sync_*.sh` scripts clone NVIDIA kernel repos. `SerDes_D457_*.sh` scripts configure serializer/deserializer registers.

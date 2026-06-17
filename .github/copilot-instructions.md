@@ -44,7 +44,11 @@ Each camera registers four sensor subdevices: Depth, RGB, IR (Y8/Y8I/Y12I), and 
 - `ds5_depth_subdev_ops`, `ds5_ir_subdev_ops`, `ds5_rgb_subdev_ops`, `ds5_imu_subdev_ops`
 - Mux ops: `ds5_mux_subdev_ops`, `ds5_mux_pad_ops`, `ds5_mux_core_ops`, `ds5_mux_video_ops`
 
-A deserializer abstraction layer (`struct dser_interface`) provides function pointer tables for MAX9296 vs MAX96712 variants.
+The driver is **unified across the D4xx (D40x–D46x) and D5xx (D58x) families** and probes both `intel,d4xx` and `realsense,d5xx` (one module, `d4xx.ko`). SerDes chips are abstracted behind two ops tables, selected at runtime in `ds5_board_setup()` from the DT node names:
+- `struct dser_interface *dser_ops` — deserializer: `max9296_interface` / `max96712_interface` / `max96724_interface` (D5xx). Matched by exact dser node name.
+- `struct ser_interface *ser_ops` — serializer: `max9295_interface` / `max96717_interface` (D5xx). Matched by **prefix** (`strncmp`), since ser node names carry a link suffix (e.g. `max96717_a`, `max96717_prim`).
+
+Tunnel-mode-only hooks (`ser_ops->retrigger_tx`, `ser_ops->setup_streaming`, `dser_ops->setup_streaming`) are NULL for the D4xx chips, so the legacy D4xx flow is unchanged. **Add a new SerDes chip by adding an ops-table instance — never branch on chip name in the stream/pipeline paths.** Family-specific resolution/format tables are keyed by `DS5_DEVICE_TYPE_*` (including `DS5_DEVICE_TYPE_D58X`) in `ds5_parse_cam()`.
 
 - **SerDes pipe configuration**: the **driver** configures all four SerDes pipes (Depth, RGB, IR, IMU) at stream start via `ds5_configure()`. The D457 firmware does **not** configure any pipes. Do not add probe-time pipe setup or special-case individual pipes (e.g. IMU) in `ds5_probe()`.
 - **Device tree assumptions**: all supported device trees include all four sensor instances (Depth, RGB, IR, IMU). Do not add DT-scanning logic to check for the presence of individual sensor types.
