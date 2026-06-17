@@ -821,7 +821,10 @@ static const u16 ds5_default_framerate = 30;
 static const u16 ds5_framerate_30 = 30;
 static const u16 ds5_depth_framerate_to_30[] = {5, 15, 30};
 static const u16 ds5_framerate_to_60[] = {5, 15, 30, 60};
+static const u16 ds5_framerate_to_90[] = {5, 15, 30, 60, 90};
 static const u16 ds5_framerate_15_30[] = {15, 30};
+static const u16 ds5_framerate_15_25[] = {15, 25};
+static const u16 ds5_framerate_90[] = {90};
 static const u16 ds5_framerate_9_30[] = {9, 30};
 static const u16 ds5_imu_framerates[] = {100, 200, 400};
 
@@ -831,26 +834,44 @@ static const u16 ds5_imu_framerates[] = {100, 200, 400};
 
 /* D58x depth resolutions: DEPTH (Z16) + DEPTH_RAW (Z16) */
 static const struct ds5_resolution d58x_depth_sizes[] = {
-	DS5_RES(640, 360, ds5_framerate_to_60)
+	DS5_RES(640, 360, ds5_framerate_to_90)	/* default */
+	DS5_RES(1280, 960, ds5_framerate_to_60)
 	DS5_RES(1280, 720, ds5_framerate_to_60)
-	DS5_RES(1280, 960, ds5_depth_framerate_to_30)
+	DS5_RES(896, 504, ds5_framerate_to_60)
+	DS5_RES(848, 480, ds5_framerate_to_60)
+	DS5_RES(640, 480, ds5_framerate_to_90)
+	DS5_RES(480, 270, ds5_framerate_to_90)
+	DS5_RES(424, 240, ds5_framerate_to_90)
 };
 
-/* D58x IR/Y8 resolutions: IR (Y8) + IR_RAW (Y8) */
+/* D58x IR/Y8 resolutions: IR (Y8/L8R8) + IR_RAW (Y8) */
 static const struct ds5_resolution d58x_y8_sizes[] = {
+	DS5_RES(640, 360, ds5_framerate_to_90)	/* default */
+	DS5_RES(1280, 960, ds5_framerate_to_60)
 	DS5_RES(1280, 720, ds5_framerate_to_60)
-	DS5_RES(1280, 960, ds5_depth_framerate_to_30)
+	DS5_RES(896, 504, ds5_framerate_to_60)
+	DS5_RES(848, 480, ds5_framerate_to_60)
+	DS5_RES(640, 480, ds5_framerate_to_90)
+	DS5_RES(480, 270, ds5_framerate_to_90)
+	DS5_RES(424, 240, ds5_framerate_to_90)
 };
 
-/* D58x calibration resolutions: IR_RAW Y16 */
+/* D58x calibration resolutions: IR_RAW Y12I (24-bit) + Self-Calibration/Tare */
 static const struct ds5_resolution d58x_calibration_sizes[] = {
-	DS5_RES(1600, 1300, ds5_framerate_15_30)
+	DS5_RES(1600, 1300, ds5_framerate_15_25)
+	DS5_RES(256, 144, ds5_framerate_90)
 };
 
-/* D58x RGB resolutions: COLOR (RGB8) */
+/* D58x RGB resolutions: COLOR (YUY2) */
 static const struct ds5_resolution d58x_rgb_sizes[] = {
-	DS5_RES(640, 360, ds5_depth_framerate_to_30)
-	DS5_RES(1280, 720, ds5_depth_framerate_to_30)
+	DS5_RES(640, 360, ds5_framerate_to_90)	/* default */
+	DS5_RES(1280, 960, ds5_framerate_to_60)
+	DS5_RES(1280, 720, ds5_framerate_to_60)
+	DS5_RES(896, 504, ds5_framerate_to_60)
+	DS5_RES(848, 480, ds5_framerate_to_60)
+	DS5_RES(640, 480, ds5_framerate_to_90)
+	DS5_RES(480, 270, ds5_framerate_to_90)
+	DS5_RES(424, 240, ds5_framerate_to_90)
 };
 
 /* D58x COLOR_RAW resolutions: RAW16 */

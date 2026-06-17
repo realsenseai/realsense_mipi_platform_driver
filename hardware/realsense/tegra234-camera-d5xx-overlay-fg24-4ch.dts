@@ -125,7 +125,7 @@
 				status = "okay";
 				compatible = "nvidia, tegra-camera-platform";
 				num_csi_lanes = <4>;
-				max_lane_speed = <1500000>;
+				max_lane_speed = <1300000>;
 				min_bits_per_pixel = <10>;
 				vi_peak_byte_per_pixel = <2>;
 				vi_bw_margin_pct = <25>;
@@ -397,8 +397,8 @@
 								discontinuous_clk = "no";
 								cil_settletime = "0";
 								mclk_khz = "24000";
-								pix_clk_hz = "175000000";
-							serdes_pix_clk_hz = "175000000";
+								pix_clk_hz = "325000000";
+							serdes_pix_clk_hz = "325000000";
 								line_length = "1280";
 								embedded_metadata_height = "1";
 							};
@@ -455,8 +455,8 @@
 								discontinuous_clk = "no";
 								cil_settletime = "0";
 								mclk_khz = "24000";
-								pix_clk_hz = "175000000";
-							serdes_pix_clk_hz = "175000000";
+								pix_clk_hz = "325000000";
+							serdes_pix_clk_hz = "325000000";
 								line_length = "1920";
 								embedded_metadata_height = "1";
 							};
@@ -514,8 +514,8 @@
 								discontinuous_clk = "no";
 								cil_settletime = "0";
 								mclk_khz = "24000";
-								pix_clk_hz = "175000000";
-								serdes_pix_clk_hz = "175000000";
+								pix_clk_hz = "325000000";
+								serdes_pix_clk_hz = "325000000";
 								line_length = "1280";
 								embedded_metadata_height = "1";
 							};
@@ -532,8 +532,8 @@
 								discontinuous_clk = "no";
 								cil_settletime = "0";
 								mclk_khz = "24000";
-								pix_clk_hz = "175000000";
-								serdes_pix_clk_hz = "175000000";
+								pix_clk_hz = "325000000";
+								serdes_pix_clk_hz = "325000000";
 								line_length = "1280";
 								embedded_metadata_height = "1";
 							};
@@ -590,8 +590,8 @@
 								discontinuous_clk = "no";
 								cil_settletime = "0";
 								mclk_khz = "24000";
-								pix_clk_hz = "175000000";
-							serdes_pix_clk_hz = "175000000";
+								pix_clk_hz = "325000000";
+							serdes_pix_clk_hz = "325000000";
 								line_length = "1280";
 								embedded_metadata_height = "0";
 							};
