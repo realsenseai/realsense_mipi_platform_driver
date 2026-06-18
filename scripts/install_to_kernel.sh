@@ -57,9 +57,12 @@ if [ "${JETPACK_VERSION}" = "5.0.2" ]; then
           sudo cp videobuf-vmalloc.ko /lib/modules/$(uname -r)/updates/
 elif [ "${JETPACK_VERSION}" = "6.0" ] || [ "${JETPACK_VERSION}" = "6.1" ] || [ "${JETPACK_VERSION}" = "6.2" ] || [ "${JETPACK_VERSION}" = "6.2.1" ] || [ "${JETPACK_VERSION}" = "7.0" ] || [ "${JETPACK_VERSION}" = "7.1" ] || [ "${JETPACK_VERSION}" = "7.2" ]; then
     MODULES_DIR="lib/modules/$(uname -r)"
-    echo "Extracting rootfs.tar.gz..."
-    if ! tar xf rootfs.tar.gz; then
-        echo "Error: Failed to extract rootfs.tar.gz; not modifying kernel modules."
+    # Accept any compression (rootfs.tar.gz, rootfs.tar.bz2, rootfs.tar.xz, ...);
+    # tar autodetects the format from the file contents.
+    ROOTFS_TARBALL=$(ls rootfs.tar.* 2>/dev/null | head -n1)
+    echo "Extracting ${ROOTFS_TARBALL:-rootfs.tar.*}..."
+    if [ -z "${ROOTFS_TARBALL}" ] || ! tar xf "${ROOTFS_TARBALL}"; then
+        echo "Error: Failed to extract rootfs tarball (rootfs.tar.*); not modifying kernel modules."
         exit 1
     fi
     if [ ! -d "${MODULES_DIR}" ] || [ -z "$(ls -A "${MODULES_DIR}" 2>/dev/null)" ]; then
