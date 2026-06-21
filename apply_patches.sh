@@ -97,13 +97,13 @@ if [[ "$ACTION" = "apply" ]]; then
         cp kernel/nvidia/max96712.h "${BUILD_SRCS}/kernel/nvidia/include/media/"
     else
         # max96712 header
-        ln -f nvidia-oot/max96712.h "${BUILD_SRCS}/nvidia-oot/include/media/"
+        ln -f -s $(pwd)/nvidia-oot/max96712.h "${BUILD_SRCS}/nvidia-oot/include/media/"
         # max96717 header and source
-        ln -f nvidia-oot/max96717.h "${BUILD_SRCS}/nvidia-oot/include/media/"
-        ln -f nvidia-oot/max96717.c "${BUILD_SRCS}/nvidia-oot/drivers/media/i2c/"
+        ln -f -s $(pwd)/nvidia-oot/max96717.h "${BUILD_SRCS}/nvidia-oot/include/media/"
+        ln -f -s $(pwd)/nvidia-oot/max96717.c "${BUILD_SRCS}/nvidia-oot/drivers/media/i2c/"
         if version_lt "$JETPACK_VERSION" "7.0"; then
             # jp6 overlay
-            ln -f hardware/realsense/tegra234-camera-d4xx-overlay*.dts "${BUILD_SRCS}/hardware/nvidia/t23x/nv-public/overlay/"
+            ln -f -s $(pwd)/hardware/realsense/tegra234-camera-d4xx-overlay*.dts "${BUILD_SRCS}/hardware/nvidia/t23x/nv-public/overlay/"
             ln -f ${BUILD_SRCS}/hardware/nvidia/t23x/nv-public/include/platforms/dt-bindings/tegra234-p3737-0000+p3701-0000.h \
                     ${BUILD_SRCS}/$KERNEL_DIR/include/dt-bindings/
         else
@@ -112,11 +112,9 @@ if [[ "$ACTION" = "apply" ]]; then
                 ln -f "${BUILD_SRCS}/$KERNEL_DIR/3rdparty/canonical/linux-noble/include/dt-bindings/gpio/tegra264-gpio.h" \
                     "${BUILD_SRCS}/$KERNEL_DIR/include/dt-bindings/gpio/" 2>/dev/null || true
             fi
-            ln -f hardware/realsense/tegra264-camera-d4xx-overlay*.dtso "${BUILD_SRCS}/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/"
-            # tegra234 (Orin) single-camera Fangzhu overlay for JP7.2 on Orin.
-            # Uses dt-bindings headers already present in the noble tree
-            # (tegra234-gpio.h/-clock.h, pinctrl-tegra.h); no extra header link needed.
-            ln -f hardware/realsense/tegra234-camera-d4xx-overlay-fg12-16ch-cams-0.dtso "${BUILD_SRCS}/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/"
+            # JP7.x supports overlays with .dtso extension (234 for Orin and 264 for Thor)
+            ln -f -s $(pwd)/hardware/realsense/tegra234-camera-d4xx-overlay*.dtso "${BUILD_SRCS}/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/"
+            ln -f -s $(pwd)/hardware/realsense/tegra264-camera-d4xx-overlay*.dtso "${BUILD_SRCS}/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/"
         fi
     fi
 
