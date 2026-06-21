@@ -115,7 +115,7 @@ struct ser_interface {
 #define DS5_FW_VERSION			0x030C
 #define DS5_FW_BUILD			0x030E
 #define DS5_DEVICE_TYPE			0x0310
-#define DS5_DEVICE_TYPE_D5XX		9
+#define DS5_DEVICE_TYPE_D58X		9
 #define DS5_DEVICE_TYPE_D40X		8
 #define DS5_DEVICE_TYPE_D41X		7
 #define DS5_DEVICE_TYPE_D45X		6
@@ -756,7 +756,7 @@ static bool ds5_is_valid_device_type(u16 dev_type)
 	case DS5_DEVICE_TYPE_D41X:
 	case DS5_DEVICE_TYPE_D43X:
 	case DS5_DEVICE_TYPE_D45X:
-	case DS5_DEVICE_TYPE_D5XX:
+	case DS5_DEVICE_TYPE_D58X:
 		return true;
 	default:
 		return false;
@@ -1471,6 +1471,73 @@ static const struct ds5_format ds5_onsemi_rgb_format = {
 	.resolutions = ds5_onsemi_rgb_sizes,
 };
 #define DS5_ONSEMI_RGB_N_FORMATS 1
+
+static const struct ds5_resolution d58x_depth_sizes[] = {
+	DS5_RES(640, 360, ds5_framerate_to_60)
+	DS5_RES(1280, 720, ds5_framerate_to_60)
+	DS5_RES(1280, 960, ds5_depth_framerate_to_30)
+};
+
+static const struct ds5_resolution d58x_y8_sizes[] = {
+	DS5_RES(1280, 720, ds5_framerate_to_60)
+	DS5_RES(1280, 960, ds5_depth_framerate_to_30)
+};
+
+static const struct ds5_resolution d58x_calibration_sizes[] = {
+	DS5_RES(1600, 1300, ds5_framerate_15_30)
+};
+
+static const struct ds5_resolution d58x_rgb_sizes[] = {
+	DS5_RES(640, 360, ds5_depth_framerate_to_30)
+	DS5_RES(1280, 720, ds5_depth_framerate_to_30)
+};
+
+static const struct ds5_format ds5_depth_formats_d58x[] = {
+	{
+		.data_type = GMSL_CSI_DT_YUV422_8,	/* Z16 */
+		.mbus_code = MEDIA_BUS_FMT_UYVY8_1X16,
+		.n_resolutions = ARRAY_SIZE(d58x_depth_sizes),
+		.resolutions = d58x_depth_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_RAW_8,		/* Y8 */
+		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
+		.n_resolutions = ARRAY_SIZE(d58x_depth_sizes),
+		.resolutions = d58x_depth_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_RGB_888,	/* 24-bit Calibration */
+		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,
+		.n_resolutions = ARRAY_SIZE(d58x_calibration_sizes),
+		.resolutions = d58x_calibration_sizes,
+	},
+};
+
+static const struct ds5_format ds5_y_formats_d58x[] = {
+	{
+		/* First format: default */
+		.data_type = GMSL_CSI_DT_RAW_8,		/* Y8 */
+		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
+		.n_resolutions = ARRAY_SIZE(d58x_y8_sizes),
+		.resolutions = d58x_y8_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_YUV422_8,	/* Y8I */
+		.mbus_code = MEDIA_BUS_FMT_VYUY8_1X16,
+		.n_resolutions = ARRAY_SIZE(d58x_y8_sizes),
+		.resolutions = d58x_y8_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_RGB_888,	/* Y12I, 24-bit Calibration */
+		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,
+		.n_resolutions = ARRAY_SIZE(d58x_calibration_sizes),
+		.resolutions = d58x_calibration_sizes,
+	},
+};
+
+static const struct ds5_format ds5_d58x_rgb_format = {
+	.data_type = GMSL_CSI_DT_YUV422_8,	/* UYVY */
+	.mbus_code = MEDIA_BUS_FMT_YUYV8_1X16,
+	.n_resolutions = ARRAY_SIZE(d58x_rgb_sizes),
+	.resolutions = d58x_rgb_sizes,
+};
+#define DS5_D58X_RGB_N_FORMATS 1
 
 static const struct ds5_variant ds5_variants[] = {
 	[DS5_DS5U] = {
@@ -5764,6 +5831,9 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	case DS5_DEVICE_TYPE_D45X:
 		sensor->formats = ds5_depth_formats_d43x;
 		break;
+	case DS5_DEVICE_TYPE_D58X:
+		sensor->formats = ds5_depth_formats_d58x;
+		break;
 	default:
 		dev_warn(&client->dev,
 			"%s(): unknown device type 0x%x, using D43X format tables\n",
@@ -5786,6 +5856,10 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	case DS5_DEVICE_TYPE_D45X:
 		sensor->formats = ds5_y_formats_45x;
 		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_45x);
+		break;
+	case DS5_DEVICE_TYPE_D58X:
+		sensor->formats = ds5_y_formats_d58x;
+		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_d58x);
 		break;
 	default:
 		sensor->formats = state->variant->formats;
@@ -5810,6 +5884,10 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	case DS5_DEVICE_TYPE_D45X:
 		sensor->formats = &ds5_rlt_rgb_format;
 		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
+		break;
+	case DS5_DEVICE_TYPE_D58X:
+		sensor->formats = &ds5_d58x_rgb_format;
+		sensor->n_formats = DS5_D58X_RGB_N_FORMATS;
 		break;
 	default:
 		sensor->formats = &ds5_onsemi_rgb_format;
@@ -6243,6 +6321,12 @@ static void ds5_adjust_sync_mode_control(struct i2c_client *client, struct ds5 *
 		state->ctrls.sync_mode->qmenu = sync_mode_menu;
 		dev_dbg(&client->dev, "%s(): sync mode: 0-2 (Default/Master/External)\n",
 			__func__);
+		break;
+	case DS5_DEVICE_TYPE_D58X:
+		/* D58X - TODO: verify sync D5xx */
+		__v4l2_ctrl_modify_range(state->ctrls.sync_mode, 0, 5, 0, 0);
+		state->ctrls.sync_mode->qmenu = sync_mode_menu_full;
+		dev_dbg(&client->dev, "%s(): D58X sync mode: all modes 0-5 supported\n", __func__);
 		break;
 	default:
 		/* Unknown device - disable sync mode */
