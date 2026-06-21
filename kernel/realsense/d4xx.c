@@ -4006,10 +4006,11 @@ static int ds5_board_setup(struct ds5 *state)
 	}
 
 	state->ser_dev = &ser_i2c->dev;
-	/* Initialize serializer interface */
-	if (!strcmp(ser_node->name, "max9295")) {
+	/* Initialize serializer interface. Match by name prefix so device-tree
+	 * nodes with link suffixes (e.g. max9295_a, max9295_b) are recognized. */
+	if (!strncmp(ser_node->name, "max9295", strlen("max9295"))) {
 		state->ser_ops = &max9295_interface;
-	} else if (!strcmp(ser_node->name, "max96717")) {
+	} else if (!strncmp(ser_node->name, "max96717", strlen("max96717"))) {
 		state->ser_ops = &max96717_interface;
 	} else {
 		dev_err(dev, "%s: Unsupported serializer = %s\n", __func__, ser_node->name);
@@ -4043,10 +4044,11 @@ static int ds5_board_setup(struct ds5 *state)
 	}
 
 	state->dser_dev = &dser_i2c->dev;
-	/* Initialize deserializer interface */
-	if (!strcmp(dser_node->name, "max9296")) {
+	/* Initialize deserializer interface. Match by name prefix so device-tree
+	 * nodes with suffixes (e.g. max96712_a) are recognized. */
+	if (!strncmp(dser_node->name, "max9296", strlen("max9296"))) {
 		state->dser_ops = &max9296_interface;
-	} else if (!strcmp(dser_node->name, "max96712")) {
+	} else if (!strncmp(dser_node->name, "max96712", strlen("max96712"))) {
 		state->dser_ops = &max96712_interface;
 	} else {
 		dev_err(dev, "%s: Unsupported deserializer = %s\n", __func__, dser_node->name);
