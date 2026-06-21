@@ -47,7 +47,6 @@
 struct dser_interface {
 	/* Pipeline management */
 	int (*get_available_pipe_id)(struct device *dev, int vc_id);
-	int (*get_ser_pipe_id)(struct device *dev, int dser_pipe_id, int vc_id);
 	int (*bind_ser_to_dser_pipe)(struct device *dev, int dser_pipe_id, int ser_pipe_id, u32 vc_id);
 
 	int (*set_pipe)(struct device *dev, int pipe_id, u8 data_type1, u8 data_type2, u32 vc_id);
@@ -655,7 +654,6 @@ static inline atomic_t *ds5_get_reset_gen(struct ds5 *state)
 /* MAX9296 deserializer interface implementation */
 static const struct dser_interface max9296_interface = {
 	.get_available_pipe_id = max9296_get_available_pipe_id,
-	.get_ser_pipe_id = max9296_get_ser_pipe_id,
 	.bind_ser_to_dser_pipe = max9296_bind_ser_to_dser_pipe,
 	.set_pipe = max9296_set_pipe,
 	.release_pipe = max9296_release_pipe,
@@ -674,7 +672,6 @@ static const struct dser_interface max9296_interface = {
 /* MAX96712 deserializer interface implementation */
 static const struct dser_interface max96712_interface = {
 	.get_available_pipe_id = max96712_get_available_pipe_id,
-	.get_ser_pipe_id = max96712_get_ser_pipe_id,
 	.bind_ser_to_dser_pipe = max96712_bind_ser_to_dser_pipe,
 	.set_pipe = max96712_set_pipe,
 	.release_pipe = max96712_release_pipe,
@@ -1847,18 +1844,41 @@ static int ds5_sensor_set_fmt(struct v4l2_subdev *sd,
 }
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
+/*
+ * Resolve the serializer pipe id for the current SerDes topology.
+ *
+ * The ser_pipe_id mapping depends both on the serializer nad deserializer identity:
+ *   - MAX96717 serializer:       ser_pipe_id = 2 (fixed)
+ *   - MAX9295 + MAX96712 dser:   ser_pipe_id = ser_vc_id
+ *   - MAX9295 + MAX9296 dser:    ser_pipe_id = dser_pipe_id
+ */
+static int serdes_get_ser_pipe_id(struct ds5 *state, int dser_pipe_id,
+				  int ser_vc_id)
+{
+	if (state->ser_ops == &max96717_interface)
+		return 2;
+
+	/* MAX9295 serializer: mapping depends on the deserializer */
+	if (state->dser_ops == &max96712_interface)
+		return ser_vc_id;
+
+	/* MAX9295 + MAX9296 deserializer */
+	return dser_pipe_id;
+}
+
 static int ds5_setup_pipeline(struct ds5 *state, u8 data_type1, u8 data_type2,
 			      int pipe_id, u32 vc_id)
 {
 	int ret = 0;
-	/* While some deserializers can support up to 8 pipes, the serializer only supports
-	 * four pipes and four vc_ids (0 - 3).
+	/* While some deserializers can support up to 8 pipes, the serializer currently
+	 * only supports four vc_ids (0 - 3).
 	 * To use multiple cameras under this restriction, a second camera connected
 	 * to a deserializer will have its vc_id 0 - 3 mapped to outside vc_id 4 - 7 etc.
-	 * The ser_pipe to dser_pipe mapping depends on the deserializer.
+	 * The ser_pipe_id mapping depends on both the serializer and the
+	 * deserializer (see serdes_get_ser_pipe_id()).
 	 */
 	int ser_vc_id = vc_id % DS5_MAX_STREAMS;
-	int ser_pipe_id = state->dser_ops->get_ser_pipe_id(state->dser_dev, pipe_id, ser_vc_id);
+	int ser_pipe_id = serdes_get_ser_pipe_id(state, pipe_id, ser_vc_id);
 
 	ret |= state->dser_ops->bind_ser_to_dser_pipe(state->dser_dev, pipe_id, ser_pipe_id, vc_id);
 	dev_dbg(&state->client->dev,

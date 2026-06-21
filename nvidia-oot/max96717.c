@@ -16,11 +16,6 @@
 #define MAX96717_MIPI_RX2_ADDR 0x332
 #define MAX96717_MIPI_RX3_ADDR 0x333
 
-#define MAX96717_PIPE_X_DT_ADDR 0x314
-#define MAX96717_PIPE_Y_DT_ADDR 0x316
-#define MAX96717_PIPE_Z_DT_ADDR 0x318
-#define MAX96717_PIPE_U_DT_ADDR 0x31A
-
 #define MAX96717_CTRL0_ADDR 0x10
 #define MAX96717_SRC_CTRL_ADDR 0x2BF
 #define MAX96717_SRC_PWDN_ADDR 0x02BE
@@ -98,8 +93,6 @@
 #define MAX96717_2C2_ESYNC 0x1F
 #define MAX96717_2C3_ESYNC 0x57
 
-#define MAX96717_MAX_PIPES 0x4
-
 struct max96717_client_ctx {
 	struct gmsl_link_ctx *g_ctx;
 	bool st_done;
@@ -110,7 +103,6 @@ struct max96717 {
 	struct regmap *regmap;
 	struct max96717_client_ctx g_client;
 	struct mutex lock;
-	bool external_addr_reassign;
 };
 
 struct map_ctx {
@@ -330,59 +322,6 @@ static int max96717_set_registers(struct device *dev, struct reg_pair *map,
 	return err;
 }
 
-static int __max96717_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
-			      u8 data_type2, u32 vc_id)
-{
-	int err = 0;
-#if 0
-	u8 bpp = 0x30;
-	struct reg_pair map_bpp8dbl[] = {
-		{0x0312, 0x0F},
-	};
-	struct reg_pair map_pipe_control[] = {
-		/* addr, val */
-		{MAX96717_PIPE_X_DT_ADDR, 0x5E}, // Pipe X pulls data_type1
-		{0x0315, 0x52}, // Pipe X pulls data_type2
-		{0x0309, 0x01}, // # Pipe X pulls vc_id
-		{0x030A, 0x00},
-		{0x031C, 0x30}, // BPP in pipe X
-		{0x0102, 0x0E}, // LIM_HEART Pipe X: Disabled
-	};
-
-	if (data_type1 == GMSL_CSI_DT_RAW_8 || data_type1 == GMSL_CSI_DT_EMBED
-	    || data_type2 == GMSL_CSI_DT_RAW_8 || data_type2 == GMSL_CSI_DT_EMBED) {
-		map_bpp8dbl[0].val |= (1 << pipe_id);
-	} else {
-		map_bpp8dbl[0].val &= ~(1 << pipe_id);
-	}
-	err |= max96717_set_registers(dev, map_bpp8dbl, ARRAY_SIZE(map_bpp8dbl));
-
-	if (data_type1 == GMSL_CSI_DT_RGB_888)
-		bpp = 0x18;
-
-	map_pipe_control[0].addr += 0x2 * pipe_id;
-	map_pipe_control[1].addr += 0x2 * pipe_id;
-	map_pipe_control[2].addr += 0x2 * pipe_id;
-	map_pipe_control[3].addr += 0x2 * pipe_id;
-	map_pipe_control[4].addr += 0x1 * pipe_id;
-	map_pipe_control[5].addr += 0x8 * pipe_id;
-
-	map_pipe_control[0].val = 0x40 | data_type1;
-	map_pipe_control[1].val = 0x40 | data_type2;
-	if (pipe_id == 0) {
-		map_pipe_control[1].val |= 0x80;
-	}
-	map_pipe_control[2].val = 1 << vc_id;
-	map_pipe_control[3].val = 0x00;
-	map_pipe_control[4].val = bpp;
-	map_pipe_control[5].val = 0x0E;
-
-	err |= max96717_set_registers(dev, map_pipe_control,
-				     ARRAY_SIZE(map_pipe_control));
-#endif
-	return err;
-}
-
 int max96717_init_settings(struct device *dev)
 {
 	int err = 0;
@@ -403,11 +342,16 @@ int max96717_init_settings(struct device *dev)
 	struct reg_pair ser_cfg_mid[] = {
 		{0x0029, 0x00}, /* FEC OFF */
 		{0x0383, 0x00}, /* Pixel mode */
+		{0x0312, 0x00}, /* FRONTTOP_10 no double-pixel (Mode 1 uniform bpp) */
+		{0x0313, 0x00}, /* FRONTTOP_10 no double-pixel (Mode 1 uniform bpp) */
+		{0x0110, 0x60}, /* VIDEO_TX0 AUTO_BPP=0 ENC_MODE=10 */
+		{0x0111, 0x10}, /* VIDEO_TX1 BPP=16 forced (matches DT) */
 		{0x0331, 0x30}, /* MIPI_RX1: 4-lane */
-		{0x0330, 0x08}, /* MIPI_RX0: reset ON */
+		{0x0330, 0x48}, /* MIPI_RX0 reset ON + non-cont-clk */
 	};
 	struct reg_pair ser_cfg_post[] = {
-		{0x0330, 0x00}, /* MIPI_RX0: reset OFF */
+		{0x0330, 0x40}, /* MIPI_RX0 reset OFF, non-cont-clk enabled */
+		{0x0338, 0x22}, /* MIPI_RX8 settle=0x22 (t_hs[5:4]/t_clk[1:0]) */
 		{0x0002, 0x43}, /* REG2: VID_TX_EN */
 	};
 
@@ -432,25 +376,8 @@ EXPORT_SYMBOL(max96717_init_settings);
 int max96717_set_pipe(struct device *dev, int pipe_id,
 		     u8 data_type1, u8 data_type2, u32 vc_id)
 {
-	struct max96717 *priv = dev_get_drvdata(dev);
-	int err = 0;
-
-	if (pipe_id > (MAX96717_MAX_PIPES - 1)) {
-		dev_info(dev, "%s, input pipe_id: %d exceed max96717 max pipes\n",
-			 __func__, pipe_id);
-		return -EINVAL;
-	}
-
-	dev_dbg(dev, "%s pipe_id %d, data_type1 %u, data_type2 %u, vc_id %u\n",
-		__func__, pipe_id, data_type1, data_type2, vc_id);
-
-	mutex_lock(&priv->lock);
-
-	err = __max96717_set_pipe(dev, pipe_id, data_type1, data_type2, vc_id);
-
-	mutex_unlock(&priv->lock);
-
-	return err;
+	/* No runtime config needed in pixel mode */
+	return 0;
 }
 EXPORT_SYMBOL(max96717_set_pipe);
 
@@ -463,7 +390,6 @@ static int max96717_probe(struct i2c_client *client,
 {
 	struct max96717 *priv;
 	int err = 0;
-	struct device_node *node = client->dev.of_node;
 
 	dev_info(&client->dev, "[MAX96717]: probing GMSL Serializer\n");
 
@@ -478,12 +404,6 @@ static int max96717_probe(struct i2c_client *client,
 	}
 
 	mutex_init(&priv->lock);
-
-	if (of_get_property(node, "external_addr_reassign", NULL)) {
-		priv->external_addr_reassign = true;
-	} else {
-		priv->external_addr_reassign = false;
-	}
 
 	dev_set_drvdata(&client->dev, priv);
 
