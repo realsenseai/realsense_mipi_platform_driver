@@ -11,77 +11,28 @@
 #include <media/max96717.h>
 
 /* register specifics */
+#define MAX96717_REG2_ADDR 0x2
+#define MAX96717_CTRL0_ADDR 0x10
+#define MAX96717_TX1_ADDR 0x29
+#define MAX96717_EXT11_ADDR 0x383
+#define MAX96717_FRONTTOP_10_ADDR 0x312
+#define MAX96717_FRONTTOP_11_ADDR 0x313
+#define MAX96717_VIDEO_TX0_ADDR 0x110
+#define MAX96717_VIDEO_TX1_ADDR 0x111
 #define MAX96717_MIPI_RX0_ADDR 0x330
 #define MAX96717_MIPI_RX1_ADDR 0x331
-#define MAX96717_MIPI_RX2_ADDR 0x332
-#define MAX96717_MIPI_RX3_ADDR 0x333
+#define MAX96717_MIPI_RX8_ADDR 0x338
 
-#define MAX96717_CTRL0_ADDR 0x10
 #define MAX96717_SRC_CTRL_ADDR 0x2BF
 #define MAX96717_SRC_PWDN_ADDR 0x02BE
 #define MAX96717_2C0_ADDR 0x02C0
 #define MAX96717_2C1_ADDR 0x02C1
 #define MAX96717_2C2_ADDR 0x02C2
 #define MAX96717_2C3_ADDR 0x02C3
-#define MAX96717_SRC_OUT_RCLK_ADDR 0x3F1
-#define MAX96717_START_PIPE_ADDR 0x311
-#define MAX96717_PIPE_EN_ADDR 0x2
-#define MAX96717_CSI_PORT_SEL_ADDR 0x308
 
 #define MAX96717_I2C4_ADDR 0x44
 #define MAX96717_I2C5_ADDR 0x45
 
-#define MAX96717_DEV_ADDR 0x00
-
-#define MAX96717_STREAM_PIPE_UNUSED 0x22
-#define MAX96717_CSI_MODE_1X4 0x00
-#define MAX96717_CSI_MODE_2X2 0x03
-#define MAX96717_CSI_MODE_2X4 0x06
-
-#define MAX96717_CSI_PORT_B(num_lanes) (((num_lanes) << 4) & 0xF0)
-#define MAX96717_CSI_PORT_A(num_lanes) ((num_lanes) & 0x0F)
-
-#define MAX96717_CSI_1X4_MODE_LANE_MAP1 0xE0
-#define MAX96717_CSI_1X4_MODE_LANE_MAP2 0x04
-
-#define MAX96717_CSI_2X4_MODE_LANE_MAP1 0xEE
-#define MAX96717_CSI_2X4_MODE_LANE_MAP2 0xE4
-
-#define MAX96717_CSI_2X2_MODE_LANE_MAP1 MAX96717_CSI_2X4_MODE_LANE_MAP1
-#define MAX96717_CSI_2X2_MODE_LANE_MAP2 MAX96717_CSI_2X4_MODE_LANE_MAP2
-
-#define MAX96717_ST_ID_0 0x0
-#define MAX96717_ST_ID_1 0x1
-#define MAX96717_ST_ID_2 0x2
-#define MAX96717_ST_ID_3 0x3
-
-#define MAX96717_PIPE_X_START_B 0x80
-#define MAX96717_PIPE_Y_START_B 0x40
-#define MAX96717_PIPE_Z_START_B 0x20
-#define MAX96717_PIPE_U_START_B 0x10
-
-#define MAX96717_PIPE_X_START_A 0x1
-#define MAX96717_PIPE_Y_START_A 0x2
-#define MAX96717_PIPE_Z_START_A 0x4
-#define MAX96717_PIPE_U_START_A 0x8
-
-#define MAX96717_START_PORT_A 0x10
-#define MAX96717_START_PORT_B 0x20
-
-#define MAX96717_CSI_LN2 0x1
-#define MAX96717_CSI_LN4 0x3
-
-#define MAX96717_EN_LINE_INFO 0x40
-
-#define MAX96717_VID_TX_EN_X 0x10
-#define MAX96717_VID_TX_EN_Y 0x20
-#define MAX96717_VID_TX_EN_Z 0x40
-#define MAX96717_VID_TX_EN_U 0x80
-
-#define MAX96717_VID_INIT 0x3
-#define MAX96717_SRC_RCLK 0x89
-
-#define MAX96717_RESET_ALL 0x80
 #define MAX96717_RESET_SRC 0x60
 #define MAX96717_RESET_ESYNC 0x77
 
@@ -103,13 +54,6 @@ struct max96717 {
 	struct regmap *regmap;
 	struct max96717_client_ctx g_client;
 	struct mutex lock;
-};
-
-struct map_ctx {
-	u8 dt;
-	u16 addr;
-	u8 val;
-	u8 st_id;
 };
 
 static int max96717_write_reg(struct device *dev, u16 addr, u8 val)
@@ -336,23 +280,21 @@ int max96717_init_settings(struct device *dev)
 	 * once here.
 	 */
 	struct reg_pair ser_cfg_pre[] = {
-		{0x0002, 0x03}, /* REG2: VID_TX_EN=0, INIT=1 */
-		{0x0010, 0x21}, /* CTRL0: RESET_ONESHOT, GMSL2 link A */
+		{MAX96717_REG2_ADDR, 0x03}, /* 0x2 - REG2: VID_TX_EN=0, INIT=1 */
+		{MAX96717_CTRL0_ADDR, 0x21}, /* 0x10 - CTRL0: RESET_ONESHOT, GMSL2 link A */
 	};
 	struct reg_pair ser_cfg_mid[] = {
-		{0x0029, 0x00}, /* FEC OFF */
-		{0x0383, 0x00}, /* Pixel mode */
-		{0x0312, 0x00}, /* FRONTTOP_10 no double-pixel (Mode 1 uniform bpp) */
-		{0x0313, 0x00}, /* FRONTTOP_10 no double-pixel (Mode 1 uniform bpp) */
-		{0x0110, 0x60}, /* VIDEO_TX0 AUTO_BPP=0 ENC_MODE=10 */
-		{0x0111, 0x10}, /* VIDEO_TX1 BPP=16 forced (matches DT) */
-		{0x0331, 0x30}, /* MIPI_RX1: 4-lane */
-		{0x0330, 0x48}, /* MIPI_RX0 reset ON + non-cont-clk */
+		{MAX96717_TX1_ADDR, 0x00}, /* 0x29 - FEC OFF */
+		{MAX96717_EXT11_ADDR, 0x00}, /* 0x383 - Pixel mode */
+		{MAX96717_VIDEO_TX0_ADDR, 0x60}, /* 0x110 - VIDEO_TX0 AUTO_BPP=0 ENC_MODE=10 */
+		{MAX96717_VIDEO_TX1_ADDR, 0x10}, /* 0x111 - VIDEO_TX1 BPP=16 forced (matches DT) */
+		{MAX96717_MIPI_RX1_ADDR, 0x30}, /* 0x331 - MIPI_RX1: 4-lane */
+		{MAX96717_MIPI_RX0_ADDR, 0x48}, /* 0x330 - MIPI_RX0 reset ON + non-cont-clk */
 	};
 	struct reg_pair ser_cfg_post[] = {
-		{0x0330, 0x40}, /* MIPI_RX0 reset OFF, non-cont-clk enabled */
-		{0x0338, 0x22}, /* MIPI_RX8 settle=0x22 (t_hs[5:4]/t_clk[1:0]) */
-		{0x0002, 0x43}, /* REG2: VID_TX_EN */
+		{MAX96717_MIPI_RX0_ADDR, 0x40}, /* 0x330 - MIPI_RX0 reset OFF, non-cont-clk enabled */
+		{MAX96717_MIPI_RX8_ADDR, 0x22}, /* 0x338 - MIPI_RX8 settle=0x22 (t_hs[5:4]/t_clk[1:0]) */
+		{MAX96717_REG2_ADDR, 0x43}, /* 0x2 - REG2: VID_TX_EN */
 	};
 
 	mutex_lock(&priv->lock);
