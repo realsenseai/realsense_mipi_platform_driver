@@ -16,7 +16,6 @@
 #define MAX96717_TX1_ADDR 0x29
 #define MAX96717_EXT11_ADDR 0x383
 #define MAX96717_FRONTTOP_10_ADDR 0x312
-#define MAX96717_FRONTTOP_11_ADDR 0x313
 #define MAX96717_VIDEO_TX0_ADDR 0x110
 #define MAX96717_VIDEO_TX1_ADDR 0x111
 #define MAX96717_MIPI_RX0_ADDR 0x330
@@ -288,6 +287,7 @@ int max96717_init_settings(struct device *dev)
 		{MAX96717_EXT11_ADDR, 0x00}, /* 0x383 - Pixel mode */
 		{MAX96717_VIDEO_TX0_ADDR, 0x60}, /* 0x110 - VIDEO_TX0 AUTO_BPP=0 ENC_MODE=10 */
 		{MAX96717_VIDEO_TX1_ADDR, 0x10}, /* 0x111 - VIDEO_TX1 BPP=16 forced (matches DT) */
+		{MAX96717_FRONTTOP_10_ADDR, 0x4}, /* 0x312 - Fronttop_10 double 8bit */
 		{MAX96717_MIPI_RX1_ADDR, 0x30}, /* 0x331 - MIPI_RX1: 4-lane */
 		{MAX96717_MIPI_RX0_ADDR, 0x48}, /* 0x330 - MIPI_RX0 reset ON + non-cont-clk */
 	};
