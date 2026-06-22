@@ -12,7 +12,7 @@ vb2; real S_FMT/TRY_FMT; proper init error ladder) and review follow-ups:
  - shared tegra_metadata_fill_format() helper for G/S/TRY_FMT
  - drop stray double semicolon
 ---
- drivers/media/i2c/Makefile                    |   3 +
+ drivers/media/i2c/Makefile                    |   4 +
  .../platform/tegra/camera/sensor_common.c     |   4 +
  .../media/platform/tegra/camera/vi/channel.c  | 437 +++++++++++++++++-
  .../media/platform/tegra/camera/vi/graph.c    |  46 +-

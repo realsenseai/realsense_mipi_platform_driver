@@ -6315,18 +6315,13 @@ static void ds5_adjust_sync_mode_control(struct i2c_client *client, struct ds5 *
 	case DS5_DEVICE_TYPE_D41X:
 	case DS5_DEVICE_TYPE_D43X:
 	case DS5_DEVICE_TYPE_D45X:
+	case DS5_DEVICE_TYPE_D58X:
 		/* Unified 3-value public interface (RSDEV-6449): Default/Master/External */
 		__v4l2_ctrl_modify_range(state->ctrls.sync_mode,
 					 0, DS5_SYNC_MODE_EXTERNAL, 0, 0);
 		state->ctrls.sync_mode->qmenu = sync_mode_menu;
 		dev_dbg(&client->dev, "%s(): sync mode: 0-2 (Default/Master/External)\n",
 			__func__);
-		break;
-	case DS5_DEVICE_TYPE_D58X:
-		/* D58X - TODO: verify sync D5xx */
-		__v4l2_ctrl_modify_range(state->ctrls.sync_mode, 0, 5, 0, 0);
-		state->ctrls.sync_mode->qmenu = sync_mode_menu_full;
-		dev_dbg(&client->dev, "%s(): D58X sync mode: all modes 0-5 supported\n", __func__);
 		break;
 	default:
 		/* Unknown device - disable sync mode */
