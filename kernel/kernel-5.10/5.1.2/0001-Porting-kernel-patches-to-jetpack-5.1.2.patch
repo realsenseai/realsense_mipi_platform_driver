@@ -6,7 +6,7 @@ Subject: [PATCH] Porting kernel patches to jetpack 5.1.2
 Signed-off-by: Dmitry Perchanov <dmitry.perchanov@intel.com>
 ---
  Makefile                                      |   3 +-
- arch/arm64/configs/defconfig                  |   1 +
+ arch/arm64/configs/defconfig                  |   4 +-
  drivers/media/usb/uvc/Makefile                |   1 +
  drivers/media/usb/uvc/uvc_ctrl.c              |   1 +
  drivers/media/usb/uvc/uvc_driver.c            | 103 ++++++++++++++++++
@@ -36,12 +36,14 @@ diff --git a/arch/arm64/configs/defconfig b/arch/arm64/configs/defconfig
 index ce9f3e0a7432..54069a4773ac 100644
 --- a/arch/arm64/configs/defconfig
 +++ b/arch/arm64/configs/defconfig
-@@ -900,6 +900,7 @@ CONFIG_VIDEO_LT6911UXC=m
+@@ -900,6 +900,8 @@ CONFIG_VIDEO_LT6911UXC=m
  CONFIG_I2C_IOEXPANDER_SER_MAX9295=y
  CONFIG_I2C_IOEXPANDER_DESER_MAX9296=y
  CONFIG_NV_VIDEO_IMX390=y
 +CONFIG_VIDEO_D4XX=m
- CONFIG_NV_DESER_MAX96712=m
+-CONFIG_NV_DESER_MAX96712=m
++CONFIG_NV_DESER_MAX96712=y
++CONFIG_NV_SER_MAX96717=y
  CONFIG_NV_VIDEO_AR0234=m
  CONFIG_NV_VIDEO_HAWK_OWL=m
 diff --git a/drivers/media/usb/uvc/Makefile b/drivers/media/usb/uvc/Makefile

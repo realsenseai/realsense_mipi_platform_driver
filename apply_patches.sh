@@ -94,7 +94,10 @@ if [[ "$ACTION" = "apply" ]]; then
         # device tree
         cp "hardware/realsense/${JP5_D4XX_DTSI}" "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen/kernel-dts/common/tegra194-camera-d4xx.dtsi"
         # max96712 header
-        cp kernel/nvidia/max96712.h "${BUILD_SRCS}/kernel/nvidia/include/media/"
+        ln -f -s $(pwd)/kernel/nvidia/max96712.h "${BUILD_SRCS}/kernel/nvidia/include/media/"
+        # max96717 header and source
+        ln -f -s $(pwd)/kernel/nvidia/max96717.h "${BUILD_SRCS}/kernel/nvidia/include/media/"
+        ln -f -s $(pwd)/kernel/nvidia/max96717.c "${BUILD_SRCS}/kernel/nvidia/drivers/media/i2c/"
     else
         # max96712 header
         ln -f -s $(pwd)/nvidia-oot/max96712.h "${BUILD_SRCS}/nvidia-oot/include/media/"
