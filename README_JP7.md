@@ -107,6 +107,7 @@ sudo depmod
     |---|---|
     | `tegra264-camera-d4xx-overlay.dtbo` | max9296 deserializer board w/ one camera |
     | `tegra264-camera-d4xx-overlay-max96712-EVB.dtbo` | max96712 evaluation board w/ one camera |
+    | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0.dtbo` | Fangzhu/FG12-16CH (max96712) w/ one camera — **AGX Orin (tegra234)**, not Thor (see note below) |
     | `tegra264-camera-d4xx-overlay-advantech.dtbo` | Advantech board w/ one camera on the bottom right of the left port (i2c9) |
     | `tegra264-camera-d4xx-overlay-advantech-cams-0-1-2-3.dtbo` | Advantech board w/ four cameras on the left port (i2c9) |
     | `tegra264-camera-d4xx-overlay-advantech-cams-4-5.dtbo` | Advantech board w/ two cameras on the bottom right and top right of the right port (i2c12) |
@@ -128,6 +129,34 @@ LABEL JetsonIO
 ```
 On Jetson target (user home folder) assuming backup step was followed:
 
+## Running JP7.2 on AGX Orin (tegra234)
+
+JP7.2 (Jetson Linux R39.2) is a unified release that runs on both Jetson Thor™ (tegra264) and AGX Orin™ (tegra234). The overlays listed above are Thor (tegra264); on AGX Orin use the tegra234 overlay `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0.dtbo`.
+
+Two things differ when installing the rebuilt kernel onto an AGX Orin that was just flashed with SDK Manager:
+
+1. **Kernel version & initrd.** The rebuilt kernel reports `6.8.12-tegra`, while a freshly-flashed image runs `6.8.12-1021-tegra`. Because the NVMe root driver is a kernel *module*, you must install the new modules under the new version **and regenerate an initrd for it**, otherwise the device cannot mount the root filesystem and will not boot:
+```
+sudo cp -r ./lib/modules/6.8.12-tegra /lib/modules/
+sudo depmod 6.8.12-tegra
+sudo cp ./boot/Image /boot/Image-6.8.12-tegra
+sudo cp ./boot/tegra234-camera-d4xx-overlay-fg12-16ch-cams-0.dtbo /boot/
+sudo update-initramfs -c -k 6.8.12-tegra        # -> /boot/initrd.img-6.8.12-tegra
+```
+
+2. **extlinux entry needs both `FDT` and `OVERLAYS`.** The bootloader applies `OVERLAYS` only when the boot entry also has an `FDT` line pointing at the Orin base DTB; without `FDT` the overlay is silently ignored. Add a new `LABEL` and keep the stock `primary` as a fallback (recoverable from the serial console):
+```
+LABEL d4xx
+      MENU LABEL d4xx JP7.2 test kernel (tegra234)
+      LINUX /boot/Image-6.8.12-tegra
+      INITRD /boot/initrd.img-6.8.12-tegra
+      FDT /boot/dtb/kernel_tegra234-p3737-0000+p3701-0000-nv.dtb
+      APPEND ${cbootargs} root=/dev/nvme0n1p1 rw rootwait rootfstype=ext4 ...   # copy verbatim from the primary entry
+      OVERLAYS /boot/tegra234-camera-d4xx-overlay-fg12-16ch-cams-0.dtbo
+```
+Set `DEFAULT d4xx`, then reboot. The D457 (depth/RGB/IR/IMU) is discovered as `/dev/video0`–`video6`.
+
+> Note: overlays in this repo are `*.dtso` sources (the noble kernel build rule is `%.dtbo: %.dtso`).
 
 ### Verify driver loaded - on Jetson:
 - Driver API manual page [Driver API page](./README_driver.md)

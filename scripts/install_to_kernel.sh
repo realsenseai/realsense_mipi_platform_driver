@@ -87,8 +87,12 @@ elif [ "${JETPACK_VERSION}" = "6.0" ] || [ "${JETPACK_VERSION}" = "6.1" ] || [ "
         exit 1
     fi
     if [ "${JETPACK_VERSION}" = "7.0" ] || [ "${JETPACK_VERSION}" = "7.1" ] || [ "${JETPACK_VERSION}" = "7.2" ]; then
+        # Thor (tegra264) overlays; "|| true" so an Orin-only target without them does not fail.
         echo "sudo cp boot/tegra264-camera-d4xx-overlay*.dtbo /boot/."
-              sudo cp boot/tegra264-camera-d4xx-overlay*.dtbo /boot/.
+              sudo cp boot/tegra264-camera-d4xx-overlay*.dtbo /boot/. 2>/dev/null || true
+        # Orin (tegra234) overlays built for JP7.x on Orin (e.g. Fangzhu single-cam).
+        echo "sudo cp boot/tegra234-camera-d4xx-overlay*.dtbo /boot/."
+              sudo cp boot/tegra234-camera-d4xx-overlay*.dtbo /boot/. 2>/dev/null || true
     else
         echo "sudo cp boot/tegra234-camera-d4xx-overlay*.dtbo /boot/."
               sudo cp boot/tegra234-camera-d4xx-overlay*.dtbo /boot/.
