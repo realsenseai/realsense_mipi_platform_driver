@@ -1,24 +1,22 @@
 #!/usr/bin/env python3
-"""Pure-Python V4L2 MMAP capture for a D4XX CSI depth (Z16) video node.
+"""Pure-Python V4L2 MMAP capture for a D4XX CSI IR video node.
 
-Drives the full V4L2 MMAP pipeline directly via ctypes + fcntl.ioctl (no
-compiled C, no external V4L2 bindings). Dumps a captured frame to a raw file
-*even when the V4L2 error flag is set* (v4l2-ctl --stream-to silently drops
-error-flagged buffers; this does not), and can render the raw Z16 frame to a
-viewable PNG. Capture-only needs no deps; --png/--display need numpy + Pillow.
---raw, --png and --display are all optional and independent.
+Sibling of depth_capture.py / nv12_capture.py for the IR stream
+(/dev/video-rs-ir-0). Two modes:
+  --mode y8   GREY  (8 bpp, single 8-bit greyscale image)
+  --mode y8i  'Y8I' (16 bpp, two 8-bit IR images byte-interleaved L,R,L,R...)
+
+Y8 renders as plain greyscale; Y8I is deinterleaved into the left and right
+images and shown side-by-side. Drives V4L2 directly via ctypes+fcntl.ioctl
+(no compiled C, no V4L2 bindings); dumps a frame even when the error flag is
+set; waits for a non-empty frame. Capture-only needs no deps; --png/--display
+need numpy + Pillow.
 
 Examples
 --------
-  ./depth_capture.py --dev /dev/video-rs-depth-0 -W 1280 -H 720 \
-                     --raw frame.raw --png frame.png
-
-  # capture and pop up a window (needs a display; over SSH use 'ssh -X').
+  ./ir_capture.py --mode y8  -W 1280 -H 720 --display
+  ./ir_capture.py --mode y8i -W 1280 -H 720 --raw ir.raw --png ir.png
   # Run WITHOUT sudo so --display works (the video node is group-accessible).
-  ./depth_capture.py -W 1280 -H 720 --display
-
-  # just re-render an existing raw (no capture):
-  ./depth_capture.py --render-only --raw frame.raw -W 1280 -H 720 --png frame.png
 """
 import argparse, ctypes as C, fcntl, mmap, os, sys
 
@@ -36,8 +34,8 @@ class v4l2_pix_format(C.Structure):
 class v4l2_format(C.Structure):
     class _fmt(C.Union):
         # _align forces 8-byte alignment so the union matches the kernel
-        # (its real members contain pointers); this pads `type` and makes
-        # sizeof == 208, so VIDIOC_S_FMT == 0xc0d05605.
+        # (its real members contain pointers); pads `type` -> sizeof == 208,
+        # so VIDIOC_S_FMT == 0xc0d05605.
         _fields_ = [("pix", v4l2_pix_format), ("raw_data", C.c_uint8 * 200),
                     ("_align", C.c_uint64)]
     _fields_ = [("type", C.c_uint32), ("fmt", _fmt)]
@@ -77,7 +75,10 @@ MEMORY_MMAP            = 1
 FIELD_NONE             = 1
 BUF_FLAG_ERROR         = 0x0040
 def fourcc(s): return s[0] | (s[1] << 8) | (s[2] << 16) | (s[3] << 24)
-PIX_FMT_Z16 = fourcc(b"Z16 ")
+def fourcc_str(v): return "".join(chr((v >> (8 * i)) & 0xff) for i in range(4))
+PIX_FMT_GREY = fourcc(b"GREY")   # Y8  : 8 bpp greyscale
+PIX_FMT_Y8I  = fourcc(b"Y8I ")   # Y8I : 16 bpp, two 8-bit images interleaved
+MODES = {"y8": PIX_FMT_GREY, "y8i": PIX_FMT_Y8I}
 
 
 def _has_data(buf, ln):
@@ -87,16 +88,16 @@ def _has_data(buf, ln):
     return any(buf[i] for i in range(0, ln, step))
 
 
-def capture(dev, W, H, nframes, save_idx, raw_out):
+def capture(dev, W, H, pixfmt, nframes, save_idx, raw_out):
     fd = os.open(dev, os.O_RDWR)
     try:
         f = v4l2_format(); f.type = BUF_TYPE_VIDEO_CAPTURE
         f.fmt.pix.width = W; f.fmt.pix.height = H
-        f.fmt.pix.pixelformat = PIX_FMT_Z16; f.fmt.pix.field = FIELD_NONE
+        f.fmt.pix.pixelformat = pixfmt; f.fmt.pix.field = FIELD_NONE
         fcntl.ioctl(fd, VIDIOC_S_FMT, f)
         W, H = f.fmt.pix.width, f.fmt.pix.height
         bpl, size = f.fmt.pix.bytesperline, f.fmt.pix.sizeimage
-        print("fmt %ux%u bpl=%u size=%u" % (W, H, bpl, size))
+        print("fmt %ux%u fourcc=%s bpl=%u size=%u" % (W, H, fourcc_str(f.fmt.pix.pixelformat), bpl, size))
 
         rb = v4l2_requestbuffers(); rb.count = 4
         rb.type = BUF_TYPE_VIDEO_CAPTURE; rb.memory = MEMORY_MMAP
@@ -111,7 +112,7 @@ def capture(dev, W, H, nframes, save_idx, raw_out):
             fcntl.ioctl(fd, VIDIOC_QBUF, b)
 
         fcntl.ioctl(fd, VIDIOC_STREAMON, C.c_int(BUF_TYPE_VIDEO_CAPTURE))
-        frame = None             # bytes of the kept frame (first with data, else last)
+        frame = None
         got_data = False
         for n in range(nframes):
             b = v4l2_buffer(); b.type = BUF_TYPE_VIDEO_CAPTURE; b.memory = MEMORY_MMAP
@@ -120,8 +121,6 @@ def capture(dev, W, H, nframes, save_idx, raw_out):
             ln = b.bytesused or maps[b.index].size()
             data = _has_data(maps[b.index], ln)
             print("dq idx=%d used=%u err=%d seq=%u data=%d" % (b.index, b.bytesused, err, b.sequence, data))
-            # keep the first frame WITH data at/after save_idx (skips initial sync/zero frames);
-            # otherwise keep the most recent as a fallback
             if (not got_data) and n >= save_idx and data:
                 frame = bytes(maps[b.index][:ln]); got_data = True
                 print("captured frame seq=%u err=%d (%u bytes)" % (b.sequence, err, ln))
@@ -132,62 +131,66 @@ def capture(dev, W, H, nframes, save_idx, raw_out):
                 break
         fcntl.ioctl(fd, VIDIOC_STREAMOFF, C.c_int(BUF_TYPE_VIDEO_CAPTURE))
         if not got_data:
-            print("WARNING: no frame contained data in %d frames -- is csitest streaming during the "
-                  "capture? Keeping last (empty) frame." % nframes)
+            print("WARNING: no frame contained data in %d frames -- is the IR stream running "
+                  "during the capture? Keeping last (empty) frame." % nframes)
         if raw_out and frame is not None:
             with open(raw_out, "wb") as o:
                 o.write(frame)
             print("wrote raw -> %s" % raw_out)
-        return W, H, frame
+        return W, H, bpl, frame
     finally:
         os.close(fd)
 
 
-def render(W, H, pct, data=None, raw=None, png=None, display=False):
-    """Render a Z16 frame to a grayscale image. Source is either in-memory
-    `data` (bytes) or a `raw` file path. Optionally save to `png` and/or pop
-    up a viewer window (`display`)."""
+def render(mode, W, H, bpl, data=None, raw=None, png=None, display=False, pct=None):
+    """Render an IR frame. y8 -> greyscale (HxW). y8i -> deinterleave the two
+    8-bit images (even/odd bytes) and show them side-by-side (left | right).
+    IR scenes are often dark; pass --pct (e.g. 99.5) to contrast-stretch by
+    clipping at that percentile of nonzero pixels. Default renders 8-bit raw."""
     import numpy as np
     from PIL import Image
-    if data is not None:
-        d = np.frombuffer(data, dtype=np.uint16)[:W * H].reshape(H, W)
+    b = np.frombuffer(data, dtype=np.uint8) if data is not None else np.fromfile(raw, dtype=np.uint8)
+    rows = (len(b) // bpl) if bpl else H
+    b = b[:rows * bpl].reshape(rows, bpl)
+    if mode == "y8i":
+        left, right = b[:, 0::2], b[:, 1::2]        # two HxW images
+        g = np.concatenate([left, right], axis=1)   # side-by-side: Hx(2W)
+        desc = "y8i %dx%d (left|right deinterleaved, each %dx%d)" % (g.shape[1], rows, left.shape[1], rows)
     else:
-        d = np.fromfile(raw, dtype=np.uint16)[:W * H].reshape(H, W)
-    nz = d[d > 0]
-    hi = int(np.percentile(nz, pct)) if nz.size else 1
-    g = np.clip(d.astype(np.float32) / max(1, hi) * 255, 0, 255).astype(np.uint8)
+        g = b                                        # GREY: bpl == width
+        desc = "y8 %dx%d" % (g.shape[1], rows)
+    scaled = ""
+    if pct is not None:
+        nz = g[g > 0]
+        hi = int(np.percentile(nz, pct)) if nz.size else 1
+        g = np.clip(g.astype(np.float32) / max(1, hi) * 255, 0, 255).astype(np.uint8)
+        scaled = " scaled@p%g=%d" % (pct, hi)
     img = Image.fromarray(g, "L")
-    rows = [r for r in range(H) if d[r].any()]
-    print("z16 %dx%d min=%d max=%d mean=%.0f data_rows=%d (%s..%s) scaled@p%g=%d%s"
-          % (W, H, d.min(), d.max(), d.mean(), len(rows),
-             rows[0] if rows else "-", rows[-1] if rows else "-", pct, hi,
-             (" -> " + png) if png else ""))
+    drows = [r for r in range(rows) if b[r].any()]
+    print("%s min=%d max=%d mean=%.0f data_rows=%d (%s..%s)%s%s"
+          % (desc, b.min(), b.max(), b.mean(), len(drows),
+             drows[0] if drows else "-", drows[-1] if drows else "-",
+             scaled, (" -> " + png) if png else ""))
     if png:
         img.save(png)
     if display:
-        _show(g, img, W, H)
+        _show(g, img, g.shape[1], rows)
 
 
 def _show(g, img, W, H):
-    """Pop up a window showing the rendered frame.
-
-    Uses pure tkinter (Tk talks straight to X11 with NO D-Bus), which is fast
-    and reliable over X11 forwarding / ssh -X / MobaXterm as a normal user.
-    GNOME viewers (eog) are avoided as the primary path because they connect
-    to the user's D-Bus session bus and can stall ~20-30s on dconf/gvfs --
-    that was the 'slow without sudo' symptom (root via sudo -E is fast only
-    because the session bus rejects root, so its eog runs bus-less).
-    Falls back to eog, then matplotlib, if Tk is unavailable."""
-    title = "depth %dx%d" % (W, H)
+    """Pop up a window showing the rendered frame, drawn with pure tkinter
+    (Tk talks straight to X11, no D-Bus -> fast over ssh -X / MobaXterm as a
+    normal user; GNOME viewers stall on the user D-Bus session bus). Falls
+    back to eog, then matplotlib."""
+    title = "ir %dx%d" % (W, H)
     if not os.environ.get("DISPLAY") and sys.platform.startswith("linux"):
         print("note: --display but $DISPLAY is unset; for a remote window use 'ssh -X' "
               "(or MobaXterm with X11 forwarding on)")
-    # 1) pure Tk window -- no D-Bus, no GNOME services -> fast as normal user
     try:
         import tkinter as tk
         from PIL import ImageTk
         root = tk.Tk(); root.title(title)
-        photo = ImageTk.PhotoImage(img)            # keep ref alive until mainloop ends
+        photo = ImageTk.PhotoImage(img)
         tk.Label(root, image=photo).pack()
         root.bind("<Escape>", lambda e: root.destroy())
         root.bind("q", lambda e: root.destroy())
@@ -196,7 +199,6 @@ def _show(g, img, W, H):
         return
     except Exception as e:
         print("tk display failed (%s); trying eog" % e)
-    # 2) eog fallback (NO_AT_BRIDGE avoids the a11y-bus stall)
     import shutil
     if shutil.which("eog"):
         try:
@@ -208,12 +210,15 @@ def _show(g, img, W, H):
             return
         except Exception as e:
             print("eog display failed (%s); trying matplotlib" % e)
-    # 3) matplotlib fallback
     try:
         import matplotlib
         matplotlib.use("TkAgg", force=True)
         import matplotlib.pyplot as plt
-        plt.figure(title); plt.imshow(g, cmap="gray", vmin=0, vmax=255)
+        plt.figure(title)
+        if getattr(g, "ndim", 2) == 3:
+            plt.imshow(g)
+        else:
+            plt.imshow(g, cmap="gray", vmin=0, vmax=255)
         plt.title(title); plt.tight_layout()
         print("showing matplotlib window (close it to exit) ...")
         plt.show()
@@ -224,27 +229,30 @@ def _show(g, img, W, H):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Pure-Python V4L2 capture + Z16 render")
-    ap.add_argument("--dev", default="/dev/video-rs-depth-0")
+    ap = argparse.ArgumentParser(description="Pure-Python V4L2 capture + render (IR node: Y8 / Y8I)")
+    ap.add_argument("--dev", default="/dev/video-rs-ir-0")
+    ap.add_argument("--mode", choices=("y8", "y8i"), default="y8",
+                    help="y8=GREY 8bpp, y8i=Y8I 16bpp interleaved (default y8)")
     ap.add_argument("-W", "--width", type=int, default=1280)
     ap.add_argument("-H", "--height", type=int, default=720)
     ap.add_argument("--frames", type=int, default=90, help="max frames to dequeue while waiting for data (~3s @30fps)")
     ap.add_argument("--save-index", type=int, default=2, help="don't save before this frame (skips initial sync frames)")
     ap.add_argument("--raw", help="save the captured frame to this raw file (optional)")
     ap.add_argument("--png", help="render the captured frame to this PNG (optional)")
-    ap.add_argument("--pct", type=float, default=95.0, help="contrast clip percentile (nonzero px)")
     ap.add_argument("--display", action="store_true", help="open a window showing the rendered image")
+    ap.add_argument("--pct", type=float, default=None,
+                    help="contrast-stretch: clip at this percentile of nonzero px (e.g. 99.5 for dark IR)")
     ap.add_argument("--render-only", action="store_true", help="skip capture, just render --raw")
     a = ap.parse_args()
-    W, H = a.width, a.height
     if a.render_only:
         if not a.raw or not (a.png or a.display):
             sys.exit("--render-only needs --raw (input) and at least one of --png / --display")
-        render(W, H, a.pct, raw=a.raw, png=a.png, display=a.display)
+        bpl = a.width * (2 if a.mode == "y8i" else 1)
+        render(a.mode, a.width, a.height, bpl, raw=a.raw, png=a.png, display=a.display, pct=a.pct)
         return
-    W, H, frame = capture(a.dev, W, H, a.frames, a.save_index, a.raw)
+    W, H, bpl, frame = capture(a.dev, a.width, a.height, MODES[a.mode], a.frames, a.save_index, a.raw)
     if a.png or a.display:
-        render(W, H, a.pct, data=frame, png=a.png, display=a.display)
+        render(a.mode, W, H, bpl, data=frame, png=a.png, display=a.display, pct=a.pct)
     if not a.raw and not a.png and not a.display:
         print("note: none of --raw / --png / --display given; capture ran but output nothing")
 

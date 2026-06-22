@@ -15,8 +15,9 @@ for a non-empty frame. Capture-only needs no deps; --png/--display need numpy + 
 
 Examples
 --------
-  sudo ./nv12_capture.py --dev /dev/video-rs-color-0 -W 1280 -H 720 --display
-  sudo ./nv12_capture.py --raw c.raw --png c.png
+  ./nv12_capture.py --dev /dev/video-rs-color-0 -W 1280 -H 720 --display
+  ./nv12_capture.py --raw c.raw --png c.png
+  # Run WITHOUT sudo so --display works (the video node is group-accessible).
 """
 import argparse, ctypes as C, fcntl, mmap, os, sys
 
