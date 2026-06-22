@@ -209,7 +209,7 @@ int max96717_sdev_pair(struct device *dev, struct gmsl_link_ctx *g_ctx)
 
 error:
 	mutex_unlock(&priv->lock);
-	return 0;
+	return err;
 }
 EXPORT_SYMBOL(max96717_sdev_pair);
 

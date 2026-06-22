@@ -203,7 +203,7 @@ def _show(g, img, W, H):
     if shutil.which("eog"):
         try:
             import subprocess, tempfile
-            p = tempfile.mktemp(suffix=".png"); img.save(p)
+            fd, p = tempfile.mkstemp(suffix=".png"); os.close(fd); img.save(p)
             env = dict(os.environ, NO_AT_BRIDGE="1", GTK_A11Y="none")
             subprocess.Popen(["eog", p], env=env)
             print("opened in eog: %s (close the window when done)" % p)
