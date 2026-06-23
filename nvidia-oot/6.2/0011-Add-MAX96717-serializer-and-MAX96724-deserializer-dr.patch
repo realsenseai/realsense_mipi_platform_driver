@@ -22,11 +22,11 @@ MAX96724 quad deserializer features:
 
 Signed-off-by: RealSense AI <realsense@realsenseai.com>
 ---
- drivers/media/i2c/max96717.c |  853 ++++++++++++++
+ drivers/media/i2c/max96717.c |  854 ++++++++++++++
  drivers/media/i2c/max96724.c | 1992 ++++++++++++++++++++++++++++++++++
  include/media/max96717.h     |  151 ++
  include/media/max96724.h     |  183 +++
- 4 files changed, 3179 insertions(+)
+ 4 files changed, 3180 insertions(+)
  create mode 100644 drivers/media/i2c/max96717.c
  create mode 100644 drivers/media/i2c/max96724.c
  create mode 100644 include/media/max96717.h
@@ -37,7 +37,7 @@ new file mode 100644
 index 0000000..70d25a3
 --- /dev/null
 +++ b/drivers/media/i2c/max96717.c
-@@ -0,0 +1,853 @@
+@@ -0,0 +1,854 @@
 +/*
 + * max96717.c - MAX96717 GMSL2 Serializer driver (Tunnel Mode)
 + *
@@ -68,7 +68,8 @@ index 0000000..70d25a3
 +
 +/*
 + *   REG1: GMSL2 link rate
-+ *   0x48: 6Gbps forward / 187.5Mbps reverse
++ *   TX_RATE[3:2]: 01=3Gbps, 10=6Gbps
++ *   RX_RATE[1:0]: 00=187.5Mbps reverse
 + */
 +#define MAX96717_REG1_ADDR		0x01
 +
@@ -215,10 +216,10 @@ index 0000000..70d25a3
 +/* MIPI_RX0: Normal operation */
 +#define MAX96717_MIPI_RX0_NORMAL	0x00
 +
-+/* REG1: 3Gbps forward / 187.5Mbps reverse */
-+#define MAX96717_LINK_SPEED_3GBPS	0x08
-+/* REG1: 6Gbps forward / 187.5Mbps reverse */
-+#define MAX96717_LINK_SPEED_6GBPS	0x48
++/* REG1: TX_RATE[3:2]=01, RX_RATE[1:0]=00 */
++#define MAX96717_LINK_SPEED_3GBPS	0x04
++/* REG1: TX_RATE[3:2]=10, RX_RATE[1:0]=00 */
++#define MAX96717_LINK_SPEED_6GBPS	0x08
 +
 +/* EXT11 tunnel mode pre-config (0x0383=0x80) */
 +#define MAX96717_EXT11_TUN_PRE		0x80
