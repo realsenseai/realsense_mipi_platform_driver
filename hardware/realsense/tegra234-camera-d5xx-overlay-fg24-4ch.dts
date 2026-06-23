@@ -18,14 +18,16 @@
  * GMSL link:
  *   GMSL2 Tunnel Mode, 6 Gbps
  *   HKR MIPI Tx → MAX96717: 4-lane CSI-2
- *   MAX96724 → Orin NVCSI:  4-lane CSI-2 (FG24-4CH → Orin CAM1 / CSI-C / serial_c)
+ *   MAX96724 Port A → Orin NVCSI: 4-lane CSI-2 over the Orin Nano CAM1
+ *   22-pin connector.
  *
  * CSI port / control I2C:
- *   Orin CAM1 connector control I2C = board "IIC-10" = GPIO mux channel 1 = mux node i2c@1
- *   (mux-gpio AON_GPIO(CC,3) driven HIGH). NOTE: Linux runtime i2c-10 is HDMI DDC,
- *   unrelated; the camera control bus is cam_i2c (i2c@3180000) + GPIO mux.
- *   Orin CAM1 connector = CSI-C brick = port-index 2 = serial_c (per fzcam ref: i2c mux
- *   channel 1 pairs with serial_c). I2C control on GPIO mux channel 1 (i2c@1).
+ *   The physical CAM1 connector is not auto-bound to I2C by Linux. This
+ *   overlay explicitly binds the video path to Orin NVCSI CSI-C via
+ *   port-index 2 / tegra_sinterface "serial_c", and binds control I2C to
+ *   cam_i2c (i2c@3180000) through the GPIO mux channel 1 node i2c@1
+ *   (mux-gpio AON_GPIO(CC,3) driven HIGH). Linux runtime i2c-10 is HDMI DDC
+ *   on this platform and is not the camera control bus.
  *
  * I2C address map (7-bit):
  *   GPIO mux:     AON_GPIO(CC, 3)
@@ -125,7 +127,7 @@
 				status = "okay";
 				compatible = "nvidia, tegra-camera-platform";
 				num_csi_lanes = <4>;
-				max_lane_speed = <1300000>;
+				max_lane_speed = <2000000>;
 				min_bits_per_pixel = <10>;
 				vi_peak_byte_per_pixel = <2>;
 				vi_bw_margin_pct = <25>;
@@ -310,8 +312,10 @@
 					mux-gpios = <&gpio_aon CAM_I2C_MUX GPIO_ACTIVE_HIGH>;
 
 					/*
-					 * Orin CAM1 control path = board "IIC-10" = GPIO mux channel 1
-					 * (mux-gpio driven HIGH). DES/SER/D585 live here.
+					 * Camera control path for this CAM1-wired design:
+					 * cam_i2c -> GPIO mux channel 1 (i2c@1, mux-gpio HIGH).
+					 * The video path is selected separately by serial_c /
+					 * port-index 2 on all NVCSI and sensor endpoints.
 					 */
 					i2c@1 {
 						reg = <1>;
@@ -331,7 +335,7 @@
 							compatible = "adi,max96724";
 							csi-mode = "2x4";
 							max-src = <1>;
-							gmsl-link-speed = <3>;
+							gmsl-link-speed = <6>;
 						};
 
 						/*
@@ -386,6 +390,26 @@
 								};
 							};
 
+							/*
+							 * Pixel clock reference for mixed-VC tunnel mode:
+							 *   pix_clk_hz = lane_rate_bps * lane_count / bits_per_pixel
+							 *
+							 * The MAX96724->Orin D-PHY output is configured to
+							 * 2.0Gbps/lane over 4 lanes, so the payload budget is
+							 * 2,000,000,000 * 4 = 8,000,000,000 bits/s.
+							 *
+							 * Tunnel mode carries each source packet as-is. There is
+							 * no single rewritten DES-side BPP when VC0-3 run
+							 * concurrently, so each Orin mode uses its own
+							 * csi_pixel_bit_depth:
+							 *   16-bit modes: 8,000,000,000 / 16 = 500,000,000 Hz
+							 *   8-bit modes:  8,000,000,000 /  8 = 1,000,000,000 Hz
+							 *
+							 * Aggregate bandwidth closure is still checked against
+							 * the shared 4-lane physical link and the 6Gbps GMSL2
+							 * forward link; pix_clk_hz here is the per-mode parser
+							 * clock NVIDIA uses for VI/NVCSI bandwidth setup.
+							 */
 							mode0 {
 								pixel_t = "yuv_uyvy16";
 								num_lanes = "4";
@@ -397,8 +421,8 @@
 								discontinuous_clk = "no";
 								cil_settletime = "0";
 								mclk_khz = "24000";
-								pix_clk_hz = "325000000";
-							serdes_pix_clk_hz = "325000000";
+								pix_clk_hz = "500000000";
+								serdes_pix_clk_hz = "500000000";
 								line_length = "1280";
 								embedded_metadata_height = "1";
 							};
@@ -455,8 +479,8 @@
 								discontinuous_clk = "no";
 								cil_settletime = "0";
 								mclk_khz = "24000";
-								pix_clk_hz = "325000000";
-							serdes_pix_clk_hz = "325000000";
+								pix_clk_hz = "500000000";
+								serdes_pix_clk_hz = "500000000";
 								line_length = "1920";
 								embedded_metadata_height = "1";
 							};
@@ -514,8 +538,8 @@
 								discontinuous_clk = "no";
 								cil_settletime = "0";
 								mclk_khz = "24000";
-								pix_clk_hz = "325000000";
-								serdes_pix_clk_hz = "325000000";
+								pix_clk_hz = "1000000000";
+								serdes_pix_clk_hz = "1000000000";
 								line_length = "1280";
 								embedded_metadata_height = "1";
 							};
@@ -532,8 +556,8 @@
 								discontinuous_clk = "no";
 								cil_settletime = "0";
 								mclk_khz = "24000";
-								pix_clk_hz = "325000000";
-								serdes_pix_clk_hz = "325000000";
+								pix_clk_hz = "500000000";
+								serdes_pix_clk_hz = "500000000";
 								line_length = "1280";
 								embedded_metadata_height = "1";
 							};
@@ -590,8 +614,8 @@
 								discontinuous_clk = "no";
 								cil_settletime = "0";
 								mclk_khz = "24000";
-								pix_clk_hz = "325000000";
-							serdes_pix_clk_hz = "325000000";
+								pix_clk_hz = "1000000000";
+								serdes_pix_clk_hz = "1000000000";
 								line_length = "1280";
 								embedded_metadata_height = "0";
 							};

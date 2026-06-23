@@ -22,12 +22,11 @@ MAX96724 quad deserializer features:
 
 Signed-off-by: RealSense AI <realsense@realsenseai.com>
 ---
- drivers/media/i2c/Makefile   |    2 +
- drivers/media/i2c/max96717.c |  835 ++++++++++++++
- drivers/media/i2c/max96724.c | 1916 ++++++++++++++++++++++++++++++++++
+ drivers/media/i2c/max96717.c |  853 ++++++++++++++
+ drivers/media/i2c/max96724.c | 1992 ++++++++++++++++++++++++++++++++++
  include/media/max96717.h     |  151 ++
  include/media/max96724.h     |  183 +++
- 4 files changed, 3085 insertions(+)
+ 4 files changed, 3179 insertions(+)
  create mode 100644 drivers/media/i2c/max96717.c
  create mode 100644 drivers/media/i2c/max96724.c
  create mode 100644 include/media/max96717.h
@@ -38,7 +37,7 @@ new file mode 100644
 index 0000000..70d25a3
 --- /dev/null
 +++ b/drivers/media/i2c/max96717.c
-@@ -0,0 +1,835 @@
+@@ -0,0 +1,853 @@
 +/*
 + * max96717.c - MAX96717 GMSL2 Serializer driver (Tunnel Mode)
 + *
@@ -67,9 +66,9 @@ index 0000000..70d25a3
 +/* REG0: Device ID (read-only, returns 0x40) */
 +#define MAX96717_DEV_ADDR		0x00
 +
-+/* 
-+ *   REG1: Link Speed
-+ *   bit[3]=1: 3 Gbps, bit[4]=1: 6 Gbps
++/*
++ *   REG1: GMSL2 link rate
++ *   0x48: 6Gbps forward / 187.5Mbps reverse
 + */
 +#define MAX96717_REG1_ADDR		0x01
 +
@@ -216,10 +215,10 @@ index 0000000..70d25a3
 +/* MIPI_RX0: Normal operation */
 +#define MAX96717_MIPI_RX0_NORMAL	0x00
 +
-+/* REG1: 3 Gbps link speed, bit[3]=1 */
++/* REG1: 3Gbps forward / 187.5Mbps reverse */
 +#define MAX96717_LINK_SPEED_3GBPS	0x08
-+/* REG1: 6 Gbps link speed, bit[4]=1 */
-+#define MAX96717_LINK_SPEED_6GBPS	0x10
++/* REG1: 6Gbps forward / 187.5Mbps reverse */
++#define MAX96717_LINK_SPEED_6GBPS	0x48
 +
 +/* EXT11 tunnel mode pre-config (0x0383=0x80) */
 +#define MAX96717_EXT11_TUN_PRE		0x80
@@ -378,6 +377,7 @@ index 0000000..70d25a3
 +	struct max96717 *priv = dev_get_drvdata(dev);
 +	int err = 0;
 +	struct gmsl_link_ctx *g_ctx;
++	u8 ctrl0_val;
 +
 +	mutex_lock(&priv->lock);
 +
@@ -397,9 +397,12 @@ index 0000000..70d25a3
 +					MAX96717_DEV_ADDR, &dev_id);
 +		if (probe_ret == 0) {
 +			/* Primary address (0x40) still responsive — do reassign */
-+			max96717_write_reg(&prim_priv__->i2c_client->dev,
-+					   MAX96717_DEV_ADDR,
-+					   (g_ctx->ser_reg << 1));
++			err = max96717_write_reg(&prim_priv__->i2c_client->dev,
++						 MAX96717_DEV_ADDR,
++						 (g_ctx->ser_reg << 1));
++			if (err)
++				goto error;
++			msleep(20);
 +		} else {
 +			dev_info(&prim_priv__->i2c_client->dev,
 +				 "%s: SER already reassigned (addr 0x40 NACK), skipping DEV_ADDR write\n",
@@ -407,13 +410,27 @@ index 0000000..70d25a3
 +		}
 +	}
 +
-+	/* CTRL0: GMSL2 mode + TX enable */
++	/* Match MAX96724 6Gbps forward / 187.5Mbps reverse link setup. */
++	err = max96717_write_reg(dev, MAX96717_REG1_ADDR,
++				 MAX96717_LINK_SPEED_6GBPS);
++	if (err) {
++		dev_err(dev, "%s: failed to configure serializer link rate\n",
++			__func__);
++		goto error;
++	}
++
 +	if (g_ctx->serdes_csi_link == GMSL_SERDES_CSI_LINK_A)
-+		err = max96717_write_reg(dev, MAX96717_CTRL0_ADDR,
-+					 MAX96717_CTRL0_LINK_A);
++		ctrl0_val = MAX96717_CTRL0_LINK_A;
 +	else
-+		err = max96717_write_reg(dev, MAX96717_CTRL0_ADDR,
-+					 MAX96717_CTRL0_LINK_B);
++		ctrl0_val = MAX96717_CTRL0_LINK_B;
++
++	dev_info(dev, "%s: SER rate=6Gbps/187.5Mbps link=%c CTRL0=0x%02x\n",
++		 __func__,
++		 (g_ctx->serdes_csi_link == GMSL_SERDES_CSI_LINK_A) ? 'A' : 'B',
++		 ctrl0_val);
++
++	/* CTRL0: manual single-link mode + one-shot reset on selected PHY. */
++	err = max96717_write_reg(dev, MAX96717_CTRL0_ADDR, ctrl0_val);
 +
 +	if (err) {
 +		dev_err(dev, "%s: ERROR: ser device not found\n", __func__);
@@ -879,7 +896,7 @@ new file mode 100644
 index 0000000..22bfb47
 --- /dev/null
 +++ b/drivers/media/i2c/max96724.c
-@@ -0,0 +1,1916 @@
+@@ -0,0 +1,1992 @@
 +/*
 + * max96724.c - MAX96724 GMSL2 Quad Deserializer driver (Tunnel Mode)
 + *
@@ -939,8 +956,11 @@ index 0000000..22bfb47
 +/* GMSL Link/PHY Rate Select (Links C&D) */
 +#define MAX96724_LINK_RATE_CD_ADDR	0x0011
 +
-+/* Link A lock status (bit[3]=LOCK) */
++/* Link lock status (bit[3]=LOCK). */
 +#define MAX96724_LINK_A_LOCK_ADDR	0x001A
++#define MAX96724_LINK_B_LOCK_ADDR	0x001B
++#define MAX96724_LINK_C_LOCK_ADDR	0x001C
++#define MAX96724_LINK_D_LOCK_ADDR	0x001D
 +
 +/* 
 + *   GMSL Link Reset
@@ -1171,6 +1191,10 @@ index 0000000..22bfb47
 +#define MAX96724_LINK_EN_SIOA		0xF1  /* GMSL2 all, enable Link A only */
 +#define MAX96724_LINK_EN_ALL		0xFF  /* GMSL2 all, enable all links */
 +
++#define MAX96724_LINK_LOCKED		0x08
++#define MAX96724_LINK_LOCK_POLL_MS	100
++#define MAX96724_LINK_LOCK_TIMEOUT_MS	5000
++
 +/* BACKTOP_EN (0x040B): CSI output port enable */
 +#define MAX96724_BACKTOP_CSIB_EN	0x02
 +#define MAX96724_BACKTOP_CSIA_EN	0x01
@@ -1245,10 +1269,10 @@ index 0000000..22bfb47
 +#define MAX96724_DPLL_700MBPS_CTRL0	0x27
 +
 +/* 
-+ *   CSI-output DPLL data rate = 1300 Mbps.
-+ *   bits[4:0] = data-rate / 100 MHz -> 1300/100 = 13 = 0x0D. bit[5] = DPLL en.
++ *   CSI-output DPLL data rate = 2000 Mbps.
++ *   bits[4:0] = data-rate / 100 MHz -> 2000/100 = 20 = 0x14. bit[5] = DPLL en.
 + */
-+#define MAX96724_DPLL_1300MBPS		0x2D
++#define MAX96724_DPLL_2000MBPS		0x34
 +
 +/* One-shot reset: all links */
 +#define MAX96724_ONESHOT_ALL		0x0F
@@ -1394,6 +1418,94 @@ index 0000000..22bfb47
 +	}
 +
 +	return err;
++}
++
++static const char *max96724_link_name(u32 link)
++{
++	switch (link) {
++	case GMSL_SERDES_CSI_LINK_A:
++		return "A";
++	case GMSL_SERDES_CSI_LINK_B:
++		return "B";
++	default:
++		return "?";
++	}
++}
++
++static u16 max96724_link_lock_addr(u32 link)
++{
++	switch (link) {
++	case GMSL_SERDES_CSI_LINK_A:
++		return MAX96724_LINK_A_LOCK_ADDR;
++	case GMSL_SERDES_CSI_LINK_B:
++		return MAX96724_LINK_B_LOCK_ADDR;
++	default:
++		return 0;
++	}
++}
++
++static void max96724_log_link_status(struct device *dev, const char *tag)
++{
++	struct max96724 *priv = dev_get_drvdata(dev);
++	unsigned int lock_a = 0, lock_b = 0, lock_c = 0, lock_d = 0;
++	unsigned int link_en = 0, reg10 = 0, reg11 = 0;
++
++	regmap_read(priv->regmap, MAX96724_LINK_A_LOCK_ADDR, &lock_a);
++	regmap_read(priv->regmap, MAX96724_LINK_B_LOCK_ADDR, &lock_b);
++	regmap_read(priv->regmap, MAX96724_LINK_C_LOCK_ADDR, &lock_c);
++	regmap_read(priv->regmap, MAX96724_LINK_D_LOCK_ADDR, &lock_d);
++	regmap_read(priv->regmap, MAX96724_LINK_EN_ADDR, &link_en);
++	regmap_read(priv->regmap, MAX96724_LINK_RATE_AB_ADDR, &reg10);
++	regmap_read(priv->regmap, MAX96724_LINK_RATE_CD_ADDR, &reg11);
++
++	dev_info(dev,
++		 "GMSL link status[%s]: EN=0x%02x A@0x%04x=0x%02x(%s) B@0x%04x=0x%02x(%s) C@0x%04x=0x%02x(%s) D@0x%04x=0x%02x(%s) REG10=0x%02x REG11=0x%02x\n",
++		 tag, link_en,
++		 MAX96724_LINK_A_LOCK_ADDR,
++		 lock_a, (lock_a & MAX96724_LINK_LOCKED) ? "LOCK" : "noLk",
++		 MAX96724_LINK_B_LOCK_ADDR,
++		 lock_b, (lock_b & MAX96724_LINK_LOCKED) ? "LOCK" : "noLk",
++		 MAX96724_LINK_C_LOCK_ADDR,
++		 lock_c, (lock_c & MAX96724_LINK_LOCKED) ? "LOCK" : "noLk",
++		 MAX96724_LINK_D_LOCK_ADDR,
++		 lock_d, (lock_d & MAX96724_LINK_LOCKED) ? "LOCK" : "noLk",
++		 reg10, reg11);
++}
++
++static int max96724_wait_link_lock(struct device *dev, u32 link)
++{
++	struct max96724 *priv = dev_get_drvdata(dev);
++	u16 lock_addr = max96724_link_lock_addr(link);
++	unsigned int lock = 0;
++	int elapsed;
++	int err;
++
++	if (!lock_addr)
++		return -EINVAL;
++
++	for (elapsed = 0;
++	     elapsed <= MAX96724_LINK_LOCK_TIMEOUT_MS;
++	     elapsed += MAX96724_LINK_LOCK_POLL_MS) {
++		err = regmap_read(priv->regmap, lock_addr, &lock);
++		if (err)
++			return err;
++
++		if (lock & MAX96724_LINK_LOCKED) {
++			dev_info(dev, "GMSL Link %s locked after %d ms (reg 0x%04x=0x%02x)\n",
++				 max96724_link_name(link), elapsed, lock_addr, lock);
++			return 0;
++		}
++
++		if (elapsed < MAX96724_LINK_LOCK_TIMEOUT_MS)
++			msleep(MAX96724_LINK_LOCK_POLL_MS);
++	}
++
++	dev_err(dev, "GMSL Link %s lock timeout after %d ms (reg 0x%04x=0x%02x)\n",
++		max96724_link_name(link), MAX96724_LINK_LOCK_TIMEOUT_MS,
++		lock_addr, lock);
++	max96724_log_link_status(dev, "timeout");
++
++	return -ETIMEDOUT;
 +}
 +
 +/* ================================================================
@@ -1631,6 +1743,7 @@ index 0000000..22bfb47
 +	struct max96724 *priv = dev_get_drvdata(dev);
 +	u8 link_rate_ab, link_rate_cd;
 +	u8 link_en_val;
++	int err;
 +
 +	/*
 +	 * [Aardvark-verified] Disable CSI output before link configuration
@@ -1691,34 +1804,13 @@ index 0000000..22bfb47
 +	max96724_write_reg(dev, MAX96724_LINK_EN_ADDR, link_en_val);
 +
 +	/*
-+	 * Wait for link lock.
-+	 * [XML] Uses 1000ms regardless of link speed.
-+	 * I2C pass-through CC requires fully trained link, not just PHY lock.
++	 * Poll the selected physical GMSL input until link lock before
++	 * accessing the remote serializer over the control channel.
 +	 */
-+	msleep(1000);
-+
-+	/* Check link lock status on ALL ports for diagnostics */
-+	{
-+		unsigned int lock_a = 0, lock_b = 0, lock_c = 0, lock_d = 0;
-+		unsigned int link_en = 0;
-+		unsigned int reg10 = 0, reg11 = 0;
-+
-+		regmap_read(priv->regmap, 0x001A, &lock_a);
-+		regmap_read(priv->regmap, 0x001B, &lock_b);
-+		regmap_read(priv->regmap, 0x001C, &lock_c);
-+		regmap_read(priv->regmap, 0x001D, &lock_d);
-+		regmap_read(priv->regmap, MAX96724_LINK_EN_ADDR, &link_en);
-+		regmap_read(priv->regmap, 0x0010, &reg10);
-+		regmap_read(priv->regmap, 0x0011, &reg11);
-+		dev_info(dev,
-+			 "GMSL link status: EN=0x%02x A=0x%02x(%s) B=0x%02x(%s) C=0x%02x(%s) D=0x%02x(%s) REG10=0x%02x REG11=0x%02x\n",
-+			 link_en,
-+			 lock_a, (lock_a & 0x08) ? "LOCK" : "noLk",
-+			 lock_b, (lock_b & 0x08) ? "LOCK" : "noLk",
-+			 lock_c, (lock_c & 0x08) ? "LOCK" : "noLk",
-+			 lock_d, (lock_d & 0x08) ? "LOCK" : "noLk",
-+			 reg10, reg11);
-+	}
++	err = max96724_wait_link_lock(dev, link);
++	max96724_log_link_status(dev, err ? "after-timeout" : "after-lock");
++	if (err)
++		return err;
 +
 +	return 0;
 +}
@@ -2089,14 +2181,14 @@ index 0000000..22bfb47
 +		vid_rx0_cfg = MAX96724_VID_RX0_PIXEL_VAL;
 +		vid_rx6_cfg = MAX96724_VID_RX6_PIXEL_VAL;
 +		st_sel_cfg = 0x00;
-+		dpll_cfg = MAX96724_DPLL_1300MBPS;
++		dpll_cfg = MAX96724_DPLL_2000MBPS;
 +	} else {
 +		pipe_sel0 = MAX96724_PIPE_SEL0_PIXEL;
 +		pipe_sel1 = MAX96724_PIPE_SEL1_PIXEL;
 +		vid_rx0_cfg = MAX96724_VID_RX0_CFG_VAL;
 +		vid_rx6_cfg = MAX96724_VID_RX6_CFG_VAL;
 +		st_sel_cfg = 0x10;
-+		dpll_cfg = MAX96724_DPLL_1300MBPS;
++		dpll_cfg = MAX96724_DPLL_2000MBPS;
 +	}
 +
 +	/*
@@ -2116,7 +2208,7 @@ index 0000000..22bfb47
 +	max96724_apply_porta_subset(dev, priv);
 +
 +	/*
-+	 * CSI-output DPLL data rate = 1300 Mbps
++	 * CSI-output DPLL data rate = 2000 Mbps
 +	 * on ALL FOUR controller freq registers
 +	 */
 +	if (!priv->lane_setup) {
@@ -2335,14 +2427,14 @@ index 0000000..22bfb47
 +		vid_rx0_cfg = MAX96724_VID_RX0_PIXEL_VAL;
 +		vid_rx6_cfg = MAX96724_VID_RX6_PIXEL_VAL;
 +		st_sel_cfg = 0x00;
-+		dpll_cfg = MAX96724_DPLL_1300MBPS;
++		dpll_cfg = MAX96724_DPLL_2000MBPS;
 +	} else {
 +		pipe_sel0 = MAX96724_PIPE_SEL0_PIXEL;
 +		pipe_sel1 = MAX96724_PIPE_SEL1_PIXEL;
 +		vid_rx0_cfg = MAX96724_VID_RX0_CFG_VAL;
 +		vid_rx6_cfg = MAX96724_VID_RX6_CFG_VAL;
 +		st_sel_cfg = 0x10;
-+		dpll_cfg = MAX96724_DPLL_1300MBPS;
++		dpll_cfg = MAX96724_DPLL_2000MBPS;
 +	}
 +
 +	/* 
@@ -2359,8 +2451,9 @@ index 0000000..22bfb47
 +	max96724_apply_porta_subset(dev, priv);
 +
 +	/*
-+	 * CSI-output DPLL data rate = 1300 Mbps on ALL
-+	 * FOUR controllers, matching the device-tree serdes_pix_clk_hz (325 MHz).
++	 * CSI-output DPLL data rate = 2000 Mbps on ALL controllers.
++	 * This matches the device-tree serdes_pix_clk_hz values:
++	 * 500 MHz for 16-bit modes and 1000 MHz for 8-bit modes.
 +	 * reset_oneshot is called by the sensor after setup_streaming, so it must
 +	 * mirror the same DPLL values.
 +	 */
@@ -3144,4 +3237,3 @@ index 0000000..dc5a8ea
 +#endif  /* __MAX96724_H__ */
 -- 
 2.25.1
-

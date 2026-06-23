@@ -1245,10 +1245,10 @@ index 0000000..22bfb47
 +#define MAX96724_DPLL_700MBPS_CTRL0	0x27
 +
 +/* 
-+ *   CSI-output DPLL data rate = 1300 Mbps.
-+ *   bits[4:0] = data-rate / 100 MHz -> 1300/100 = 13 = 0x0D. bit[5] = DPLL en.
++ *   CSI-output DPLL data rate = 2000 Mbps.
++ *   bits[4:0] = data-rate / 100 MHz -> 2000/100 = 20 = 0x14. bit[5] = DPLL en.
 + */
-+#define MAX96724_DPLL_1300MBPS		0x2D
++#define MAX96724_DPLL_2000MBPS		0x34
 +
 +/* One-shot reset: all links */
 +#define MAX96724_ONESHOT_ALL		0x0F
@@ -2089,14 +2089,14 @@ index 0000000..22bfb47
 +		vid_rx0_cfg = MAX96724_VID_RX0_PIXEL_VAL;
 +		vid_rx6_cfg = MAX96724_VID_RX6_PIXEL_VAL;
 +		st_sel_cfg = 0x00;
-+		dpll_cfg = MAX96724_DPLL_1300MBPS;
++		dpll_cfg = MAX96724_DPLL_2000MBPS;
 +	} else {
 +		pipe_sel0 = MAX96724_PIPE_SEL0_PIXEL;
 +		pipe_sel1 = MAX96724_PIPE_SEL1_PIXEL;
 +		vid_rx0_cfg = MAX96724_VID_RX0_CFG_VAL;
 +		vid_rx6_cfg = MAX96724_VID_RX6_CFG_VAL;
 +		st_sel_cfg = 0x10;
-+		dpll_cfg = MAX96724_DPLL_1300MBPS;
++		dpll_cfg = MAX96724_DPLL_2000MBPS;
 +	}
 +
 +	/*
@@ -2116,7 +2116,7 @@ index 0000000..22bfb47
 +	max96724_apply_porta_subset(dev, priv);
 +
 +	/*
-+	 * CSI-output DPLL data rate = 1300 Mbps
++	 * CSI-output DPLL data rate = 2000 Mbps
 +	 * on ALL FOUR controller freq registers
 +	 */
 +	if (!priv->lane_setup) {
@@ -2335,14 +2335,14 @@ index 0000000..22bfb47
 +		vid_rx0_cfg = MAX96724_VID_RX0_PIXEL_VAL;
 +		vid_rx6_cfg = MAX96724_VID_RX6_PIXEL_VAL;
 +		st_sel_cfg = 0x00;
-+		dpll_cfg = MAX96724_DPLL_1300MBPS;
++		dpll_cfg = MAX96724_DPLL_2000MBPS;
 +	} else {
 +		pipe_sel0 = MAX96724_PIPE_SEL0_PIXEL;
 +		pipe_sel1 = MAX96724_PIPE_SEL1_PIXEL;
 +		vid_rx0_cfg = MAX96724_VID_RX0_CFG_VAL;
 +		vid_rx6_cfg = MAX96724_VID_RX6_CFG_VAL;
 +		st_sel_cfg = 0x10;
-+		dpll_cfg = MAX96724_DPLL_1300MBPS;
++		dpll_cfg = MAX96724_DPLL_2000MBPS;
 +	}
 +
 +	/* 
@@ -2359,8 +2359,9 @@ index 0000000..22bfb47
 +	max96724_apply_porta_subset(dev, priv);
 +
 +	/*
-+	 * CSI-output DPLL data rate = 1300 Mbps on ALL
-+	 * FOUR controllers, matching the device-tree serdes_pix_clk_hz (325 MHz).
++	 * CSI-output DPLL data rate = 2000 Mbps on ALL controllers.
++	 * This matches the device-tree serdes_pix_clk_hz values:
++	 * 500 MHz for 16-bit modes and 1000 MHz for 8-bit modes.
 +	 * reset_oneshot is called by the sensor after setup_streaming, so it must
 +	 * mirror the same DPLL values.
 +	 */
@@ -3144,4 +3145,3 @@ index 0000000..dc5a8ea
 +#endif  /* __MAX96724_H__ */
 -- 
 2.25.1
-
