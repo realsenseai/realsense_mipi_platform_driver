@@ -1,5 +1,5 @@
 diff --git a/drivers/media/platform/tegra/camera/csi/csi.c b/drivers/media/platform/tegra/camera/csi/csi.c
-index 7e3dfb3a..3d221ac6 100644
+index 7e3dfb3a..fea546c5 100644
 --- a/drivers/media/platform/tegra/camera/csi/csi.c
 +++ b/drivers/media/platform/tegra/camera/csi/csi.c
 @@ -7,7 +7,9 @@
@@ -12,15 +12,16 @@ index 7e3dfb3a..3d221ac6 100644
  #include <linux/gpio/consumer.h>
  #include <linux/of.h>
  #include <linux/of_graph.h>
-@@ -15,6 +17,7 @@
+@@ -15,6 +17,8 @@
  #include <linux/of_platform.h>
  #include <linux/property.h>
  #include <linux/nospec.h>
 +#include <linux/seq_file.h>
++#include <uapi/linux/media-bus-format.h>
  
  #include <media/media-entity.h>
  #include <media/v4l2-async.h>
-@@ -155,6 +158,151 @@ u64 read_mipi_clk_from_dt(struct tegra_csi_channel *chan)
+@@ -155,6 +159,191 @@ u64 read_mipi_clk_from_dt(struct tegra_csi_channel *chan)
  	return mipi_clk;
  }
  
@@ -49,6 +50,42 @@ index 7e3dfb3a..3d221ac6 100644
 +	}
 +}
 +
++static const char *tegra_csi_debugfs_mbus_code_name(u32 code)
++{
++	switch (code) {
++	case MEDIA_BUS_FMT_FIXED:
++		return "MEDIA_BUS_FMT_FIXED";
++	case MEDIA_BUS_FMT_UYVY8_1X16:
++		return "MEDIA_BUS_FMT_UYVY8_1X16";
++	case MEDIA_BUS_FMT_UYVY8_2X8:
++		return "MEDIA_BUS_FMT_UYVY8_2X8";
++	case MEDIA_BUS_FMT_YUYV8_1X16:
++		return "MEDIA_BUS_FMT_YUYV8_1X16";
++	case MEDIA_BUS_FMT_VYUY8_1X16:
++		return "MEDIA_BUS_FMT_VYUY8_1X16";
++	case MEDIA_BUS_FMT_Y8_1X8:
++		return "MEDIA_BUS_FMT_Y8_1X8";
++	case MEDIA_BUS_FMT_RGB888_1X24:
++		return "MEDIA_BUS_FMT_RGB888_1X24";
++	case MEDIA_BUS_FMT_SRGGB10_1X10:
++		return "MEDIA_BUS_FMT_SRGGB10_1X10";
++	default:
++		return "unknown";
++	}
++}
++
++static void tegra_csi_debugfs_fourcc(u32 fourcc, char out[5])
++{
++	int i;
++
++	for (i = 0; i < 4; i++) {
++		u8 c = (fourcc >> (i * 8)) & 0xff;
++
++		out[i] = (c >= 0x20 && c <= 0x7e) ? c : '.';
++	}
++	out[4] = '\0';
++}
++
 +static void tegra_csi_debugfs_mode_show(struct seq_file *s,
 +					struct camera_common_data *s_data)
 +{
@@ -57,6 +94,7 @@ index 7e3dfb3a..3d221ac6 100644
 +	struct sensor_image_properties *img;
 +	int idx;
 +	u32 num_modes;
++	char pixel_fourcc[5];
 +
 +	if (!s_data) {
 +		seq_puts(s, "  sensor: unavailable\n");
@@ -79,11 +117,13 @@ index 7e3dfb3a..3d221ac6 100644
 +	mode = &s_data->sensor_props.sensor_modes[idx];
 +	sig = &mode->signal_properties;
 +	img = &mode->image_properties;
++	tegra_csi_debugfs_fourcc(img->pixel_format, pixel_fourcc);
 +
 +	seq_printf(s,
-+		   "  mode: width=%u height=%u line_length=%u embedded_metadata_height=%u pixel_format=0x%x\n",
++		   "  mode: width=%u height=%u line_length=%u embedded_metadata_height=%u pixel_format=0x%x (%s)\n",
 +		   img->width, img->height, img->line_length,
-+		   img->embedded_metadata_height, img->pixel_format);
++		   img->embedded_metadata_height, img->pixel_format,
++		   pixel_fourcc);
 +	seq_printf(s,
 +		   "  clocks: pixel_clock=%llu serdes_pixel_clock=%llu mipi_clock=%llu lane_rate_dphy=%llu\n",
 +		   (unsigned long long)sig->pixel_clock.val,
@@ -123,12 +163,13 @@ index 7e3dfb3a..3d221ac6 100644
 +			struct tegra_csi_port *port = &chan->ports[i];
 +
 +			seq_printf(s,
-+				   "  port%d: csi_port=%u (%s) stream_id=%u vc=%u lanes=%u format=%ux%u code=0x%x\n",
++				   "  port%d: csi_port=%u (%s) stream_id=%u vc=%u lanes=%u format=%ux%u code=0x%x (%s)\n",
 +				   i, port->csi_port,
 +				   tegra_csi_debugfs_port_name(port->csi_port),
 +				   port->stream_id, port->virtual_channel_id,
 +				   port->lanes, port->format.width,
-+				   port->format.height, port->format.code);
++				   port->format.height, port->format.code,
++				   tegra_csi_debugfs_mbus_code_name(port->format.code));
 +		}
 +
 +		tegra_csi_debugfs_mode_show(s, chan->s_data);
@@ -172,7 +213,7 @@ index 7e3dfb3a..3d221ac6 100644
  void set_csi_portinfo(struct tegra_csi_device *csi,
  	unsigned int port, unsigned int numlanes)
  {
-@@ -1154,6 +1302,8 @@ int tegra_csi_media_controller_init(struct tegra_csi_device *csi,
+@@ -1154,6 +1343,8 @@ int tegra_csi_media_controller_init(struct tegra_csi_device *csi,
  	if (ret < 0)
  		dev_err(&pdev->dev, "Failed to init csi property,clks\n");
  
@@ -181,7 +222,7 @@ index 7e3dfb3a..3d221ac6 100644
  	return 0;
  }
  EXPORT_SYMBOL(tegra_csi_media_controller_init);
-@@ -1163,6 +1313,8 @@ int tegra_csi_media_controller_remove(struct tegra_csi_device *csi)
+@@ -1163,6 +1354,8 @@ int tegra_csi_media_controller_remove(struct tegra_csi_device *csi)
  	struct tegra_csi_channel *chan;
  	struct v4l2_subdev *sd;
  
