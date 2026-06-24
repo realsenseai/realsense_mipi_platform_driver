@@ -23,11 +23,11 @@ MAX96724 quad deserializer features:
 Signed-off-by: RealSense AI <realsense@realsenseai.com>
 ---
  drivers/media/i2c/Makefile   |    2 +
- drivers/media/i2c/max96717.c |  835 ++++++++++++++
+ drivers/media/i2c/max96717.c |  836 ++++++++++++++
  drivers/media/i2c/max96724.c | 1916 ++++++++++++++++++++++++++++++++++
  include/media/max96717.h     |  151 ++
  include/media/max96724.h     |  183 +++
- 4 files changed, 3085 insertions(+)
+ 4 files changed, 3086 insertions(+)
  create mode 100644 drivers/media/i2c/max96717.c
  create mode 100644 drivers/media/i2c/max96724.c
  create mode 100644 include/media/max96717.h
@@ -38,7 +38,7 @@ new file mode 100644
 index 0000000..70d25a3
 --- /dev/null
 +++ b/drivers/media/i2c/max96717.c
-@@ -0,0 +1,835 @@
+@@ -0,0 +1,836 @@
 +/*
 + * max96717.c - MAX96717 GMSL2 Serializer driver (Tunnel Mode)
 + *
@@ -68,8 +68,9 @@ index 0000000..70d25a3
 +#define MAX96717_DEV_ADDR		0x00
 +
 +/* 
-+ *   REG1: Link Speed
-+ *   bit[3]=1: 3 Gbps, bit[4]=1: 6 Gbps
++ *   REG1: GMSL2 link rate
++ *   TX_RATE[3:2]: 01=3Gbps, 10=6Gbps
++ *   RX_RATE[1:0]: 00=187.5Mbps reverse
 + */
 +#define MAX96717_REG1_ADDR		0x01
 +
@@ -216,10 +217,10 @@ index 0000000..70d25a3
 +/* MIPI_RX0: Normal operation */
 +#define MAX96717_MIPI_RX0_NORMAL	0x00
 +
-+/* REG1: 3 Gbps link speed, bit[3]=1 */
-+#define MAX96717_LINK_SPEED_3GBPS	0x08
-+/* REG1: 6 Gbps link speed, bit[4]=1 */
-+#define MAX96717_LINK_SPEED_6GBPS	0x10
++/* REG1: TX_RATE[3:2]=01, RX_RATE[1:0]=00 */
++#define MAX96717_LINK_SPEED_3GBPS	0x04
++/* REG1: TX_RATE[3:2]=10, RX_RATE[1:0]=00 */
++#define MAX96717_LINK_SPEED_6GBPS	0x08
 +
 +/* EXT11 tunnel mode pre-config (0x0383=0x80) */
 +#define MAX96717_EXT11_TUN_PRE		0x80
@@ -1245,10 +1246,10 @@ index 0000000..22bfb47
 +#define MAX96724_DPLL_700MBPS_CTRL0	0x27
 +
 +/* 
-+ *   CSI-output DPLL data rate = 1300 Mbps.
-+ *   bits[4:0] = data-rate / 100 MHz -> 1300/100 = 13 = 0x0D. bit[5] = DPLL en.
++ *   CSI-output DPLL data rate = 2000 Mbps.
++ *   bits[4:0] = data-rate / 100 MHz -> 2000/100 = 20 = 0x14. bit[5] = DPLL en.
 + */
-+#define MAX96724_DPLL_1300MBPS		0x2D
++#define MAX96724_DPLL_2000MBPS		0x34
 +
 +/* One-shot reset: all links */
 +#define MAX96724_ONESHOT_ALL		0x0F
@@ -2089,14 +2090,14 @@ index 0000000..22bfb47
 +		vid_rx0_cfg = MAX96724_VID_RX0_PIXEL_VAL;
 +		vid_rx6_cfg = MAX96724_VID_RX6_PIXEL_VAL;
 +		st_sel_cfg = 0x00;
-+		dpll_cfg = MAX96724_DPLL_1300MBPS;
++		dpll_cfg = MAX96724_DPLL_2000MBPS;
 +	} else {
 +		pipe_sel0 = MAX96724_PIPE_SEL0_PIXEL;
 +		pipe_sel1 = MAX96724_PIPE_SEL1_PIXEL;
 +		vid_rx0_cfg = MAX96724_VID_RX0_CFG_VAL;
 +		vid_rx6_cfg = MAX96724_VID_RX6_CFG_VAL;
 +		st_sel_cfg = 0x10;
-+		dpll_cfg = MAX96724_DPLL_1300MBPS;
++		dpll_cfg = MAX96724_DPLL_2000MBPS;
 +	}
 +
 +	/*
@@ -2116,7 +2117,7 @@ index 0000000..22bfb47
 +	max96724_apply_porta_subset(dev, priv);
 +
 +	/*
-+	 * CSI-output DPLL data rate = 1300 Mbps
++	 * CSI-output DPLL data rate = 2000 Mbps
 +	 * on ALL FOUR controller freq registers
 +	 */
 +	if (!priv->lane_setup) {
@@ -2335,14 +2336,14 @@ index 0000000..22bfb47
 +		vid_rx0_cfg = MAX96724_VID_RX0_PIXEL_VAL;
 +		vid_rx6_cfg = MAX96724_VID_RX6_PIXEL_VAL;
 +		st_sel_cfg = 0x00;
-+		dpll_cfg = MAX96724_DPLL_1300MBPS;
++		dpll_cfg = MAX96724_DPLL_2000MBPS;
 +	} else {
 +		pipe_sel0 = MAX96724_PIPE_SEL0_PIXEL;
 +		pipe_sel1 = MAX96724_PIPE_SEL1_PIXEL;
 +		vid_rx0_cfg = MAX96724_VID_RX0_CFG_VAL;
 +		vid_rx6_cfg = MAX96724_VID_RX6_CFG_VAL;
 +		st_sel_cfg = 0x10;
-+		dpll_cfg = MAX96724_DPLL_1300MBPS;
++		dpll_cfg = MAX96724_DPLL_2000MBPS;
 +	}
 +
 +	/* 
@@ -2359,8 +2360,9 @@ index 0000000..22bfb47
 +	max96724_apply_porta_subset(dev, priv);
 +
 +	/*
-+	 * CSI-output DPLL data rate = 1300 Mbps on ALL
-+	 * FOUR controllers, matching the device-tree serdes_pix_clk_hz (325 MHz).
++	 * CSI-output DPLL data rate = 2000 Mbps on ALL controllers.
++	 * This matches the device-tree serdes_pix_clk_hz values:
++	 * 500 MHz for 16-bit modes and 1000 MHz for 8-bit modes.
 +	 * reset_oneshot is called by the sensor after setup_streaming, so it must
 +	 * mirror the same DPLL values.
 +	 */
@@ -3144,4 +3146,3 @@ index 0000000..dc5a8ea
 +#endif  /* __MAX96724_H__ */
 -- 
 2.25.1
-

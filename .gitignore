@@ -8,3 +8,6 @@
 /.vscode/*.db*
 /.vscode/compile_commands.json
 jetpack_version
+*.code-workspace
+*.tar.gz
+logs
