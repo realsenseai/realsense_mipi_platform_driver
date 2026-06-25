@@ -1248,6 +1248,9 @@ static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 		struct v4l2_subdev_format *fmt)
 {
 	struct v4l2_mbus_framefmt *mf;// = &fmt->format;
+	u32 req_code;
+	u32 req_width;
+	u32 req_height;
 	int ret = 0;
 	//unsigned r;
 
@@ -1256,6 +1259,9 @@ static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 		__func__, state, sensor, fmt,  &fmt->format);
 
 	mf = &fmt->format;
+	req_code = mf->code;
+	req_width = mf->width;
+	req_height = mf->height;
 
 	if (fmt->pad)
 		return -EINVAL;
@@ -1301,6 +1307,15 @@ static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 	}
 
 	state->mux.last_set = sensor;
+
+	dev_info(sensor->sd.dev,
+		"ds5_set_fmt: sensor=%s request=%ux%u code=0x%x selected=%ux%u code=0x%x dt=0x%x fps=%u\n",
+		ds5_get_sensor_name(state), req_width, req_height, req_code,
+		sensor->config.resolution ? sensor->config.resolution->width : 0,
+		sensor->config.resolution ? sensor->config.resolution->height : 0,
+		sensor->config.format ? sensor->config.format->mbus_code : 0,
+		sensor->config.format ? sensor->config.format->data_type : 0,
+		sensor->config.framerate);
 
 	mutex_unlock(&state->lock);
 	return ret;
@@ -1397,6 +1412,7 @@ static int ds5_configure(struct ds5 *state)
 	u16 dt_addr, md_addr, override_addr, fps_addr, width_addr, height_addr;
 	u16 dt_value = 0;
 	u16 md_value = 0;
+	u16 override_value = 0;
 	u16 fps_value = 0;
 	u16 width_value = 0;
 	u16 height_value = 0;
@@ -1456,8 +1472,13 @@ static int ds5_configure(struct ds5 *state)
 
 	vc_id = state->g_ctx.dst_vc;
 	dev_info(&state->client->dev,
-		"ds5_configure: sensor=%s dt1=0x%x dt2=0x%x vc=%u pipe_id=%d\n",
-		ds5_get_sensor_name(state), data_type1, data_type2, vc_id, sensor->pipe_id);
+		"ds5_configure: sensor=%s %ux%u@%u code=0x%x dt1=0x%x dt2=0x%x vc=%u pipe_id=%d\n",
+		ds5_get_sensor_name(state),
+		sensor->config.resolution ? sensor->config.resolution->width : 0,
+		sensor->config.resolution ? sensor->config.resolution->height : 0,
+		sensor->config.framerate,
+		sensor->config.format ? sensor->config.format->mbus_code : 0,
+		data_type1, data_type2, vc_id, sensor->pipe_id);
     if (PIPE_NOT_CONFIGURED == sensor->pipe_id ||
 			sensor->pipe_data_type1 != data_type1 ||
 			sensor->pipe_data_type2 != data_type2 ||
@@ -1525,6 +1546,19 @@ static int ds5_configure(struct ds5 *state)
 	else if (state->is_y8 && dt_value == GMSL_CSI_DT_YUV422_8)
 		dt_value = 0x32;
 
+	md_value = (vc_id << 8) | md_fmt;
+	if (override_addr != 0)
+		override_value = sensor->config.format->data_type;
+	fps_value = sensor->config.framerate;
+	width_value = sensor->config.resolution->width;
+	height_value = sensor->config.resolution->height;
+
+	dev_info(&state->client->dev,
+		"ds5_configure: stream cfg sensor=%s dt=0x%04x meta_dt=0x%04x override_dt=0x%04x res=%ux%u fps=%u regs(dt=0x%04x md=0x%04x override=0x%04x width=0x%04x height=0x%04x fps=0x%04x)\n",
+		ds5_get_sensor_name(state), dt_value, md_value, override_value,
+		width_value, height_value, fps_value, dt_addr, md_addr,
+		override_addr, width_addr, height_addr, fps_addr);
+
 	dev_dbg(&state->client->dev,
 		"sensor %p: dt_value=0x%x, cached_dt_value=0x%x, cached_fps_value=%u, framerate=%u\n",
 		sensor, dt_value, sensor->cached_dt_value, sensor->cached_fps_value, sensor->config.framerate);
@@ -1536,7 +1570,6 @@ static int ds5_configure(struct ds5 *state)
 		sensor->cached_dt_value = dt_value;
 	}
 
-	md_value = (vc_id << 8) | md_fmt;
 	if (sensor->cached_md_value != md_value) {
 		ret = ds5_write(state, md_addr, md_value);
 		if (ret < 0)
@@ -1545,16 +1578,14 @@ static int ds5_configure(struct ds5 *state)
 	}
 
 	if (override_addr != 0) {
-		dt_value = sensor->config.format->data_type;
-		if (sensor->cached_override_value != dt_value) {
-			ret = ds5_write(state, override_addr, dt_value);
+		if (sensor->cached_override_value != override_value) {
+			ret = ds5_write(state, override_addr, override_value);
 			if (ret < 0)
 				return ret;
-			sensor->cached_override_value = dt_value;
+			sensor->cached_override_value = override_value;
 		}
 	}
 
-	fps_value = sensor->config.framerate;
 	if (sensor->cached_fps_value != fps_value) {
 		ret = ds5_write(state, fps_addr, fps_value);
 		if (ret < 0)
@@ -1562,7 +1593,6 @@ static int ds5_configure(struct ds5 *state)
 		sensor->cached_fps_value = fps_value;
 	}
 
-	width_value = sensor->config.resolution->width;
 	if (sensor->cached_width_value != width_value) {
 		ret = ds5_write(state, width_addr, width_value);
 		if (ret < 0)
@@ -1570,7 +1600,6 @@ static int ds5_configure(struct ds5 *state)
 		sensor->cached_width_value = width_value;
 	}
 
-	height_value = sensor->config.resolution->height;
 	if (sensor->cached_height_value != height_value) {
 		ret = ds5_write(state, height_addr, height_value);
 		if (ret < 0)
@@ -4639,6 +4668,15 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		expected_streaming_state = DS5_STREAM_IDLE;
 		status = DS5_STATUS_STREAMING;
 	}
+
+	dev_info(&state->client->dev,
+		"ds5_s_stream: sensor=%s on=%d stream_id=%u cmd=0x%04x vc=%u res=%ux%u fps=%u code=0x%x dt=0x%x\n",
+		ds5_get_sensor_name(state), on, stream_id, stream_cmd, vc_id,
+		sensor->config.resolution ? sensor->config.resolution->width : 0,
+		sensor->config.resolution ? sensor->config.resolution->height : 0,
+		sensor->config.framerate,
+		sensor->config.format ? sensor->config.format->mbus_code : 0,
+		sensor->config.format ? sensor->config.format->data_type : 0);
 
 	/* Verify stream is in the expected state before issuing command */
 	ts = jiffies;
