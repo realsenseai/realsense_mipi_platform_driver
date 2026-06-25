@@ -121,7 +121,7 @@ Build outputs go to `images/<version>/`.
 
 ### Patch Application
 
-`apply_patches.sh` copies `kernel/realsense/d4xx.c`, device tree files, and `nvidia-oot/max96712.h` into the NVIDIA source tree, applies git patches, and commits with `"RS patched"`. The `reset` action uses `git reset --hard` to a stored base commit.
+`apply_patches.sh` copies `kernel/realsense/d4xx.c`, device tree files, and `nvidia-oot/max96712.h` into the NVIDIA source tree, applies git patches, and commits with `"RS patched"`. The `reset` action uses `git reset --hard` to a stored base commit. JP6+ SERDES source overlays use link mode by default, so patched SERDES source files symlink back to `nvidia-oot/files/<version>/...`; set `RS_SOURCE_OVERLAY_MODE=copy` only when an explicit standalone source copy is needed.
 
 Camera variant flags: `--one-cam`, `--dual-cam`, `--max96712-EVB`, `--fg12-16ch`, `--fg12-16ch-dual` (only some apply to specific JetPack versions).
 
@@ -137,7 +137,7 @@ Camera variant flags: `--one-cam`, `--dual-cam`, `--max96712-EVB`, `--fg12-16ch`
 | `kernel/kernel-5.10/` | Kernel patches for JetPack 5.x |
 | `kernel/kernel-jammy-src/` | Kernel patches for JetPack 6.x |
 | `kernel/nvidia/` | NVIDIA driver patches (MAX9295/9296 SerDes, VI capture) |
-| `nvidia-oot/` | Out-of-tree NVIDIA module patches for JetPack 6.x |
+| `nvidia-oot/` | Out-of-tree NVIDIA module patches plus JP6+/JP7 SERDES source overlays under `nvidia-oot/files/` |
 | `hardware/realsense/` | Device tree source files |
 | `hardware/nvidia/` | Platform-level DT patches |
 | `scripts/` | Build orchestration and SerDes configuration scripts |

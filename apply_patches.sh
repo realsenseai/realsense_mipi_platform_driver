@@ -3,6 +3,7 @@
 set -e
 
 ACTION="apply"
+SOURCE_OVERLAY_MODE="${RS_SOURCE_OVERLAY_MODE:-link}"
 # Default to single camera DT for JetPack 5.0.2
 # single - jp5 [default] single cam GMSL board
 # dual - dual cam GMSL board SC20220126
@@ -32,6 +33,14 @@ while [[ $# -gt 0 ]]; do
 done
 
 . scripts/setup-common
+
+case "$SOURCE_OVERLAY_MODE" in
+    copy|link) ;;
+    *)
+        echo "ERROR: RS_SOURCE_OVERLAY_MODE must be 'copy' or 'link' (got: ${SOURCE_OVERLAY_MODE})"
+        exit 2
+        ;;
+esac
 
 # set JP4 devicetree
 if [[ "$JETPACK_VERSION" == "4.x" ]]; then
@@ -78,20 +87,71 @@ cleanup_reset_artifacts() {
     git -C "${source}" clean -f -- "${reset_artifacts[@]}" > /dev/null 2>&1 || true
 }
 
+copy_source_overlay() {
+    local overlay_dir="$1"
+    local source="$2"
+    local git_dir manifest rel
+    local -a overlay_paths
+
+    [[ -d "${overlay_dir}" ]] || return 0
+
+    mapfile -t overlay_paths < <(cd "${overlay_dir}" && find . \( -type f -o -type l \) -printf '%P\n' | sort)
+    [[ ${#overlay_paths[@]} -gt 0 ]] || return 0
+
+    git_dir="$(git -C "${source}" rev-parse --absolute-git-dir)"
+    manifest="${git_dir}/rs-source-overlay.manifest"
+
+    printf 'source overlay (%s): %s -> %s\n' "${SOURCE_OVERLAY_MODE}" "${overlay_dir}" "${source}"
+
+    if [[ -f "${manifest}" ]]; then
+        while IFS= read -r rel; do
+            [[ -n "${rel}" ]] || continue
+            if ! printf '%s\n' "${overlay_paths[@]}" | grep -Fxq -- "${rel}"; then
+                if git -C "${source}" ls-files --error-unmatch -- "${rel}" > /dev/null 2>&1; then
+                    printf 'ERROR: previous overlay path is now tracked by native source: %s\n' "${rel}" >&2
+                    printf '       convert this file to a patch instead of overlay copy.\n' >&2
+                    exit 1
+                fi
+                rm -f -- "${source}/${rel}"
+            fi
+        done < "${manifest}"
+    fi
+
+    for rel in "${overlay_paths[@]}"; do
+        if git -C "${source}" ls-files --error-unmatch -- "${rel}" > /dev/null 2>&1; then
+            printf 'ERROR: source overlay refuses to overwrite native tracked file: %s\n' "${rel}" >&2
+            printf '       use a patch for existing kernel files instead of copying over them.\n' >&2
+            exit 1
+        fi
+    done
+
+    if [[ "$SOURCE_OVERLAY_MODE" == "link" ]]; then
+        for rel in "${overlay_paths[@]}"; do
+            mkdir -p "${source}/$(dirname "${rel}")"
+            rm -f -- "${source}/${rel}"
+            ln -sfr "${overlay_dir}/${rel}" "${source}/${rel}"
+        done
+    else
+        cp -a "${overlay_dir}/." "${source}/"
+    fi
+    printf '%s\n' "${overlay_paths[@]}" > "${manifest}"
+    git -C "${source}" add -A -- "${overlay_paths[@]}"
+}
+
 apply_external_patches() {
 	local source="${BUILD_SRCS}/$2"
     git -C "${source}" status > /dev/null
     if [[ "$ACTION" == 'apply' ]]; then
         if ! git -C "${source}" diff --quiet || ! git -C "${source}" diff --cached --quiet; then
-            read -p "Repo ${source} has changes that may disturb applying patches. Continue (Y/n)? " confirm
+            read -p "Repo ${source} has changes that may disturb applying patches. Continue (Y/n)? " confirm || confirm=""
             [[ -n "$confirm" && "$confirm" != "y" && "$confirm" != "Y" ]] && exit 1
         fi
-        echo -e "\e[33m$(ls -Ld ${PWD}/$2/$1)\e[0m"
+        printf '%s\n' "$(ls -Ld ${PWD}/$2/$1)"
         ls -Lw1 "${PWD}/$2/$1"
         git -C "${source}" apply "${PWD}/$2/$1"/*
     elif [[ "$ACTION" = "reset" ]]; then
         if ! git -C "${source}" diff --quiet || ! git -C "${source}" diff --cached --quiet; then
-            read -p "Repo ${source} has changes that will be hard reset. Continue (Y/n)? " confirm
+            read -p "Repo ${source} has changes that will be hard reset. Continue (Y/n)? " confirm || confirm=""
             [[ -n "$confirm" && "$confirm" != "y" && "$confirm" != "Y" ]] && exit 1
         fi
         cleanup_reset_artifacts "${source}"
@@ -126,6 +186,7 @@ if [[ "$ACTION" = "apply" ]]; then
         # max96712 header
         cp kernel/nvidia/max96712.h "${BUILD_SRCS}/kernel/nvidia/include/media/"
     else
+        copy_source_overlay "$(pwd)/nvidia-oot/files/${JP_INPUT_VERSION}" "${BUILD_SRCS}/nvidia-oot"
         # max96712 header
         ln -f nvidia-oot/max96712.h "${BUILD_SRCS}/nvidia-oot/include/media/"
         if version_lt "$JETPACK_VERSION" "7.0"; then
@@ -156,6 +217,13 @@ if [[ "$ACTION" = "apply" ]]; then
     # Stage all modified files after patching
     if ! version_lt "$JETPACK_VERSION" "5.0"; then
         git -C "${BUILD_SRCS}/$D4XX_SRC_DST" add drivers/media/i2c/d4xx.c drivers/media/i2c/d5xx.c
+    fi
+    if ! version_lt "$JETPACK_VERSION" "6.0"; then
+        [[ -e "${BUILD_SRCS}/${D4XX_SRC_DST}/include/media/max96712.h" ]] && \
+            git -C "${BUILD_SRCS}/$D4XX_SRC_DST" add include/media/max96712.h
+        [[ -e "${BUILD_SRCS}/${D4XX_SRC_DST}/drivers/net/ethernet/nvidia/nvethernet/nvethernetrm" || \
+            -L "${BUILD_SRCS}/${D4XX_SRC_DST}/drivers/net/ethernet/nvidia/nvethernet/nvethernetrm" ]] && \
+            git -C "${BUILD_SRCS}/$D4XX_SRC_DST" add -Af drivers/net/ethernet/nvidia/nvethernet/nvethernetrm
     fi
     git -C "${BUILD_SRCS}/$D4XX_SRC_DST" add -u
     [[ -d "${BUILD_SRCS}/$KERNEL_DIR" ]] && git -C "${BUILD_SRCS}/$KERNEL_DIR" add -A
