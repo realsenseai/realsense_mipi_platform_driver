@@ -35,6 +35,7 @@ CI runs these three steps for each JetPack version (see `.github/workflows/build
 ./apply_patches.sh reset <version>                            # Reset all patches
 ```
 The `--one-cam`/`--dual-cam` options only apply to JetPack 5.0.2.
+For JP6+ generated SERDES source overlays, `apply_patches.sh` uses link mode by default so patched source files symlink back to `nvidia-oot/files/<version>/...`. Set `RS_SOURCE_OVERLAY_MODE=copy` only when an explicit standalone source copy is needed.
 
 ### Deploy to Jetson
 
@@ -77,7 +78,7 @@ RealSense D4XX camera module
 - **`kernel/realsense/d4xx.c`** — The main driver. Single-file V4L2 subdevice driver handling I2C communication, MIPI CSI-2 stream config, firmware control (DFU), calibration data, metadata capture, and V4L2 controls (exposure, laser power, AE ROI, etc.). Registers four sensor subdevices per camera: Depth, RGB, IR (Y8/Y8I/Y12I), and IMU.
 - **`kernel/kernel-4.9/`, `kernel/kernel-5.10/`, `kernel/kernel-jammy-src/`** — Kernel patches organized by JetPack generation: 4.6.1 uses kernel 4.9, 5.x uses kernel 5.10, 6.x uses kernel-jammy-src.
 - **`kernel/nvidia/`** — NVIDIA driver patches (max9295/max9296 SerDes, VI capture engine) organized by JetPack version.
-- **`nvidia-oot/`** — Out-of-tree NVIDIA module patches for JetPack 6.x (subdirs `6.0/`, `6.1/`, `6.2/`, `6.2.1/`). Has its own Makefile for building conftest, hwpm, nvidia-oot, nvgpu, nvidia-display modules.
+- **`nvidia-oot/`** — Out-of-tree NVIDIA module patches for JetPack 6.x/7.x. New SERDES source overlays live under `nvidia-oot/files/<version>/...`; non-6.2 selectors currently link to the shared 6.2 overlay.
 - **`hardware/realsense/`** — Device tree source files. Xavier uses `.dtsi` includes (`tegra194-camera-d4xx-*.dtsi`), Orin uses DT overlays (`tegra234-camera-d4xx-overlay*.dts`). Single-camera and dual-camera variants exist, plus `.calib.` variants for calibration.
 - **`hardware/nvidia/`** — Platform-level DT patches (`t19x/galen/` for Xavier, `t23x/` for Orin T234).
 - **`scripts/`** — Build orchestration. `setup-common` defines version-to-revision mappings and kernel directory selection. `source_sync_*.sh` scripts clone NVIDIA kernel repos. `SerDes_D457_*.sh` scripts configure serializer/deserializer registers.
