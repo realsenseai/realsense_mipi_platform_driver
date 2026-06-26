@@ -1135,12 +1135,7 @@ int max96724_sdev_register(struct device *dev, struct gmsl_link_ctx *g_ctx)
 	unsigned int i;
 	int err = 0;
 
-	if (!dev) {
-		pr_err("%s: invalid device\n", __func__);
-		return -EINVAL;
-	}
-
-	if (!g_ctx || !g_ctx->s_dev) {
+	if (!dev || !g_ctx || !g_ctx->s_dev) {
 		dev_err(dev, "%s: invalid input params\n", __func__);
 		return -EINVAL;
 	}
@@ -1203,12 +1198,7 @@ int max96724_sdev_unregister(struct device *dev, struct device *s_dev)
 	int err = 0;
 	unsigned int i = 0;
 
-	if (!dev) {
-		pr_err("%s: invalid device\n", __func__);
-		return -EINVAL;
-	}
-
-	if (!s_dev) {
+	if (!dev || !s_dev) {
 		dev_err(dev, "%s: invalid input params\n", __func__);
 		return -EINVAL;
 	}
@@ -1801,6 +1791,151 @@ int max96724_set_pipe(struct device *dev, int pipe_id,
 	return err;
 }
 EXPORT_SYMBOL(max96724_set_pipe);
+
+/* ================================================================
+ * Frame Sync (FSYNC) — internal generator, broadcast to all links
+ * ================================================================ */
+
+/*
+ * Multi-camera frame synchronization.
+ *
+ * The MAX96724 generates the FSYNC signal internally from its on-board
+ * 25MHz crystal and broadcasts it over the GMSL2 reverse channel to
+ * every serializer on GPIO channel 23.  Each MAX96717 already receives
+ * ch23 on GPIO0 (H_VSYNC_TRIG) and GPIO1 (RGB_FSYNC) — see
+ * max96717_setup_gpio_tunneling() — so all cameras are driven by the
+ * same deserializer-generated edge with zero inter-camera skew.  No
+ * camera strobe loop-back and no SoC sync pin are required.
+ *
+ * Register sequence validated against the MAX96724 User Guide
+ * "Internal FSYNC (GMSL2)" programming example.
+ */
+#define MAX96724_FSYNC_0_ADDR		0x04A0	/* mode / method / enable      */
+#define MAX96724_FSYNC_PER_L_ADDR	0x04A5	/* FSYNC_PERIOD[7:0]           */
+#define MAX96724_FSYNC_PER_M_ADDR	0x04A6	/* FSYNC_PERIOD[15:8]          */
+#define MAX96724_FSYNC_PER_H_ADDR	0x04A7	/* FSYNC_PERIOD[23:16]         */
+#define MAX96724_FSYNC_15_ADDR		0x04AF	/* link select / XTAL time base*/
+#define MAX96724_FSYNC_TXID_ADDR	0x04B1	/* FSYNC_TX_ID[7:3]            */
+
+/* FSYNC time base = on-board 25MHz crystal. */
+#define MAX96724_FSYNC_XTAL_HZ		25000000U
+/* Fallback frame rate (Hz) if the caller passes fps == 0 (unknown). */
+#define MAX96724_FSYNC_FPS_DEFAULT	30U
+/* FSYNC_PERIOD is a 24-bit field (0x04A5..0x04A7). */
+#define MAX96724_FSYNC_PERIOD_MAX	0x00FFFFFFU
+
+/* GMSL2 GPIO channel the serializers receive sync on
+ * (matches MAX96717 GPIO0/GPIO1 RX_ID=23). */
+#define MAX96724_FSYNC_TX_CH		23
+
+/*
+ * 0x04AF: GMSL2-type FSYNC output (bit7=1), use 25MHz XTAL as the time
+ * base (bit6=1), select links via FS_LINK_x rather than "all enabled"
+ * (bit4=0), and include all four video pipes (bits[3:0]=1111).
+ */
+#define MAX96724_FSYNC_15_ALL		0xCF
+/* 0x04B1: FSYNC_TX_ID in bits[7:3]; FSYNC_ERR_THR[2:0] left at 0. */
+#define MAX96724_FSYNC_TXID_VAL		(MAX96724_FSYNC_TX_CH << 3)
+/*
+ * 0x04A0: FSYNC_MODE=01 (master deserializer — drives subordinates over
+ * the GMSL reverse channel) | FSYNC_METH=00 (manual / internal period).
+ * Must be written last to start the FSYNC state machine.
+ */
+#define MAX96724_FSYNC_0_ENABLE		0x04
+/* 0x04A0 disable: FSYNC_MODE=11 (off / power-up reset state). */
+#define MAX96724_FSYNC_0_DISABLE	0x0C
+
+/*
+ * max96724_setup_fsync - enable internal FSYNC broadcast (multi-camera sync)
+ * @dev: deserializer device handle
+ * @fps: desired frame rate in Hz, normally the V4L2-negotiated value
+ *       (VIDIOC_S_PARM / frame interval); pass 0 to use the default.
+ *
+ * Programs the MAX96724 as the FSYNC master: it generates a frame-sync
+ * pulse internally from the 25MHz crystal and transmits it on GMSL GPIO
+ * channel 23 to all four links.  Every camera's serializer receives the
+ * same edge (via max96717_setup_gpio_tunneling()), giving frame-locked,
+ * skew-free multi-camera capture.  The FSYNC period is computed at
+ * runtime as XTAL / fps so the sync rate tracks the active V4L2 mode.
+ */
+int max96724_setup_fsync(struct device *dev, u32 fps)
+{
+	struct max96724 *priv = dev_get_drvdata(dev);
+	struct reg_pair map[6];
+	u32 period;
+	int err;
+
+	if (!fps)
+		fps = MAX96724_FSYNC_FPS_DEFAULT;
+
+	/* Convert frame rate to a 24-bit period in 25MHz XTAL cycles. */
+	period = MAX96724_FSYNC_XTAL_HZ / fps;
+	if (!period || period > MAX96724_FSYNC_PERIOD_MAX) {
+		dev_err(dev, "%s: fps %u out of range (period %u)\n",
+			__func__, fps, period);
+		return -EINVAL;
+	}
+
+	/* Link select + 25MHz XTAL time base (all 4 links). */
+	map[0].addr = MAX96724_FSYNC_15_ADDR;
+	map[0].val  = MAX96724_FSYNC_15_ALL;
+	/* FSYNC period (24-bit, in XTAL cycles). */
+	map[1].addr = MAX96724_FSYNC_PER_L_ADDR;
+	map[1].val  = period & 0xFF;
+	map[2].addr = MAX96724_FSYNC_PER_M_ADDR;
+	map[2].val  = (period >> 8) & 0xFF;
+	map[3].addr = MAX96724_FSYNC_PER_H_ADDR;
+	map[3].val  = (period >> 16) & 0xFF;
+	/* Transmit FSYNC over GMSL reverse channel 23 to all SERs. */
+	map[4].addr = MAX96724_FSYNC_TXID_ADDR;
+	map[4].val  = MAX96724_FSYNC_TXID_VAL;
+	/* Enable internal FSYNC, manual mode (must be written last). */
+	map[5].addr = MAX96724_FSYNC_0_ADDR;
+	map[5].val  = MAX96724_FSYNC_0_ENABLE;
+
+	mutex_lock(&priv->lock);
+
+	err = max96724_set_registers(dev, map, ARRAY_SIZE(map));
+	if (err)
+		dev_err(dev, "%s: FSYNC setup failed (%d)\n", __func__, err);
+	else
+		dev_info(dev,
+			 "%s: internal FSYNC enabled (%u Hz, period %u, broadcast ch%u to all links)\n",
+			 __func__, fps, period, MAX96724_FSYNC_TX_CH);
+
+	mutex_unlock(&priv->lock);
+
+	return err;
+}
+EXPORT_SYMBOL(max96724_setup_fsync);
+
+/*
+ * max96724_disable_fsync - disable internal FSYNC generation
+ *
+ * Turns the FSYNC state machine off (FSYNC_MODE=11/off).  Counterpart to
+ * max96724_setup_fsync().
+ */
+int max96724_disable_fsync(struct device *dev)
+{
+	struct max96724 *priv = dev_get_drvdata(dev);
+	struct reg_pair map[] = {
+		{MAX96724_FSYNC_0_ADDR, MAX96724_FSYNC_0_DISABLE},
+	};
+	int err;
+
+	mutex_lock(&priv->lock);
+
+	err = max96724_set_registers(dev, map, ARRAY_SIZE(map));
+	if (err)
+		dev_err(dev, "%s: FSYNC disable failed (%d)\n", __func__, err);
+	else
+		dev_dbg(dev, "%s: internal FSYNC disabled\n", __func__);
+
+	mutex_unlock(&priv->lock);
+
+	return err;
+}
+EXPORT_SYMBOL(max96724_disable_fsync);
 
 /* ================================================================
  * Device Tree Parsing
