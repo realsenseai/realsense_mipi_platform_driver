@@ -146,6 +146,17 @@ int max96717_init_settings(struct device *dev);
  */
 int max96717_setup_gpio_tunneling(struct device *dev);
 
+/**
+ * @brief  Disables GPIO-over-GMSL tunneling for FSIN/FOUT signals.
+ *
+ * Restores the serializer GPIOs to their default non-tunneled function.
+ *
+ * @param  [in]  dev          The serializer device handle.
+ *
+ * @return  0 for success, or negative error code.
+ */
+int max96717_disable_gpio_tunneling(struct device *dev);
+
 /** @} */
 
 #endif  /* __MAX96717_H__ */

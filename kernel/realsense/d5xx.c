@@ -56,6 +56,10 @@ struct dser_interface {
 	int (*setup_link)(struct device *dev, struct device *s_dev);
 	int (*setup_control)(struct device *dev, struct device *s_dev);
 	int (*reset_control)(struct device *dev, struct device *s_dev);
+
+	/* Frame sync (multi-camera).  fps is the V4L2-negotiated frame rate. */
+	int (*setup_fsync)(struct device *dev, u32 fps);
+	int (*disable_fsync)(struct device *dev);
 	
 	/* Device registration */
 	int (*sdev_register)(struct device *dev, struct gmsl_link_ctx *g_ctx);
@@ -182,7 +186,7 @@ struct dser_interface {
 #define DS5_STATUS_INVALID_RES		0x4
 #define DS5_STATUS_INVALID_FPS		0x8
 
-#define MIPI_LANE_RATE				1000
+#define MIPI_LANE_RATE				1300
 
 #define MAX_DEPTH_EXP				200000
 #define MAX_RGB_EXP					10000
@@ -555,6 +559,7 @@ struct ds5_dev {
 	/* Pointer to the primary DS5 struct */
 	struct ds5 *ds5_primary;
 
+	int sync_mode;
 	bool depth_streaming;
 	bool ir_streaming;
 	bool rgb_streaming;
@@ -622,6 +627,8 @@ static const struct dser_interface max96724_interface = {
 	.setup_link = max96724_setup_link,
 	.setup_control = max96724_setup_control,
 	.reset_control = max96724_reset_control,
+	.setup_fsync = max96724_setup_fsync,
+	.disable_fsync = max96724_disable_fsync,
 	.sdev_register = max96724_sdev_register,
 	.sdev_unregister = max96724_sdev_unregister,
 	.power_on = max96724_power_on,
@@ -1248,9 +1255,6 @@ static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 		struct v4l2_subdev_format *fmt)
 {
 	struct v4l2_mbus_framefmt *mf;// = &fmt->format;
-	u32 req_code;
-	u32 req_width;
-	u32 req_height;
 	int ret = 0;
 	//unsigned r;
 
@@ -1259,9 +1263,6 @@ static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 		__func__, state, sensor, fmt,  &fmt->format);
 
 	mf = &fmt->format;
-	req_code = mf->code;
-	req_width = mf->width;
-	req_height = mf->height;
 
 	if (fmt->pad)
 		return -EINVAL;
@@ -1307,15 +1308,6 @@ static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 	}
 
 	state->mux.last_set = sensor;
-
-	dev_info(sensor->sd.dev,
-		"ds5_set_fmt: sensor=%s request=%ux%u code=0x%x selected=%ux%u code=0x%x dt=0x%x fps=%u\n",
-		ds5_get_sensor_name(state), req_width, req_height, req_code,
-		sensor->config.resolution ? sensor->config.resolution->width : 0,
-		sensor->config.resolution ? sensor->config.resolution->height : 0,
-		sensor->config.format ? sensor->config.format->mbus_code : 0,
-		sensor->config.format ? sensor->config.format->data_type : 0,
-		sensor->config.framerate);
 
 	mutex_unlock(&state->lock);
 	return ret;
@@ -1412,7 +1404,6 @@ static int ds5_configure(struct ds5 *state)
 	u16 dt_addr, md_addr, override_addr, fps_addr, width_addr, height_addr;
 	u16 dt_value = 0;
 	u16 md_value = 0;
-	u16 override_value = 0;
 	u16 fps_value = 0;
 	u16 width_value = 0;
 	u16 height_value = 0;
@@ -1472,13 +1463,8 @@ static int ds5_configure(struct ds5 *state)
 
 	vc_id = state->g_ctx.dst_vc;
 	dev_info(&state->client->dev,
-		"ds5_configure: sensor=%s %ux%u@%u code=0x%x dt1=0x%x dt2=0x%x vc=%u pipe_id=%d\n",
-		ds5_get_sensor_name(state),
-		sensor->config.resolution ? sensor->config.resolution->width : 0,
-		sensor->config.resolution ? sensor->config.resolution->height : 0,
-		sensor->config.framerate,
-		sensor->config.format ? sensor->config.format->mbus_code : 0,
-		data_type1, data_type2, vc_id, sensor->pipe_id);
+		"ds5_configure: sensor=%s dt1=0x%x dt2=0x%x vc=%u pipe_id=%d\n",
+		ds5_get_sensor_name(state), data_type1, data_type2, vc_id, sensor->pipe_id);
     if (PIPE_NOT_CONFIGURED == sensor->pipe_id ||
 			sensor->pipe_data_type1 != data_type1 ||
 			sensor->pipe_data_type2 != data_type2 ||
@@ -1546,19 +1532,6 @@ static int ds5_configure(struct ds5 *state)
 	else if (state->is_y8 && dt_value == GMSL_CSI_DT_YUV422_8)
 		dt_value = 0x32;
 
-	md_value = (vc_id << 8) | md_fmt;
-	if (override_addr != 0)
-		override_value = sensor->config.format->data_type;
-	fps_value = sensor->config.framerate;
-	width_value = sensor->config.resolution->width;
-	height_value = sensor->config.resolution->height;
-
-	dev_info(&state->client->dev,
-		"ds5_configure: stream cfg sensor=%s dt=0x%04x meta_dt=0x%04x override_dt=0x%04x res=%ux%u fps=%u regs(dt=0x%04x md=0x%04x override=0x%04x width=0x%04x height=0x%04x fps=0x%04x)\n",
-		ds5_get_sensor_name(state), dt_value, md_value, override_value,
-		width_value, height_value, fps_value, dt_addr, md_addr,
-		override_addr, width_addr, height_addr, fps_addr);
-
 	dev_dbg(&state->client->dev,
 		"sensor %p: dt_value=0x%x, cached_dt_value=0x%x, cached_fps_value=%u, framerate=%u\n",
 		sensor, dt_value, sensor->cached_dt_value, sensor->cached_fps_value, sensor->config.framerate);
@@ -1570,6 +1543,7 @@ static int ds5_configure(struct ds5 *state)
 		sensor->cached_dt_value = dt_value;
 	}
 
+	md_value = (vc_id << 8) | md_fmt;
 	if (sensor->cached_md_value != md_value) {
 		ret = ds5_write(state, md_addr, md_value);
 		if (ret < 0)
@@ -1578,14 +1552,16 @@ static int ds5_configure(struct ds5 *state)
 	}
 
 	if (override_addr != 0) {
-		if (sensor->cached_override_value != override_value) {
-			ret = ds5_write(state, override_addr, override_value);
+		dt_value = sensor->config.format->data_type;
+		if (sensor->cached_override_value != dt_value) {
+			ret = ds5_write(state, override_addr, dt_value);
 			if (ret < 0)
 				return ret;
-			sensor->cached_override_value = override_value;
+			sensor->cached_override_value = dt_value;
 		}
 	}
 
+	fps_value = sensor->config.framerate;
 	if (sensor->cached_fps_value != fps_value) {
 		ret = ds5_write(state, fps_addr, fps_value);
 		if (ret < 0)
@@ -1593,6 +1569,7 @@ static int ds5_configure(struct ds5 *state)
 		sensor->cached_fps_value = fps_value;
 	}
 
+	width_value = sensor->config.resolution->width;
 	if (sensor->cached_width_value != width_value) {
 		ret = ds5_write(state, width_addr, width_value);
 		if (ret < 0)
@@ -1600,6 +1577,7 @@ static int ds5_configure(struct ds5 *state)
 		sensor->cached_width_value = width_value;
 	}
 
+	height_value = sensor->config.resolution->height;
 	if (sensor->cached_height_value != height_value) {
 		ret = ds5_write(state, height_addr, height_value);
 		if (ret < 0)
@@ -2065,35 +2043,105 @@ static void ds5_reset_streaming_flags(struct ds5_dev *ds5_dev)
 static int ds5_set_ser_esync_tunneling(struct ds5 *state, bool enable)
 {
 #ifdef CONFIG_VIDEO_D5XX_SERDES
+	struct ds5 *owner;
 	int ret;
 
-	if (!state || !state->ser_dev)
+	if (!state || !state->client || !state->ds5_dev)
 		return -EINVAL;
-	if (state->dser_ops != &max96724_interface)
+
+	owner = state->ds5_dev->ds5_primary ? state->ds5_dev->ds5_primary : state;
+	if (!owner || !owner->client || !owner->ser_dev || !owner->dser_ops)
+		return -EINVAL;
+	if (owner->dser_ops != &max96724_interface)
 		return 0;
 
-	dev_dbg(&state->client->dev,
-		"%s(): serializer ESYNC %s requested\n",
-		__func__, enable ? "enable" : "disable");
+	dev_info(&state->client->dev,
+		"%s(): serializer GPIO tunnel %s requested via %s owner %s\n",
+		__func__, enable ? "enable" : "disable",
+		dev_name(&state->client->dev), dev_name(&owner->client->dev));
 
 	if (enable)
-		ret = max96717_setup_gpio_tunneling(state->ser_dev);
+		ret = max96717_setup_gpio_tunneling(owner->ser_dev);
 	else
-		ret = 0; /* MAX96717 GPIO tunneling has no disable */
+		ret = max96717_disable_gpio_tunneling(owner->ser_dev);
 
 	if (ret)
 		dev_warn(&state->client->dev,
-			"%s(): serializer ESYNC %s failed (%d)\n",
+			"%s(): serializer GPIO tunnel %s failed (%d)\n",
 			__func__, enable ? "enable" : "disable", ret);
 	else
-		dev_dbg(&state->client->dev,
-			"%s(): serializer ESYNC %s OK\n",
+		dev_info(&state->client->dev,
+			"%s(): serializer GPIO tunnel %s OK\n",
 			__func__, enable ? "enable" : "disable");
 
 	return ret;
 #else
 	return 0;
 #endif
+}
+
+static int ds5_set_des_fsync(struct ds5 *state, bool enable)
+{
+#ifdef CONFIG_VIDEO_D5XX_SERDES
+	struct ds5 *owner;
+	u32 fps = 0;
+	int ret = 0;
+
+	if (!state || !state->client || !state->ds5_dev)
+		return -EINVAL;
+
+	owner = state->ds5_dev->ds5_primary ? state->ds5_dev->ds5_primary : state;
+	if (!owner || !owner->client || !owner->dser_dev || !owner->dser_ops)
+		return -EINVAL;
+	if (owner->dser_ops != &max96724_interface)
+		return 0;
+
+	if (state->mux.last_set)
+		fps = state->mux.last_set->config.framerate;
+	if (!fps)
+		fps = state->depth.sensor.config.framerate;
+
+	dev_info(&state->client->dev,
+		"%s(): deserializer internal FSYNC %s requested via %s owner %s, fps=%u\n",
+		__func__, enable ? "enable" : "disable",
+		dev_name(&state->client->dev), dev_name(&owner->client->dev), fps);
+
+	if (enable) {
+		if (owner->dser_ops->setup_fsync)
+			ret = owner->dser_ops->setup_fsync(owner->dser_dev, fps);
+	} else if (owner->dser_ops->disable_fsync) {
+		ret = owner->dser_ops->disable_fsync(owner->dser_dev);
+	}
+
+	if (ret)
+		dev_warn(&state->client->dev,
+			"%s(): deserializer internal FSYNC %s failed (%d)\n",
+			__func__, enable ? "enable" : "disable", ret);
+	else
+		dev_info(&state->client->dev,
+			"%s(): deserializer internal FSYNC %s OK\n",
+			__func__, enable ? "enable" : "disable");
+
+	return ret;
+#else
+	return 0;
+#endif
+}
+
+static bool ds5_sync_mode_uses_esync(struct ds5 *state)
+{
+	int sync_mode = DS5_SYNC_MODE_DEFAULT;
+
+	if (!state)
+		return false;
+
+	if (state->ds5_dev)
+		sync_mode = READ_ONCE(state->ds5_dev->sync_mode);
+	if (sync_mode == DS5_SYNC_MODE_DEFAULT && state->ctrls.sync_mode)
+		sync_mode = state->ctrls.sync_mode->cur.val;
+
+	return sync_mode == DS5_SYNC_MODE_SLAVE ||
+	       sync_mode == DS5_SYNC_MODE_FULL_SLAVE;
 }
 
 /*
@@ -2303,18 +2351,12 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 		(state->fw_version >> 8) & 0xff, state->fw_version & 0xff,
 		(state->fw_build >> 8) & 0xff, state->fw_build & 0xff);
 
-	/* Re-apply ESYNC tunneling to match cached sync_mode control */
-	if (state->ctrls.sync_mode) {
-		int sync_val = state->ctrls.sync_mode->cur.val;
-		bool need_esync = (sync_val == DS5_SYNC_MODE_SLAVE ||
-				   sync_val == DS5_SYNC_MODE_FULL_SLAVE);
-
-		ret = ds5_set_ser_esync_tunneling(state, need_esync);
-		if (ret)
-			dev_warn(&state->client->dev,
-				"%s(): serializer ESYNC %s after HW reset failed (%d)\n",
-				__func__, need_esync ? "enable" : "disable", ret);
-	}
+	/*
+	 * ESYNC / FSYNC hardware is NOT re-applied here after a HW
+	 * reset.  The cached sync_mode control is a pure policy flag;
+	 * the actual SERDES programming happens at the next
+	 * stream-on boundary (ds5_mux_s_stream).
+	 */
 
 	WRITE_ONCE(state->ds5_dev->last_reset_jiffies, jiffies);
 
@@ -2654,11 +2696,19 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 				bool need_esync = (ctrl->val == DS5_SYNC_MODE_SLAVE ||
 						   ctrl->val == DS5_SYNC_MODE_FULL_SLAVE);
 
-				dev_dbg(&state->client->dev,
-					"%s(): sync_mode=%d -> serializer ESYNC %s\n",
-					__func__, ctrl->val,
-					need_esync ? "enable" : "disable");
+				if (state->ds5_dev)
+					WRITE_ONCE(state->ds5_dev->sync_mode, ctrl->val);
+
+				/*
+				 * Match D4xx behavior for the serializer side:
+				 * make GPIO tunneling visible immediately after
+				 * camera_sync_mode changes.  The DES internal
+				 * FSYNC generator still starts at stream-on so it
+				 * can use the negotiated FPS.
+				 */
 				ret = ds5_set_ser_esync_tunneling(state, need_esync);
+				if (!ret && !need_esync)
+					ret = ds5_set_des_fsync(state, false);
 			}
 		}
 		break;
@@ -3268,6 +3318,7 @@ static void ds5_init_ds5_dev(struct ds5 *state, struct ds5_dev *ds5_dev)
 	mutex_lock(&ds5_dev->lock);
 	ds5_dev->ds5_primary = state;
 	ds5_dev->cached_device_type = DS5_DEVICE_TYPE_UNKNOWN;
+	ds5_dev->sync_mode = DS5_SYNC_MODE_DEFAULT;
 	mutex_unlock(&ds5_dev->lock);
 	ds5_reset_streaming_flags(ds5_dev);
 }
@@ -4572,6 +4623,17 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			mutex_unlock(&state->ds5_dev->lock);
 			return ret;
 		}
+#ifdef CONFIG_VIDEO_D5XX_SERDES
+		/*
+		 * The control callback enables serializer GPIO tunneling
+		 * immediately.  Re-assert it here after reset/recovery, then
+		 * start the DES internal FSYNC source at the negotiated FPS.
+		 */
+		if (ds5_sync_mode_uses_esync(state)) {
+			ds5_set_ser_esync_tunneling(state, true);
+			ds5_set_des_fsync(state, true);
+		}
+#endif
 	} else {
 		/* On stream off, release SERDES pipe */
 #ifdef CONFIG_VIDEO_D5XX_SERDES
@@ -4583,6 +4645,17 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 				sensor->pipe_id = PIPE_NOT_CONFIGURED;
 			mutex_unlock(&serdes_lock__);
 		}
+		/*
+		 * Tear down the DES FSYNC generator when the last stream
+		 * stops.  Serializer GPIO tunneling remains tied to
+		 * camera_sync_mode and is disabled by the control callback.
+		 */
+		if (ds5_sync_mode_uses_esync(state) &&
+		    !state->ds5_dev->depth_streaming &&
+		    !state->ds5_dev->rgb_streaming &&
+		    !state->ds5_dev->ir_streaming &&
+		    !state->ds5_dev->imu_streaming)
+			ds5_set_des_fsync(state, false);
 #endif
 	}
 	return 0;
@@ -4668,15 +4741,6 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		expected_streaming_state = DS5_STREAM_IDLE;
 		status = DS5_STATUS_STREAMING;
 	}
-
-	dev_info(&state->client->dev,
-		"ds5_s_stream: sensor=%s on=%d stream_id=%u cmd=0x%04x vc=%u res=%ux%u fps=%u code=0x%x dt=0x%x\n",
-		ds5_get_sensor_name(state), on, stream_id, stream_cmd, vc_id,
-		sensor->config.resolution ? sensor->config.resolution->width : 0,
-		sensor->config.resolution ? sensor->config.resolution->height : 0,
-		sensor->config.framerate,
-		sensor->config.format ? sensor->config.format->mbus_code : 0,
-		sensor->config.format ? sensor->config.format->data_type : 0);
 
 	/* Verify stream is in the expected state before issuing command */
 	ts = jiffies;
@@ -4864,8 +4928,32 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		}
 		mutex_unlock(&serdes_lock__);
 		msleep_range(100);
+
+		/*
+		 * Tear down the DES FSYNC generator when the last stream stops.
+		 * Check the ds5_dev-level streaming flags (already
+		 * cleared for *this* sensor before we entered the polling
+		 * loop) to decide whether any stream is still active.
+		 */
+		if (ds5_sync_mode_uses_esync(state) &&
+		    !state->ds5_dev->depth_streaming &&
+		    !state->ds5_dev->rgb_streaming &&
+		    !state->ds5_dev->ir_streaming &&
+		    !state->ds5_dev->imu_streaming)
+			ds5_set_des_fsync(state, false);
 #endif
 	}
+#ifdef CONFIG_VIDEO_D5XX_SERDES
+	/*
+	 * Stream-on success path (neither timeout nor stream-off).
+	 * Re-assert serializer GPIO tunneling after reset/recovery and
+	 * start the DES internal FSYNC source at the negotiated FPS.
+	 */
+	if (on && ds5_sync_mode_uses_esync(state)) {
+		ds5_set_ser_esync_tunneling(state, true);
+		ds5_set_des_fsync(state, true);
+	}
+#endif
 	return ret;
 #endif /* !DS5_BYPASS_CAMERA_I2C */
 }

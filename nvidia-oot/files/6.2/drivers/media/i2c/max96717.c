@@ -432,31 +432,140 @@ EXPORT_SYMBOL(max96717_setup_control);
 /* ===== GPIO Tunneling ===== */
 
 /*
- * max96717_setup_gpio_tunneling - GPIO-over-GMSL no-op hook
+ * GPIO-over-GMSL tunneling for external frame sync (FSYNC/ESYNC).
  *
- *   GPIO Signal Mapping:
- *   MFP0 → GPIO0: FSIN (DES→SER, frame sync in)
- *   MFP1 → GPIO1: FOUT/STROBE (SER→DES, frame sync out)
- *   MFP4 → GPIO4: RESET_N (DES→SER, hard reset)
- *   MFP5 → GPIO5: IRQ (SER→DES, interrupt request)
- *   MFP6 → GPIO6: ZV_SYNC (DES→SER, IR stereo sync)
+ * The MAX96717 GPIO_n registers form a 3-byte group (A/B/C) at 0x02BE + 3*n:
+ *   GPIO_n_A: GPIO_OUT_DIS / GPIO_TX_EN / GPIO_RX_EN / TX_COMP_EN
+ *   GPIO_n_B: GPIO_TX_ID[4:0]  - GMSL channel this pin transmits on
+ *   GPIO_n_C: GPIO_RX_ID[4:0]  - GMSL channel this pin receives from
  *
+ * Schematic signal mapping on the D585/D580 board:
+ *   H_VSYNC_TRIG    → MFP0  (PIN 2) = GPIO0  (DES→SER, host sync trigger)
+ *   RGB_FSYNC       → CFG0  (PIN 3) = GPIO1  (DES→SER, RGB frame sync; note
+ *                          CFG0 is output-only after boot, so GPIO1 must be
+ *                          RX-from-link driving the pin, not input)
+ *   H_STROBE_OUT_1V8 → MFP6 (PIN22) = GPIO6  (SER→DES, camera strobe/EOF
+ *                          feedback for host-side frame timing)
+ *
+ * GMSL2 GPIO channel assignment (mirrors validated MAX9295 ESYNC scheme):
+ *   ch23: Host→Camera  sync edge (GPIO0 + GPIO1 both RX from ch23)
+ *   ch31: Camera→Host  strobe/EOF (GPIO6 TX on ch31)
+ */
+#define MAX96717_GPIO0_A_ADDR		0x02BE
+#define MAX96717_GPIO0_B_ADDR		0x02BF
+#define MAX96717_GPIO0_C_ADDR		0x02C0
+#define MAX96717_GPIO1_A_ADDR		0x02C1
+#define MAX96717_GPIO1_B_ADDR		0x02C2
+#define MAX96717_GPIO1_C_ADDR		0x02C3
+#define MAX96717_GPIO6_A_ADDR		0x02D0
+#define MAX96717_GPIO6_B_ADDR		0x02D1
+#define MAX96717_GPIO6_C_ADDR		0x02D2
+
+/* Enable: GPIO0 (H_VSYNC_TRIG) — RX from ch23, drives camera pin. */
+#define MAX96717_GPIO0_A_ESYNC		0x24	/* RX_EN=1, OUT_DIS=0, TX_COMP_EN=1 */
+#define MAX96717_GPIO0_B_ESYNC		0x77	/* TX_ID=23, push-pull, pull-up */
+#define MAX96717_GPIO0_C_ESYNC		0x57	/* RX_ID=23 */
+/* Enable: GPIO1 (RGB_FSYNC) — RX from ch23, drives camera pin (CFG0=output only). */
+#define MAX96717_GPIO1_A_ESYNC		0x05	/* OUT_DIS=1*, RX_EN=1, TX_EN=0 */
+#define MAX96717_GPIO1_B_ESYNC		0x1F	/* TX_ID=31 (unused, TX_EN=0) */
+#define MAX96717_GPIO1_C_ESYNC		0x57	/* RX_ID=23 */
+/* Enable: GPIO6 (H_STROBE_OUT_1V8) — TX on ch31, reads camera strobe pin. */
+#define MAX96717_GPIO6_A_ESYNC		0x27	/* TX_EN=1, RX_EN=0, OUT_DIS=1, TX_COMP_EN=1 */
+#define MAX96717_GPIO6_B_ESYNC		0x1F	/* TX_ID=31, push-pull, no pull */
+#define MAX96717_GPIO6_C_ESYNC		0x00	/* RX_ID=0 (unused, RX_EN=0) */
+
+/* Disable: restore power-up reset values (datasheet GPIO_n reset column). */
+#define MAX96717_GPIO0_A_RESET		0x99
+#define MAX96717_GPIO0_B_RESET		0xA0
+#define MAX96717_GPIO0_C_RESET		0x40
+#define MAX96717_GPIO1_A_RESET		0x81
+#define MAX96717_GPIO1_B_RESET		0x21
+#define MAX96717_GPIO1_C_RESET		0x41
+#define MAX96717_GPIO6_A_RESET		0x99
+#define MAX96717_GPIO6_B_RESET		0xA6
+#define MAX96717_GPIO6_C_RESET		0x46
+
+/*
+ * max96717_setup_gpio_tunneling - enable sync/strobe GPIO tunneling
+ *
+ * Configures three GPIOs for external frame sync:
+ *   GPIO0 (H_VSYNC_TRIG):  RX from ch23, drives camera MFP0 pin
+ *   GPIO1 (RGB_FSYNC):     RX from ch23, drives camera CFG0/MFP1 pin
+ *   GPIO6 (H_STROBE_OUT_1V8): TX on ch31, reads camera strobe for host timing
+ *
+ * Used for external sync (FSYNC/trigger).  The register values mirror the
+ * validated MAX9295 ESYNC configuration.
  */
 int max96717_setup_gpio_tunneling(struct device *dev)
 {
 	struct max96717 *priv = dev_get_drvdata(dev);
-	int err = 0;
+	struct reg_pair map[] = {
+		{MAX96717_GPIO0_A_ADDR, MAX96717_GPIO0_A_ESYNC},
+		{MAX96717_GPIO0_B_ADDR, MAX96717_GPIO0_B_ESYNC},
+		{MAX96717_GPIO0_C_ADDR, MAX96717_GPIO0_C_ESYNC},
+		{MAX96717_GPIO1_A_ADDR, MAX96717_GPIO1_A_ESYNC},
+		{MAX96717_GPIO1_B_ADDR, MAX96717_GPIO1_B_ESYNC},
+		{MAX96717_GPIO1_C_ADDR, MAX96717_GPIO1_C_ESYNC},
+		{MAX96717_GPIO6_A_ADDR, MAX96717_GPIO6_A_ESYNC},
+		{MAX96717_GPIO6_B_ADDR, MAX96717_GPIO6_B_ESYNC},
+		{MAX96717_GPIO6_C_ADDR, MAX96717_GPIO6_C_ESYNC},
+	};
+	int err;
 
 	mutex_lock(&priv->lock);
 
-	dev_info(dev, "%s: GPIO tunneling hook is a no-op; MFP_CFG values are not defined yet\n",
-		 __func__);
+	err = max96717_set_registers(dev, map, ARRAY_SIZE(map));
+	if (err)
+		dev_err(dev, "%s: GPIO tunneling enable failed (%d)\n",
+			__func__, err);
+	else
+		dev_info(dev, "%s: GPIO tunneling enabled (sync ch23, strobe ch31)\n",
+			 __func__);
 
 	mutex_unlock(&priv->lock);
 
 	return err;
 }
 EXPORT_SYMBOL(max96717_setup_gpio_tunneling);
+
+/*
+ * max96717_disable_gpio_tunneling - disable sync/strobe GPIO tunneling
+ *
+ * Restores GPIO0/GPIO1/GPIO6 to their power-up reset state so the
+ * serializer no longer tunnels frame-sync or strobe transitions.
+ * Counterpart to max96717_setup_gpio_tunneling().
+ */
+int max96717_disable_gpio_tunneling(struct device *dev)
+{
+	struct max96717 *priv = dev_get_drvdata(dev);
+	struct reg_pair map[] = {
+		{MAX96717_GPIO0_A_ADDR, MAX96717_GPIO0_A_RESET},
+		{MAX96717_GPIO0_B_ADDR, MAX96717_GPIO0_B_RESET},
+		{MAX96717_GPIO0_C_ADDR, MAX96717_GPIO0_C_RESET},
+		{MAX96717_GPIO1_A_ADDR, MAX96717_GPIO1_A_RESET},
+		{MAX96717_GPIO1_B_ADDR, MAX96717_GPIO1_B_RESET},
+		{MAX96717_GPIO1_C_ADDR, MAX96717_GPIO1_C_RESET},
+		{MAX96717_GPIO6_A_ADDR, MAX96717_GPIO6_A_RESET},
+		{MAX96717_GPIO6_B_ADDR, MAX96717_GPIO6_B_RESET},
+		{MAX96717_GPIO6_C_ADDR, MAX96717_GPIO6_C_RESET},
+	};
+	int err;
+
+	mutex_lock(&priv->lock);
+
+	err = max96717_set_registers(dev, map, ARRAY_SIZE(map));
+	if (err)
+		dev_err(dev, "%s: GPIO tunneling disable failed (%d)\n",
+			__func__, err);
+	else
+		dev_dbg(dev, "%s: GPIO tunneling disabled (pins restored)\n",
+			__func__);
+
+	mutex_unlock(&priv->lock);
+
+	return err;
+}
+EXPORT_SYMBOL(max96717_disable_gpio_tunneling);
 
 /* ===== Reset Control ===== */
 
@@ -498,13 +607,8 @@ int max96717_sdev_pair(struct device *dev, struct gmsl_link_ctx *g_ctx)
 	struct max96717 *priv;
 	int err = 0;
 
-	if (!dev) {
-		pr_err("%s: invalid device\n", __func__);
-		return -EINVAL;
-	}
-
-	if (!g_ctx || !g_ctx->s_dev) {
-		dev_err(dev, "%s: invalid input params\n", __func__);
+	if (!dev || !g_ctx || !g_ctx->s_dev) {
+		pr_err("%s: invalid input params\n", __func__);
 		return -EINVAL;
 	}
 
@@ -534,13 +638,8 @@ int max96717_sdev_unpair(struct device *dev, struct device *s_dev)
 	struct max96717 *priv = NULL;
 	int err = 0;
 
-	if (!dev) {
-		pr_err("%s: invalid device\n", __func__);
-		return -EINVAL;
-	}
-
-	if (!s_dev) {
-		dev_err(dev, "%s: invalid input params\n", __func__);
+	if (!dev || !s_dev) {
+		pr_err("%s: invalid input params\n", __func__);
 		return -EINVAL;
 	}
 
@@ -817,6 +916,8 @@ static int max96717_remove(struct i2c_client *client)
 
 	if (client != NULL) {
 		priv = dev_get_drvdata(&client->dev);
+		if (priv == prim_priv__)
+			prim_priv__ = NULL;
 		mutex_destroy(&priv->lock);
 		i2c_unregister_device(client);
 		client = NULL;

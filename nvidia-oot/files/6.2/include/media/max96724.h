@@ -163,6 +163,28 @@ void max96724_power_off(struct device *dev);
 int max96724_init_settings(struct device *dev);
 
 /**
+ * @brief  Enables the MAX96724 internal FSYNC generator.
+ *
+ * Programs the deserializer as the FSYNC master and broadcasts the
+ * generated sync signal over the configured GMSL GPIO channel.
+ *
+ * @param  [in]  dev          The deserializer device handle.
+ * @param  [in]  fps          Desired frame-sync rate in Hz.
+ *
+ * @return  0 for success, or negative error code.
+ */
+int max96724_setup_fsync(struct device *dev, u32 fps);
+
+/**
+ * @brief  Disables the MAX96724 internal FSYNC generator.
+ *
+ * @param  [in]  dev          The deserializer device handle.
+ *
+ * @return  0 for success, or negative error code.
+ */
+int max96724_disable_fsync(struct device *dev);
+
+/**
  * @brief  Maps deserializer pipe ID to serializer pipe ID.
  *
  * In tunnel mode with MAX96717, all data flows through a single pipe
