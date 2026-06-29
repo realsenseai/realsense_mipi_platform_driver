@@ -42,6 +42,7 @@
 #include <media/max9296.h>
 #include <media/max96712.h>
 #include <media/max96717.h>
+#include <media/max96724.h>
 
 /* Deserializer interface structure for abstraction */
 struct dser_interface {
@@ -685,6 +686,24 @@ static const struct dser_interface max96712_interface = {
 	.power_off = max96712_power_off,
 	.init_settings = max96712_init_settings,
 	.name = "max96712",
+};
+
+/* MAX96724 deserializer interface implementation */
+static const struct dser_interface max96724_interface = {
+	.get_available_pipe_id = max96724_get_available_pipe_id,
+	.bind_ser_to_dser_pipe = max96724_bind_ser_to_dser_pipe,
+	.set_pipe = max96724_set_pipe,
+	.release_pipe = max96724_release_pipe,
+	.reset_oneshot = max96724_reset_oneshot,
+	.setup_link = max96724_setup_link,
+	.setup_control = max96724_setup_control,
+	.reset_control = max96724_reset_control,
+	.sdev_register = max96724_sdev_register,
+	.sdev_unregister = max96724_sdev_unregister,
+	.power_on = max96724_power_on,
+	.power_off = max96724_power_off,
+	.init_settings = max96724_init_settings,
+	.name = "max96724",
 };
 
 /* MAX9295 serializer interface implementation */
@@ -1948,7 +1967,7 @@ static int ds5_setup_pipeline(struct ds5 *state, u8 data_type1, u8 data_type2,
 	int ser_pipe_id = serdes_get_ser_pipe_id(state, pipe_id, ser_vc_id);
 
 	ret |= state->dser_ops->bind_ser_to_dser_pipe(state->dser_dev, pipe_id, ser_pipe_id, vc_id);
-	dev_dbg(&state->client->dev,
+	dev_warn(&state->client->dev,
 			"set ser pipe %d, dser pipe %d, data_type1: 0x%x, data_type2: 0x%x, ser_vc_id: %u, vc_id: %u\n",
 			ser_pipe_id, pipe_id, data_type1, data_type2, ser_vc_id, vc_id);
 	ret |= state->ser_ops->set_pipe(state->ser_dev, ser_pipe_id,
@@ -4117,6 +4136,8 @@ static int ds5_board_setup(struct ds5 *state)
 		state->dser_ops = &max9296_interface;
 	} else if (!strncmp(dser_node->name, "max96712", strlen("max96712"))) {
 		state->dser_ops = &max96712_interface;
+	} else if (!strncmp(dser_node->name, "max96724", strlen("max96724"))) {
+		state->dser_ops = &max96724_interface;
 	} else {
 		dev_err(dev, "%s: Unsupported deserializer = %s\n", __func__, dser_node->name);
 		/* Should not be used, this is just to make sure we don't have NULL pointers */
