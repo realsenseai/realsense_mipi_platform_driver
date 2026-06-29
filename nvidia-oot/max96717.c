@@ -318,17 +318,8 @@ EXPORT_SYMBOL(max96717_init_settings);
 int max96717_set_pipe(struct device *dev, int pipe_id,
 		     u8 data_type1, u8 data_type2, u32 vc_id)
 {
-	/* No runtime config needed in pixel mode - Only reset rx and oneshot */
-	struct max96717 *priv = dev_get_drvdata(dev);
-	int err = 0;
-
-	mutex_lock(&priv->lock);
-	err = max96717_write_reg(dev, MAX96717_MIPI_RX0_ADDR, 0x48); /* 0x330 - MIPI_RX0 reset ON + non-cont-clk */
-	usleep_range(2000, 2100);
-	err |= max96717_write_reg(dev, MAX96717_MIPI_RX0_ADDR, 0x40); /* 0x330 - MIPI_RX0 reset OFF, non-cont-clk enabled */
-	mutex_unlock(&priv->lock);
-
-	return err;
+	/* No runtime config needed in pixel mode */
+	return 0;
 }
 EXPORT_SYMBOL(max96717_set_pipe);
 
