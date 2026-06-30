@@ -473,7 +473,7 @@ struct max96724 {
 	u8 csi_mode;
 	u8 lane_mp1;
 	u8 lane_mp2;
-	int reset_gpio;
+	int pwdn_gpio;
 	int pw_ref;
 	struct regulator *vdd_cam_1v2;
 	u8 link_speed;  /* DT-configurable: 3 or 6 Gbps */
@@ -773,8 +773,8 @@ int max96724_power_on(struct device *dev)
 	mutex_lock(&priv->lock);
 	if (priv->pw_ref == 0) {
 		usleep_range(1, 2);
-		if (gpio_is_valid(priv->reset_gpio))
-			gpio_set_value(priv->reset_gpio, 0);
+		if (gpio_is_valid(priv->pwdn_gpio))
+			gpio_direction_output(priv->pwdn_gpio, 0);
 
 		usleep_range(30, 50);
 
@@ -786,11 +786,12 @@ int max96724_power_on(struct device *dev)
 
 		usleep_range(30, 50);
 
-		/* exit reset mode: XCLR */
-		if (gpio_is_valid(priv->reset_gpio)) {
-			gpio_set_value(priv->reset_gpio, 0);
+		/* exit power-down: drive PWDNB high (gpio_direction_output also
+		 * (re)asserts output mode, matching the max96712 convention). */
+		if (gpio_is_valid(priv->pwdn_gpio)) {
+			gpio_direction_output(priv->pwdn_gpio, 0);
 			usleep_range(30, 50);
-			gpio_set_value(priv->reset_gpio, 1);
+			gpio_direction_output(priv->pwdn_gpio, 1);
 			usleep_range(30, 50);
 		}
 
@@ -817,8 +818,8 @@ void max96724_power_off(struct device *dev)
 
 	if (priv->pw_ref == 0) {
 		usleep_range(1, 2);
-		if (gpio_is_valid(priv->reset_gpio))
-			gpio_set_value(priv->reset_gpio, 0);
+		if (gpio_is_valid(priv->pwdn_gpio))
+			gpio_direction_output(priv->pwdn_gpio, 0);
 
 		if (priv->vdd_cam_1v2)
 			regulator_disable(priv->vdd_cam_1v2);
@@ -1989,12 +1990,17 @@ static int max96724_parse_dt(struct max96724 *priv,
 	}
 	priv->max_src = value;
 
-	/* Reset GPIO */
-	priv->reset_gpio = of_get_named_gpio(node, "reset-gpios", 0);
-	if (priv->reset_gpio < 0) {
+	/*
+	 * Deserializer power-down GPIO (PWDNB). Same convention as max96712:
+	 * of_get_named_gpio() only resolves the number here; the line is put in
+	 * output mode and driven when max96724_power_on() calls
+	 * gpio_direction_output(). The property name is "pwdn-gpios".
+	 */
+	priv->pwdn_gpio = of_get_named_gpio(node, "pwdn-gpios", 0);
+	if (priv->pwdn_gpio < 0) {
 		dev_info(&client->dev,
-			 "reset-gpios not found, continuing without external reset\n");
-		priv->reset_gpio = -1;
+			 "pwdn-gpios not found, continuing without power-down control\n");
+		priv->pwdn_gpio = -1;
 	}
 
 	/* GMSL link speed from DT: 3 or 6 (Gbps) */

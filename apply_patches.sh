@@ -112,6 +112,9 @@ if [[ "$ACTION" = "apply" ]]; then
             ln -f -s $(pwd)/hardware/realsense/tegra234-camera-d4xx-overlay*.dts "${BUILD_SRCS}/hardware/nvidia/t23x/nv-public/overlay/"
             ln -f ${BUILD_SRCS}/hardware/nvidia/t23x/nv-public/include/platforms/dt-bindings/tegra234-p3737-0000+p3701-0000.h \
                     ${BUILD_SRCS}/$KERNEL_DIR/include/dt-bindings/
+            # Orin Nano P3768 platform header for the FG24-4CH (d5xx) overlay
+            ln -f ${BUILD_SRCS}/hardware/nvidia/t23x/nv-public/include/platforms/dt-bindings/tegra234-p3767-0000-common.h \
+                    ${BUILD_SRCS}/$KERNEL_DIR/include/dt-bindings/
         else
             # Copy tegra264-gpio.h for Thor overlay compilation if not already present
             if [[ ! -f "${BUILD_SRCS}/$KERNEL_DIR/include/dt-bindings/gpio/tegra264-gpio.h" ]]; then

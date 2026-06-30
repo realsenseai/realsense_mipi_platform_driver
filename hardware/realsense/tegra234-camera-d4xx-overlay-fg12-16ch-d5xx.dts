@@ -276,6 +276,8 @@
 								status = "okay";
 								compatible = "maxim,max96717";
 								reg = <0x40>;
+								/* select MAX96717 pixel mode (default is tunnel) */
+								adi,pixel-mode;
 								maxim,gmsl-dser-device = <&dser>;
 							};
 
