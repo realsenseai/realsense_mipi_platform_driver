@@ -5,7 +5,7 @@ Subject: [PATCH] Porting kernel patches to jetpack 5.0.2
 
 Signed-off-by: Junze Wu <junze.wu@intel.com>
 ---
- arch/arm64/configs/defconfig                  |   1 +
+ arch/arm64/configs/defconfig                  |   4 +-
  .../media/common/videobuf2/videobuf2-core.c   |   6 +-
  .../common/videobuf2/videobuf2-dma-contig.c   |   4 +-
  drivers/media/usb/uvc/Makefile                |   1 +
@@ -22,12 +22,14 @@ diff --git a/arch/arm64/configs/defconfig b/arch/arm64/configs/defconfig
 index c49c5c304b20..285c64888db1 100644
 --- a/arch/arm64/configs/defconfig
 +++ b/arch/arm64/configs/defconfig
-@@ -893,6 +893,7 @@ CONFIG_VIDEO_LT6911UXC=m
+@@ -893,6 +893,8 @@ CONFIG_VIDEO_LT6911UXC=m
  CONFIG_I2C_IOEXPANDER_SER_MAX9295=y
  CONFIG_I2C_IOEXPANDER_DESER_MAX9296=y
  CONFIG_NV_VIDEO_IMX390=y
 +CONFIG_VIDEO_D4XX=m
- CONFIG_NV_DESER_MAX96712=m
+-CONFIG_NV_DESER_MAX96712=m
++CONFIG_NV_DESER_MAX96712=y
++CONFIG_NV_SER_MAX96717=y
  CONFIG_NV_VIDEO_AR0234=m
  # CONFIG_CXD2880_SPI_DRV is not set
 diff --git a/drivers/media/common/videobuf2/videobuf2-core.c b/drivers/media/common/videobuf2/videobuf2-core.c
