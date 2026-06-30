@@ -54,6 +54,18 @@ if [[ "$JETPACK_VERSION" == "6.x" ]]; then
     cp hardware/realsense/tegra234-camera-d4xx-overlay*.dts "$TARGET/hardware/nvidia/t23x/nv-public/overlay/"
     # max96712 header
     cp nvidia-oot/max96712.h "$TARGET/nvidia-oot/include/media/"
+elif [[ "$JETPACK_VERSION" == "7.x" ]]; then
+    # max96712 header
+    cp nvidia-oot/max96712.h "$TARGET/nvidia-oot/include/media/"
+    # tegra264-gpio.h for Thor overlay compilation if not already present
+    if [[ ! -f "$TARGET/$KERNEL_DIR/include/dt-bindings/gpio/tegra264-gpio.h" ]]; then
+        cp "$TARGET/$KERNEL_DIR/3rdparty/canonical/linux-noble/include/dt-bindings/gpio/tegra264-gpio.h" \
+            "$TARGET/$KERNEL_DIR/include/dt-bindings/gpio/" 2>/dev/null || true
+    fi
+    # JP7 D4XX device-tree overlays (noble uses .dtso, built in the kernel tree):
+    # Thor (tegra264) + single-camera Orin (tegra234) Fangzhu overlay
+    cp hardware/realsense/tegra264-camera-d4xx-overlay*.dtso "$TARGET/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/"
+    cp hardware/realsense/tegra234-camera-d4xx-overlay-fg12-16ch-cams-0.dtso "$TARGET/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/"
 elif [[ "$JETPACK_VERSION" == "5.x" ]]; then
     cp "hardware/realsense/${JP5_D4XX_DTSI}" "$TARGET/hardware/nvidia/platform/t19x/galen/kernel-dts/common/tegra194-camera-d4xx.dtsi"
     # max96712 header
