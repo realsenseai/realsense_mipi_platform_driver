@@ -232,7 +232,7 @@ int max96717_sdev_unpair(struct device *dev, struct device *s_dev)
 
 	if (!priv->g_client.g_ctx) {
 		dev_err(dev, "%s: device is not paired\n", __func__);
-		err = -ENOMEM;
+		err = -EINVAL;
 		goto error;
 	}
 
