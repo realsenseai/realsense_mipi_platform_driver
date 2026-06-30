@@ -1,26 +1,17 @@
 #!/usr/bin/env python3
-"""Pure-Python V4L2 MMAP capture for a D4XX CSI depth (Z16) video node.
+"""Shared pure-Python V4L2 MMAP capture core for the D4XX CSI capture tools.
 
-Drives the full V4L2 MMAP pipeline directly via ctypes + fcntl.ioctl (no
-compiled C, no external V4L2 bindings). Dumps a captured frame to a raw file
-*even when the V4L2 error flag is set* (v4l2-ctl --stream-to silently drops
-error-flagged buffers; this does not), and can render the raw Z16 frame to a
-viewable PNG. Capture-only needs no deps; --png/--display need numpy + Pillow.
---raw, --png and --display are all optional and independent.
+depth_capture.py, ir_capture.py and nv12_capture.py all drive the V4L2 MMAP
+pipeline identically -- the only per-stream differences are the pixel format
+requested and how the captured frame is decoded for display. That common core
+(the ioctl encoding, the V4L2 ctypes structs, the VIDIOC constants, the
+capture loop and the display fallback chain) lives here so an ABI/ioctl fix
+only has to be made once.
 
-Examples
---------
-  ./depth_capture.py --dev /dev/video-rs-depth-0 -W 1280 -H 720 \
-                     --raw frame.raw --png frame.png
-
-  # capture and pop up a window (needs a display; over SSH use 'ssh -X').
-  # Run WITHOUT sudo so --display works (the video node is group-accessible).
-  ./depth_capture.py -W 1280 -H 720 --display
-
-  # just re-render an existing raw (no capture):
-  ./depth_capture.py --render-only --raw frame.raw -W 1280 -H 720 --png frame.png
+This module is imported by the three sibling scripts; it is not a standalone
+tool. Keep it in the same directory as them.
 """
-import argparse, ctypes as C, fcntl, mmap, os, sys
+import ctypes as C, fcntl, mmap, os, sys
 
 # ---- ioctl encoding (asm-generic) ----
 def _IOC(d, t, nr, size): return (d << 30) | (size << 16) | (ord(t) << 8) | nr
@@ -77,7 +68,7 @@ MEMORY_MMAP            = 1
 FIELD_NONE             = 1
 BUF_FLAG_ERROR         = 0x0040
 def fourcc(s): return s[0] | (s[1] << 8) | (s[2] << 16) | (s[3] << 24)
-PIX_FMT_Z16 = fourcc(b"Z16 ")
+def fourcc_str(v): return "".join(chr((v >> (8 * i)) & 0xff) for i in range(4))
 
 
 def _has_data(buf, ln):
@@ -87,22 +78,31 @@ def _has_data(buf, ln):
     return any(buf[i] for i in range(0, ln, step))
 
 
-def capture(dev, W, H, nframes, save_idx, raw_out):
+def capture(dev, W, H, pixfmt, nframes, save_idx, raw_out):
+    """Run the full V4L2 MMAP pipeline on `dev`, requesting `pixfmt` at WxH.
+
+    Dumps the captured frame *even when the V4L2 error flag is set* (v4l2-ctl
+    --stream-to silently drops error-flagged buffers; this does not). Keeps the
+    first frame WITH data at/after `save_idx` (skips initial sync/zero frames);
+    otherwise keeps the most recent as a fallback, optionally writing it to
+    `raw_out`. Returns (W, H, bpl, size, frame) using the geometry the driver
+    negotiated; `frame` is the kept bytes (or None if none were captured)."""
     fd = os.open(dev, os.O_RDWR)
+    maps = []
     try:
         f = v4l2_format(); f.type = BUF_TYPE_VIDEO_CAPTURE
         f.fmt.pix.width = W; f.fmt.pix.height = H
-        f.fmt.pix.pixelformat = PIX_FMT_Z16; f.fmt.pix.field = FIELD_NONE
+        f.fmt.pix.pixelformat = pixfmt; f.fmt.pix.field = FIELD_NONE
         fcntl.ioctl(fd, VIDIOC_S_FMT, f)
         W, H = f.fmt.pix.width, f.fmt.pix.height
         bpl, size = f.fmt.pix.bytesperline, f.fmt.pix.sizeimage
-        print("fmt %ux%u bpl=%u size=%u" % (W, H, bpl, size))
+        print("fmt %ux%u fourcc=%s bpl=%u size=%u"
+              % (W, H, fourcc_str(f.fmt.pix.pixelformat), bpl, size))
 
         rb = v4l2_requestbuffers(); rb.count = 4
         rb.type = BUF_TYPE_VIDEO_CAPTURE; rb.memory = MEMORY_MMAP
         fcntl.ioctl(fd, VIDIOC_REQBUFS, rb)
 
-        maps = []
         for i in range(rb.count):
             b = v4l2_buffer(); b.type = BUF_TYPE_VIDEO_CAPTURE; b.memory = MEMORY_MMAP; b.index = i
             fcntl.ioctl(fd, VIDIOC_QUERYBUF, b)
@@ -132,43 +132,20 @@ def capture(dev, W, H, nframes, save_idx, raw_out):
                 break
         fcntl.ioctl(fd, VIDIOC_STREAMOFF, C.c_int(BUF_TYPE_VIDEO_CAPTURE))
         if not got_data:
-            print("WARNING: no frame contained data in %d frames -- is csitest streaming during the "
-                  "capture? Keeping last (empty) frame." % nframes)
+            print("WARNING: no frame contained data in %d frames -- is the stream running "
+                  "during the capture? Keeping last (empty) frame." % nframes)
         if raw_out and frame is not None:
             with open(raw_out, "wb") as o:
                 o.write(frame)
             print("wrote raw -> %s" % raw_out)
-        return W, H, frame
+        return W, H, bpl, size, frame
     finally:
+        for mm in maps:
+            mm.close()
         os.close(fd)
 
 
-def render(W, H, pct, data=None, raw=None, png=None, display=False):
-    """Render a Z16 frame to a grayscale image. Source is either in-memory
-    `data` (bytes) or a `raw` file path. Optionally save to `png` and/or pop
-    up a viewer window (`display`)."""
-    import numpy as np
-    from PIL import Image
-    if data is not None:
-        d = np.frombuffer(data, dtype=np.uint16)[:W * H].reshape(H, W)
-    else:
-        d = np.fromfile(raw, dtype=np.uint16)[:W * H].reshape(H, W)
-    nz = d[d > 0]
-    hi = int(np.percentile(nz, pct)) if nz.size else 1
-    g = np.clip(d.astype(np.float32) / max(1, hi) * 255, 0, 255).astype(np.uint8)
-    img = Image.fromarray(g, "L")
-    rows = [r for r in range(H) if d[r].any()]
-    print("z16 %dx%d min=%d max=%d mean=%.0f data_rows=%d (%s..%s) scaled@p%g=%d%s"
-          % (W, H, d.min(), d.max(), d.mean(), len(rows),
-             rows[0] if rows else "-", rows[-1] if rows else "-", pct, hi,
-             (" -> " + png) if png else ""))
-    if png:
-        img.save(png)
-    if display:
-        _show(g, img, W, H)
-
-
-def _show(g, img, W, H):
+def show(g, img, W, H, title):
     """Pop up a window showing the rendered frame.
 
     Uses pure tkinter (Tk talks straight to X11 with NO D-Bus), which is fast
@@ -177,8 +154,10 @@ def _show(g, img, W, H):
     to the user's D-Bus session bus and can stall ~20-30s on dconf/gvfs --
     that was the 'slow without sudo' symptom (root via sudo -E is fast only
     because the session bus rejects root, so its eog runs bus-less).
-    Falls back to eog, then matplotlib, if Tk is unavailable."""
-    title = "depth %dx%d" % (W, H)
+    Falls back to eog, then matplotlib, if Tk is unavailable.
+
+    `g` may be 2-D (greyscale) or 3-D (RGB); the matplotlib fallback picks the
+    colormap accordingly."""
     if not os.environ.get("DISPLAY") and sys.platform.startswith("linux"):
         print("note: --display but $DISPLAY is unset; for a remote window use 'ssh -X' "
               "(or MobaXterm with X11 forwarding on)")
@@ -213,7 +192,11 @@ def _show(g, img, W, H):
         import matplotlib
         matplotlib.use("TkAgg", force=True)
         import matplotlib.pyplot as plt
-        plt.figure(title); plt.imshow(g, cmap="gray", vmin=0, vmax=255)
+        plt.figure(title)
+        if getattr(g, "ndim", 2) == 3:
+            plt.imshow(g)
+        else:
+            plt.imshow(g, cmap="gray", vmin=0, vmax=255)
         plt.title(title); plt.tight_layout()
         print("showing matplotlib window (close it to exit) ...")
         plt.show()
@@ -221,33 +204,3 @@ def _show(g, img, W, H):
     except Exception as e:
         print("could not open a display window: %s\n"
               "  -> save with --png and copy it off the device to view." % e)
-
-
-def main():
-    ap = argparse.ArgumentParser(description="Pure-Python V4L2 capture + Z16 render")
-    ap.add_argument("--dev", default="/dev/video-rs-depth-0")
-    ap.add_argument("-W", "--width", type=int, default=1280)
-    ap.add_argument("-H", "--height", type=int, default=720)
-    ap.add_argument("--frames", type=int, default=90, help="max frames to dequeue while waiting for data (~3s @30fps)")
-    ap.add_argument("--save-index", type=int, default=2, help="don't save before this frame (skips initial sync frames)")
-    ap.add_argument("--raw", help="save the captured frame to this raw file (optional)")
-    ap.add_argument("--png", help="render the captured frame to this PNG (optional)")
-    ap.add_argument("--pct", type=float, default=95.0, help="contrast clip percentile (nonzero px)")
-    ap.add_argument("--display", action="store_true", help="open a window showing the rendered image")
-    ap.add_argument("--render-only", action="store_true", help="skip capture, just render --raw")
-    a = ap.parse_args()
-    W, H = a.width, a.height
-    if a.render_only:
-        if not a.raw or not (a.png or a.display):
-            sys.exit("--render-only needs --raw (input) and at least one of --png / --display")
-        render(W, H, a.pct, raw=a.raw, png=a.png, display=a.display)
-        return
-    W, H, frame = capture(a.dev, W, H, a.frames, a.save_index, a.raw)
-    if a.png or a.display:
-        render(W, H, a.pct, data=frame, png=a.png, display=a.display)
-    if not a.raw and not a.png and not a.display:
-        print("note: none of --raw / --png / --display given; capture ran but output nothing")
-
-
-if __name__ == "__main__":
-    main()

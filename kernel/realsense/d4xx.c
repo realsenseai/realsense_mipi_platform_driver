@@ -712,6 +712,8 @@ static const struct ser_interface max96717_interface = {
 	.disable_gpio_tunneling = max96717_disable_gpio_tunneling,
 	.name = "max96717",
 };
+/* Max96717 only has one pipe, and its ID is 2 */
+#define MAX96717_PIPE_ID 2
 
 #else /* !CONFIG_VIDEO_D4XX_SERDES */
 
@@ -1914,7 +1916,7 @@ static int ds5_sensor_set_fmt(struct v4l2_subdev *sd,
 /*
  * Resolve the serializer pipe id for the current SerDes topology.
  *
- * The ser_pipe_id mapping depends both on the serializer nad deserializer identity:
+ * The ser_pipe_id mapping depends both on the serializer and deserializer identity:
  *   - MAX96717 serializer:       ser_pipe_id = 2 (fixed)
  *   - MAX9295 + MAX96712 dser:   ser_pipe_id = ser_vc_id
  *   - MAX9295 + MAX9296 dser:    ser_pipe_id = dser_pipe_id
@@ -1923,7 +1925,7 @@ static int serdes_get_ser_pipe_id(struct ds5 *state, int dser_pipe_id,
 				  int ser_vc_id)
 {
 	if (state->ser_ops == &max96717_interface)
-		return 2;
+		return MAX96717_PIPE_ID;
 
 	/* MAX9295 serializer: mapping depends on the deserializer */
 	if (state->dser_ops == &max96712_interface)
@@ -4062,6 +4064,7 @@ static int ds5_board_setup(struct ds5 *state)
 	}
 
 	ser_i2c = of_find_i2c_device_by_node(ser_node);
+	of_node_put(ser_node);
 
 	if (ser_i2c == NULL) {
 		err = -EPROBE_DEFER;
@@ -4081,14 +4084,10 @@ static int ds5_board_setup(struct ds5 *state)
 		state->ser_ops = &max96717_interface;
 	} else {
 		dev_err(dev, "%s: Unsupported serializer = %s\n", __func__, ser_node->name);
-		/* Should not be used, this is just to make sure we don't have NULL pointers */
-		state->ser_ops = &max9295_interface;
-		of_node_put(ser_node);
 		err = -ENODEV;
 		goto error;
 	}
 	dev_info(dev, "Using serializer %s\n", state->ser_ops->name);
-	of_node_put(ser_node);
 
 	dser_node = of_parse_phandle(node, "maxim,gmsl-dser-device", 0);
 	if (dser_node == NULL) {

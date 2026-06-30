@@ -87,8 +87,11 @@ int max96717_setup_control(struct device *dev)
 
 	g_ctx = priv->g_client.g_ctx;
 
-	max96717_write_reg(dev, MAX96717_I2C4_ADDR, (g_ctx->sdev_reg << 1));
-	max96717_write_reg(dev, MAX96717_I2C5_ADDR, (g_ctx->sdev_def << 1));
+	err = max96717_write_reg(dev, MAX96717_I2C4_ADDR, (g_ctx->sdev_reg << 1));
+	err |= max96717_write_reg(dev, MAX96717_I2C5_ADDR, (g_ctx->sdev_def << 1));
+	if (err) {
+		goto error;
+	}
 
 	g_ctx->serdev_found = true;
 
@@ -336,6 +339,10 @@ static int max96717_probe(struct i2c_client *client,
 	dev_info(&client->dev, "[MAX96717]: probing GMSL Serializer\n");
 
 	priv = devm_kzalloc(&client->dev, sizeof(*priv), GFP_KERNEL);
+	if (!priv) {
+		dev_err(&client->dev, "dev allocation failed\n");
+		return -ENOMEM;
+	}
 	priv->i2c_client = client;
 	priv->regmap = devm_regmap_init_i2c(priv->i2c_client,
 				&max96717_regmap_config);
@@ -390,6 +397,7 @@ static struct i2c_driver max96717_i2c_driver = {
 	.driver = {
 		.name = "max96717",
 		.owner = THIS_MODULE,
+		.of_match_table = of_match_ptr(max96717_of_match),
 	},
 	.probe = max96717_probe,
 	.remove = max96717_remove,
