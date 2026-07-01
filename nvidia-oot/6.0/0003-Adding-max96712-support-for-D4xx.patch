@@ -7,14 +7,14 @@ Add MAX96712 deserializer driver support for D4XX/D5XX cameras.
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- drivers/media/i2c/max96712.c | 607 ++++++++++++++++++++++++++++++++---
- 1 file changed, 570 insertions(+), 37 deletions(-)
+ drivers/media/i2c/max96712.c | 672 ++++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 635 insertions(+), 37 deletions(-)
 
 diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
-index 8e237eef..3b4376fe 100644
+index 8e237eef..42df25b3 100644
 --- a/drivers/media/i2c/max96712.c
 +++ b/drivers/media/i2c/max96712.c
-@@ -16,32 +16,104 @@
+@@ -16,32 +16,111 @@
  #include <linux/gpio.h>
  #include <linux/of.h>
  #include <linux/of_gpio.h>
@@ -59,6 +59,8 @@ index 8e237eef..3b4376fe 100644
 +#define MAX96712_MIPI_PHY0_ADDR 0x8A0
 +#define MAX96712_MIPI_PHY2_ADDR 0x8A2
 +#define MAX96712_MIPI_PHY3_ADDR 0x8A3
++#define MAX96712_MIPI_PHY5_ADDR 0x8A5
++#define MAX96712_MIPI_PHY6_ADDR 0x8A6
 +#define MAX96712_VIDEO_PIPE_SEL_0_ADDR 0xF0
 +#define MAX96712_VIDEO_PIPE_SEL_1_ADDR 0xF1
 +#define MAX96712_VIDEO_PIPE_SEL_2_ADDR 0xF2
@@ -83,6 +85,9 @@ index 8e237eef..3b4376fe 100644
 +
 +#define MAX96712_VIDEO_RX0_ADDR 0x100
 +
++#define MAX96712_FANGZHU_POC_IO_ADDR 0x1
++#define MAX96712_FANGZHU_FG12_POC_ADDR 0x326
++
 +#define MAX96712_DPLL_0_ADDR 0x1D00
 +
 +#define MAX9295_DEFAULT_ADDR 0x40
@@ -102,6 +107,8 @@ index 8e237eef..3b4376fe 100644
 +	bool video_pipe_alloc[MAX96712_MAX_PIPES];
 +	bool force_clk0;
 +	int lane_cnt;
++	bool fangzhu_fg12_reverse_lane_polarity;
++	bool fangzhu_fg12_poc_enable;
  };
  static struct max96712 *global_priv[4];
  
@@ -125,7 +132,7 @@ index 8e237eef..3b4376fe 100644
  	i2c_client = global_priv[channel]->i2c_client;
  	bak = i2c_client->addr;
  
-@@ -53,7 +125,6 @@ int max96712_write_reg_Dser(int slaveAddr, int channel,
+@@ -53,7 +132,6 @@ int max96712_write_reg_Dser(int slaveAddr, int channel,
  		dev_err(&i2c_client->dev, "%s: addr = 0x%x, val = 0x%x\n",
  				__func__, addr, val);
  	}
@@ -133,7 +140,7 @@ index 8e237eef..3b4376fe 100644
  	return err;
  }
  EXPORT_SYMBOL(max96712_write_reg_Dser);
-@@ -68,8 +139,6 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
+@@ -68,8 +146,6 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
  
  	if (channel > 3 || channel < 0 || global_priv[channel] == NULL)
  		return -1;
@@ -142,7 +149,7 @@ index 8e237eef..3b4376fe 100644
  	i2c_client = global_priv[channel]->i2c_client;
  	bak = i2c_client->addr;
  	i2c_client->addr = slaveAddr / 2;
-@@ -80,11 +149,56 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
+@@ -80,11 +156,56 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
  		dev_err(&i2c_client->dev, "%s: addr = 0x%x, val = 0x%x\n",
  				__func__, addr, *val);
  	}
@@ -200,7 +207,7 @@ index 8e237eef..3b4376fe 100644
  static int max96712_read_reg(struct max96712 *priv,
  			u16 addr, unsigned int *val)
  {
-@@ -99,6 +213,20 @@ static int max96712_read_reg(struct max96712 *priv,
+@@ -99,6 +220,20 @@ static int max96712_read_reg(struct max96712 *priv,
  	return err;
  }
  
@@ -221,7 +228,7 @@ index 8e237eef..3b4376fe 100644
  
  static int max96712_stats_show(struct seq_file *s, void *data)
  {
-@@ -153,24 +281,6 @@ static const struct file_operations max96712_debugfs_fops = {
+@@ -153,24 +288,6 @@ static const struct file_operations max96712_debugfs_fops = {
  	.release = single_release,
  };
  
@@ -246,7 +253,7 @@ index 8e237eef..3b4376fe 100644
  static int max96712_debugfs_init(const char *dir_name,
  				struct dentry **d_entry,
  				struct dentry **f_entry,
-@@ -225,7 +335,8 @@ static int max96712_debugfs_init(const char *dir_name,
+@@ -225,7 +342,8 @@ static int max96712_debugfs_init(const char *dir_name,
  static  struct regmap_config max96712_regmap_config = {
  	.reg_bits = 16,
  	.val_bits = 8,
@@ -256,7 +263,7 @@ index 8e237eef..3b4376fe 100644
  };
  
  #if defined(NV_I2C_DRIVER_STRUCT_PROBE_WITHOUT_I2C_DEVICE_ID_ARG) /* Linux 6.3 */
-@@ -237,6 +348,8 @@ static int max96712_probe(struct i2c_client *client,
+@@ -237,6 +355,8 @@ static int max96712_probe(struct i2c_client *client,
  {
  	struct max96712 *priv;
  	int err = 0;
@@ -265,7 +272,7 @@ index 8e237eef..3b4376fe 100644
  
  	dev_info(&client->dev, "%s: enter\n", __func__);
  
-@@ -249,15 +362,50 @@ static int max96712_probe(struct i2c_client *client,
+@@ -249,15 +369,55 @@ static int max96712_probe(struct i2c_client *client,
  			"regmap init failed: %ld\n", PTR_ERR(priv->regmap));
  		return -ENODEV;
  	}
@@ -315,6 +322,11 @@ index 8e237eef..3b4376fe 100644
 +		} else {
 +			priv->lane_cnt = value;
 +		}
++
++		priv->fangzhu_fg12_reverse_lane_polarity =
++			of_property_read_bool(np, "fangzhu,fg12-reverse-lane-polarity");
++		priv->fangzhu_fg12_poc_enable =
++			of_property_read_bool(np, "fangzhu,fg12-poc-enable");
  	}
  
 +	dev_set_drvdata(&client->dev, priv);
@@ -322,7 +334,7 @@ index 8e237eef..3b4376fe 100644
  	err = max96712_debugfs_init(NULL, NULL, NULL, priv);
  	if (err)
  		return err;
-@@ -274,8 +422,11 @@ static int max96712_remove(struct i2c_client *client)
+@@ -274,8 +434,11 @@ static int max96712_remove(struct i2c_client *client)
  static void max96712_remove(struct i2c_client *client)
  #endif
  {
@@ -335,7 +347,7 @@ index 8e237eef..3b4376fe 100644
  		i2c_unregister_device(client);
  		client = NULL;
  	}
-@@ -284,13 +435,394 @@ static void max96712_remove(struct i2c_client *client)
+@@ -284,13 +447,447 @@ static void max96712_remove(struct i2c_client *client)
  #endif
  }
  
@@ -356,6 +368,43 @@ index 8e237eef..3b4376fe 100644
 +	}
 +
 +	return err;
++}
++
++static int max96712_set_reverse_lane_polarity(struct max96712 *priv)
++{
++	struct reg_pair lane_polarity[] = {
++		/*
++		 * FG12-4CH routes the MAX96712 CSI-2 lanes with reversed polarity.
++		 */
++		{MAX96712_MIPI_PHY5_ADDR, 0x3f},
++		{MAX96712_MIPI_PHY6_ADDR, 0x3f},
++	};
++
++	return max96712_set_registers(priv, lane_polarity,
++				      ARRAY_SIZE(lane_polarity));
++}
++
++static int max96712_enable_poc(struct max96712 *priv)
++{
++	struct reg_pair poc_enable[] = {
++		{MAX96712_FANGZHU_POC_IO_ADDR, 0xe0},
++		{MAX96712_FANGZHU_FG12_POC_ADDR, 0x80},
++	};
++	int err;
++
++	err = max96712_set_registers(priv, poc_enable,
++				     ARRAY_SIZE(poc_enable));
++	if (err)
++		return err;
++
++	msleep(100);
++	err = max96712_write_reg(priv, MAX96712_FANGZHU_FG12_POC_ADDR, 0x90);
++	if (err)
++		return err;
++
++	msleep(500);
++
++	return 0;
 +}
 +
 +int max96712_get_available_pipe_id(struct device *dev, int vc_id)
@@ -694,13 +743,29 @@ index 8e237eef..3b4376fe 100644
 +
 +int max96712_power_on(struct device *dev)
 +{
-+    struct max96712 *priv = dev_get_drvdata(dev);
-+    if (priv->pwdn_gpio > 0) {
-+        gpio_direction_output(priv->pwdn_gpio, 1);
-+        gpio_set_value(priv->pwdn_gpio, 1);
-+        msleep(100);
-+    }
-+    return 0;
++	struct max96712 *priv = dev_get_drvdata(dev);
++	int err = 0;
++
++	if (priv->pwdn_gpio > 0) {
++		gpio_direction_output(priv->pwdn_gpio, 1);
++		gpio_set_value(priv->pwdn_gpio, 1);
++		msleep(100);
++	}
++
++	if (priv->fangzhu_fg12_reverse_lane_polarity ||
++	    priv->fangzhu_fg12_poc_enable) {
++		mutex_lock(&priv->lock);
++
++		if (priv->fangzhu_fg12_reverse_lane_polarity)
++			err = max96712_set_reverse_lane_polarity(priv);
++
++		if (!err && priv->fangzhu_fg12_poc_enable)
++			err = max96712_enable_poc(priv);
++
++		mutex_unlock(&priv->lock);
++	}
++
++	return err;
 +}
 +EXPORT_SYMBOL(max96712_power_on);
 +
@@ -731,7 +796,7 @@ index 8e237eef..3b4376fe 100644
  	{ },
  };
  
-@@ -300,6 +832,7 @@ static struct i2c_driver max96712_i2c_driver = {
+@@ -300,6 +897,7 @@ static struct i2c_driver max96712_i2c_driver = {
  	.driver = {
  		.name = "max96712",
  		.owner = THIS_MODULE,
@@ -739,6 +804,6 @@ index 8e237eef..3b4376fe 100644
  	},
  	.probe = max96712_probe,
  	.remove = max96712_remove,
+
 -- 
 2.43.0
-
