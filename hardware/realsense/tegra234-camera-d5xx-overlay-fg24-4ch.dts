@@ -531,7 +531,6 @@
 							};
 
 							mode0 {
-								/* Y8: 8-bit raw IR */
 								pixel_t = "grey_y8";
 								num_lanes = "4";
 								csi_pixel_bit_depth = "8";
@@ -546,26 +545,6 @@
 								mclk_khz = "24000";
 								pix_clk_hz = "1000000000";
 								serdes_pix_clk_hz = "1000000000";
-								line_length = "1280";
-								embedded_metadata_height = "1";
-							};
-
-							mode1 {
-								/* Y8I: 16-bit Raw IR interleaved */
-								pixel_t = "grey_y16";
-								num_lanes = "4";
-								csi_pixel_bit_depth = "16";
-								active_w = "1280";
-								active_h = "720";
-								tegra_sinterface = "serial_c";
-								phy_mode = "DPHY";
-								discontinuous_clk = "no";
-								cil_settletime = "0";
-								deskew_initial_enable = "true";
-								deskew_periodic_enable = "true";
-								mclk_khz = "24000";
-								pix_clk_hz = "500000000";
-								serdes_pix_clk_hz = "500000000";
 								line_length = "1280";
 								embedded_metadata_height = "1";
 							};

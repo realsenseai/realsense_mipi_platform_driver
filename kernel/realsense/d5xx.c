@@ -22,6 +22,7 @@
 #include <linux/i2c.h>
 #include <linux/kernel.h>
 #include <linux/media.h>
+#include <linux/math64.h>
 #include <linux/module.h>
 #include <linux/of_gpio.h>
 #include <linux/regmap.h>
@@ -830,7 +831,7 @@ static const u16 ds5_depth_framerate_to_30[] = {5, 15, 30};
 static const u16 ds5_framerate_to_60[] = {5, 15, 30, 60};
 static const u16 ds5_framerate_to_90[] = {5, 15, 30, 60, 90};
 static const u16 ds5_framerate_15_30[] = {15, 30};
-static const u16 ds5_framerate_15_25[] = {15, 25};
+static const u16 ds5_framerate_15[] = {15};
 static const u16 ds5_framerate_90[] = {90};
 static const u16 ds5_framerate_9_30[] = {9, 30};
 static const u16 ds5_imu_framerates[] = {100, 200, 400};
@@ -865,7 +866,8 @@ static const struct ds5_resolution d58x_y8_sizes[] = {
 
 /* D58x calibration resolutions: IR_RAW Y12I (24-bit) + Self-Calibration/Tare */
 static const struct ds5_resolution d58x_calibration_sizes[] = {
-	DS5_RES(1600, 1300, ds5_framerate_15_25)
+	DS5_RES(1600, 1300, ds5_framerate_15)
+	DS5_RES(1280, 720, ds5_framerate_15)
 	DS5_RES(256, 144, ds5_framerate_90)
 };
 
@@ -1246,6 +1248,71 @@ static const struct ds5_format *ds5_sensor_find_format(
 /* 1-8 */
 #define MIPI_CSI2_TYPE_USER_DEF(i)	(0x30 + (i) - 1)
 
+#ifdef CONFIG_TEGRA_CAMERA_PLATFORM
+static void ds5_tegra_update_mipi_clock(struct sensor_signal_properties *signal,
+					u32 bit_depth)
+{
+	u64 rate;
+
+	if (!signal || !signal->num_lanes)
+		return;
+
+	rate = signal->serdes_pixel_clock.val ?
+		signal->serdes_pixel_clock.val : signal->pixel_clock.val;
+	rate = div_u64(rate * bit_depth, signal->num_lanes);
+
+	if (signal->phy_mode == CSI_PHY_MODE_DPHY)
+		signal->mipi_clock.val = div_u64(rate, 2);
+	else if (signal->phy_mode == CSI_PHY_MODE_CPHY)
+		signal->mipi_clock.val = div_u64(rate * 7, 16);
+	else
+		signal->mipi_clock.val = rate;
+}
+
+static void ds5_tegra_update_ir_mode(struct ds5 *state,
+				     const struct ds5_sensor *sensor)
+{
+	struct sensor_mode_properties *mode;
+	struct sensor_image_properties *image;
+	u32 pixel_format;
+	u32 bit_depth;
+
+	if (!state->is_y8 || !state->mux.sd.sensor_props.sensor_modes ||
+	    !sensor->config.format || !sensor->config.resolution)
+		return;
+
+	switch (sensor->config.format->mbus_code) {
+	case MEDIA_BUS_FMT_Y8_1X8:
+		pixel_format = V4L2_PIX_FMT_GREY;
+		bit_depth = 8;
+		break;
+	case MEDIA_BUS_FMT_RGB888_1X24:
+		pixel_format = V4L2_PIX_FMT_RGB24;
+		bit_depth = 24;
+		break;
+	default:
+		pixel_format = V4L2_PIX_FMT_Y16;
+		bit_depth = 16;
+		break;
+	}
+
+	mode = &state->mux.sd.sensor_props.sensor_modes[0];
+	image = &mode->image_properties;
+	image->width = sensor->config.resolution->width;
+	image->height = sensor->config.resolution->height;
+	image->line_length = sensor->config.resolution->width;
+	image->pixel_format = pixel_format;
+	image->embedded_metadata_height = state->metadata_enabled ? 1 : 0;
+
+	ds5_tegra_update_mipi_clock(&mode->signal_properties, bit_depth);
+
+	state->mux.sd.mode_prop_idx = 0;
+	state->mux.sd.mode = state->mux.sd.def_mode;
+	state->mux.sd.fmt_width = image->width;
+	state->mux.sd.fmt_height = image->height;
+}
+#endif
+
 static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
 		struct v4l2_subdev_pad_config *cfg,
@@ -1293,17 +1360,7 @@ static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 	else {
 		sensor->format = *mf;
 #ifdef CONFIG_TEGRA_CAMERA_PLATFORM
-		/* Update mode_prop_idx so the Tegra framework uses the correct
-		 * DT mode (pixel_t) for NVCSI/VI pixel parser configuration.
-		 * Only the IR sensor has multiple DT modes (mode0=grey_y8, mode1=grey_y16).
-		 * Other sensors (depth/rgb/imu) have a single mode0 and must stay at 0.
-		 */
-		if (state->is_y8) {
-			if (sensor->config.format->mbus_code == MEDIA_BUS_FMT_Y8_1X8)
-				state->mux.sd.mode_prop_idx = 0;
-			else
-				state->mux.sd.mode_prop_idx = 1;
-		}
+		ds5_tegra_update_ir_mode(state, sensor);
 #endif
 	}
 
