@@ -217,14 +217,13 @@ enum ds5_mux_pad {
 #define MAX_DS5_CONFIG_RETRIES		5
 
 /*
- * Debounce window (ms) for coalescing the deserializer ONESHOT re-latch.
- * When DEPTH and IR (and any sibling stream sharing the same GMSL link)
- * issue STREAMON close together, each one re-arms this timer instead of
- * performing its own ~300ms max96724 reset_oneshot inline. A single
- * coalesced reset_oneshot + serializer TX retrigger then re-latches ALL
- * pipes at once. This lets the FW see both play writes within its pairing
- * window so it builds ONE combined stereo pipe, while still guaranteeing
- * the (load-bearing) ONESHOT that CSI frame delivery depends on.
+ * DEPTH/IR pairing window (ms), mirroring the D500 FW pairing window.
+ * The first of DEPTH/IR to STREAMON is held for at most this long so the
+ * partner can be programmed too; then a SINGLE max96724 reset_oneshot
+ * re-latches both pipes and the deferred DS5_START writes are issued
+ * together. Because the DEPTH/IR s_stream path no longer blocks polling for
+ * STREAMING, the two STREAMONs arrive back-to-back and comfortably inside
+ * this window, so the pair is built with ONE oneshot instead of two.
  */
 #define DS5_ONESHOT_DEBOUNCE_MS		60
 
@@ -579,12 +578,22 @@ struct ds5_dev {
 	bool imu_streaming;
 #ifdef CONFIG_VIDEO_D5XX_SERDES
 	/*
-	 * Debounced/coalesced deserializer ONESHOT re-latch.
-	 * Armed by each stream's pipeline setup (via mod_delayed_work) so that
-	 * DEPTH+IR (and siblings) sharing this camera's GMSL link trigger only
-	 * ONE reset_oneshot + serializer retrigger for the whole group.
+	 * Host-side coalesced stream start (mirror of the D500 FW pairing window).
+	 * EVERY stream (DEPTH/IR/RGB/IMU) sharing this camera configures its pipe
+	 * with the GMSL link UP, registers itself here, and (re-)arms oneshot_work
+	 * DS5_ONESHOT_DEBOUNCE_MS out. The worker then performs at most ONE
+	 * reset_oneshot for the whole batch (re-latching every programmed pipe)
+	 * and, only after the link re-locks, issues the deferred DS5_START writes
+	 * together. Funnelling every start through this single worker means there
+	 * is exactly ONE link-retrain window and no stream is doing reverse-channel
+	 * I2C while it runs -- which is what eliminates the -121 bus collisions.
+	 * Arrays are indexed by ds5_stream_slot(); pending_need_oneshot is OR'd
+	 * across the batch. All guarded by ds5_dev->lock.
 	 */
 	struct delayed_work oneshot_work;
+	struct ds5 *pending_stream[DS5_MAX_STREAMS];
+	bool pending_start[DS5_MAX_STREAMS];
+	bool pending_need_oneshot;
 #endif
 };
 
@@ -612,36 +621,12 @@ static struct dser_control dser_inited[MAX_DSER_NUM];
 static struct ds5_dev ds5_inited[MAX_DS5_NUM];
 
 /*
- * Coalesced deserializer ONESHOT worker.
- *
- * Runs in workqueue context (NOT under graph_mutex), armed via
- * mod_delayed_work() from each stream's pipeline setup. All streams sharing
- * this camera (same ser_dev -> same ds5_dev, guaranteed by ds5_setup_and_link)
- * re-arm the same timer, so multiple close-together STREAMONs collapse into a
- * SINGLE reset_oneshot. The ONESHOT re-latches the entire deserializer data
- * path (all pipes at once), so one call covers every pipe that was programmed
- * during the debounce window. The serializer TX retrigger MUST happen AFTER
- * the reset so the deserializer re-acquires the tunnelled streams.
+ * Coalesced deserializer ONESHOT + DEPTH/IR pairing worker.
+ * Forward-declared here for INIT_DELAYED_WORK() below; the body is defined
+ * lower down, after the reverse-channel I2C write (ds5_write) and the
+ * ESYNC/FSYNC helpers it depends on.
  */
-static void ds5_deferred_oneshot_work(struct work_struct *work)
-{
-	struct ds5_dev *ds5_dev =
-		container_of(to_delayed_work(work), struct ds5_dev, oneshot_work);
-	struct ds5 *primary;
-
-	mutex_lock(&serdes_lock__);
-	primary = ds5_dev->ds5_primary;
-	if (primary && primary->dser_ops && primary->dser_dev) {
-		primary->dser_ops->reset_oneshot(primary->dser_dev);
-		/* DES ONESHOT resets the data path; SER must retrigger TX for
-		 * the DES to re-acquire the tunnel stream. One retrigger on the
-		 * shared serializer covers every stream in this ds5_dev group.
-		 */
-		if (primary->ser_dev)
-			max96717_retrigger_tx(primary->ser_dev);
-	}
-	mutex_unlock(&serdes_lock__);
-}
+static void ds5_deferred_oneshot_work(struct work_struct *work);
 
 static void ds5_init_global_slots_once(void)
 {
@@ -1410,23 +1395,17 @@ static int ds5_setup_pipeline(struct ds5 *state, u8 data_type1, u8 data_type2,
 	ret |= state->dser_ops->set_pipe(state->dser_dev, pipe_id,
 				data_type1, data_type2, vc_id);
 	/*
-	 * Defer & coalesce the deserializer ONESHOT (see DS5_ONESHOT_DEBOUNCE_MS).
-	 * The pipe routing (set_pipe above) is programmed synchronously, but the
-	 * ~300ms reset_oneshot + TX retrigger is debounced so that DEPTH+IR (and
-	 * siblings) sharing this GMSL link collapse into a SINGLE re-latch. This
-	 * keeps each STREAMON fast (no per-stream 300ms block under graph_mutex),
-	 * letting both FW play writes land inside the FW pairing window, while the
-	 * coalesced worker still performs the load-bearing ONESHOT that CSI frame
-	 * delivery depends on.
+	 * Program the pipe routing ONLY here. The load-bearing reset_oneshot
+	 * (which rewrites LINK_EN/LINK_RATE, re-locks the GMSL links with internal
+	 * msleeps, and re-latches the data path) is issued by the caller AFTER any
+	 * reverse-channel camera I2C has completed, so it never collides with an
+	 * in-flight reverse-channel transaction (-121):
+	 *   - DEPTH/IR: deferred to the shared pairing worker
+	 *     (ds5_deferred_oneshot_work) so BOTH pipes are latched by ONE oneshot
+	 *     and the DS5_START writes are issued together.
+	 *   - RGB/IMU: inline in ds5_mux_s_stream() right after ds5_configure(),
+	 *     before the DS5_START poll.
 	 */
-	if (state->ds5_dev) {
-		mod_delayed_work(system_wq, &state->ds5_dev->oneshot_work,
-				 msecs_to_jiffies(DS5_ONESHOT_DEBOUNCE_MS));
-	} else {
-		/* No shared ds5_dev (should not happen): fall back to inline. */
-		state->dser_ops->reset_oneshot(state->dser_dev);
-		max96717_retrigger_tx(state->ser_dev);
-	}
 	if (ret)
 		dev_warn(&state->client->dev,
 			 "failed to set pipe %d, data_type1: 0x%x, data_type2: 0x%x, vc_id: %u\n",
@@ -1461,7 +1440,7 @@ static void ds5_invalidate_sensor(struct ds5 *state, struct ds5_sensor *sensor)
 	sensor->pipe_vc_id = 0xFFFF;
 }
 
-static int ds5_configure(struct ds5 *state)
+static int ds5_configure(struct ds5 *state, bool *pipe_reconfigured)
 {
 	struct ds5_sensor *sensor;
 	u16 md_fmt, vc_id;
@@ -1478,6 +1457,9 @@ static int ds5_configure(struct ds5 *state)
 	u16 height_value = 0;
 #endif
 	int ret;
+
+	if (pipe_reconfigured)
+		*pipe_reconfigured = false;
 
 	if (state->is_depth) {
 		sensor = &state->depth.sensor;
@@ -1564,9 +1546,9 @@ static int ds5_configure(struct ds5 *state)
 					 sensor->pipe_id, vc_id);
 		/*
 		 * Switching to Y12I (calib) needs a data-path re-latch; this is
-		 * handled by the coalesced ONESHOT that ds5_setup_pipeline() just
-		 * armed (see DS5_ONESHOT_DEBOUNCE_MS), so no extra inline reset
-		 * here — that would defeat the debounce and re-serialize STREAMON.
+		 * covered by the reset_oneshot the caller issues after configure
+		 * (the pairing worker for DEPTH/IR, inline for RGB/IMU), so no
+		 * extra inline reset is needed here.
 		 */
 		(void)is_calib;
 		mutex_unlock(&serdes_lock__);
@@ -1582,6 +1564,8 @@ static int ds5_configure(struct ds5 *state)
 		sensor->pipe_data_type1 = data_type1;
 		sensor->pipe_data_type2 = data_type2;
 		sensor->pipe_vc_id = vc_id;
+		if (pipe_reconfigured)
+			*pipe_reconfigured = true;
 	} else {
 		dev_info(&state->client->dev,
 				"pipe %d already configured (dt1=0x%x dt2=0x%x vc=%u)\n",
@@ -1609,10 +1593,21 @@ static int ds5_configure(struct ds5 *state)
 		"sensor %p: dt_value=0x%x, cached_dt_value=0x%x, cached_fps_value=%u, framerate=%u\n",
 		sensor, dt_value, sensor->cached_dt_value, sensor->cached_fps_value, sensor->config.framerate);
 
+#ifdef CONFIG_VIDEO_D5XX_SERDES
+	/*
+	 * Serialize these reverse-channel camera-config writes against the
+	 * coalesced reset_oneshot (which also holds serdes_lock__ and drops the
+	 * GMSL link for ~300ms). Without this, a sibling stream's oneshot could
+	 * NACK these writes with -121 and corrupt the FW's per-stream config.
+	 */
+	mutex_lock(&serdes_lock__);
+#endif
+	ret = 0;
+
 	if (sensor->cached_dt_value != dt_value) {
 		ret = ds5_write(state, dt_addr, dt_value);
 		if (ret < 0)
-			return ret;
+			goto out_unlock;
 		sensor->cached_dt_value = dt_value;
 	}
 
@@ -1620,7 +1615,7 @@ static int ds5_configure(struct ds5 *state)
 	if (sensor->cached_md_value != md_value) {
 		ret = ds5_write(state, md_addr, md_value);
 		if (ret < 0)
-			return ret;
+			goto out_unlock;
 		sensor->cached_md_value = md_value;
 	}
 
@@ -1629,7 +1624,7 @@ static int ds5_configure(struct ds5 *state)
 		if (sensor->cached_override_value != dt_value) {
 			ret = ds5_write(state, override_addr, dt_value);
 			if (ret < 0)
-				return ret;
+				goto out_unlock;
 			sensor->cached_override_value = dt_value;
 		}
 	}
@@ -1638,7 +1633,7 @@ static int ds5_configure(struct ds5 *state)
 	if (sensor->cached_fps_value != fps_value) {
 		ret = ds5_write(state, fps_addr, fps_value);
 		if (ret < 0)
-			return ret;
+			goto out_unlock;
 		sensor->cached_fps_value = fps_value;
 	}
 
@@ -1646,7 +1641,7 @@ static int ds5_configure(struct ds5 *state)
 	if (sensor->cached_width_value != width_value) {
 		ret = ds5_write(state, width_addr, width_value);
 		if (ret < 0)
-			return ret;
+			goto out_unlock;
 		sensor->cached_width_value = width_value;
 	}
 
@@ -1654,11 +1649,16 @@ static int ds5_configure(struct ds5 *state)
 	if (sensor->cached_height_value != height_value) {
 		ret = ds5_write(state, height_addr, height_value);
 		if (ret < 0)
-			return ret;
+			goto out_unlock;
 		sensor->cached_height_value = height_value;
 	}
 
-	return 0;
+	ret = 0;
+out_unlock:
+#ifdef CONFIG_VIDEO_D5XX_SERDES
+	mutex_unlock(&serdes_lock__);
+#endif
+	return ret;
 #endif /* !DS5_BYPASS_CAMERA_I2C */
 }
 
@@ -3829,7 +3829,7 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 	 * the GMSL link; if init_settings runs after it, the first
 	 * I2C write to the serializer NACKs with -121.
 	 */
-	msleep(200);
+	msleep(100);
 	err = max96717_init_settings(state->ser_dev);
 	if (err) {
 		dev_warn(dev, "max96717 init settings failed\n");
@@ -4654,6 +4654,143 @@ static int ds5_mux_s_frame_interval(struct v4l2_subdev *sd,
 	return 0;
 }
 
+#ifdef CONFIG_VIDEO_D5XX_SERDES
+/* Map a stream instance to its coalescing slot / FW stream-enable id. */
+static int ds5_stream_slot(struct ds5 *state)
+{
+	if (state->is_depth)
+		return 0;
+	if (state->is_rgb)
+		return 1;
+	if (state->is_y8)
+		return 2;
+	if (state->is_imu)
+		return 3;
+	return -1;
+}
+
+static u16 ds5_slot_stream_id(int slot)
+{
+	switch (slot) {
+	case 0:  return DS5_STREAM_DEPTH;
+	case 1:  return DS5_STREAM_RGB;
+	case 2:  return DS5_STREAM_IR;
+	case 3:  return DS5_STREAM_IMU;
+	default: return DS5_STREAM_DEPTH;
+	}
+}
+
+/*
+ * Coalesced stream-start worker (mirror of the D500 FW pairing window).
+ *
+ * Every stream (DEPTH/IR/RGB/IMU) that STREAMONs configures its pipe with the
+ * link up, registers into ds5_dev->pending_*, and (re-)arms this work. When it
+ * runs it performs at most ONE reset_oneshot for the whole batch (re-latching
+ * every programmed pipe) + the serializer TX retrigger, and only AFTER the
+ * link has re-locked issues the deferred DS5_START writes for every pending
+ * stream. Because ALL starts funnel through here, the ~300ms link retrain
+ * happens exactly once and never overlaps another stream's reverse-channel
+ * I2C -> no -121 bus collisions.
+ */
+static void ds5_deferred_oneshot_work(struct work_struct *work)
+{
+	struct ds5_dev *ds5_dev =
+		container_of(to_delayed_work(work), struct ds5_dev, oneshot_work);
+	struct ds5 *primary;
+	struct ds5 *pend[DS5_MAX_STREAMS];
+	bool want[DS5_MAX_STREAMS];
+	bool need_oneshot;
+	bool any = false;
+	int slot;
+
+	mutex_lock(&serdes_lock__);
+	mutex_lock(&ds5_dev->lock);
+	primary = ds5_dev->ds5_primary;
+	need_oneshot = ds5_dev->pending_need_oneshot;
+	ds5_dev->pending_need_oneshot = false;
+	for (slot = 0; slot < DS5_MAX_STREAMS; slot++) {
+		pend[slot] = ds5_dev->pending_stream[slot];
+		want[slot] = ds5_dev->pending_start[slot];
+		ds5_dev->pending_start[slot] = false;
+		if (want[slot])
+			any = true;
+	}
+	mutex_unlock(&ds5_dev->lock);
+
+	if (!any || !primary || !primary->dser_ops || !primary->dser_dev) {
+		mutex_unlock(&serdes_lock__);
+		return;
+	}
+
+	/*
+	 * Re-latch (reset_oneshot + retrigger) only when a pending stream actually
+	 * (re)programmed its pipe this batch. A same-config restart keeps the
+	 * pipe/tunnel, so we skip the ~300ms re-latch and just re-issue DS5_START.
+	 * One oneshot re-latches the ENTIRE deserializer, covering every pipe.
+	 */
+	if (need_oneshot) {
+		primary->dser_ops->reset_oneshot(primary->dser_dev);
+		if (primary->ser_dev)
+			max96717_retrigger_tx(primary->ser_dev);
+	}
+	mutex_unlock(&serdes_lock__);
+
+	/*
+	 * Link is re-locked now (if we re-latched); either way the reverse-channel
+	 * is up, so issue the deferred D500 stream-enable writes together.
+	 */
+	for (slot = 0; slot < DS5_MAX_STREAMS; slot++) {
+		if (want[slot] && pend[slot])
+			ds5_write(pend[slot], DS5_START_STOP_STREAM,
+				  DS5_STREAM_START | ds5_slot_stream_id(slot));
+	}
+
+	/*
+	 * Re-assert serializer GPIO tunnel + DES FSYNC after the reset for
+	 * slave/FSYNC sync modes (mirrors the normal s_stream success path).
+	 * These are per-camera, so a single owner call covers the batch.
+	 */
+	for (slot = 0; slot < DS5_MAX_STREAMS; slot++) {
+		if (want[slot] && pend[slot] &&
+		    ds5_sync_mode_uses_esync(pend[slot])) {
+			ds5_set_ser_esync_tunneling(pend[slot], true);
+			ds5_set_des_fsync(pend[slot], true);
+			break;
+		}
+	}
+}
+
+/*
+ * ds5_configure() completed for a stream: register it as pending and (re-)arm
+ * the coalescing worker DS5_ONESHOT_DEBOUNCE_MS out. Streams started
+ * back-to-back all land in one worker run.
+ */
+static void ds5_stream_arm_start(struct ds5 *state, int slot, bool need_oneshot)
+{
+	struct ds5_dev *dev = state->ds5_dev;
+
+	if (slot < 0 || slot >= DS5_MAX_STREAMS)
+		return;
+
+	mutex_lock(&dev->lock);
+	dev->pending_stream[slot] = state;
+	dev->pending_start[slot] = true;
+	/*
+	 * Always require the reset_oneshot on (re)start. On real HW the D500 tears
+	 * down the deserializer tunnel when a stream stops, so even a same-config
+	 * restart must re-latch the data path or no frames arrive (and the stale
+	 * link then NACKs the next close with -121). need_oneshot is kept for a
+	 * possible future "pipe truly retained" fast path but is forced on for now.
+	 */
+	(void)need_oneshot;
+	dev->pending_need_oneshot = true;
+	mutex_unlock(&dev->lock);
+
+	mod_delayed_work(system_wq, &dev->oneshot_work,
+			 msecs_to_jiffies(DS5_ONESHOT_DEBOUNCE_MS));
+}
+#endif /* CONFIG_VIDEO_D5XX_SERDES */
+
 static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 {
 	struct ds5 *state = container_of(sd, struct ds5, mux.sd.subdev);
@@ -4686,7 +4823,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 
 	if (on) {
 		/* Configure SERDES pipes - this is essential for MIPI data flow */
-		ret = ds5_configure(state);
+		ret = ds5_configure(state, NULL);
 		if (ret < 0) {
 			dev_err(&state->client->dev,
 				"BYPASS: ds5_configure (SERDES pipe setup) failed: %d\n", ret);
@@ -4744,6 +4881,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	u16 expected_streaming_state;
 	bool ds5_config_done = !on; /* for stop, skip config */
 	bool reset_invalidated = false;
+	bool pipe_reconfigured = false;
 	bool *streaming_flag = NULL;
 #ifdef CONFIG_VIDEO_D5XX_SERDES
 	int cur_dser = atomic_read(dser_get_reset_gen(state));
@@ -4814,6 +4952,80 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		expected_streaming_state = DS5_STREAM_IDLE;
 		status = DS5_STATUS_STREAMING;
 	}
+
+#ifdef CONFIG_VIDEO_D5XX_SERDES
+	/*
+	 * Host-side coalesced stream START (mirror of the D500 FW pairing window),
+	 * used for EVERY stream (DEPTH/IR/RGB/IMU). Program this stream's pipe +
+	 * camera registers now, while the GMSL link is up (so the reverse-channel
+	 * I2C is safe), register it as pending, and hand the shared reset_oneshot +
+	 * DS5_START off to the single coalescing worker. This returns as soon as the
+	 * stream is queued -- it deliberately does NOT block polling for STREAMING
+	 * -- so sibling STREAMONs are not serialized behind it, they all land in the
+	 * same coalescing window, and exactly ONE reset_oneshot re-latches the whole
+	 * batch. Crucially no stream does reverse-channel I2C while that single
+	 * oneshot re-locks the link, which is what removes the -121 storm.
+	 * On stop: drop any still-queued start; if it never actually started,
+	 * release the pipe here, otherwise fall through to the normal DS5_STOP path.
+	 */
+	{
+		int slot = ds5_stream_slot(state);
+
+		if (on) {
+			mutex_lock(&state->ds5_dev->lock);
+			*streaming_flag = true;
+			mutex_unlock(&state->ds5_dev->lock);
+			sensor->streaming = true;
+
+			ret = ds5_configure(state, &pipe_reconfigured);
+			if (ret < 0) {
+				dev_err(&state->client->dev,
+					"stream %d configure failed: %d\n",
+					stream_id, ret);
+				mutex_lock(&state->ds5_dev->lock);
+				*streaming_flag = false;
+				mutex_unlock(&state->ds5_dev->lock);
+				sensor->streaming = false;
+				return ret;
+			}
+			ds5_stream_arm_start(state, slot, pipe_reconfigured);
+			return 0;
+		}
+
+		if (slot >= 0) {
+			bool was_pending;
+
+			mutex_lock(&state->ds5_dev->lock);
+			was_pending = state->ds5_dev->pending_start[slot];
+			state->ds5_dev->pending_start[slot] = false;
+			mutex_unlock(&state->ds5_dev->lock);
+
+			/*
+			 * Still queued -> the worker never issued DS5_START, so the FW
+			 * never started this stream, but ds5_configure() already
+			 * programmed the pipe. Cancel cleanly: release the pipe and clear
+			 * flags without poking the FW.
+			 */
+			if (was_pending) {
+				if (sensor->pipe_id >= 0) {
+					mutex_lock(&serdes_lock__);
+					if (state->dser_ops->release_pipe(state->dser_dev,
+							sensor->pipe_id) < 0)
+						dev_warn(&state->client->dev,
+							"release pipe failed\n");
+					else
+						sensor->pipe_id = PIPE_NOT_CONFIGURED;
+					mutex_unlock(&serdes_lock__);
+				}
+				mutex_lock(&state->ds5_dev->lock);
+				*streaming_flag = false;
+				mutex_unlock(&state->ds5_dev->lock);
+				sensor->streaming = false;
+				return 0;
+			}
+		}
+	}
+#endif
 
 	/* Verify stream is in the expected state before issuing command */
 	ts = jiffies;
@@ -4887,7 +5099,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			time_before(jiffies, timeout); i++, msleep_range(i*DS5_START_POLL_TIME))
 	{
 		if (!ds5_config_done) {
-			ret = ds5_configure(state);
+			ret = ds5_configure(state, &pipe_reconfigured);
 			if (ret < 0) {
 				if (ret == -ENOSR) {
 					/* No recovery can help if no resources are available */
@@ -4898,6 +5110,27 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 				continue;
 			}
 			ds5_config_done = true;
+#ifdef CONFIG_VIDEO_D5XX_SERDES
+			/*
+			 * RGB/IMU latch their just-programmed pipe here, inline and
+			 * synchronously, BEFORE the DS5_START write below. DEPTH/IR
+			 * never reach this loop (they returned early into the pairing
+			 * worker). reset_oneshot re-locks the GMSL link with internal
+			 * msleeps, so it must finish before any reverse-channel stream
+			 * I2C to avoid the -121 collision.
+			 *
+			 * Only re-latch when this STREAMON actually (re)programmed the
+			 * pipe. A same-config restart keeps the pipe/tunnel, so it skips
+			 * the ~300ms oneshot and just re-issues DS5_START below.
+			 */
+			if (pipe_reconfigured && state->dser_ops && state->dser_dev) {
+				mutex_lock(&serdes_lock__);
+				state->dser_ops->reset_oneshot(state->dser_dev);
+				if (state->ser_dev)
+					max96717_retrigger_tx(state->ser_dev);
+				mutex_unlock(&serdes_lock__);
+			}
+#endif
 		}
 
 		if (streaming != expected_streaming_state) {
@@ -4989,6 +5222,14 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	else if (!on)
 	{
 #ifdef CONFIG_VIDEO_D5XX_SERDES
+		/*
+		 * Release the SerDes pipe on STREAMOFF. On real HW the D500 tears down
+		 * the tunnel when a stream stops, so RETAINING the pipe and skipping the
+		 * re-latch on restart left the deserializer unlatched (no frames on
+		 * reopen) and wedged the reverse channel (-121 on the next close).
+		 * Releasing here forces the next STREAMON through a full ds5_configure()
+		 * + reset_oneshot, which re-latches the data path.
+		 */
 		mutex_lock(&serdes_lock__);
 		if (state->dser_ops->release_pipe(state->dser_dev, sensor->pipe_id) < 0)
 			dev_warn(&state->client->dev, "release pipe failed\n");
@@ -4997,16 +5238,13 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		if (state->is_y8
 			&& (state->ir.sensor.config.format->data_type == GMSL_CSI_DT_RGB_888))
 		{
-			state->dser_ops->reset_oneshot(state->dser_dev);
 			/*
-			 * The ONESHOT re-latches the ENTIRE deserializer data path, so
-			 * any sibling stream that stays up (e.g. DEPTH still running when
-			 * this IR/Y12I stream stops) needs its serializer TX retriggered
-			 * to re-acquire the tunnel stream. Mirror the reset->retrigger
-			 * ordering used on the (coalesced) start path; without it the
-			 * remaining stream can lose CSI frames after this reset.
+			 * Y12I/RGB888 calib IR shares the data path with depth; when it
+			 * stops while depth stays active, re-latch so depth keeps flowing.
 			 */
-			max96717_retrigger_tx(state->ser_dev);
+			state->dser_ops->reset_oneshot(state->dser_dev);
+			if (state->ser_dev)
+				max96717_retrigger_tx(state->ser_dev);
 		}
 		mutex_unlock(&serdes_lock__);
 		msleep_range(100);

@@ -1524,6 +1524,10 @@ void max96724_reset_oneshot(struct device *dev)
 	}
 	msleep(100);
 
+	/* Poll for GMSL Link A to actually RE-LOCK before returning */
+	if (priv->splitter_enabled)
+		(void)max96724_wait_link_lock(dev, GMSL_SERDES_CSI_LINK_A);
+
 	if (max96724_is_pixel_mode(priv)) {
 		pipe_sel0 = MAX96724_PIPE_SEL0_PIXEL;
 		pipe_sel1 = MAX96724_PIPE_SEL1_PIXEL;
