@@ -88,7 +88,7 @@ index b363d5f6..e7c77845 100644
 +	err |= max9295_set_registers(dev, map_bpp8dbl, ARRAY_SIZE(map_bpp8dbl));
 +
 +	if (data_type1 == GMSL_CSI_DT_RGB_888)
-+		bpp = 0x18;
++		bpp = 0x20 | 0x18; /* Enable soft_bpp and 24 bit */
 +
 +	map_pipe_control[0].addr += 0x2 * pipe_id;
 +	map_pipe_control[1].addr += 0x2 * pipe_id;
