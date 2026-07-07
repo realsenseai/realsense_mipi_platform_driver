@@ -22,6 +22,11 @@
 #define MAX96717_MIPI_RX1_ADDR 0x331
 #define MAX96717_MIPI_RX8_ADDR 0x338
 
+/* MIPI_RX0 (0x330): bit3 = mipi_rx_reset (not self-clearing), bit6 = non-cont-clk.
+ * Pulsing reset re-arms the serializer MIPI RX PHY; both values keep bit6 as-is. */
+#define MAX96717_MIPI_RX0_RESET 0x48
+#define MAX96717_MIPI_RX0_NORMAL 0x40
+
 #define MAX96717_SRC_CTRL_ADDR 0x2BF
 #define MAX96717_SRC_PWDN_ADDR 0x02BE
 #define MAX96717_2C0_ADDR 0x02C0
@@ -53,6 +58,9 @@ struct max96717 {
 	struct regmap *regmap;
 	struct max96717_client_ctx g_client;
 	struct mutex lock;
+	/* bit[ser_vc_id] set while that pipe is streaming (set in set_pipe,
+	 * cleared in stream_stop). When it drops to 0 the MIPI RX is re-armed. */
+	u8 active_vc_mask;
 };
 
 static int max96717_write_reg(struct device *dev, u16 addr, u8 val)
@@ -302,6 +310,11 @@ int max96717_init_settings(struct device *dev)
 
 	mutex_lock(&priv->lock);
 
+	/* Fresh link bring-up: no pipe is streaming yet. Clearing this here
+	 * ensures a deserializer/link reset can't strand a stale bit and
+	 * permanently suppress the last-stream MIPI RX re-arm. */
+	priv->active_vc_mask = 0;
+
 	err |= max96717_set_registers(dev, ser_cfg_pre,
 				     ARRAY_SIZE(ser_cfg_pre));
 	msleep(100);
@@ -321,10 +334,57 @@ EXPORT_SYMBOL(max96717_init_settings);
 int max96717_set_pipe(struct device *dev, int pipe_id,
 		     u8 data_type1, u8 data_type2, u32 vc_id)
 {
-	/* No runtime config needed in pixel mode */
+	struct max96717 *priv = dev_get_drvdata(dev);
+
+	if (vc_id >= 8)
+		return -EINVAL;
+
+	/* Mark this VC's pipe active. Idempotent (mask, not a counter) because
+	 * the d4xx config-retry loop can call set_pipe more than once per
+	 * stream start; a raw increment would leak and never re-arm the RX. */
+	mutex_lock(&priv->lock);
+	priv->active_vc_mask |= (u8)BIT(vc_id);
+	mutex_unlock(&priv->lock);
+
 	return 0;
 }
 EXPORT_SYMBOL(max96717_set_pipe);
+
+int max96717_stream_stop(struct device *dev, u32 vc_id)
+{
+	struct max96717 *priv = dev_get_drvdata(dev);
+	int err = 0;
+
+	if (vc_id >= 8)
+		return -EINVAL;
+
+	mutex_lock(&priv->lock);
+	priv->active_vc_mask &= (u8)~BIT(vc_id);
+
+	if (priv->active_vc_mask == 0) {
+		/*
+		 * Last stream stopped -> the shared MAX96717 video pipe is going
+		 * idle. Pulse mipi_rx_reset (0x330 bit3, not self-clearing) to
+		 * re-arm the MIPI RX PHY while idle, so the next stream re-locks
+		 * cleanly instead of wedging. Same reset sequence as
+		 * init_settings and the manual host recovery flush; bit6
+		 * (non-cont-clk) is preserved. Safe: no stream is active here,
+		 * so multi-stream operation is unaffected (a single stream
+		 * stopping while others run leaves the mask non-zero).
+		 */
+		err  = max96717_write_reg(dev, MAX96717_MIPI_RX0_ADDR,
+					  MAX96717_MIPI_RX0_RESET);
+		usleep_range(2000, 2100);
+		err |= max96717_write_reg(dev, MAX96717_MIPI_RX0_ADDR,
+					  MAX96717_MIPI_RX0_NORMAL);
+		dev_dbg(dev, "%s: last stream stopped, MIPI RX re-armed (err %d)\n",
+			__func__, err);
+	}
+	mutex_unlock(&priv->lock);
+
+	return err;
+}
+EXPORT_SYMBOL(max96717_stream_stop);
 
 #if defined(NV_I2C_DRIVER_STRUCT_PROBE_WITHOUT_I2C_DEVICE_ID_ARG) /* Linux 6.3 */
 static int max96717_probe(struct i2c_client *client)

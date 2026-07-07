@@ -75,6 +75,9 @@ struct dser_interface {
 struct ser_interface {
 	/* Pipeline management */
 	int (*set_pipe)(struct device *dev, int pipe_id, u8 data_type1, u8 data_type2, u32 vc_id);
+	/* Notify serializer a stream stopped; re-arms MIPI RX on last stop.
+	 * Optional - NULL if the serializer does not need it. */
+	int (*stream_stop)(struct device *dev, u32 vc_id);
 
 	/* Setup and control */
 	int (*setup_control)(struct device *dev);
@@ -703,6 +706,7 @@ static const struct ser_interface max9295_interface = {
 /* MAX96717 serializer interface implementation */
 static const struct ser_interface max96717_interface = {
 	.set_pipe = max96717_set_pipe,
+	.stream_stop = max96717_stream_stop,
 	.setup_control = max96717_setup_control,
 	.reset_control = max96717_reset_control,
 	.init_settings = max96717_init_settings,
@@ -5515,6 +5519,13 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			state->dser_ops->reset_oneshot(state->dser_dev);
 		}
 		mutex_unlock(&serdes_lock__);
+		/* Tell the serializer this stream stopped. On the last stream it
+		 * re-arms the MIPI RX PHY (idle) so the next stream re-locks
+		 * cleanly instead of wedging the shared pipe. vc_id % DS5_MAX_STREAMS
+		 * matches the ser_vc_id passed to set_pipe in ds5_setup_pipeline(). */
+		if (state->ser_ops->stream_stop)
+			state->ser_ops->stream_stop(state->ser_dev,
+						    vc_id % DS5_MAX_STREAMS);
 		msleep_range(100);
 #endif
 	}
