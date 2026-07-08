@@ -285,6 +285,19 @@ static int max96717_set_registers(struct device *dev, struct reg_pair *map,
 	return err;
 }
 
+static int max96717_mipi_rx_reset_pulse(struct device *dev)
+{
+	int err;
+
+	err  = max96717_write_reg(dev, MAX96717_MIPI_RX0_ADDR,
+				  MAX96717_MIPI_RX0_RESET);
+	usleep_range(2000, 2100);
+	err |= max96717_write_reg(dev, MAX96717_MIPI_RX0_ADDR,
+				  MAX96717_MIPI_RX0_NORMAL);
+
+	return err;
+}
+
 int max96717_init_settings(struct device *dev)
 {
 	int err = 0;
@@ -309,10 +322,8 @@ int max96717_init_settings(struct device *dev)
 		{MAX96717_VIDEO_TX1_ADDR, 0x10}, /* 0x111 - VIDEO_TX1 BPP=16 forced (matches DT) */
 		{MAX96717_FRONTTOP_10_ADDR, 0x4}, /* 0x312 - Fronttop_10 double 8bit */
 		{MAX96717_MIPI_RX1_ADDR, 0x30}, /* 0x331 - MIPI_RX1: 4-lane */
-		{MAX96717_MIPI_RX0_ADDR, 0x48}, /* 0x330 - MIPI_RX0 reset ON + non-cont-clk */
 	};
 	struct reg_pair ser_cfg_post[] = {
-		{MAX96717_MIPI_RX0_ADDR, 0x40}, /* 0x330 - MIPI_RX0 reset OFF, non-cont-clk enabled */
 		{MAX96717_MIPI_RX8_ADDR, 0x22}, /* 0x338 - MIPI_RX8 settle=0x22 (t_hs[5:4]/t_clk[1:0]) */
 		{MAX96717_REG2_ADDR, 0x43}, /* 0x2 - REG2: VID_TX_EN */
 	};
@@ -344,8 +355,7 @@ int max96717_init_settings(struct device *dev)
 	msleep(100);
 	err |= max96717_set_registers(dev, ser_cfg_mid,
 				     ARRAY_SIZE(ser_cfg_mid));
-	/* XML waits 2ms between MIPI_RX0 reset assert and release */
-	usleep_range(2000, 2100);
+	err |= max96717_mipi_rx_reset_pulse(dev);
 	err |= max96717_set_registers(dev, ser_cfg_post,
 				     ARRAY_SIZE(ser_cfg_post));
 
@@ -394,19 +404,10 @@ int max96717_stream_stop(struct device *dev, u32 vc_id)
 	if (priv->active_vc_mask == 0) {
 		/*
 		 * Last stream stopped -> the shared MAX96717 video pipe is going
-		 * idle. Pulse mipi_rx_reset (0x330 bit3, not self-clearing) to
-		 * re-arm the MIPI RX PHY while idle, so the next stream re-locks
-		 * cleanly instead of wedging. Same reset sequence as
-		 * init_settings and the manual host recovery flush; bit6
-		 * (non-cont-clk) is preserved. Safe: no stream is active here,
-		 * so multi-stream operation is unaffected (a single stream
-		 * stopping while others run leaves the mask non-zero).
+		 * idle. Pulse the MIPI RX reset to re-arm the MIPI RX PHY while
+		 * idle, so the next stream re-locks cleanly instead of wedging.
 		 */
-		err  = max96717_write_reg(dev, MAX96717_MIPI_RX0_ADDR,
-					  MAX96717_MIPI_RX0_RESET);
-		usleep_range(2000, 2100);
-		err |= max96717_write_reg(dev, MAX96717_MIPI_RX0_ADDR,
-					  MAX96717_MIPI_RX0_NORMAL);
+		err = max96717_mipi_rx_reset_pulse(dev);
 		dev_dbg(dev, "%s: last stream stopped, MIPI RX re-armed (err %d)\n",
 			__func__, err);
 	}
