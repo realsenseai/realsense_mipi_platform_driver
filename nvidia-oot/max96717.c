@@ -48,6 +48,15 @@
 #define MAX96717_2C2_ESYNC 0x1F
 #define MAX96717_2C3_ESYNC 0x57
 
+#define MAX96717_GPIO7_A_ADDR		0x02D3	/* MFP7 / pass-through SDA1 */
+#define MAX96717_GPIO7_B_ADDR		0x02D4
+#define MAX96717_GPIO8_A_ADDR		0x02D6	/* MFP8 / pass-through SCL1 */
+#define MAX96717_GPIO8_B_ADDR		0x02D7
+/* GPIO_A: GPIO_OUT_DIS=1 (high-Z), GPIO_TX_EN=0, GPIO_RX_EN=0 */
+#define MAX96717_GPIO_A_HIGH_Z		0x01
+/* GPIO_B: PULL_UPDN_SEL=None, TX_ID=0 */
+#define MAX96717_GPIO_B_NO_PULL		0x00
+
 struct max96717_client_ctx {
 	struct gmsl_link_ctx *g_ctx;
 	bool st_done;
@@ -308,12 +317,27 @@ int max96717_init_settings(struct device *dev)
 		{MAX96717_REG2_ADDR, 0x43}, /* 0x2 - REG2: VID_TX_EN */
 	};
 
+	/*
+	 * Release MFP7/MFP8 before any other config so the serializer
+	 * stops driving the camera-side M2_I2C bus shared with the BMI088
+	 * IMU. Confirmed on HW: tri-stating GPIO8 restores IMU I2C access.
+	 */
+	struct reg_pair gpio_release[] = {
+		{MAX96717_GPIO7_A_ADDR, MAX96717_GPIO_A_HIGH_Z},
+		{MAX96717_GPIO7_B_ADDR, MAX96717_GPIO_B_NO_PULL},
+		{MAX96717_GPIO8_A_ADDR, MAX96717_GPIO_A_HIGH_Z},
+		{MAX96717_GPIO8_B_ADDR, MAX96717_GPIO_B_NO_PULL},
+	};
+
 	mutex_lock(&priv->lock);
 
 	/* Fresh link bring-up: no pipe is streaming yet. Clearing this here
 	 * ensures a deserializer/link reset can't strand a stale bit and
 	 * permanently suppress the last-stream MIPI RX re-arm. */
 	priv->active_vc_mask = 0;
+
+	err |= max96717_set_registers(dev, gpio_release,
+				     ARRAY_SIZE(gpio_release));
 
 	err |= max96717_set_registers(dev, ser_cfg_pre,
 				     ARRAY_SIZE(ser_cfg_pre));
@@ -335,18 +359,24 @@ int max96717_set_pipe(struct device *dev, int pipe_id,
 		     u8 data_type1, u8 data_type2, u32 vc_id)
 {
 	struct max96717 *priv = dev_get_drvdata(dev);
+	int err = 0;
+	u8 bpp;
 
 	if (vc_id >= 8)
 		return -EINVAL;
 
-	/* Mark this VC's pipe active. Idempotent (mask, not a counter) because
-	 * the d4xx config-retry loop can call set_pipe more than once per
-	 * stream start; a raw increment would leak and never re-arm the RX. */
 	mutex_lock(&priv->lock);
+	
+	if (data_type1 == GMSL_CSI_DT_RGB_888) {
+		bpp = 24;
+	} else {
+		bpp = 16;
+	}
+	err = max96717_write_reg(dev, MAX96717_VIDEO_TX1_ADDR, bpp);
 	priv->active_vc_mask |= (u8)BIT(vc_id);
 	mutex_unlock(&priv->lock);
 
-	return 0;
+	return err;
 }
 EXPORT_SYMBOL(max96717_set_pipe);
 
