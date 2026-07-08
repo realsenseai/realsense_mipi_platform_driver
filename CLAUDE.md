@@ -142,6 +142,18 @@ The build system cross-compiles for ARM64. Toolchains vary by JetPack:
 - In `ds5_mux_s_stream()`, treat pre-toggle "already streaming" as no-op only when state is coherent; after reset-generation invalidation on start path, force stop + state clear and proceed with normal reconfiguration flow.
 - In `ds5_probe()`, the DFU-magic recovery check (`DS5_DFU_MAGIC_REG` 0x5020 → `DS5_DFU_MAGIC_LSW` 0x0201) must run **before** `ds5_wait_device_type()`. A device sitting in the bootloader after an interrupted FW upgrade never serves `DS5_DEVICE_TYPE` (0x0310) — placing the device-type wait first causes a ~10 s timeout followed by `goto e_chardev` which tears down the `/dev/d4xx-dfu*` chardev, leaving the device unrecoverable over MIPI. Early-return `DS5_DFU_RECOVERY` on magic match; only then proceed to the device-type wait for operational devices.
 
+## SerDes pipe allocation (MAX96712)
+
+Two allocation schemes coexist on one MAX96712 (up to 4 serializers):
+- **MAX9295 serializer** (default): dynamic — `ds5_configure()` allocates a fresh deserializer pipe per stream via `get_available_pipe_id()`, configures it per-stream in `set_pipe()`, and frees it in `release_pipe()` on stop.
+- **MAX96717 serializer**: it funnels all of a camera's streams through one serializer pipe (`MAX96717_PIPE_ID = 2`) as distinct VCs, so the deserializer must dedicate **one sticky "multi-VC" pipe** to that camera's link and reuse it for the driver's lifetime. `ds5_configure()` detects `ser_ops == &max96717_interface` and allocates via the optional `dser_interface::get_multi_vc_pipe_id()` hook (NULL for MAX9296).
+
+MAX96712 keys the sticky pipe by link (`link = vc_id / MAX9295_MAX_STREAMS`): `link_multi_vc_pipe[]` (-1 = none) + `multi_vc_configured[]`. Contract, when adding/using these helpers:
+- `max96712_release_pipe()` **no-ops** for a multi-VC pipe (never frees or disables it) — a stream stop must not tear it down. `max96712_pipe_is_multi_vc()` detects them and **requires `priv->lock` held**.
+- `max96712_set_pipe()` configures a multi-VC pipe **exactly once** (`__max96712_set_multi_vc_pipe()`, maps all 4 local VCs), guarded by `multi_vc_configured`; later starts no-op. `max96712_init_settings()` clears `multi_vc_configured` (it zeroes `PIPE_EN`, voiding the mapping) so a dser re-init forces re-apply, while pipe ownership persists.
+- The multi-VC register table is validated on **link 0** only; link>0 extended-VC-msb (`MIPI_TX_EXT0..3 = link_id << 2`) is generalized to match the dynamic path but unproven — validate on hardware.
+- `max96712.c` has **no repo copy** — it is carried entirely by `nvidia-oot/6.0/0003-…patch` (JP6.1/6.2 symlink to 6.0; JP7 = `7.x/0006-…patch`). Edit the `sources_<v>/nvidia-oot/.../max96712.c` working copy, then regenerate 0003 via `git diff HEAD^ -- drivers/media/i2c/max96712.c` (0003 touches only this file). JP7 patches are **not** updated by JP6 work — port separately after validation.
+
 ## Post-patch instruction hygiene
 
 After every confirmed code patch, review both `.github/copilot-instructions.md` and `CLAUDE.md` against the final net diff, including any follow-up tuning edits.

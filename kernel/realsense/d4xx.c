@@ -47,6 +47,10 @@
 struct dser_interface {
 	/* Pipeline management */
 	int (*get_available_pipe_id)(struct device *dev, int vc_id);
+	/* Allocate/return a sticky multi-VC pipe for the vc_id's link. Used for
+	 * MAX96717 serializers, which funnel all of a camera's VCs through one
+	 * pipe. Optional - NULL if the deserializer has no multi-VC support. */
+	int (*get_multi_vc_pipe_id)(struct device *dev, int vc_id);
 	int (*bind_ser_to_dser_pipe)(struct device *dev, int dser_pipe_id, int ser_pipe_id, u32 vc_id);
 
 	int (*set_pipe)(struct device *dev, int pipe_id, u8 data_type1, u8 data_type2, u32 vc_id);
@@ -675,6 +679,7 @@ static const struct dser_interface max9296_interface = {
 /* MAX96712 deserializer interface implementation */
 static const struct dser_interface max96712_interface = {
 	.get_available_pipe_id = max96712_get_available_pipe_id,
+	.get_multi_vc_pipe_id = max96712_get_multi_vc_pipe_id,
 	.bind_ser_to_dser_pipe = max96712_bind_ser_to_dser_pipe,
 	.set_pipe = max96712_set_pipe,
 	.release_pipe = max96712_release_pipe,
@@ -2073,8 +2078,20 @@ static int ds5_configure(struct ds5 *state)
 		* take down the entire bus.
 		*/
 		mutex_lock(&serdes_lock__);
-		sensor->pipe_id =
-			state->dser_ops->get_available_pipe_id(state->dser_dev, (int)state->g_ctx.dst_vc);
+		/*
+		 * A MAX96717 serializer funnels all of a camera's streams through
+		 * a single serializer pipe carrying multiple VCs, so the
+		 * deserializer must dedicate one sticky pipe to this camera's link
+		 * and reuse it for every stream. All other serializers (MAX9295)
+		 * keep allocating a fresh deserializer pipe per stream.
+		 */
+		if (state->ser_ops == &max96717_interface &&
+		    state->dser_ops->get_multi_vc_pipe_id)
+			sensor->pipe_id =
+				state->dser_ops->get_multi_vc_pipe_id(state->dser_dev, (int)state->g_ctx.dst_vc);
+		else
+			sensor->pipe_id =
+				state->dser_ops->get_available_pipe_id(state->dser_dev, (int)state->g_ctx.dst_vc);
 		mutex_unlock(&serdes_lock__);
 		if (sensor->pipe_id < 0) {
 			dev_err(&state->client->dev, "No free pipe in %s\n",state->dser_ops->name);
