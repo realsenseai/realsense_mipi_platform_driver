@@ -45,12 +45,12 @@ if [ "$(ls -A ${LOCAL_DIR}/kernel_mod/${JETPACK_VERSION} 2>/dev/null)" ]; then
 fi
 
 
-# Copy specific kernel files for compatibility with legacy scripts (only for 5.0.2)
+# Copy specific kernel files for compatibility with legacy scripts (5.0.2 / 5.1.2)
 IMG_DIR="images/${JETPACK_VERSION}"
 DEST_DIR="${LOCAL_DIR}/kernel_mod/${JETPACK_VERSION}"
 
-if [ "${JETPACK_VERSION}" = "5.0.2" ]; then
-    echo "Copying kernel files to ${DEST_DIR} (5.0.2 only)..."
+if [ "${JETPACK_VERSION}" = "5.0.2" ] || [ "${JETPACK_VERSION}" = "5.1.2" ]; then
+    echo "Copying kernel files to ${DEST_DIR} (5.0.2/5.1.2)..."
     cp "${IMG_DIR}/arch/arm64/boot/Image" "${DEST_DIR}/" 2>/dev/null || true
     cp "${IMG_DIR}/arch/arm64/boot/dts/nvidia/tegra194-p2888-0001-p2822-0000.dtb" "${DEST_DIR}/" 2>/dev/null || true
     cp "${IMG_DIR}/drivers/media/i2c/d4xx.ko" "${DEST_DIR}/" 2>/dev/null || true
