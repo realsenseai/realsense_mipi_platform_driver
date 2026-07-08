@@ -53,10 +53,7 @@ The `CAM_SYNCALL` pin does not have TSC routing in the Orin SoC, so it cannot be
 | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-1.dts` | 1 | `@380` | Yes |
 | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-1-2-3.dts` | 1 | `@380` | Yes |
 | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-4.dts` | 1, 2 | `@380`, `@480` | Yes |
-| `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-4.calib.dts` | 1, 2 | `@380`, `@480` | Yes |
 | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-4-8-12.dts` | 1, 2, 4 | `@380`, `@480`, `@500` | Yes |
-| `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-4-8-12.calib.dts` | 1, 2, 4 | `@380`, `@480`, `@500` | Yes |
-| `tegra234-camera-d4xx-overlay-fg12-16ch.calib.dts` | 1 | `@380` | Yes |
 | `tegra234-camera-d4xx-overlay-fg12-16ch-PWR-only.dts` | 1, 2, 4 | `@380`, `@480`, `@500` | Yes |
 
 All overlays configure:
