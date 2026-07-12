@@ -22,6 +22,11 @@
 #define MAX96717_MIPI_RX1_ADDR 0x331
 #define MAX96717_MIPI_RX8_ADDR 0x338
 
+/* MIPI_RX0 (0x330): bit3 = mipi_rx_reset (not self-clearing), bit6 = non-cont-clk.
+ * Pulsing reset re-arms the serializer MIPI RX PHY; both values keep bit6 as-is. */
+#define MAX96717_MIPI_RX0_RESET 0x48
+#define MAX96717_MIPI_RX0_NORMAL 0x40
+
 #define MAX96717_SRC_CTRL_ADDR 0x2BF
 #define MAX96717_SRC_PWDN_ADDR 0x02BE
 #define MAX96717_2C0_ADDR 0x02C0
@@ -43,6 +48,15 @@
 #define MAX96717_2C2_ESYNC 0x1F
 #define MAX96717_2C3_ESYNC 0x57
 
+#define MAX96717_GPIO7_A_ADDR		0x02D3	/* MFP7 / pass-through SDA1 */
+#define MAX96717_GPIO7_B_ADDR		0x02D4
+#define MAX96717_GPIO8_A_ADDR		0x02D6	/* MFP8 / pass-through SCL1 */
+#define MAX96717_GPIO8_B_ADDR		0x02D7
+/* GPIO_A: GPIO_OUT_DIS=1 (high-Z), GPIO_TX_EN=0, GPIO_RX_EN=0 */
+#define MAX96717_GPIO_A_HIGH_Z		0x01
+/* GPIO_B: PULL_UPDN_SEL=None, TX_ID=0 */
+#define MAX96717_GPIO_B_NO_PULL		0x00
+
 struct max96717_client_ctx {
 	struct gmsl_link_ctx *g_ctx;
 	bool st_done;
@@ -53,6 +67,9 @@ struct max96717 {
 	struct regmap *regmap;
 	struct max96717_client_ctx g_client;
 	struct mutex lock;
+	/* bit[ser_vc_id] set while that pipe is streaming (set in set_pipe,
+	 * cleared in stream_stop). When it drops to 0 the MIPI RX is re-armed. */
+	u8 active_vc_mask;
 };
 
 static int max96717_write_reg(struct device *dev, u16 addr, u8 val)
@@ -268,6 +285,19 @@ static int max96717_set_registers(struct device *dev, struct reg_pair *map,
 	return err;
 }
 
+static int max96717_mipi_rx_reset_pulse(struct device *dev)
+{
+	int err;
+
+	err  = max96717_write_reg(dev, MAX96717_MIPI_RX0_ADDR,
+				  MAX96717_MIPI_RX0_RESET);
+	usleep_range(2000, 2100);
+	err |= max96717_write_reg(dev, MAX96717_MIPI_RX0_ADDR,
+				  MAX96717_MIPI_RX0_NORMAL);
+
+	return err;
+}
+
 int max96717_init_settings(struct device *dev)
 {
 	int err = 0;
@@ -292,23 +322,40 @@ int max96717_init_settings(struct device *dev)
 		{MAX96717_VIDEO_TX1_ADDR, 0x10}, /* 0x111 - VIDEO_TX1 BPP=16 forced (matches DT) */
 		{MAX96717_FRONTTOP_10_ADDR, 0x4}, /* 0x312 - Fronttop_10 double 8bit */
 		{MAX96717_MIPI_RX1_ADDR, 0x30}, /* 0x331 - MIPI_RX1: 4-lane */
-		{MAX96717_MIPI_RX0_ADDR, 0x48}, /* 0x330 - MIPI_RX0 reset ON + non-cont-clk */
 	};
 	struct reg_pair ser_cfg_post[] = {
-		{MAX96717_MIPI_RX0_ADDR, 0x40}, /* 0x330 - MIPI_RX0 reset OFF, non-cont-clk enabled */
 		{MAX96717_MIPI_RX8_ADDR, 0x22}, /* 0x338 - MIPI_RX8 settle=0x22 (t_hs[5:4]/t_clk[1:0]) */
 		{MAX96717_REG2_ADDR, 0x43}, /* 0x2 - REG2: VID_TX_EN */
 	};
 
+	/*
+	 * Release MFP7/MFP8 before any other config so the serializer
+	 * stops driving the camera-side M2_I2C bus shared with the BMI088
+	 * IMU. Confirmed on HW: tri-stating GPIO8 restores IMU I2C access.
+	 */
+	struct reg_pair gpio_release[] = {
+		{MAX96717_GPIO7_A_ADDR, MAX96717_GPIO_A_HIGH_Z},
+		{MAX96717_GPIO7_B_ADDR, MAX96717_GPIO_B_NO_PULL},
+		{MAX96717_GPIO8_A_ADDR, MAX96717_GPIO_A_HIGH_Z},
+		{MAX96717_GPIO8_B_ADDR, MAX96717_GPIO_B_NO_PULL},
+	};
+
 	mutex_lock(&priv->lock);
+
+	/* Fresh link bring-up: no pipe is streaming yet. Clearing this here
+	 * ensures a deserializer/link reset can't strand a stale bit and
+	 * permanently suppress the last-stream MIPI RX re-arm. */
+	priv->active_vc_mask = 0;
+
+	err |= max96717_set_registers(dev, gpio_release,
+				     ARRAY_SIZE(gpio_release));
 
 	err |= max96717_set_registers(dev, ser_cfg_pre,
 				     ARRAY_SIZE(ser_cfg_pre));
 	msleep(100);
 	err |= max96717_set_registers(dev, ser_cfg_mid,
 				     ARRAY_SIZE(ser_cfg_mid));
-	/* XML waits 2ms between MIPI_RX0 reset assert and release */
-	usleep_range(2000, 2100);
+	err |= max96717_mipi_rx_reset_pulse(dev);
 	err |= max96717_set_registers(dev, ser_cfg_post,
 				     ARRAY_SIZE(ser_cfg_post));
 
@@ -321,10 +368,54 @@ EXPORT_SYMBOL(max96717_init_settings);
 int max96717_set_pipe(struct device *dev, int pipe_id,
 		     u8 data_type1, u8 data_type2, u32 vc_id)
 {
-	/* No runtime config needed in pixel mode */
-	return 0;
+	struct max96717 *priv = dev_get_drvdata(dev);
+	int err = 0;
+	u8 bpp;
+
+	if (vc_id >= 8)
+		return -EINVAL;
+
+	mutex_lock(&priv->lock);
+	
+	if (data_type1 == GMSL_CSI_DT_RGB_888) {
+		bpp = 24;
+	} else {
+		bpp = 16;
+	}
+	err = max96717_write_reg(dev, MAX96717_VIDEO_TX1_ADDR, bpp);
+	priv->active_vc_mask |= (u8)BIT(vc_id);
+	mutex_unlock(&priv->lock);
+
+	return err;
 }
 EXPORT_SYMBOL(max96717_set_pipe);
+
+int max96717_stream_stop(struct device *dev, u32 vc_id)
+{
+	struct max96717 *priv = dev_get_drvdata(dev);
+	int err = 0;
+
+	if (vc_id >= 8)
+		return -EINVAL;
+
+	mutex_lock(&priv->lock);
+	priv->active_vc_mask &= (u8)~BIT(vc_id);
+
+	if (priv->active_vc_mask == 0) {
+		/*
+		 * Last stream stopped -> the shared MAX96717 video pipe is going
+		 * idle. Pulse the MIPI RX reset to re-arm the MIPI RX PHY while
+		 * idle, so the next stream re-locks cleanly instead of wedging.
+		 */
+		err = max96717_mipi_rx_reset_pulse(dev);
+		dev_dbg(dev, "%s: last stream stopped, MIPI RX re-armed (err %d)\n",
+			__func__, err);
+	}
+	mutex_unlock(&priv->lock);
+
+	return err;
+}
+EXPORT_SYMBOL(max96717_stream_stop);
 
 #if defined(NV_I2C_DRIVER_STRUCT_PROBE_WITHOUT_I2C_DEVICE_ID_ARG) /* Linux 6.3 */
 static int max96717_probe(struct i2c_client *client)

@@ -27,6 +27,18 @@ int max96717_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
 		     u8 data_type2, u32 vc_id);
 
 /**
+ * @brief  Notifies the serializer that a stream (identified by its serializer
+ * virtual channel) has stopped. When the last active stream stops, the MIPI RX
+ * PHY is re-armed (mipi_rx_reset pulse) so the next stream re-locks cleanly.
+ *
+ * @param  [in]  dev    The serializer device handle.
+ * @param  [in]  vc_id  The serializer virtual channel id of the stopped stream.
+ *
+ * @return  0 on success, error code otherwise.
+ */
+int max96717_stream_stop(struct device *dev, u32 vc_id);
+
+/**
  * @brief  Powers on a serializer device and performs the I2C overrides
  * for sensor and serializer devices.
  *

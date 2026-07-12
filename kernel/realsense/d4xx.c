@@ -47,6 +47,10 @@
 struct dser_interface {
 	/* Pipeline management */
 	int (*get_available_pipe_id)(struct device *dev, int vc_id);
+	/* Allocate/return a sticky multi-VC pipe for the vc_id's link. Used for
+	 * MAX96717 serializers, which funnel all of a camera's VCs through one
+	 * pipe. Optional - NULL if the deserializer has no multi-VC support. */
+	int (*get_multi_vc_pipe_id)(struct device *dev, int vc_id);
 	int (*bind_ser_to_dser_pipe)(struct device *dev, int dser_pipe_id, int ser_pipe_id, u32 vc_id);
 
 	int (*set_pipe)(struct device *dev, int pipe_id, u8 data_type1, u8 data_type2, u32 vc_id);
@@ -75,6 +79,9 @@ struct dser_interface {
 struct ser_interface {
 	/* Pipeline management */
 	int (*set_pipe)(struct device *dev, int pipe_id, u8 data_type1, u8 data_type2, u32 vc_id);
+	/* Notify serializer a stream stopped; re-arms MIPI RX on last stop.
+	 * Optional - NULL if the serializer does not need it. */
+	int (*stream_stop)(struct device *dev, u32 vc_id);
 
 	/* Setup and control */
 	int (*setup_control)(struct device *dev);
@@ -672,6 +679,7 @@ static const struct dser_interface max9296_interface = {
 /* MAX96712 deserializer interface implementation */
 static const struct dser_interface max96712_interface = {
 	.get_available_pipe_id = max96712_get_available_pipe_id,
+	.get_multi_vc_pipe_id = max96712_get_multi_vc_pipe_id,
 	.bind_ser_to_dser_pipe = max96712_bind_ser_to_dser_pipe,
 	.set_pipe = max96712_set_pipe,
 	.release_pipe = max96712_release_pipe,
@@ -703,6 +711,7 @@ static const struct ser_interface max9295_interface = {
 /* MAX96717 serializer interface implementation */
 static const struct ser_interface max96717_interface = {
 	.set_pipe = max96717_set_pipe,
+	.stream_stop = max96717_stream_stop,
 	.setup_control = max96717_setup_control,
 	.reset_control = max96717_reset_control,
 	.init_settings = max96717_init_settings,
@@ -2069,8 +2078,20 @@ static int ds5_configure(struct ds5 *state)
 		* take down the entire bus.
 		*/
 		mutex_lock(&serdes_lock__);
-		sensor->pipe_id =
-			state->dser_ops->get_available_pipe_id(state->dser_dev, (int)state->g_ctx.dst_vc);
+		/*
+		 * A MAX96717 serializer funnels all of a camera's streams through
+		 * a single serializer pipe carrying multiple VCs, so the
+		 * deserializer must dedicate one sticky pipe to this camera's link
+		 * and reuse it for every stream. All other serializers (MAX9295)
+		 * keep allocating a fresh deserializer pipe per stream.
+		 */
+		if (state->ser_ops == &max96717_interface &&
+		    state->dser_ops->get_multi_vc_pipe_id)
+			sensor->pipe_id =
+				state->dser_ops->get_multi_vc_pipe_id(state->dser_dev, (int)state->g_ctx.dst_vc);
+		else
+			sensor->pipe_id =
+				state->dser_ops->get_available_pipe_id(state->dser_dev, (int)state->g_ctx.dst_vc);
 		mutex_unlock(&serdes_lock__);
 		if (sensor->pipe_id < 0) {
 			dev_err(&state->client->dev, "No free pipe in %s\n",state->dser_ops->name);
@@ -5515,6 +5536,13 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			state->dser_ops->reset_oneshot(state->dser_dev);
 		}
 		mutex_unlock(&serdes_lock__);
+		/* Tell the serializer this stream stopped. On the last stream it
+		 * re-arms the MIPI RX PHY (idle) so the next stream re-locks
+		 * cleanly instead of wedging the shared pipe. vc_id % DS5_MAX_STREAMS
+		 * matches the ser_vc_id passed to set_pipe in ds5_setup_pipeline(). */
+		if (state->ser_ops->stream_stop)
+			state->ser_ops->stream_stop(state->ser_dev,
+						    vc_id % DS5_MAX_STREAMS);
 		msleep_range(100);
 #endif
 	}
