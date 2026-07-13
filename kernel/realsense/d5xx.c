@@ -192,6 +192,8 @@ struct dser_interface {
 #define DS5_STATUS_UNAVAILABLE		0xffff
 
 #define MIPI_LANE_RATE				1300
+#define DS5_CSI_METADATA_DEPTH_IR_WC	256	/* csi header 20 + depth/IR metadata 236 */
+#define DS5_CSI_METADATA_RGB_WC		263	/* csi header 20 + RGB metadata 243 */
 
 #define MAX_DEPTH_EXP				200000
 #define MAX_RGB_EXP					10000
@@ -5884,7 +5886,10 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 static int ds5_mux_get_frame_desc(struct v4l2_subdev *sd,
 	unsigned int pad, struct v4l2_mbus_frame_desc *desc)
 {
+	struct ds5 *state = container_of(sd, struct ds5, mux.sd.subdev);
 	unsigned int i;
+	unsigned int metadata_len = state->is_rgb ?
+		DS5_CSI_METADATA_RGB_WC : DS5_CSI_METADATA_DEPTH_IR_WC;
 
 	desc->num_entries = V4L2_FRAME_DESC_ENTRY_MAX;
 
@@ -5894,7 +5899,7 @@ static int ds5_mux_get_frame_desc(struct v4l2_subdev *sd,
 		desc->entry[i].length = 0;
 		if (i == desc->num_entries - 1) {
 			desc->entry[i].pixelcode = 0x12;
-			desc->entry[i].length = 68;
+			desc->entry[i].length = metadata_len;
 		}
 	}
 	return 0;
