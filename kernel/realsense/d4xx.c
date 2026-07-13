@@ -1316,6 +1316,45 @@ static const struct ds5_resolution ds5_size_imu_extended[] = {
 	},
 };
 
+/* D58x (GMSL): the IMU line is zero-padded to a video-line-scale wire slot to
+ * meet GMSL2 pixel-mode minimum sync spacing when sharing the single serdes pipe.
+ * The record flavor is encoded in the width: 2560 carries the legacy 32-byte hid_mipi_data
+ * record, 2568 the 38-byte extended record */
+static const struct ds5_resolution ds5_size_imu_d58x[] = {
+	/* Default: legacy bare 32-byte line (unchanged behaviour). */
+	{
+	.width = 32,
+	.height = 1,
+	.framerates = ds5_imu_framerates,
+	.n_framerates = ARRAY_SIZE(ds5_imu_framerates),
+	},
+	/* Padded wide line: same 32-byte record at offset 0, zero-padded to a
+	 * video-line-scale wire slot */
+	{
+	.width = 2560,
+	.height = 1,
+	.framerates = ds5_imu_framerates,
+	.n_framerates = ARRAY_SIZE(ds5_imu_framerates),
+	},
+};
+
+static const struct ds5_resolution ds5_size_imu_extended_d58x[] = {
+	/* Default: legacy bare 38-byte line (unchanged behaviour). */
+	{
+	.width = 38,
+	.height = 1,
+	.framerates = ds5_imu_framerates,
+	.n_framerates = ARRAY_SIZE(ds5_imu_framerates),
+	},
+	/* Padded wide line (see ds5_size_imu_d58x); 38-byte extended record. */
+	{
+	.width = 2568,
+	.height = 1,
+	.framerates = ds5_imu_framerates,
+	.n_framerates = ARRAY_SIZE(ds5_imu_framerates),
+	},
+};
+
 static const struct ds5_format ds5_depth_formats_d40x[] = {
 	{
 		// TODO: 0x31 is replaced with 0x1e since it caused low FPS in Jetson.
@@ -1595,6 +1634,26 @@ static const struct ds5_format ds5_imu_formats_extended[] = {
 		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
 		.n_resolutions = ARRAY_SIZE(ds5_size_imu_extended),
 		.resolutions = ds5_size_imu_extended,
+	},
+};
+
+static const struct ds5_format ds5_imu_formats_d58x[] = {
+	{
+		/* First format: default */
+		.data_type = GMSL_CSI_DT_RAW_8,	/* IMU DT */
+		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
+		.n_resolutions = ARRAY_SIZE(ds5_size_imu_d58x),
+		.resolutions = ds5_size_imu_d58x,
+	},
+};
+
+static const struct ds5_format ds5_imu_formats_extended_d58x[] = {
+	{
+		/* First format: default */
+		.data_type = GMSL_CSI_DT_RAW_8,	/* IMU DT */
+		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
+		.n_resolutions = ARRAY_SIZE(ds5_size_imu_extended_d58x),
+		.resolutions = ds5_size_imu_extended_d58x,
 	},
 };
 
@@ -5937,7 +5996,13 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	/* For fimware version starting from: 5.16,
 	   IMU will have 32bit axis values.
  	   5.16.x.y = firmware version: 0x0510 */
-	if (state->fw_version >= 0x510)
+	if (dev_type == DS5_DEVICE_TYPE_D58X) {
+		/* D58x (GMSL): padded IMU line, see ds5_size_imu_d58x. */
+		if (state->fw_version >= 0x510)
+			sensor->formats = ds5_imu_formats_extended_d58x;
+		else
+			sensor->formats = ds5_imu_formats_d58x;
+	} else if (state->fw_version >= 0x510)
 		sensor->formats = ds5_imu_formats_extended;
 	else
 		sensor->formats = ds5_imu_formats;
