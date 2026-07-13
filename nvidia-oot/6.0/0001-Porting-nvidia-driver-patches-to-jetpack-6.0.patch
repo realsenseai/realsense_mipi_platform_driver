@@ -602,20 +602,20 @@ index 91f8d5f8..d9be2677 100644
 +	memset(fmt, 0, sizeof(*fmt));
 +
 +	fmt->dataformat = V4L2_META_FMT_D4XX;
-+	fmt->buffersize = 255;
++	fmt->buffersize = 4096;
 +
 +	return 0;
 +}
 +static int tegra_metadata_set_format(struct file *file, void *fh,
 +                                    struct v4l2_format *format)
 +{
-+   return 0;
++	return tegra_metadata_get_format(file, fh, format);
 +}
 +
 +static int tegra_metadata_try_format(struct file *file, void *fh,
 +                                    struct v4l2_format *format)
 +{
-+    return 0;
++	return tegra_metadata_get_format(file, fh, format);
 +}
 +static const struct v4l2_ioctl_ops tegra_metadata_ioctl_ops = {
 +	.vidioc_querycap                = tegra_metadata_querycap,
@@ -643,14 +643,14 @@ index 91f8d5f8..d9be2677 100644
 +		if (*nplanes != 1)
 +			return -EINVAL;
 +
-+		if (sizes[0] < 255)
++		if (sizes[0] < 4096)
 +			return -EINVAL;
 +
 +		return 0;
 +	}
 +
 +	*nplanes = 1;
-+	sizes[0] = 255;
++	sizes[0] = 4096;
 +	alloc_devs[0] = chan->vi->dev;
 +
 +
@@ -662,7 +662,7 @@ index 91f8d5f8..d9be2677 100644
 +	if (vb->num_planes != 1)
 +		return -EINVAL;
 +
-+	if (vb2_plane_size(vb, 0) < 255)
++	if (vb2_plane_size(vb, 0) < 4096)
 +		return -EINVAL;
 +
 +	return 0;
@@ -990,16 +990,42 @@ diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/p
 index 7b16dcaf..487ae44b 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
 +++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-@@ -426,6 +426,39 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+@@ -426,6 +426,76 @@ static void vi5_setup_surface(struct tegra_channel *chan,
  		chan->capture_descr_sequence += 1;
  }
  
++static unsigned int vi5_metadata_bytesused(struct tegra_channel *chan,
++	unsigned int copy_size)
++{
++	u8 *meta = chan->emb_buf_addr;
++	u32 magic;
++	u16 payload_size;
++	unsigned int bytesused;
++
++	if (!meta || copy_size < 20)
++		return copy_size;
++
++	/* HKRM csi_metadata_header: magic, version, stream, reserved, payload_size. */
++	memcpy(&magic, meta, sizeof(magic));
++	if (magic != 0x484B524D)
++		return copy_size;
++
++	memcpy(&payload_size, meta + 8, sizeof(payload_size));
++	bytesused = 20 + payload_size;
++	if (payload_size && bytesused <= copy_size && bytesused <= 4096)
++		return bytesused;
++
++	return copy_size;
++}
++
 +static void vi5_release_metadata_buffer(struct tegra_channel *chan,
 +	struct vb2_v4l2_buffer *vbuf)
 +{
 +	struct vb2_buffer *evb = NULL;
 +	struct vb2_v4l2_buffer *evbuf;
-+	void* frm_buffer;
++	void *frm_buffer;
++	unsigned int copy_size;
++	unsigned int bytesused;
 +
 +	spin_lock(&chan->embedded.spin_lock);
 +	if (0 < chan->embedded.num_buffers) {
@@ -1019,10 +1045,21 @@ index 7b16dcaf..487ae44b 100644
 +	if (!frm_buffer)
 +		return;
 +
-+	memcpy(frm_buffer, chan->emb_buf_addr, 255);
++	copy_size = min_t(unsigned int, 4096, vb2_plane_size(evb, 0));
++	if (chan->embedded_data_width && chan->embedded_data_height)
++		copy_size = min_t(unsigned int, copy_size,
++			chan->embedded_data_width * chan->embedded_data_height *
++			BPP_MEM);
++	if (chan->emb_buf_size)
++		copy_size = min_t(unsigned int, copy_size, chan->emb_buf_size);
++	if (!copy_size)
++		return;
++
++	bytesused = vi5_metadata_bytesused(chan, copy_size);
++	memcpy(frm_buffer, chan->emb_buf_addr, bytesused);
 +	evbuf = to_vb2_v4l2_buffer(evb);
 +	evbuf->sequence = vbuf->sequence;
-+	vb2_set_plane_payload(evb, 0, 68);
++	vb2_set_plane_payload(evb, 0, bytesused);
 +	evb->timestamp = vbuf->vb2_buf.timestamp;
 +	vb2_buffer_done(evb, VB2_BUF_STATE_DONE);
 +}
@@ -1264,4 +1301,3 @@ index e6d9a2b1..38634b77 100644
  /* Supported CSI to VI Data Formats */
 -- 
 2.34.1
-
