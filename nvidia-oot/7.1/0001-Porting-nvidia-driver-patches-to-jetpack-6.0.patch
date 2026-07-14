@@ -998,28 +998,75 @@ index 7b16dcaf..487ae44b 100644
  		chan->capture_descr_sequence += 1;
  }
  
++#define VI5_CSI_METADATA_MAGIC		0x484B524D
++#define VI5_CSI_METADATA_HEADER_SIZE	20
++#define VI5_CSI_METADATA_VERSION	2
++#define VI5_CSI_METADATA_MAX_SIZE	4096
++#define VI5_CSI_METADATA_LEGACY_SIZE	68
++#define VI5_CSI_METADATA_VERSION_OFFSET	4
++#define VI5_CSI_METADATA_STREAM_OFFSET	6
++#define VI5_CSI_METADATA_PAYLOAD_OFFSET	8
++
++static bool vi5_metadata_stream_valid(u8 stream_type)
++{
++	switch (stream_type) {
++	case 2:
++	case 3:
++	case 4:
++	case 5:
++	case 8:
++	case 12:
++		return true;
++	default:
++		return false;
++	}
++}
++
++static unsigned int vi5_metadata_legacy_bytesused(unsigned int copy_size)
++{
++	return min_t(unsigned int, copy_size, VI5_CSI_METADATA_LEGACY_SIZE);
++}
++
 +static unsigned int vi5_metadata_bytesused(struct tegra_channel *chan,
 +	unsigned int copy_size)
 +{
 +	u8 *meta = chan->emb_buf_addr;
 +	u32 magic;
++	u16 version;
++	u8 stream_type;
 +	u16 payload_size;
++	unsigned int max_payload_size;
 +	unsigned int bytesused;
 +
-+	if (!meta || copy_size < 20)
-+		return copy_size;
++	if (!meta || copy_size < VI5_CSI_METADATA_HEADER_SIZE)
++		return vi5_metadata_legacy_bytesused(copy_size);
 +
-+	/* HKRM csi_metadata_header: magic, version, stream, reserved, payload_size. */
 +	memcpy(&magic, meta, sizeof(magic));
-+	if (magic != 0x484B524D)
-+		return copy_size;
++	if (magic != VI5_CSI_METADATA_MAGIC)
++		return vi5_metadata_legacy_bytesused(copy_size);
 +
-+	memcpy(&payload_size, meta + 8, sizeof(payload_size));
-+	bytesused = 20 + payload_size;
-+	if (payload_size && bytesused <= copy_size && bytesused <= 4096)
++	memcpy(&version, meta + VI5_CSI_METADATA_VERSION_OFFSET,
++		sizeof(version));
++	if (version != VI5_CSI_METADATA_VERSION)
++		return vi5_metadata_legacy_bytesused(copy_size);
++
++	memcpy(&stream_type, meta + VI5_CSI_METADATA_STREAM_OFFSET,
++		sizeof(stream_type));
++	if (!vi5_metadata_stream_valid(stream_type))
++		return vi5_metadata_legacy_bytesused(copy_size);
++
++	memcpy(&payload_size, meta + VI5_CSI_METADATA_PAYLOAD_OFFSET,
++		sizeof(payload_size));
++	max_payload_size = VI5_CSI_METADATA_MAX_SIZE -
++		VI5_CSI_METADATA_HEADER_SIZE;
++	if (!payload_size || payload_size > max_payload_size)
++		return vi5_metadata_legacy_bytesused(copy_size);
++
++	bytesused = VI5_CSI_METADATA_HEADER_SIZE + payload_size;
++	if (bytesused <= copy_size)
 +		return bytesused;
 +
-+	return copy_size;
++	return vi5_metadata_legacy_bytesused(copy_size);
 +}
 +
 +static void vi5_release_metadata_buffer(struct tegra_channel *chan,
@@ -1049,7 +1096,8 @@ index 7b16dcaf..487ae44b 100644
 +	if (!frm_buffer)
 +		return;
 +
-+	copy_size = min_t(unsigned int, 4096, vb2_plane_size(evb, 0));
++	copy_size = min_t(unsigned int, VI5_CSI_METADATA_MAX_SIZE,
++		vb2_plane_size(evb, 0));
 +	if (chan->embedded_data_width && chan->embedded_data_height)
 +		copy_size = min_t(unsigned int, copy_size,
 +			chan->embedded_data_width * chan->embedded_data_height *
