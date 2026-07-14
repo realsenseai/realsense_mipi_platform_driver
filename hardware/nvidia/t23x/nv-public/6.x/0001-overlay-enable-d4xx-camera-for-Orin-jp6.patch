@@ -25,6 +25,7 @@ index c88bbe2..cdd125f 100644
 +dtbo-y += tegra234-camera-d4xx-overlay-fg12-16ch-d5xx.dtbo
 +dtbo-y += tegra234-camera-d4xx-overlay-fg12-16ch-PWR-only.dtbo
 +dtbo-y += tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-1.dtbo
++dtbo-y += tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-1-d5xx-d4xx.dtbo
 +dtbo-y += tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-1-2-3.dtbo
 +dtbo-y += tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-4.dtbo
 +dtbo-y += tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-4-8-12.dtbo
