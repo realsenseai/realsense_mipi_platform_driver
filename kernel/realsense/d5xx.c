@@ -3190,7 +3190,11 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 
 	case V4L2_CID_EXPOSURE_ABSOLUTE:
-		ret = ds5_hw_set_exposure(state, base, ctrl->val);
+		if (!ctrl->p_new.p_u32)
+			ret = -EINVAL;
+		else
+			ret = ds5_hw_set_exposure(state, base,
+						 *ctrl->p_new.p_u32);
 		break;
 	case DS5_CAMERA_CID_LASER_POWER:
 		if (!state->is_rgb)
@@ -3792,6 +3796,36 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 static const struct v4l2_ctrl_ops ds5_ctrl_ops = {
 	.s_ctrl	= ds5_s_ctrl,
 	.g_volatile_ctrl = ds5_g_volatile_ctrl,
+};
+
+static const struct v4l2_ctrl_config ds5_ctrl_depth_exposure = {
+	.ops = &ds5_ctrl_ops,
+	.id = V4L2_CID_EXPOSURE_ABSOLUTE,
+	.name = "Exposure Time, Absolute",
+	.type = V4L2_CTRL_TYPE_U32,
+	.min = 1,
+	.max = MAX_DEPTH_EXP,
+	.step = 1,
+	.def = DEF_DEPTH_EXP,
+	.dims = {1},
+	.elem_size = sizeof(u32),
+	.flags = V4L2_CTRL_FLAG_VOLATILE |
+		 V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
+static const struct v4l2_ctrl_config ds5_ctrl_rgb_exposure = {
+	.ops = &ds5_ctrl_ops,
+	.id = V4L2_CID_EXPOSURE_ABSOLUTE,
+	.name = "Exposure Time, Absolute",
+	.type = V4L2_CTRL_TYPE_U32,
+	.min = 1,
+	.max = MAX_RGB_EXP,
+	.step = 1,
+	.def = DEF_RGB_EXP,
+	.dims = {1},
+	.elem_size = sizeof(u32),
+	.flags = V4L2_CTRL_FLAG_VOLATILE |
+		 V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 };
 
 static const struct v4l2_ctrl_config ds5_ctrl_log = {
@@ -4754,23 +4788,13 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 		}
 	}
 
-	/* Exposure time: V4L2_CID_EXPOSURE_ABSOLUTE default unit: 100 us. */
+	/* Exposure time is a one-element U32 payload in microseconds. */
 	if (sid == DEPTH_SID || sid == IR_SID) {
-		ctrls->exposure = v4l2_ctrl_new_std(hdl, ops,
-					V4L2_CID_EXPOSURE_ABSOLUTE,
-					1, MAX_DEPTH_EXP, 1, DEF_DEPTH_EXP);
+		ctrls->exposure = v4l2_ctrl_new_custom(
+				hdl, &ds5_ctrl_depth_exposure, sensor);
 	} else if (sid == RGB_SID) {
-		ctrls->exposure = v4l2_ctrl_new_std(hdl, ops,
-					V4L2_CID_EXPOSURE_ABSOLUTE,
-					1, MAX_RGB_EXP, 1, DEF_RGB_EXP);
-	}
-
-	if ((ctrls->exposure) && (sid >= DEPTH_SID && sid < IMU_SID)) {
-		ctrls->exposure->priv = sensor;
-		ctrls->exposure->flags |=
-				V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
-		/* override default int type to u32 to match SKU & UVC */
-		ctrls->exposure->type = V4L2_CTRL_TYPE_U32;
+		ctrls->exposure = v4l2_ctrl_new_custom(
+				hdl, &ds5_ctrl_rgb_exposure, sensor);
 	}
 	if (hdl->error) {
 		v4l2_err(sd, "error creating controls (%d)\n", hdl->error);
@@ -5520,9 +5544,30 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		state->reset_ref_dser = cur_dser;
 	}
 
-	/* spare duplicate calls */
-	if (sensor->streaming == on)
+	/*
+	 * A duplicate STREAMOFF can arrive after HKR has already stopped the
+	 * stream.  The camera state may be idle while the DES pipe allocated by
+	 * the previous STREAMON is still owned by this sensor, so STREAMOFF must
+	 * still perform the host-side cleanup.
+	 */
+	if (sensor->streaming == on) {
+		if (!on) {
+			mutex_lock(&state->ds5_dev->lock);
+			*streaming_flag = false;
+			mutex_unlock(&state->ds5_dev->lock);
+#ifdef CONFIG_VIDEO_D5XX_SERDES
+			ds5_release_serdes_pipe(state, sensor,
+						"duplicate stream stop");
+			if (ds5_sync_mode_uses_esync(state) &&
+			    !state->ds5_dev->depth_streaming &&
+			    !state->ds5_dev->rgb_streaming &&
+			    !state->ds5_dev->ir_streaming &&
+			    !state->ds5_dev->imu_streaming)
+				ds5_set_des_fsync(state, false);
+#endif
+		}
 		return 0;
+	}
 
 	if (on) {
 		ds5_set_rgb_start_pending(state, stream_id, true);
@@ -5624,10 +5669,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		/*
 		 * If state was invalidated by a reset-generation bump and FW
 		 * still reports this stream as active, force a stop to guarantee
-		 * the next start goes through full reconfiguration.  During a
-		 * normal batched stereo/RGB start, another stream may legitimately
-		 * bring the shared datapath up first; treat that as an already-on
-		 * no-op below.
+		 * the next start goes through full reconfiguration.
 		 */
 		if (on && reset_invalidated && (status & DS5_STATUS_STREAMING)) {
 			dev_warn(&state->client->dev,
@@ -5645,13 +5687,21 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			*streaming_flag = false;
 			mutex_unlock(&state->ds5_dev->lock);
 			sensor->streaming = false;
+		} else if (on && (status & DS5_STATUS_STREAMING)) {
+			/*
+			 * CONFIG_STATUS reflects the shared HKR pipeline.  With gated
+			 * Depth/IR outputs it can be active before this stream's cadence
+			 * is enabled, so a stream-specific START must still be sent.
+			 */
+			dev_info(&state->client->dev,
+				 "stream %d reports shared pipeline active; issuing stream-specific START\n",
+				 stream_id);
 		} else {
-			/* 
+			/*
 			 * After HW reset the FW reboots and all streams return to
-			 * idle.  If VI error recovery tries to stop a stream that
-			 * is already stopped (or start one already started), treat
-			 * it as a no-op so the upper layer can proceed with
-			 * restart instead of getting stuck in an EBUSY loop.
+			 * idle.  If VI error recovery tries to stop a stream that is
+			 * already stopped, clean up host resources and let the upper
+			 * layer proceed instead of getting stuck in an EBUSY loop.
 			 */
 			dev_warn(&state->client->dev,
 				"stream %d in %d state already (status: 0x%04x) %dms, treating as no-op\n",
@@ -5661,8 +5711,14 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			mutex_unlock(&state->ds5_dev->lock);
 			sensor->streaming = on;
 #ifdef CONFIG_VIDEO_D5XX_SERDES
-			if (on)
-				ds5_post_start_dser_datapath_kick(state, stream_id);
+			ds5_release_serdes_pipe(state, sensor,
+						"stream already stopped");
+			if (ds5_sync_mode_uses_esync(state) &&
+			    !state->ds5_dev->depth_streaming &&
+			    !state->ds5_dev->rgb_streaming &&
+			    !state->ds5_dev->ir_streaming &&
+			    !state->ds5_dev->imu_streaming)
+				ds5_set_des_fsync(state, false);
 #endif
 			if (stream_ctrl_locked) {
 				mutex_unlock(&state->ds5_dev->stream_ctrl_lock);
