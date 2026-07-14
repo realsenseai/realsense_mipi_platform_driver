@@ -761,7 +761,7 @@ index 8e237eef..293dcc8a 100644
 +		return err;
 +	}
 +
-+	max96712_reset_oneshot_link_mask(priv, link_id);
++	max96712_reset_oneshot_link_mask(priv, 1 << link_id);
 +	max96712_write_reg(priv, MAX96712_VIDEO_PIPE_EN_ADDR, 1 << pipe_id);
 +
 +	return err;
@@ -781,7 +781,7 @@ index 8e237eef..293dcc8a 100644
 +		{MAX96712_VIDEO_PIPE_EN_ADDR, 0x00}, //0xF4, Disable all pipes for now
 +	};
 +
-+	/* 700Mbps per lane for 4 lanes, 2500Mbps per lane for 2 lanes */
++	/* 1100Mbps per lane for 4 lanes, 2500Mbps per lane for 2 lanes */
 +	uint8_t lane_rate = (priv->lane_cnt == 4) ? MAX96712_BACKTOP25_1100Mbps : MAX96712_BACKTOP25_2500Mbps;
 +
 +	struct reg_pair map_phy_opt[] =
