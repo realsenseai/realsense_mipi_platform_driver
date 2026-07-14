@@ -67,6 +67,7 @@ int max96717_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
  * @param  [in]  dev          The serializer device handle.
  */
 void max96717_retrigger_tx(struct device *dev);
+void max96717_log_control_status(struct device *dev);
 
 /**
  * @brief  Powers on the serializer and performs I2C overrides
