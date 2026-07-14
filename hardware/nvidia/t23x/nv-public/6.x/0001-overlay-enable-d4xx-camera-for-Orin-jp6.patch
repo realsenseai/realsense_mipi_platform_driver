@@ -5,14 +5,14 @@ Subject: [PATCH] overlay: enable d4xx camera for Orin jp6
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- overlay/Makefile | 18 ++++++++++++++++++
- 1 file changed, 18 insertions(+)
+ overlay/Makefile | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
 
 diff --git a/overlay/Makefile b/overlay/Makefile
 index c88bbe2..cdd125f 100644
 --- a/overlay/Makefile
 +++ b/overlay/Makefile
-@@ -60,6 +60,24 @@ dtbo-y += tegra234-p3767-camera-p3768-imx219-A.dtbo
+@@ -60,6 +60,25 @@ dtbo-y += tegra234-p3767-camera-p3768-imx219-A.dtbo
  dtbo-y += tegra234-p3767-camera-p3768-imx219-imx477.dtbo
  dtbo-y += tegra234-p3767-camera-p3768-imx477-C.dtbo
  dtbo-y += tegra234-p3767-camera-p3768-imx477-A.dtbo
