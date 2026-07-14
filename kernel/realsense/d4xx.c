@@ -1484,23 +1484,41 @@ static const struct ds5_format ds5_onsemi_rgb_format = {
 #define DS5_ONSEMI_RGB_N_FORMATS 1
 
 static const struct ds5_resolution d58x_depth_sizes[] = {
-	DS5_RES(640, 360, ds5_framerate_to_60)
+	DS5_RES(640, 360, ds5_framerate_to_90)
+	DS5_RES(1280, 960, ds5_framerate_to_60)
 	DS5_RES(1280, 720, ds5_framerate_to_60)
-	DS5_RES(1280, 960, ds5_depth_framerate_to_30)
+	DS5_RES(896, 504, ds5_framerate_to_60)
+	DS5_RES(848, 480, ds5_framerate_to_60)
+	DS5_RES(640, 480, ds5_framerate_to_90)
+	DS5_RES(480, 270, ds5_framerate_to_90)
+	DS5_RES(424, 240, ds5_framerate_to_90)
 };
 
 static const struct ds5_resolution d58x_y8_sizes[] = {
+	DS5_RES(640, 360, ds5_framerate_to_90)
+	DS5_RES(1280, 960, ds5_framerate_to_60)
 	DS5_RES(1280, 720, ds5_framerate_to_60)
-	DS5_RES(1280, 960, ds5_depth_framerate_to_30)
+	DS5_RES(896, 504, ds5_framerate_to_60)
+	DS5_RES(848, 480, ds5_framerate_to_60)
+	DS5_RES(640, 480, ds5_framerate_to_90)
+	DS5_RES(480, 270, ds5_framerate_to_90)
+	DS5_RES(424, 240, ds5_framerate_to_90)
 };
 
 static const struct ds5_resolution d58x_calibration_sizes[] = {
-	DS5_RES(1600, 1300, ds5_framerate_15_30)
+	DS5_RES(1600, 1300, ds5_framerate_15_25)
+	DS5_RES(256, 144, ds5_framerate_90)
 };
 
 static const struct ds5_resolution d58x_rgb_sizes[] = {
-	DS5_RES(640, 360, ds5_depth_framerate_to_30)
-	DS5_RES(1280, 720, ds5_depth_framerate_to_30)
+	DS5_RES(640, 360, ds5_framerate_to_90)
+	DS5_RES(1280, 960, ds5_framerate_to_60)
+	DS5_RES(1280, 720, ds5_framerate_to_60)
+	DS5_RES(896, 504, ds5_framerate_to_60)
+	DS5_RES(848, 480, ds5_framerate_to_60)
+	DS5_RES(640, 480, ds5_framerate_to_90)
+	DS5_RES(480, 270, ds5_framerate_to_90)
+	DS5_RES(424, 240, ds5_framerate_to_90)
 };
 
 static const struct ds5_format ds5_depth_formats_d58x[] = {
