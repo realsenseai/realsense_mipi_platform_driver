@@ -273,35 +273,6 @@ static int max96717_set_registers(struct device *dev, struct reg_pair *map,
 	return err;
 }
 
-void max96717_log_control_status(struct device *dev)
-{
-	static const u16 regs[] = {
-		MAX96717_DEV_ADDR, MAX96717_REG1_ADDR, MAX96717_PIPE_EN_ADDR,
-		MAX96717_CTRL0_ADDR, MAX96717_CTRL3_ADDR,
-		MAX96717_SRC_A_ADDR, MAX96717_DST_A_ADDR,
-		MAX96717_I2C4_ADDR, MAX96717_I2C5_ADDR,
-		MAX96717_VIDEO_TX0_ADDR, MAX96717_VIDEO_TX1_ADDR,
-		MAX96717_EXT11_ADDR,
-	};
-	struct max96717 *priv = dev_get_drvdata(dev);
-	unsigned int val[ARRAY_SIZE(regs)] = { 0 };
-	u16 failed = 0;
-	unsigned int i;
-
-	mutex_lock(&priv->lock);
-	for (i = 0; i < ARRAY_SIZE(regs); i++) {
-		if (regmap_read(priv->regmap, regs[i], &val[i]))
-			failed |= BIT(i);
-	}
-	mutex_unlock(&priv->lock);
-
-	dev_err(dev,
-		"GMSL SER CC snapshot: failed=0x%03x dev=0x%02x reg1=0x%02x pipe=0x%02x ctrl0=0x%02x ctrl3=0x%02x srcA=0x%02x dstA=0x%02x srcB=0x%02x dstB=0x%02x video0=0x%02x video1=0x%02x tun=0x%02x\n",
-		failed, val[0], val[1], val[2], val[3], val[4], val[5],
-		val[6], val[7], val[8], val[9], val[10], val[11]);
-}
-EXPORT_SYMBOL(max96717_log_control_status);
-
 /* ===== Streaming Setup ===== */
 
 /*

@@ -45,8 +45,7 @@ int max96724_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
 		      u8 data_type2, u32 vc_id);
 int max96724_release_pipe(struct device *dev, int pipe_id);
 void max96724_reset_oneshot(struct device *dev);
-void max96724_retrigger_datapath(struct device *dev);
-void max96724_log_control_status(struct device *dev);
+int max96724_retrigger_datapath(struct device *dev);
 int max96724_active_pipe_count(struct device *dev);
 int max96724_link_locked(struct device *dev);
 
