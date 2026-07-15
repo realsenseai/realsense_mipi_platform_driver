@@ -116,6 +116,9 @@ struct ser_interface {
 #define GMSL_CSI_DT_EMBED 0x12
 #endif
 
+/* D40x FW CSI-PT mode selector for the OV9782 (not a MIPI wire DT). */
+#define DS5_FW_CSI_PT	0x2E
+
 //#define DS5_DRIVER_NAME "DS5 RealSense camera driver"
 #define DS5_DRIVER_NAME "d4xx"
 #define DS5_DRIVER_NAME_AWG "d4xx-awg"
@@ -175,6 +178,7 @@ struct ser_interface {
 #define DS5_RGB_RES_HEIGHT		0x4028
 #define DS5_RGB_FPS				0x402C
 #define DS5_RGB_CONTROL_STATUS 	0x402E
+#define DS5_RGB_OVERRIDE		0x403C
 
 /* SerDes startup I2C readiness polling (defer probe if not responsive) */
 #define DS5_SERDES_STARTUP_TIMEOUT_MS 2000
@@ -1013,6 +1017,7 @@ static const u16 ds5_41x_framerate_to_30[] = {6, 15, 30};
 static const u16 ds5_41x_framerate_to_60_no_15[] = {6, 30, 60};
 static const u16 ds5_41x_framerate_to_60[] = {6, 15, 30, 60};
 static const u16 ds5_41x_framerate_to_90[] = {6, 15, 30, 60, 90};
+static const u16 ds5_raw8_framerate_to_60[] = {5, 10, 15, 30, 60};
 static const u16 ds5_framerate_15_25[] = {15, 25};
 static const u16 ds5_framerate_15_30[] = {15, 30};
 static const u16 ds5_framerate_15_60[] = {15, 30, 60};
@@ -1372,6 +1377,10 @@ static const struct ds5_resolution d45x_calibration_sizes[] = {
 	},
 };
 
+static const struct ds5_resolution raw8_1612x808_sizes[] = {
+	DS5_RES(1612, 808, ds5_raw8_framerate_to_60)
+};
+
 static const struct ds5_resolution ds5_size_imu[] = {
 	{
 	.width = 32,
@@ -1500,6 +1509,11 @@ static const struct ds5_format ds5_y_formats_40x[] = {
 		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,
 		.n_resolutions = ARRAY_SIZE(d40x_calibration_sizes),
 		.resolutions = d40x_calibration_sizes,
+	}, {
+		.data_type = DS5_FW_CSI_PT,		/* EP3 left OV9782: activates FW CSI-PT mode; FW remaps wire DT to RAW8 */
+		.mbus_code = MEDIA_BUS_FMT_SBGGR8_1X8,
+		.n_resolutions = ARRAY_SIZE(raw8_1612x808_sizes),
+		.resolutions = raw8_1612x808_sizes,
 	},
 };
 
@@ -1550,11 +1564,18 @@ static const struct ds5_format ds5_41x_rgb_format = {
 	.resolutions = ds5_41x_rgb_sizes,
 };
 
-static const struct ds5_format ds5_40x_rgb_format = {
-	.data_type = GMSL_CSI_DT_YUV422_8,	/* UYVY */
-	.mbus_code = MEDIA_BUS_FMT_YUYV8_1X16,
-	.n_resolutions = ARRAY_SIZE(d40x_rgb_sizes),
-	.resolutions = d40x_rgb_sizes,
+static const struct ds5_format ds5_40x_rgb_formats[] = {
+	{
+		.data_type = GMSL_CSI_DT_YUV422_8,	/* UYVY */
+		.mbus_code = MEDIA_BUS_FMT_YUYV8_1X16,
+		.n_resolutions = ARRAY_SIZE(d40x_rgb_sizes),
+		.resolutions = d40x_rgb_sizes,
+	}, {
+		.data_type = DS5_FW_CSI_PT,	/* activates FW CSI-PT mode; FW remaps wire DT to RAW8 */
+		.mbus_code = MEDIA_BUS_FMT_SBGGR8_1X8,
+		.n_resolutions = ARRAY_SIZE(raw8_1612x808_sizes),
+		.resolutions = raw8_1612x808_sizes,
+	},
 };
 
 static const struct ds5_format ds5_rlt_rgb_format = {
@@ -2150,7 +2171,10 @@ static int ds5_configure(struct ds5 *state)
 		sensor = &state->rgb.sensor;
 		dt_addr = DS5_RGB_STREAM_DT;
 		md_addr = DS5_RGB_STREAM_MD;
-		override_addr = 0;
+		/* Only CSI-PT needs the FW DT override; leave the YUYV path on the
+		 * FW default so non-passthrough RGB behaviour is unchanged. */
+		override_addr = sensor->config.format->mbus_code ==
+				MEDIA_BUS_FMT_SBGGR8_1X8 ? DS5_RGB_OVERRIDE : 0;
 		fps_addr = DS5_RGB_FPS;
 		width_addr = DS5_RGB_RES_WIDTH;
 		height_addr = DS5_RGB_RES_HEIGHT;
@@ -2180,6 +2204,12 @@ static int ds5_configure(struct ds5 *state)
 	data_type1 = sensor->config.format->data_type;
 	data_type2 = md_fmt;
 	is_calib = (state->is_y8 && (data_type1 == GMSL_CSI_DT_RGB_888));
+
+	/* D401 RAW8 CSI passthrough: FW remaps all wire DTs to RAW8 on the
+	 * GMSL link; MAX9296 pipe routing must match the actual wire DT.
+	 */
+	if (sensor->config.format->mbus_code == MEDIA_BUS_FMT_SBGGR8_1X8)
+		data_type1 = MIPI_CSI2_TYPE_RAW8;
 
 	vc_id = state->g_ctx.dst_vc;
     if (PIPE_NOT_CONFIGURED == sensor->pipe_id ||
@@ -2262,6 +2292,8 @@ static int ds5_configure(struct ds5 *state)
 		ret = ds5_write(state, dt_addr, dt_value);
 		if (ret < 0)
 			return ret;
+		dev_dbg(&state->client->dev, "FW dt_addr[0x%04x] = 0x%02x\n",
+			dt_addr, dt_value);
 		sensor->cached_dt_value = dt_value;
 	}
 
@@ -2275,10 +2307,18 @@ static int ds5_configure(struct ds5 *state)
 
 	if (override_addr != 0) {
 		dt_value = sensor->config.format->data_type;
+		/* RAW8 CSI passthrough: FW runs in CSI-PT mode (0x2E → dt_addr) and
+		 * remaps all wire DTs to RAW8 via override_addr=0x2A.
+		 */
+		if (sensor->config.format->mbus_code == MEDIA_BUS_FMT_SBGGR8_1X8)
+			dt_value = MIPI_CSI2_TYPE_RAW8;
 		if (sensor->cached_override_value != dt_value) {
 			ret = ds5_write(state, override_addr, dt_value);
 			if (ret < 0)
 				return ret;
+			dev_dbg(&state->client->dev,
+				"FW override_addr[0x%04x] = 0x%02x\n",
+				override_addr, dt_value);
 			sensor->cached_override_value = dt_value;
 		}
 	}
@@ -2292,6 +2332,12 @@ static int ds5_configure(struct ds5 *state)
 	}
 
 	width_value = sensor->config.resolution->width;
+	/* RAW8 CSI passthrough: V4L2 width=1612 (VDF byte-count/line, needed for correct
+	 * DMA surface stride), but the FW width register (DS5_RGB_RES_WIDTH for EP4,
+	 * DS5_IR_RES_WIDTH for EP3) expects the OV9782 physical pixel count. Clamp to 1288.
+	 */
+	if (sensor->config.format->mbus_code == MEDIA_BUS_FMT_SBGGR8_1X8 && width_value == 1612)
+		width_value = 1288;
 	if (sensor->cached_width_value != width_value) {
 		ret = ds5_write(state, width_addr, width_value);
 		if (ret < 0)
@@ -6393,8 +6439,8 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
 		break;
 	case DS5_DEVICE_TYPE_D40X:
-		sensor->formats = &ds5_40x_rgb_format;
-		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
+		sensor->formats = ds5_40x_rgb_formats;
+		sensor->n_formats = ARRAY_SIZE(ds5_40x_rgb_formats);
 		break;
 	case DS5_DEVICE_TYPE_D45X:
 		sensor->formats = &ds5_rlt_rgb_format;
