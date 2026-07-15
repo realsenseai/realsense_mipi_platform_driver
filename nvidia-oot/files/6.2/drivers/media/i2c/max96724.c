@@ -327,10 +327,11 @@
 /*
  *   Tunnel controller destination (MIPI_TX57, 0x0939):
  *   bits[5:4]: TUN_DEST (00=PHY0, 01=PHY1, 10=PHY2, 11=PHY3)
- *   Verified value: 0x10 = PHY1 destination with auto-detect enabled
+ *   Bit 6 disables auto tunnel detection because TUN_EN is set manually.
+ *   0x50 = manual tunnel mode routed to PHY1.
  */
-#define MAX96724_TUN_DEST_CTRL0		0x00  /* Auto-detect + PHY0 */
-#define MAX96724_TUN_DEST_CTRL1		0x10  /* Auto-detect + PHY1 (Port A master) */
+#define MAX96724_TUN_DEST_CTRL0		0x40  /* Manual tunnel + PHY0 */
+#define MAX96724_TUN_DEST_CTRL1		0x50  /* Manual tunnel + PHY1 (Port A master) */
 
 #define MAX96724_CSI_MODE_2X4_VAL	0x04  /* bit[2] = clean 2x4: Port A = PHY0+PHY1 */
 
@@ -1066,7 +1067,9 @@ int max96724_setup_control(struct device *dev, struct device *s_dev)
 	/*
 	 * [SC20190112] Enable tunnel mode and route to Controller 1.
 	 *   - TUN_EN   (0x0936): 0x01 (TUN_EN=1)
-	 *   - TUN_DEST (0x0939): 0x10 = Controller 1
+	 *   - TUN_DEST (0x0939): 0x50 = disable auto detection + Controller 1
+	 * TUN_EN is programmed explicitly, so automatic tunnel detection must be
+	 * disabled to keep it from racing the manual state after Link resets.
 	 *   CSI_OUT_CFG=0x04 (2x4 mode): Controller 1 -> PHY0+1 -> Port A -> Orin
 	 */
 	{
@@ -1671,7 +1674,9 @@ void max96724_reset_oneshot(struct device *dev)
 		max96724_write_reg(dev, MAX96724_PIPE1_TUN_EN_ADDR, MAX96724_TUN_EN);
 		max96724_write_reg(dev, MAX96724_PIPE2_TUN_EN_ADDR, MAX96724_TUN_EN);
 		max96724_write_reg(dev, MAX96724_PIPE3_TUN_EN_ADDR, MAX96724_TUN_EN);
-		/* TUN_DEST: set to Controller 1 (0x10) = Port A master in 2x4 mode */
+		/* Force manual tunnel mode to Controller 1, the Port A master in
+		 * 2x4 mode. Automatic detection can otherwise overwrite TUN_EN after
+		 * ONESHOT while the source is still idle. */
 		max96724_write_reg(dev, MAX96724_PIPE0_TUN_DEST_ADDR,
 				   MAX96724_TUN_DEST_CTRL1);
 		max96724_write_reg(dev, MAX96724_PIPE1_TUN_DEST_ADDR,

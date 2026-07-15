@@ -196,7 +196,7 @@ struct dser_interface {
 #define MAX_DEPTH_EXP				200000
 #define MAX_RGB_EXP					10000
 #define DEF_DEPTH_EXP				33000
-#define DEF_RGB_EXP					1660
+#define DEF_RGB_EXP					166
 
 enum ds5_mux_pad {
 	DS5_MUX_PAD_EXTERNAL,
@@ -221,7 +221,6 @@ enum ds5_mux_pad {
 #define DS5_START_MAX_COUNT	(DS5_START_MAX_TIME / DS5_START_POLL_TIME)
 #define DS5_DEPENDENCY_DEBOUNCE_MS		300
 #define DS5_DEPENDENCY_WAIT_MS			3000
-#define DS5_DSER_REARM_COOLDOWN_MS		1800
 #define MAX_DS5_CONFIG_RETRIES		5
 
 /* I2C retry configuration */
@@ -604,7 +603,6 @@ struct dser_control {
 	*/
 	atomic_t reset_gen;
 	struct device *dser_dev;
-	unsigned long last_idle_jiffies;
 };
 static struct dser_control dser_inited[MAX_DSER_NUM];
 
@@ -658,107 +656,9 @@ static unsigned int ds5_started_mipi_streams(struct ds5 *state)
 	return count;
 }
 
-static u8 ds5_started_mipi_pipe_mask(struct ds5 *state)
-{
-	u8 mask = 0;
-
-	mutex_lock(&state->ds5_dev->lock);
-	if (state->ds5_dev->depth_streaming)
-		mask |= BIT(0);
-	if (state->ds5_dev->rgb_streaming)
-		mask |= BIT(1);
-	if (state->ds5_dev->ir_streaming)
-		mask |= BIT(2);
-	if (state->ds5_dev->imu_streaming)
-		mask |= BIT(3);
-	mutex_unlock(&state->ds5_dev->lock);
-
-	return mask;
-}
-
-static void ds5_post_start_dser_datapath_kick(struct ds5 *state, u16 stream_id)
-{
-	unsigned int started_streams;
-	u8 active_pipe_mask;
-	int active_pipes;
-	int link_locked;
-
-	mutex_lock(&serdes_lock__);
-	link_locked = state->dser_ops->get_link_locked ?
-		state->dser_ops->get_link_locked(state->dser_dev) : -1;
-	if (link_locked <= 0)
-		goto out;
-
-	active_pipes = state->dser_ops->get_active_pipe_count ?
-		state->dser_ops->get_active_pipe_count(state->dser_dev) : 1;
-	started_streams = ds5_started_mipi_streams(state);
-	active_pipe_mask = ds5_started_mipi_pipe_mask(state);
-	if (started_streams < active_pipes) {
-		dev_info(&state->client->dev,
-			 "stream %u START ok; locked DES datapath unchanged until remaining streams start (%u/%d)\n",
-			 stream_id, started_streams, active_pipes);
-		goto out;
-	}
-
-	dev_info(&state->client->dev,
-		 "stream %u START ok; updating DES CSI datapath without resetting locked GMSL Link A for pipe mask 0x%02x (%u/%d streams started)\n",
-		 stream_id, active_pipe_mask, started_streams, active_pipes);
-	/* PIPE_EN/mapping retrigger is local to the DES CSI datapath.  ONESHOT
-	 * would reset the whole Link A PHY/data path and invalidate queued VI
-	 * frames, while leaving the datapath untouched does not resynchronize
-	 * tunnel detection after the camera starts transmitting. */
-	if (state->dser_ops->retrigger_datapath(state->dser_dev) < 0) {
-		dev_warn(&state->client->dev,
-			 "stream %u START ok; DES CSI datapath retrigger failed\n",
-			 stream_id);
-		goto out;
-	}
-
-out:
-	mutex_unlock(&serdes_lock__);
-}
-
-static void ds5_wait_for_dser_rearm_cooldown(struct ds5 *state, const char *reason)
-{
-	struct dser_control *ctrl = state->ds5_dev->dser_control;
-	unsigned long last_idle;
-	unsigned long ready;
-	unsigned int wait_ms;
-
-	mutex_lock(&ctrl->lock);
-	last_idle = ctrl->last_idle_jiffies;
-	mutex_unlock(&ctrl->lock);
-
-	if (!last_idle)
-		return;
-
-	ready = last_idle + msecs_to_jiffies(DS5_DSER_REARM_COOLDOWN_MS);
-	if (!time_before(jiffies, ready))
-		return;
-
-	wait_ms = jiffies_to_msecs(ready - jiffies);
-	dev_info(&state->client->dev,
-		 "waiting %u ms before DES datapath re-arm (%s)\n",
-		 wait_ms, reason);
-	msleep(wait_ms);
-}
-
-static void ds5_reset_dser_datapath_before_start(struct ds5 *state, int pipe_id)
-{
-	ds5_wait_for_dser_rearm_cooldown(state, "unlocked link");
-	dev_info(&state->client->dev,
-		 "pipe %d pre-start resetting unlocked GMSL Link A PHY and datapath\n",
-		 pipe_id);
-	state->dser_ops->reset_oneshot(state->dser_dev);
-	max96717_retrigger_tx(state->ser_dev);
-	msleep(200);
-}
-
 static void ds5_disarm_dser_datapath_if_idle(struct ds5 *state)
 {
 	int active_pipes;
-	int link_locked;
-	struct dser_control *ctrl = state->ds5_dev->dser_control;
 
 	if (!state->dser_ops->get_active_pipe_count)
 		return;
@@ -767,20 +667,8 @@ static void ds5_disarm_dser_datapath_if_idle(struct ds5 *state)
 	if (active_pipes != 0)
 		return;
 
-	link_locked = state->dser_ops->get_link_locked ?
-		state->dser_ops->get_link_locked(state->dser_dev) : -1;
-	mutex_lock(&ctrl->lock);
-	ctrl->last_idle_jiffies = jiffies;
-	mutex_unlock(&ctrl->lock);
-
-	if (link_locked > 0) {
-		dev_info(&state->client->dev,
-			 "all DES pipes released; preserving locked Link A for next start\n");
-		return;
-	}
-
 	dev_info(&state->client->dev,
-		 "all DES pipes released; starting re-arm cooldown\n");
+		 "all DES pipes released; preserving Link A for next start\n");
 }
 
 /* MAX96724 deserializer interface implementation */
@@ -1606,10 +1494,22 @@ static int ds5_setup_pipeline(struct ds5 *state, u8 data_type1, u8 data_type2,
 	if (active_pipes <= 1) {
 		if (link_locked > 0) {
 			dev_info(&state->client->dev,
-				 "pipe %d preserving locked Link A; DES datapath retrigger will run after START\n",
+				 "pipe %d preserving locked Link A before DES pre-start re-arm\n",
 				 pipe_id);
 		} else {
-			ds5_reset_dser_datapath_before_start(state, pipe_id);
+			dev_info(&state->client->dev,
+				 "pipe %d resetting unlocked GMSL Link A before cold start\n",
+				 pipe_id);
+			state->dser_ops->reset_oneshot(state->dser_dev);
+			max96717_retrigger_tx(state->ser_dev);
+			msleep(200);
+		}
+		ret = state->dser_ops->retrigger_datapath(state->dser_dev);
+		if (ret < 0) {
+			dev_warn(&state->client->dev,
+				 "pipe %d DES pre-start re-arm failed (%d)\n",
+				 pipe_id, ret);
+			goto error;
 		}
 	} else {
 		dev_info(&state->client->dev,
@@ -2833,11 +2733,7 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 
 	case V4L2_CID_EXPOSURE_ABSOLUTE:
-		if (!ctrl->p_new.p_u32)
-			ret = -EINVAL;
-		else
-			ret = ds5_hw_set_exposure(state, base,
-						 *ctrl->p_new.p_u32);
+		ret = ds5_hw_set_exposure(state, base, ctrl->val);
 		break;
 	case DS5_CAMERA_CID_LASER_POWER:
 		if (!state->is_rgb)
@@ -3289,7 +3185,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		data = ((u32)reg << 16) & 0xffff0000;
 		ds5_read(state, base | DS5_MANUAL_EXPOSURE_LSB, &reg);
 		data |= reg;
-		*ctrl->p_new.p_u32 = data;
+		ctrl->val = (s32)data;
 		break;
 
 	case DS5_CAMERA_CID_LASER_POWER:
@@ -3445,13 +3341,11 @@ static const struct v4l2_ctrl_config ds5_ctrl_depth_exposure = {
 	.ops = &ds5_ctrl_ops,
 	.id = V4L2_CID_EXPOSURE_ABSOLUTE,
 	.name = "Exposure Time, Absolute",
-	.type = V4L2_CTRL_TYPE_U32,
+	.type = V4L2_CTRL_TYPE_INTEGER,
 	.min = 1,
 	.max = MAX_DEPTH_EXP,
 	.step = 1,
 	.def = DEF_DEPTH_EXP,
-	.dims = {1},
-	.elem_size = sizeof(u32),
 	.flags = V4L2_CTRL_FLAG_VOLATILE |
 		 V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 };
@@ -3460,13 +3354,11 @@ static const struct v4l2_ctrl_config ds5_ctrl_rgb_exposure = {
 	.ops = &ds5_ctrl_ops,
 	.id = V4L2_CID_EXPOSURE_ABSOLUTE,
 	.name = "Exposure Time, Absolute",
-	.type = V4L2_CTRL_TYPE_U32,
+	.type = V4L2_CTRL_TYPE_INTEGER,
 	.min = 1,
 	.max = MAX_RGB_EXP,
 	.step = 1,
 	.def = DEF_RGB_EXP,
-	.dims = {1},
-	.elem_size = sizeof(u32),
 	.flags = V4L2_CTRL_FLAG_VOLATILE |
 		 V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 };
@@ -5270,6 +5162,12 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		if (ret < 0 || status == DS5_STATUS_UNAVAILABLE ||
 		    (status & ~DS5_STATUS_VALID_MASK))
 			continue;
+		/* A recovery STOP may race with an HKR-side teardown that already
+		 * made the stream idle.  Let the common no-op cleanup run now rather
+		 * than waiting the full STOP timeout for a state transition that has
+		 * already happened. */
+		if (!on && !(status & DS5_STATUS_STREAMING))
+			break;
 		if (on == !(status & DS5_STATUS_STREAMING)) {
 			break;
 		}
@@ -5500,14 +5398,6 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 #endif
 	}
 #ifdef CONFIG_VIDEO_D5XX_SERDES
-	/*
-	 * Stream-on success path (neither timeout nor stream-off).
-	 * Re-assert serializer GPIO tunneling after reset/recovery and
-	 * start the DES internal FSYNC source at the negotiated FPS.
-	 */
-	if (on && ret >= 0)
-		ds5_post_start_dser_datapath_kick(state, stream_id);
-
 	if (on && ds5_sync_mode_uses_esync(state)) {
 		ds5_set_ser_esync_tunneling(state, true);
 		ds5_set_des_fsync(state, true);
