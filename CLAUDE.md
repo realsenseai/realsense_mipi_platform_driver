@@ -193,6 +193,23 @@ Format — one line per action: `<action> — <model>, effort <tier>` plus a sho
 - **Flag delegation separately.** If the action is better run as a subagent or Workflow, say so and give the model/effort for the subagent, noting that both require explicit user opt-in in this repo.
 - **Re-recommend when scope changes.** If new evidence makes an action riskier (e.g. HW work turns out to be panic-prone), restate the recommendation instead of letting the old one stand.
 
+## SerDes format configuration notes
+
+- `DS5_FW_CSI_PT` (`0x2E`) is the D40x FW CSI-PT mode selector for the OV9782 sensor — not a MIPI wire DT. Written to `DS5_RGB_STREAM_DT` to activate FW CSI passthrough mode. The sole active use is the D401 RAW8 CSI passthrough format (`mbus_code = MEDIA_BUS_FMT_SBGGR8_1X8`):
+  - Write `0x2E` to `dt_addr` — FW activates CSI passthrough mode.
+  - Write `0x2A` (`MIPI_CSI2_TYPE_RAW8`) to `override_addr` — the D401 FW remaps **all** wire DTs (pixel long packets from OV9782 and FW-generated short packets) to RAW8.
+  - Set SerDes PIPE_X_DT = `0x2A` — aligns MAX9296 routing with the actual RAW8 wire DT. In `ds5_configure()`, guard with `mbus_code == MEDIA_BUS_FMT_SBGGR8_1X8` after the standard `data_type1` init, setting `data_type1 = MIPI_CSI2_TYPE_RAW8`.
+  - Before writing `DS5_RGB_RES_WIDTH`, clamp the V4L2 format width (1612) to the OV9782 physical pixel count (1288). The FW expects the sensor pixel count; the V4L2 width stays at 1612 so `bytesperline` accommodates the actual 1612 B/line VDF output.
+- Do **not** call `max9295_set_pipe_bpp()` during stream start. Both the new-pipe branch and unconditional BPP write paths were removed after experiments proved they cause `CAPTURE_CHANNEL_ERROR_COLLISION` in the Tegra VI descriptor engine (~56 extra COLLISION events per run). The default BPP register (`0x30` = enable+16bpp) over-allocates GMSL2 link bandwidth but streaming is functionally correct.
+
+## NVCSI / VI capture notes
+
+- **D401 OV9782 RAW10 dword alignment — RAW8 passthrough is the fix**: The D401 VDF dword-aligns each RAW10 line: 1288px × 10/8 = 1610 B → `ALIGN(1610, 4)` = 1612 B transmitted. A pure RAW10 NVCSI capture path is not viable for this sensor:
+  - The NVCSI RAW10 depacketizer requires `frame_x` to be **8-pixel aligned**. No 8-aligned value gives an expected WC of exactly 1612 B (`frame_x=1288` → 1610 B → `PIXEL_LONG_LINE` → ~20% SOF; `frame_x=1296` → 1620 B → `PIXEL_SHORT_LINE` → unvalidated). Non-8-aligned values (1290, 1292) cause `CAPTURE_CHANNEL_ERROR_COLLISION` and 0% SOF regardless of WC accuracy.
+  - **Correct fix**: use the D401 RAW8 CSI passthrough approach (see SerDes notes above). FW `override_addr=0x2A` remaps all wire DTs to RAW8; NVCSI is configured with `match.datatype=0x2A`, `frame_x=1612` (1 B/pixel → expected WC = 1612 B = actual VDF output). RAW8 has no depacketizer and no pixel-alignment constraint.
+- Do **not** set `dt_enable=1` in the VI capture descriptor — it suppresses DT=0x00 Frame Start packets, causing `sof:0.0` and `PIXEL_INCOMPLETE` on every frame.
+- `frame_x` in `struct vi_frame_config` is in **pixels**, not bytes. NVCSI derives expected WC as `(frame_x × bpp_for_DT) / 8` using integer truncation.
+
 ## Post-patch instruction hygiene
 
 After every confirmed code patch, review `CLAUDE.md` against the final net diff, including any follow-up tuning edits.
