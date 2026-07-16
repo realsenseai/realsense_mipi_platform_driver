@@ -7,14 +7,14 @@ Add MAX96712 deserializer driver support for D4XX cameras.
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- drivers/media/i2c/max96712.c | 873 ++++++++++++++++++++++++++++++++++++++++++-
-  1 file changed, 870 insertions(+), 3 deletions(-)
+ drivers/media/i2c/max96712.c | 902 ++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 899 insertions(+), 3 deletions(-)
 
 diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
-index 8081385f0..dcf538b36 100644
+index 8081385f0..67c769b60 100644
 --- a/drivers/media/i2c/max96712.c
 +++ b/drivers/media/i2c/max96712.c
-@@ -21,18 +21,148 @@
+@@ -21,18 +21,153 @@
  #include <linux/debugfs.h>
  #include <media/camera_common.h>
  #include <linux/module.h>
@@ -154,6 +154,11 @@ index 8081385f0..dcf538b36 100644
 +	int lane_cnt;
 +	bool fangzhu_fg12_reverse_lane_polarity;
 +	bool fangzhu_fg12_poc_enable;
++	/* RSDEV-12608: when true, the next __max96712_set_pipe() /
++	 * __max96712_set_multi_vc_pipe() issues the one-shot GMSL link reset
++	 * (CTRL1). d4xx arms this only for a cold link bring-up. Default true
++	 * (fail-safe). */
++	bool pending_link_reset;
  };
  struct max96712 *global_priv[4] ;
  
@@ -164,7 +169,7 @@ index 8081385f0..dcf538b36 100644
  {
  	struct i2c_client *i2c_client = NULL;
  	int bak = 0;
-@@ -85,6 +215,52 @@ int max96712_read_reg_Dser(int slaveAddr,int channel,
+@@ -85,6 +220,52 @@ int max96712_read_reg_Dser(int slaveAddr,int channel,
  
  EXPORT_SYMBOL(max96712_read_reg_Dser);
  
@@ -217,7 +222,7 @@ index 8081385f0..dcf538b36 100644
  static int max96712_read_reg(struct max96712 *priv,
  			u16 addr, unsigned int *val)
  {
-@@ -99,6 +275,20 @@ static int max96712_read_reg(struct max96712 *priv,
+@@ -99,6 +280,20 @@ static int max96712_read_reg(struct max96712 *priv,
  	return err;
  }
  
@@ -238,7 +243,7 @@ index 8081385f0..dcf538b36 100644
  
  static int max96712_stats_show(struct seq_file *s, void *data)
  {
-@@ -169,7 +359,10 @@ static int max96712_debugfs_init(const char *dir_name,
+@@ -169,7 +364,10 @@ static int max96712_debugfs_init(const char *dir_name,
  	if (np) {
  		err = of_property_read_string(np, "channel", &priv->channel);
  		if (err)
@@ -249,7 +254,7 @@ index 8081385f0..dcf538b36 100644
  
  		err = snprintf(dev_name, sizeof(dev_name), "max96712_%s", priv->channel);
  		if (err < 0)
-@@ -208,7 +401,8 @@ static int max96712_debugfs_init(const char *dir_name,
+@@ -208,7 +406,8 @@ static int max96712_debugfs_init(const char *dir_name,
  static  struct regmap_config max96712_regmap_config = {
  	.reg_bits = 16,
  	.val_bits = 8,
@@ -259,7 +264,7 @@ index 8081385f0..dcf538b36 100644
  };
  
  static int max96712_probe(struct i2c_client *client,
-@@ -216,10 +410,16 @@ static int max96712_probe(struct i2c_client *client,
+@@ -216,10 +415,16 @@ static int max96712_probe(struct i2c_client *client,
  {
  	struct max96712 *priv;
  	int err = 0;
@@ -276,11 +281,12 @@ index 8081385f0..dcf538b36 100644
  	priv->i2c_client = client;
  	priv->regmap = devm_regmap_init_i2c(priv->i2c_client,
  				&max96712_regmap_config);
-@@ -228,10 +428,60 @@ static int max96712_probe(struct i2c_client *client,
+@@ -228,10 +433,61 @@ static int max96712_probe(struct i2c_client *client,
  			"regmap init failed: %ld\n", PTR_ERR(priv->regmap));
  		return -ENODEV;
  	}
 +	mutex_init(&priv->lock);
++	priv->pending_link_reset = true;
 +
 +	np = client->dev.of_node;
 +	if (np) {
@@ -337,7 +343,7 @@ index 8081385f0..dcf538b36 100644
  
  	/*set daymode by fault*/
  	dev_info(&client->dev, "%s:  success\n", __func__);
-@@ -243,8 +493,12 @@ static int max96712_probe(struct i2c_client *client,
+@@ -243,8 +499,12 @@ static int max96712_probe(struct i2c_client *client,
  static int
  max96712_remove(struct i2c_client *client)
  {
@@ -350,7 +356,7 @@ index 8081385f0..dcf538b36 100644
  		i2c_unregister_device(client);
  		client = NULL;
  	}
-@@ -252,13 +506,625 @@ max96712_remove(struct i2c_client *client)
+@@ -252,13 +512,648 @@ max96712_remove(struct i2c_client *client)
  	return 0;
  }
  
@@ -574,6 +580,20 @@ index 8081385f0..dcf538b36 100644
 +}
 +EXPORT_SYMBOL(max96712_reset_oneshot);
 +
++/* RSDEV-12608: arm/disarm the one-shot GMSL link reset consumed by the next
++ * __max96712_set_pipe() / __max96712_set_multi_vc_pipe(). d4xx sets reset=true
++ * only for a cold link bring-up so a pipe re-alloc on an already-locked link
++ * does not re-train it and truncate sibling frames. */
++void max96712_arm_link_reset(struct device *dev, bool reset)
++{
++	struct max96712 *priv = dev_get_drvdata(dev);
++
++	mutex_lock(&priv->lock);
++	priv->pending_link_reset = reset;
++	mutex_unlock(&priv->lock);
++}
++EXPORT_SYMBOL(max96712_arm_link_reset);
++
 +static int __max96712_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
 +			      u8 data_type2, u32 vc_id)
 +{
@@ -619,7 +639,12 @@ index 8081385f0..dcf538b36 100644
 +	if (err) {
 +		return err;
 +	}
-+	max96712_reset_oneshot_link_mask(priv, 1 << vc_id_msb);
++	/* RSDEV-12608: only re-train the link on a d4xx-armed cold bring-up;
++	 * skipping it on a plain pipe re-alloc avoids truncating sibling frames
++	 * on the same link. Re-arm true afterwards (fail-safe default). */
++	if (priv->pending_link_reset)
++		max96712_reset_oneshot_link_mask(priv, 1 << vc_id_msb);
++	priv->pending_link_reset = true;
 +
 +	err |= max96712_read_reg(priv, MAX96712_VIDEO_PIPE_EN_ADDR, &pipe_en_val);
 +	if (err == 0) {
@@ -796,7 +821,11 @@ index 8081385f0..dcf538b36 100644
 +
 +	/* Bring up the link that owns this multi-VC pipe. The mask is a
 +	 * per-link bit (bit N = link N), so link 0 must reset with 0x01, not 0. */
-+	max96712_reset_oneshot_link_mask(priv, 1 << link_id);
++	/* RSDEV-12608: same gate as __max96712_set_pipe(), on the MAX96717
++	 * multi-VC pipe path. Re-arm true afterwards (fail-safe default). */
++	if (priv->pending_link_reset)
++		max96712_reset_oneshot_link_mask(priv, 1 << link_id);
++	priv->pending_link_reset = true;
 +	max96712_write_reg(priv, MAX96712_VIDEO_PIPE_EN_ADDR, 1 << pipe_id);
 +
 +	return err;
@@ -977,7 +1006,7 @@ index 8081385f0..dcf538b36 100644
  	{ },
  };
  
-@@ -268,6 +1134,7 @@ static struct i2c_driver max96712_i2c_driver = {
+@@ -268,6 +1163,7 @@ static struct i2c_driver max96712_i2c_driver = {
  	.driver = {
  		.name = "max96712",
  		.owner = THIS_MODULE,

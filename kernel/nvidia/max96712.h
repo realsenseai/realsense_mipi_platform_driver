@@ -54,6 +54,12 @@ int max96712_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
 		     u8 data_type2, u32 vc_id);
 int max96712_release_pipe(struct device *dev, int pipe_id);
 void max96712_reset_oneshot(struct device *dev);
+/* RSDEV-12608: this deserializer header provides max96712_arm_link_reset().
+ * d4xx keys its one-shot-link-reset gating on this macro so the shared d4xx.c
+ * builds on every JetPack (versions whose max96712 header lacks the symbol
+ * leave the op NULL, which d4xx guards). */
+#define MAX96712_HAS_ARM_LINK_RESET 1
+void max96712_arm_link_reset(struct device *dev, bool reset);
 int max96712_setup_link(struct device *dev, struct device *s_dev);
 int max96712_setup_control(struct device *dev, struct device *s_dev);
 int max96712_reset_control(struct device *dev, struct device *s_dev);
