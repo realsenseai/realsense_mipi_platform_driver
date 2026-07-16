@@ -56,7 +56,11 @@ struct dser_interface {
 	int (*set_pipe)(struct device *dev, int pipe_id, u8 data_type1, u8 data_type2, u32 vc_id);
 	int (*release_pipe)(struct device *dev, int pipe_id);
 	void (*reset_oneshot)(struct device *dev);
-	
+	/* RSDEV-12608: arm (true) / disarm (false) the deserializer's one-shot
+	 * GMSL link reset for the next set_pipe. Optional; NULL means the deser
+	 * never re-trains the link on pipe (re)alloc (e.g. max9296). */
+	void (*arm_link_reset)(struct device *dev, bool reset);
+
 	/* Setup and control */
 	int (*setup_link)(struct device *dev, struct device *s_dev);
 	int (*setup_control)(struct device *dev, struct device *s_dev);
@@ -558,6 +562,13 @@ struct ds5 {
 	const struct ds5_variant *variant;
 	int is_depth, is_y8, is_rgb, is_imu;
 	bool metadata_enabled;
+	/* RSDEV-12608: gate the deserializer one-shot GMSL link reset.
+	 * needs_oneshot_on_alloc (DT "maxim,oneshot-on-alloc") forces the reset on
+	 * every pipe alloc for a camera that needs per-alloc re-init.
+	 * link_cold_bringup is recomputed on each stream start: true iff no sibling
+	 * stream of this camera is already up (first active stream on the link). */
+	bool needs_oneshot_on_alloc;
+	bool link_cold_bringup;
 	int aggregated;
 	int reset_ref_ds5;
 	u16 fw_version;
@@ -683,6 +694,9 @@ static const struct dser_interface max96712_interface = {
 	.set_pipe = max96712_set_pipe,
 	.release_pipe = max96712_release_pipe,
 	.reset_oneshot = max96712_reset_oneshot,
+#ifdef MAX96712_HAS_ARM_LINK_RESET
+	.arm_link_reset = max96712_arm_link_reset,
+#endif
 	.setup_link = max96712_setup_link,
 	.setup_control = max96712_setup_control,
 	.reset_control = max96712_reset_control,
@@ -1981,6 +1995,13 @@ static int ds5_setup_pipeline(struct ds5 *state, u8 data_type1, u8 data_type2,
 			ser_pipe_id, pipe_id, data_type1, data_type2, ser_vc_id, vc_id);
 	ret |= state->ser_ops->set_pipe(state->ser_dev, ser_pipe_id,
 				data_type1, data_type2, ser_vc_id);
+	/* RSDEV-12608: arm the deserializer one-shot GMSL link reset only for a
+	 * cold link bring-up (or a DT opt-in camera). Called under serdes_lock__
+	 * (held by the caller) immediately before set_pipe so the decision and the
+	 * reset are atomic w.r.t. other d4xx instances sharing this link. */
+	if (state->dser_ops->arm_link_reset)
+		state->dser_ops->arm_link_reset(state->dser_dev,
+				state->link_cold_bringup || state->needs_oneshot_on_alloc);
 	ret |= state->dser_ops->set_pipe(state->dser_dev, pipe_id,
 				data_type1, data_type2, vc_id);
 	if (ret)
@@ -4215,6 +4236,12 @@ static int ds5_board_setup(struct ds5 *state)
 	}
 	state->g_ctx.dst_vc = value;
 
+	/* RSDEV-12608: opt-in for cameras that need the deserializer one-shot
+	 * link reset on every pipe alloc (not just cold bring-up). Absent by
+	 * default, so normal cameras rely purely on link_cold_bringup. */
+	state->needs_oneshot_on_alloc =
+		of_property_read_bool(gmsl, "maxim,oneshot-on-alloc");
+
 	err = of_property_read_u32(gmsl, "num-lanes", &value);
 	if (err < 0) {
 		dev_err(dev, "No num-lanes info\n");
@@ -5410,6 +5437,18 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 
 	restore_val = sensor->streaming;
 	mutex_lock(&state->ds5_dev->lock);
+	/* RSDEV-12608: before marking our own stream active, capture whether any
+	 * sibling stream of this camera is already up. If none, this is the first
+	 * active stream on the shared GMSL link (cold bring-up) and the deser
+	 * one-shot link reset must fire in ds5_setup_pipeline; otherwise it must be
+	 * skipped so we don't re-train a link carrying a sibling's frames. Our own
+	 * flag is guaranteed false here by the duplicate-call guard above and the
+	 * reset-clear in ds5_reset_streaming_flags(). */
+	if (on)
+		state->link_cold_bringup = !(state->ds5_dev->depth_streaming ||
+					     state->ds5_dev->rgb_streaming ||
+					     state->ds5_dev->ir_streaming ||
+					     state->ds5_dev->imu_streaming);
 	*streaming_flag = on;
 	mutex_unlock(&state->ds5_dev->lock);
 	sensor->streaming = on;
