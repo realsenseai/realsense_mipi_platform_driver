@@ -327,11 +327,10 @@
 /*
  *   Tunnel controller destination (MIPI_TX57, 0x0939):
  *   bits[5:4]: TUN_DEST (00=PHY0, 01=PHY1, 10=PHY2, 11=PHY3)
- *   Bit 6 disables auto tunnel detection because TUN_EN is set manually.
- *   0x50 = manual tunnel mode routed to PHY1.
+ *   Verified value: 0x10 = PHY1 destination with auto-detect enabled
  */
-#define MAX96724_TUN_DEST_CTRL0		0x40  /* Manual tunnel + PHY0 */
-#define MAX96724_TUN_DEST_CTRL1		0x50  /* Manual tunnel + PHY1 (Port A master) */
+#define MAX96724_TUN_DEST_CTRL0		0x00  /* Auto-detect + PHY0 */
+#define MAX96724_TUN_DEST_CTRL1		0x10  /* Auto-detect + PHY1 (Port A master) */
 
 #define MAX96724_CSI_MODE_2X4_VAL	0x04  /* bit[2] = clean 2x4: Port A = PHY0+PHY1 */
 
@@ -484,6 +483,7 @@ struct max96724 {
 	bool pixel_mode;
 	bool poc_enabled; /* FG24-4CH board POC/IO enable applied once */
 	bool datapath_retriggered;
+	u8 retriggered_pipe_mask;
 };
 
 struct reg_pair {
@@ -579,6 +579,40 @@ static void max96724_log_link_status(struct device *dev, const char *tag)
 		 lock_d, (lock_d & MAX96724_LINK_LOCKED) ? "LOCK" : "noLk",
 		 reg10, reg11);
 }
+
+void max96724_log_control_status(struct device *dev)
+{
+	static const u16 regs[] = {
+		0x0001, 0x0003, 0x0007, 0x0006, 0x0010, 0x001A, 0x002E,
+		0x00C7, 0x0500, 0x0501, 0x0503, 0x0504, 0x0506, 0x0507,
+		0x0560, 0x0561, 0x0563, 0x0564, 0x0566, 0x0567, 0x0640,
+		0x0641, 0x0680, 0x0681, 0x1003, 0x1004,
+	};
+	struct max96724 *priv = dev_get_drvdata(dev);
+	unsigned int val[ARRAY_SIZE(regs)] = { 0 };
+	u32 failed = 0;
+	unsigned int i;
+
+	mutex_lock(&priv->lock);
+	for (i = 0; i < ARRAY_SIZE(regs); i++) {
+		if (regmap_read(priv->regmap, regs[i], &val[i]))
+			failed |= BIT(i);
+	}
+	mutex_unlock(&priv->lock);
+
+	dev_err(dev,
+		"GMSL CC snapshot: failed=0x%08x local=0x%02x remote=0x%02x cross=0x%02x link_en=0x%02x rate=0x%02x lock=0x%02x intr11=0x%02x i2c7=0x%02x\n",
+		failed, val[0], val[1], val[2], val[3], val[4], val[5],
+		val[6], val[7]);
+	dev_err(dev,
+		"GMSL CC0/1 A: cc0 tr0=0x%02x tr1=0x%02x tr3=0x%02x tr4=0x%02x arq1=0x%02x arq2=0x%02x; cc1 tr0=0x%02x tr1=0x%02x tr3=0x%02x tr4=0x%02x arq1=0x%02x arq2=0x%02x\n",
+		val[8], val[9], val[10], val[11], val[12], val[13], val[14],
+		val[15], val[16], val[17], val[18], val[19]);
+	dev_err(dev,
+		"GMSL I2C bridge A: p0 i2c0=0x%02x i2c1=0x%02x p1 i2c0=0x%02x i2c1=0x%02x tx3=0x%02x rx0=0x%02x\n",
+		val[20], val[21], val[22], val[23], val[24], val[25]);
+}
+EXPORT_SYMBOL(max96724_log_control_status);
 
 static int max96724_wait_link_lock(struct device *dev, u32 link)
 {
@@ -1067,9 +1101,7 @@ int max96724_setup_control(struct device *dev, struct device *s_dev)
 	/*
 	 * [SC20190112] Enable tunnel mode and route to Controller 1.
 	 *   - TUN_EN   (0x0936): 0x01 (TUN_EN=1)
-	 *   - TUN_DEST (0x0939): 0x50 = disable auto detection + Controller 1
-	 * TUN_EN is programmed explicitly, so automatic tunnel detection must be
-	 * disabled to keep it from racing the manual state after Link resets.
+	 *   - TUN_DEST (0x0939): 0x10 = Controller 1
 	 *   CSI_OUT_CFG=0x04 (2x4 mode): Controller 1 -> PHY0+1 -> Port A -> Orin
 	 */
 	{
@@ -1491,19 +1523,13 @@ EXPORT_SYMBOL(max96724_get_available_pipe_id);
 int max96724_release_pipe(struct device *dev, int pipe_id)
 {
 	struct max96724 *priv = dev_get_drvdata(dev);
-	int i;
 
 	if (pipe_id < 0 || pipe_id >= MAX96724_MAX_PIPES)
 		return -EINVAL;
 
 	mutex_lock(&priv->lock);
 	priv->pipe[pipe_id].st_count = 0;
-	for (i = 0; i < MAX96724_MAX_PIPES; i++) {
-		if (priv->pipe[i].st_count)
-			break;
-	}
-	if (i == MAX96724_MAX_PIPES)
-		priv->datapath_retriggered = false;
+	priv->retriggered_pipe_mask &= ~BIT(pipe_id);
 	mutex_unlock(&priv->lock);
 
 	return 0;
@@ -1534,7 +1560,7 @@ int max96724_active_pipe_count(struct device *dev)
 EXPORT_SYMBOL(max96724_active_pipe_count);
 
 /*
- * Whether the selected GMSL link is currently locked.  Used by the sensor driver
+ * Whether GMSL link A is currently locked.  Used by the sensor driver
  * to decide if a link ONESHOT reset is actually required at stream
  * start: a locked link forwards tunnel traffic as-is and the ONESHOT
  * would only break it (and any concurrent camera-side CSI transition
@@ -1544,17 +1570,9 @@ EXPORT_SYMBOL(max96724_active_pipe_count);
 int max96724_link_locked(struct device *dev)
 {
 	struct max96724 *priv = dev_get_drvdata(dev);
-	u16 lock_addr = max96724_link_lock_addr(priv->src_link);
 	unsigned int lock = 0;
-	int err;
 
-	if (!lock_addr)
-		return -EINVAL;
-
-	err = regmap_read(priv->regmap, lock_addr, &lock);
-	if (err)
-		return err;
-
+	regmap_read(priv->regmap, MAX96724_LINK_A_LOCK_ADDR, &lock);
 	return (lock & MAX96724_LINK_LOCKED) ? 1 : 0;
 }
 EXPORT_SYMBOL(max96724_link_locked);
@@ -1581,6 +1599,7 @@ void max96724_reset_oneshot(struct device *dev)
 
 	mutex_lock(&priv->lock);
 	priv->datapath_retriggered = false;
+	priv->retriggered_pipe_mask = 0;
 	if (priv->splitter_enabled) {
 		/* Multi-camera: reset all links */
 		u8 link_rate = (priv->link_speed == 6) ? 0x22 : 0x11;
@@ -1674,9 +1693,7 @@ void max96724_reset_oneshot(struct device *dev)
 		max96724_write_reg(dev, MAX96724_PIPE1_TUN_EN_ADDR, MAX96724_TUN_EN);
 		max96724_write_reg(dev, MAX96724_PIPE2_TUN_EN_ADDR, MAX96724_TUN_EN);
 		max96724_write_reg(dev, MAX96724_PIPE3_TUN_EN_ADDR, MAX96724_TUN_EN);
-		/* Force manual tunnel mode to Controller 1, the Port A master in
-		 * 2x4 mode. Automatic detection can otherwise overwrite TUN_EN after
-		 * ONESHOT while the source is still idle. */
+		/* TUN_DEST: set to Controller 1 (0x10) = Port A master in 2x4 mode */
 		max96724_write_reg(dev, MAX96724_PIPE0_TUN_DEST_ADDR,
 				   MAX96724_TUN_DEST_CTRL1);
 		max96724_write_reg(dev, MAX96724_PIPE1_TUN_DEST_ADDR,
@@ -1739,6 +1756,7 @@ void max96724_reset_oneshot(struct device *dev)
 		}
 	}
 
+	priv->datapath_retriggered = true;
 	mutex_unlock(&priv->lock);
 }
 EXPORT_SYMBOL(max96724_reset_oneshot);
@@ -1856,16 +1874,19 @@ static int __max96724_set_pipe(struct device *dev, int pipe_id,
 	return err;
 }
 
-int max96724_retrigger_datapath(struct device *dev)
+void max96724_retrigger_datapath(struct device *dev)
 {
 	struct max96724 *priv = dev_get_drvdata(dev);
+	unsigned int pipe_en = MAX96724_PIPE_EN_4;
 	u8 active_mask = 0;
+	u8 retrigger_mask;
 	u8 pipe_sel0;
 	u8 pipe_sel1;
 	u8 vid_rx0_cfg;
 	u8 vid_rx6_cfg;
 	u8 st_sel_cfg;
 	u8 dpll_cfg;
+	bool full_retrigger;
 	unsigned int i;
 	int err = 0;
 
@@ -1876,99 +1897,135 @@ int max96724_retrigger_datapath(struct device *dev)
 	}
 	if (!active_mask) {
 		dev_warn(dev, "datapath retrigger requested with no active pipes\n");
-		err = -EINVAL;
 		goto out;
 	}
 
-	if (priv->datapath_retriggered) {
+	full_retrigger = !priv->datapath_retriggered;
+	retrigger_mask = active_mask & ~priv->retriggered_pipe_mask;
+	if (!full_retrigger && !retrigger_mask) {
 		dev_info(dev, "CSI datapath already retriggered for active pipes 0x%02x\n",
 			 active_mask);
 		goto out;
 	}
-	if (max96724_is_pixel_mode(priv)) {
-		pipe_sel0 = MAX96724_PIPE_SEL0_PIXEL;
-		pipe_sel1 = MAX96724_PIPE_SEL1_PIXEL;
-		vid_rx0_cfg = MAX96724_VID_RX0_PIXEL_VAL;
-		vid_rx6_cfg = MAX96724_VID_RX6_PIXEL_VAL;
-		st_sel_cfg = 0x00;
-		dpll_cfg = MAX96724_DPLL_2000MBPS;
-	} else {
-		pipe_sel0 = MAX96724_PIPE_SEL0_PIXEL;
-		pipe_sel1 = MAX96724_PIPE_SEL1_PIXEL;
-		vid_rx0_cfg = MAX96724_VID_RX0_CFG_VAL;
-		vid_rx6_cfg = MAX96724_VID_RX6_CFG_VAL;
-		st_sel_cfg = 0x10;
-		dpll_cfg = MAX96724_DPLL_2000MBPS;
+	if (!full_retrigger && priv->retriggered_pipe_mask) {
+		/* All logical pipes on Link A share one tunnel detector. Once the
+		 * first stream has armed it, toggling any PIPE_EN bit can interrupt
+		 * VCs that are already live. set_pipe() has already installed the
+		 * joining stream's mapping, so only track it here. */
+		dev_info(dev,
+			 "Link A tunnel already active; adding CSI pipes 0x%02x without toggling live pipes 0x%02x\n",
+			 retrigger_mask, priv->retriggered_pipe_mask);
+		priv->retriggered_pipe_mask |= retrigger_mask;
+		goto out;
 	}
+	if (full_retrigger)
+		retrigger_mask = active_mask;
 
-	dev_info(dev, "retriggering full CSI datapath for first stream batch\n");
-	err = max96724_write_reg(dev, MAX96724_PIPE_EN_ADDR, 0x00);
-	msleep(20);
-	err |= max96724_write_reg(dev, MAX96724_PIPE_SEL0_ADDR, pipe_sel0);
-	err |= max96724_write_reg(dev, MAX96724_PIPE_SEL1_ADDR, pipe_sel1);
-	max96724_apply_porta_subset(dev, priv);
-	err |= max96724_write_reg(dev, MAX96724_DPLL_FREQ0_ADDR, dpll_cfg);
-	err |= max96724_write_reg(dev, MAX96724_DPLL_FREQ1_ADDR, dpll_cfg);
-	err |= max96724_write_reg(dev, MAX96724_DPLL_FREQ2_ADDR, dpll_cfg);
-	err |= max96724_write_reg(dev, MAX96724_DPLL_FREQ3_ADDR, dpll_cfg);
-	err |= max96724_write_reg(dev, MAX96724_MIPI_CTRL_SEL_ADDR,
-				  MAX96724_MIPI_CTRL_SEL_PIXEL);
-	err |= max96724_write_reg(dev, MAX96724_BACKTOP_EN_ADDR,
-				  MAX96724_BACKTOP_CSIB_EN);
-	for (i = 0; i < MAX96724_MAX_PIPES; i++) {
-		u16 pipe_off = 0x40 * i;
-		u16 vid_off = MAX96724_VID_RX_STRIDE * i;
-
-		err |= max96724_write_reg(dev,
-			MAX96724_PIPE_X_ST_SEL_ADDR + pipe_off, st_sel_cfg);
-		err |= max96724_write_reg(dev,
-			MAX96724_VID_RX0_P0_ADDR + vid_off, vid_rx0_cfg);
-		err |= max96724_write_reg(dev,
-			MAX96724_VID_RX6_P0_ADDR + vid_off, vid_rx6_cfg);
-		err |= max96724_write_reg(dev,
-			MAX96724_TX49_PIPE_X_ADDR + pipe_off, 0x00);
+	if (full_retrigger) {
 		if (max96724_is_pixel_mode(priv)) {
-			err |= max96724_write_reg(dev,
-				MAX96724_PIPE0_TUN_EN_ADDR + pipe_off,
-				MAX96724_TUN_DISABLED);
-			err |= max96724_write_reg(dev,
-				MAX96724_TX45_PIPE_X_DST_CTRL_ADDR + pipe_off,
-				MAX96724_ALL_MAP_CTRL0);
-			err |= max96724_write_reg(dev,
-				MAX96724_TX46_PIPE_X_ADDR + pipe_off,
-				MAX96724_ALL_MAP_CTRL0);
-			err |= max96724_write_reg(dev,
-				MAX96724_TX47_PIPE_X_ADDR + pipe_off,
-				MAX96724_ALL_MAP_CTRL0);
-			err |= max96724_write_reg(dev,
-				MAX96724_TX48_PIPE_X_ADDR + pipe_off,
-				MAX96724_ALL_MAP_CTRL0);
+			pipe_sel0 = MAX96724_PIPE_SEL0_PIXEL;
+			pipe_sel1 = MAX96724_PIPE_SEL1_PIXEL;
+			vid_rx0_cfg = MAX96724_VID_RX0_PIXEL_VAL;
+			vid_rx6_cfg = MAX96724_VID_RX6_PIXEL_VAL;
+			st_sel_cfg = 0x00;
+			dpll_cfg = MAX96724_DPLL_2000MBPS;
 		} else {
-			err |= max96724_write_reg(dev,
-				MAX96724_PIPE0_TUN_EN_ADDR + pipe_off,
-				MAX96724_TUN_EN);
-			err |= max96724_write_reg(dev,
-				MAX96724_PIPE0_TUN_DEST_ADDR + pipe_off,
-				MAX96724_TUN_DEST_CTRL1);
-			err |= max96724_write_reg(dev,
-				MAX96724_TX45_PIPE_X_DST_CTRL_ADDR + pipe_off,
-				MAX96724_ALL_MAP_CTRL1);
-			err |= max96724_write_reg(dev,
-				MAX96724_TX46_PIPE_X_ADDR + pipe_off,
-				MAX96724_ALL_MAP_CTRL1);
-			err |= max96724_write_reg(dev,
-				MAX96724_TX47_PIPE_X_ADDR + pipe_off,
-				MAX96724_ALL_MAP_CTRL1);
-			err |= max96724_write_reg(dev,
-				MAX96724_TX48_PIPE_X_ADDR + pipe_off,
-				MAX96724_ALL_MAP_CTRL1);
+			pipe_sel0 = MAX96724_PIPE_SEL0_PIXEL;
+			pipe_sel1 = MAX96724_PIPE_SEL1_PIXEL;
+			vid_rx0_cfg = MAX96724_VID_RX0_CFG_VAL;
+			vid_rx6_cfg = MAX96724_VID_RX6_CFG_VAL;
+			st_sel_cfg = 0x10;
+			dpll_cfg = MAX96724_DPLL_2000MBPS;
 		}
+
+		dev_info(dev,
+			 "retriggering full CSI datapath for first stream batch\n");
+		err = max96724_write_reg(dev, MAX96724_PIPE_EN_ADDR, 0x00);
+		msleep(20);
+		err |= max96724_write_reg(dev, MAX96724_PIPE_SEL0_ADDR,
+					  pipe_sel0);
+		err |= max96724_write_reg(dev, MAX96724_PIPE_SEL1_ADDR,
+					  pipe_sel1);
+		max96724_apply_porta_subset(dev, priv);
+		err |= max96724_write_reg(dev, MAX96724_DPLL_FREQ0_ADDR,
+					  dpll_cfg);
+		err |= max96724_write_reg(dev, MAX96724_DPLL_FREQ1_ADDR,
+					  dpll_cfg);
+		err |= max96724_write_reg(dev, MAX96724_DPLL_FREQ2_ADDR,
+					  dpll_cfg);
+		err |= max96724_write_reg(dev, MAX96724_DPLL_FREQ3_ADDR,
+					  dpll_cfg);
+		err |= max96724_write_reg(dev, MAX96724_MIPI_CTRL_SEL_ADDR,
+					  MAX96724_MIPI_CTRL_SEL_PIXEL);
+		err |= max96724_write_reg(dev, MAX96724_BACKTOP_EN_ADDR,
+					  MAX96724_BACKTOP_CSIB_EN);
+		for (i = 0; i < MAX96724_MAX_PIPES; i++) {
+			u16 pipe_off = 0x40 * i;
+			u16 vid_off = MAX96724_VID_RX_STRIDE * i;
+
+			err |= max96724_write_reg(dev,
+				MAX96724_PIPE_X_ST_SEL_ADDR + pipe_off,
+				st_sel_cfg);
+			err |= max96724_write_reg(dev,
+				MAX96724_VID_RX0_P0_ADDR + vid_off,
+				vid_rx0_cfg);
+			err |= max96724_write_reg(dev,
+				MAX96724_VID_RX6_P0_ADDR + vid_off,
+				vid_rx6_cfg);
+			err |= max96724_write_reg(dev,
+				MAX96724_TX49_PIPE_X_ADDR + pipe_off, 0x00);
+			if (max96724_is_pixel_mode(priv)) {
+				err |= max96724_write_reg(dev,
+					MAX96724_PIPE0_TUN_EN_ADDR + pipe_off,
+					MAX96724_TUN_DISABLED);
+				err |= max96724_write_reg(dev,
+					MAX96724_TX45_PIPE_X_DST_CTRL_ADDR + pipe_off,
+					MAX96724_ALL_MAP_CTRL0);
+				err |= max96724_write_reg(dev,
+					MAX96724_TX46_PIPE_X_ADDR + pipe_off,
+					MAX96724_ALL_MAP_CTRL0);
+				err |= max96724_write_reg(dev,
+					MAX96724_TX47_PIPE_X_ADDR + pipe_off,
+					MAX96724_ALL_MAP_CTRL0);
+				err |= max96724_write_reg(dev,
+					MAX96724_TX48_PIPE_X_ADDR + pipe_off,
+					MAX96724_ALL_MAP_CTRL0);
+			} else {
+				err |= max96724_write_reg(dev,
+					MAX96724_PIPE0_TUN_EN_ADDR + pipe_off,
+					MAX96724_TUN_EN);
+				err |= max96724_write_reg(dev,
+					MAX96724_PIPE0_TUN_DEST_ADDR + pipe_off,
+					MAX96724_TUN_DEST_CTRL1);
+				err |= max96724_write_reg(dev,
+					MAX96724_TX45_PIPE_X_DST_CTRL_ADDR + pipe_off,
+					MAX96724_ALL_MAP_CTRL1);
+				err |= max96724_write_reg(dev,
+					MAX96724_TX46_PIPE_X_ADDR + pipe_off,
+					MAX96724_ALL_MAP_CTRL1);
+				err |= max96724_write_reg(dev,
+					MAX96724_TX47_PIPE_X_ADDR + pipe_off,
+					MAX96724_ALL_MAP_CTRL1);
+				err |= max96724_write_reg(dev,
+					MAX96724_TX48_PIPE_X_ADDR + pipe_off,
+					MAX96724_ALL_MAP_CTRL1);
+			}
+		}
+	} else {
+		if (regmap_read(priv->regmap, MAX96724_PIPE_EN_ADDR, &pipe_en))
+			pipe_en = MAX96724_PIPE_EN_4;
+		dev_info(dev,
+			 "retriggering newly active CSI pipes 0x%02x (active 0x%02x)\n",
+			 retrigger_mask, active_mask);
+		err = max96724_write_reg(dev, MAX96724_PIPE_EN_ADDR,
+					 pipe_en & ~retrigger_mask);
+		msleep(20);
 	}
 
 	for (i = 0; i < MAX96724_MAX_PIPES; i++) {
 		struct pipe_ctx *pipe = &priv->pipe[i];
 
-		if (!(active_mask & BIT(i)) || !pipe->st_count ||
+		if (!(retrigger_mask & BIT(i)) || !pipe->st_count ||
 		    !pipe->map_configured)
 			continue;
 		dev_info(dev,
@@ -1983,17 +2040,23 @@ int max96724_retrigger_datapath(struct device *dev)
 
 	err |= max96724_write_reg(dev, MAX96724_CSI_OUT_CFG_ADDR,
 				  MAX96724_CSI_OUT_EN_VAL);
-	err |= max96724_write_reg(dev, MAX96724_PIPE_EN_ADDR,
-				  MAX96724_PIPE_EN_4);
+	if (full_retrigger) {
+		err |= max96724_write_reg(dev, MAX96724_PIPE_EN_ADDR,
+					  MAX96724_PIPE_EN_4);
+		if (!err)
+			priv->datapath_retriggered = true;
+	} else {
+		err |= max96724_write_reg(dev, MAX96724_PIPE_EN_ADDR,
+					  pipe_en | retrigger_mask);
+	}
 	if (err) {
 		dev_warn(dev, "failed to retrigger CSI datapath: %d\n", err);
 	} else {
-		priv->datapath_retriggered = true;
+		priv->retriggered_pipe_mask |= retrigger_mask;
 	}
 
 out:
 	mutex_unlock(&priv->lock);
-	return err;
 }
 EXPORT_SYMBOL(max96724_retrigger_datapath);
 
