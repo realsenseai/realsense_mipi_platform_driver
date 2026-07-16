@@ -5602,6 +5602,12 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		if (ret < 0 || status == DS5_STATUS_UNAVAILABLE ||
 		    (status & ~DS5_STATUS_VALID_MASK))
 			continue;
+		/* A recovery STOP may race with an HKR-side teardown that already
+		 * made the stream idle.  Let the common no-op cleanup run now rather
+		 * than waiting the full STOP timeout for a state transition that has
+		 * already happened. */
+		if (!on && !(status & DS5_STATUS_STREAMING))
+			break;
 		if (on == !(status & DS5_STATUS_STREAMING)) {
 			break;
 		}
