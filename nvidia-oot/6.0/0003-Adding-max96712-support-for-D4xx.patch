@@ -7,11 +7,11 @@ Add MAX96712 deserializer driver support for D4XX/D5XX cameras.
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- drivers/media/i2c/max96712.c | 931 +++++++++++++++++++++++++++++++++++++++++--
- 1 file changed, 896 insertions(+), 35 deletions(-)
+ drivers/media/i2c/max96712.c | 940 +++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 905 insertions(+), 35 deletions(-)
 
 diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
-index 8e237ee..26cdebd 100644
+index 8e237eef..ec66c247 100644
 --- a/drivers/media/i2c/max96712.c
 +++ b/drivers/media/i2c/max96712.c
 @@ -16,32 +16,167 @@
@@ -410,7 +410,7 @@ index 8e237ee..26cdebd 100644
  		i2c_unregister_device(client);
  		client = NULL;
  	}
-@@ -284,13 +508,649 @@ static void max96712_remove(struct i2c_client *client)
+@@ -284,13 +508,658 @@ static void max96712_remove(struct i2c_client *client)
  #endif
  }
  
@@ -792,7 +792,16 @@ index 8e237ee..26cdebd 100644
 +		return err;
 +	}
 +
-+	max96712_reset_oneshot_link_mask(priv, 1 << link_id);
++	/* RSDEV-12608: same one-shot link reset as __max96712_set_pipe(), here on
++	 * the MAX96717 multi-VC pipe path. Gate it on the d4xx-armed decision so a
++	 * pipe re-alloc on an already-locked link does not re-train it and truncate
++	 * sibling frames; re-arm true afterwards (fail-safe default). */
++	if (priv->pending_link_reset) {
++		dev_info(dev, "RSDEV-12608: GMSL link %d one-shot reset fired (multi-vc)\n",
++			 link_id);
++		max96712_reset_oneshot_link_mask(priv, 1 << link_id);
++	}
++	priv->pending_link_reset = true;
 +	max96712_write_reg(priv, MAX96712_VIDEO_PIPE_EN_ADDR, 1 << pipe_id);
 +
 +	return err;
@@ -1061,7 +1070,7 @@ index 8e237ee..26cdebd 100644
  	{ },
  };
  
-@@ -300,6 +1160,7 @@ static struct i2c_driver max96712_i2c_driver = {
+@@ -300,6 +1169,7 @@ static struct i2c_driver max96712_i2c_driver = {
  	.driver = {
  		.name = "max96712",
  		.owner = THIS_MODULE,
