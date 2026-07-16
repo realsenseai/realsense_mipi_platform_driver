@@ -26,6 +26,10 @@
 /* REG0: Device ID (read-only, returns 0x40) */
 #define MAX96717_DEV_ADDR		0x00
 
+/* Errata #5: force the negative GMSL output on for 6Gbps coax links. */
+#define MAX96717_RLMSCE_ADDR		0x14CE
+#define MAX96717_ENMINUS_FORCE_ON	(BIT(4) | BIT(3))
+
 /*
  *   REG1: GMSL2 link rate, CC pin routing, pass-through I2C enables
  *   TX_RATE[3:2]: 01=3Gbps, 10=6Gbps
@@ -178,8 +182,8 @@
 
 /* REG1: TX_RATE[3:2]=01, RX_RATE[1:0]=00 */
 #define MAX96717_LINK_SPEED_3GBPS	0x04
-/* REG1: IIC_2_EN=1, DIS_LOCAL_CC=0, TX_RATE[3:2]=10, RX_RATE[1:0]=00 */
-#define MAX96717_LINK_SPEED_6GBPS	0x88
+/* REG1: main CC enabled, TX_RATE[3:2]=10, RX_RATE[1:0]=00. */
+#define MAX96717_LINK_SPEED_6GBPS	0x08
 
 /* EXT11 tunnel mode pre-config (0x0383=0x80) */
 #define MAX96717_EXT11_TUN_PRE		0x80
@@ -352,31 +356,79 @@ int max96717_setup_control(struct device *dev)
 	g_ctx = priv->g_client.g_ctx;
 
 	if (prim_priv__) {
-		unsigned int dev_id;
-		int probe_ret;
+		unsigned int default_id = 0;
+		unsigned int target_id = 0;
+		int default_ret = -EREMOTEIO;
+		int target_ret = -EREMOTEIO;
+		int retry;
 
-		probe_ret = regmap_read(prim_priv__->regmap,
-					MAX96717_DEV_ADDR, &dev_id);
-		if (probe_ret == 0) {
+		for (retry = 0; retry < 10; retry++) {
+			default_ret = regmap_read(prim_priv__->regmap,
+						  MAX96717_DEV_ADDR, &default_id);
+			if (!default_ret)
+				break;
+
+			target_ret = regmap_read(priv->regmap,
+						 MAX96717_DEV_ADDR, &target_id);
+			if (!target_ret)
+				break;
+
+			msleep(20);
+		}
+
+		if (!default_ret) {
 			/* Primary address (0x40) still responsive — do reassign */
 			err = max96717_write_reg(&prim_priv__->i2c_client->dev,
 						 MAX96717_DEV_ADDR,
 						 (g_ctx->ser_reg << 1));
 			if (err)
 				goto error;
-			msleep(20);
-		} else {
+
+			for (retry = 0; retry < 10; retry++) {
+				msleep(20);
+				target_ret = regmap_read(priv->regmap,
+							 MAX96717_DEV_ADDR,
+							 &target_id);
+				if (!target_ret)
+					break;
+			}
+			if (target_ret) {
+				dev_err(dev,
+					"%s: SER target address 0x%02x did not ACK after reassignment\n",
+					__func__, g_ctx->ser_reg);
+				err = target_ret;
+				goto error;
+			}
+		} else if (!target_ret) {
 			dev_info(&prim_priv__->i2c_client->dev,
-				 "%s: SER already reassigned (addr 0x40 NACK), skipping DEV_ADDR write\n",
-				 __func__);
+				 "%s: SER already reassigned (target 0x%02x ACK, addr 0x40 NACK)\n",
+				 __func__, g_ctx->ser_reg);
+		} else {
+			dev_err(dev,
+				"%s: SER did not ACK at default 0x40 or target 0x%02x\n",
+				__func__, g_ctx->ser_reg);
+			err = target_ret;
+			goto error;
 		}
 	}
 
-	/* Enable 6Gbps GMSL and keep local CC on MFP9/MFP10 for HKR I2C. */
+	/*
+	 * Enable 6Gbps while keeping main CC on MFP9/MFP10. IIC_2 must
+	 * remain disabled because its pass-through pins overlap main CC.
+	 */
 	err = max96717_write_reg(dev, MAX96717_REG1_ADDR,
 				 MAX96717_LINK_SPEED_6GBPS);
 	if (err) {
 		dev_err(dev, "%s: failed to configure serializer link rate\n",
+			__func__);
+		goto error;
+	}
+
+	err = regmap_update_bits(priv->regmap, MAX96717_RLMSCE_ADDR,
+				 MAX96717_ENMINUS_FORCE_ON,
+				 MAX96717_ENMINUS_FORCE_ON);
+	if (err) {
+		dev_err(dev, "%s: failed to force SION on for 6Gbps coax\n",
 			__func__);
 		goto error;
 	}
@@ -386,7 +438,7 @@ int max96717_setup_control(struct device *dev)
 	else
 		ctrl0_val = MAX96717_CTRL0_LINK_B;
 
-	dev_info(dev, "%s: SER rate=6Gbps/187.5Mbps local_CC(MFP9/10)=on PT2_I2C=on link=%c CTRL0=0x%02x\n",
+	dev_info(dev, "%s: SER rate=6Gbps/187.5Mbps main_CC(MFP9/10)=on IIC_2=off link=%c CTRL0=0x%02x\n",
 		 __func__,
 		 (g_ctx->serdes_csi_link == GMSL_SERDES_CSI_LINK_A) ? 'A' : 'B',
 		 ctrl0_val);
@@ -848,9 +900,13 @@ EXPORT_SYMBOL(max96717_set_pipe);
  */
 void max96717_retrigger_tx(struct device *dev)
 {
+	struct max96717 *priv = dev_get_drvdata(dev);
+
+	mutex_lock(&priv->lock);
 	max96717_write_reg(dev, MAX96717_PIPE_EN_ADDR, MAX96717_SOFT_RESET);
 	msleep(30);
 	max96717_write_reg(dev, MAX96717_PIPE_EN_ADDR, MAX96717_PIPE_EN_ALL);
+	mutex_unlock(&priv->lock);
 }
 EXPORT_SYMBOL(max96717_retrigger_tx);
 
@@ -912,16 +968,11 @@ static int max96717_probe(struct i2c_client *client,
 
 static int max96717_remove(struct i2c_client *client)
 {
-	struct max96717 *priv;
+	struct max96717 *priv = dev_get_drvdata(&client->dev);
 
-	if (client != NULL) {
-		priv = dev_get_drvdata(&client->dev);
-		if (priv == prim_priv__)
-			prim_priv__ = NULL;
-		mutex_destroy(&priv->lock);
-		i2c_unregister_device(client);
-		client = NULL;
-	}
+	if (priv == prim_priv__)
+		prim_priv__ = NULL;
+	mutex_destroy(&priv->lock);
 
 	return 0;
 }
