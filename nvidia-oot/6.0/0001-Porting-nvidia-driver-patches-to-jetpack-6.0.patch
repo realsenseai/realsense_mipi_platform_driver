@@ -4,6 +4,7 @@ Date: Mon, 20 May 2024 18:08:02 +0300
 Subject: [PATCH] Porting nvidia driver patches to jetpack 6.0
 
 Signed-off-by: Dmitry Perchanov <dmitry.perchanov@intel.com>
+Signed-off-by: zhou <shengyong.zhou@realsenseai.com>
 ---
 drivers/media/i2c/Makefile                    |   7 +++++++
  drivers/media/i2c/max9295.c                   | 139 ++++++
@@ -990,7 +991,7 @@ diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/p
 index 7b16dcaf..487ae44b 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
 +++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-@@ -426,6 +426,76 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+@@ -426,6 +426,124 @@ static void vi5_setup_surface(struct tegra_channel *chan,
  		chan->capture_descr_sequence += 1;
  }
  
@@ -1115,7 +1116,7 @@ index 7b16dcaf..487ae44b 100644
  static void vi5_release_buffer(struct tegra_channel *chan,
  	struct tegra_channel_buffer *buf)
  {
-@@ -436,6 +469,9 @@ static void vi5_release_buffer(struct tegra_channel *chan,
+@@ -436,6 +554,9 @@ static void vi5_release_buffer(struct tegra_channel *chan,
  	vb2_set_plane_payload(&vbuf->vb2_buf, 0, chan->format.sizeimage);
  
  	vb2_buffer_done(&vbuf->vb2_buf, buf->vb2_state);
