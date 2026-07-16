@@ -2750,8 +2750,8 @@ static int ds5_wait_for_ir_start_before_depth(struct ds5 *state, u16 stream_id)
 	if (stream_id != DS5_STREAM_DEPTH)
 		return 0;
 
-	/* The PR #282 FW keeps one gated stereo pipeline alive, so IR can build
-	 * it first and Depth can enable its pre-built branch without a rebuild. */
+	/* The camera firmware keeps one gated stereo pipeline alive, so IR can
+	 * build it first and Depth can enable its pre-built branch without a rebuild. */
 	discover_timeout = jiffies + msecs_to_jiffies(DS5_IR_START_DEBOUNCE_MS);
 	while (!ds5_ir_start_state(state, &ir_error)) {
 		if (!time_before(jiffies, discover_timeout))
@@ -5520,7 +5520,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		state->reset_ref_dser = cur_dser;
 	}
 
-	/* spare duplicate calls */
+	/* Ignore requests that already match the cached stream state. */
 	if (sensor->streaming == on)
 		return 0;
 
