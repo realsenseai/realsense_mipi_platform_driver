@@ -43,6 +43,8 @@ The `--one-cam`/`--dual-cam` options only apply to JetPack 5.0.2.
 ./scripts/deploy_kernel_6.2.sh    # For JP 6.2+
 ```
 
+On JetPack 5.x, `install_to_kernel.sh` refuses to install a kernel `Image` whose embedded `Linux version` differs from the running `uname -r` (JP5 installs only a few `.ko`, so a mismatched-JetPack Image boots with no modules and can latch the bootloader into recovery); `SKIP_KERNEL_CHECK=1` overrides. Keep this guard when editing the deploy scripts.
+
 ## Testing
 
 Tests run on-device using pytest (Python 3). Located in `test/`.
