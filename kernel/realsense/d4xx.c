@@ -563,11 +563,8 @@ struct ds5 {
 	int is_depth, is_y8, is_rgb, is_imu;
 	bool metadata_enabled;
 	/* RSDEV-12608: gate the deserializer one-shot GMSL link reset.
-	 * needs_oneshot_on_alloc (DT "maxim,oneshot-on-alloc") forces the reset on
-	 * every pipe alloc for a camera that needs per-alloc re-init.
 	 * link_cold_bringup is recomputed on each stream start: true iff no sibling
 	 * stream of this camera is already up (first active stream on the link). */
-	bool needs_oneshot_on_alloc;
 	bool link_cold_bringup;
 	int aggregated;
 	int reset_ref_ds5;
@@ -1999,12 +1996,12 @@ static int ds5_setup_pipeline(struct ds5 *state, u8 data_type1, u8 data_type2,
 	ret |= state->ser_ops->set_pipe(state->ser_dev, ser_pipe_id,
 				data_type1, data_type2, ser_vc_id);
 	/* RSDEV-12608: arm the deserializer one-shot GMSL link reset only for a
-	 * cold link bring-up (or a DT opt-in camera). Called under serdes_lock__
-	 * (held by the caller) immediately before set_pipe so the decision and the
-	 * reset are atomic w.r.t. other d4xx instances sharing this link. */
+	 * cold link bring-up. Called under serdes_lock__ (held by the caller)
+	 * immediately before set_pipe so the decision and the reset are atomic
+	 * w.r.t. other d4xx instances sharing this link. */
 	if (state->dser_ops->arm_link_reset)
 		state->dser_ops->arm_link_reset(state->dser_dev,
-				state->link_cold_bringup || state->needs_oneshot_on_alloc);
+				state->link_cold_bringup);
 	ret |= state->dser_ops->set_pipe(state->dser_dev, pipe_id,
 				data_type1, data_type2, vc_id);
 	if (ret)
@@ -4238,12 +4235,6 @@ static int ds5_board_setup(struct ds5 *state)
 		goto error;
 	}
 	state->g_ctx.dst_vc = value;
-
-	/* RSDEV-12608: opt-in for cameras that need the deserializer one-shot
-	 * link reset on every pipe alloc (not just cold bring-up). Absent by
-	 * default, so normal cameras rely purely on link_cold_bringup. */
-	state->needs_oneshot_on_alloc =
-		of_property_read_bool(gmsl, "maxim,oneshot-on-alloc");
 
 	err = of_property_read_u32(gmsl, "num-lanes", &value);
 	if (err < 0) {
