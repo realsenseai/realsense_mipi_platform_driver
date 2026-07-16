@@ -216,16 +216,11 @@ enum ds5_mux_pad {
 #define DFU_WAIT_RET_LEN 			6
 
 #define DS5_START_POLL_TIME			10
+#define DS5_START_POLL_MAX_TIME			40
 #define DS5_START_MAX_TIME			2000
 #define DS5_STOP_MAX_TIME			7000
 #define DS5_START_MAX_COUNT	(DS5_START_MAX_TIME / DS5_START_POLL_TIME)
-#define DS5_RGB_START_DEBOUNCE_MS		300
-#define DS5_RGB_START_WAIT_MS			3000
-#define DS5_IR_START_DEBOUNCE_MS		300
-#define DS5_IR_START_WAIT_MS			3000
 #define DS5_DSER_REARM_COOLDOWN_MS		1800
-#define DS5_DSER_REARM_FALLBACK_MS		700
-#define DS5_DSER_REARM_WAIT_MS			3500
 #define MAX_DS5_CONFIG_RETRIES		5
 
 /* I2C retry configuration */
@@ -579,10 +574,6 @@ struct ds5_dev {
 	bool ir_streaming;
 	bool rgb_streaming;
 	bool imu_streaming;
-	bool rgb_start_pending;
-	int rgb_start_error;
-	bool ir_start_pending;
-	int ir_start_error;
 };
 
 #ifdef CONFIG_VIDEO_D5XX_SERDES
@@ -605,10 +596,6 @@ struct dser_control {
 	bool datapath_armed;
 	u8 datapath_pipe_mask;
 	bool post_start_kick_pending;
-	bool rearm_pending;
-	bool rearm_started;
-	int rearm_owner_pipe;
-	unsigned int rearm_waiters;
 	unsigned int rearm_gen;
 	unsigned long last_idle_jiffies;
 };
@@ -714,70 +701,23 @@ static void ds5_set_dser_post_start_kick_pending(struct ds5 *state,
 	mutex_unlock(&ctrl->lock);
 }
 
-static void ds5_cancel_dser_rearm(struct ds5 *state)
+static void ds5_clear_dser_start_state(struct ds5 *state)
 {
 	struct dser_control *ctrl = state->ds5_dev->dser_control;
 
 	mutex_lock(&ctrl->lock);
-	ctrl->rearm_pending = false;
-	ctrl->rearm_started = false;
 	ctrl->post_start_kick_pending = false;
-	ctrl->rearm_owner_pipe = PIPE_NOT_CONFIGURED;
-	ctrl->rearm_waiters = 0;
 	mutex_unlock(&ctrl->lock);
 }
 
-static void ds5_schedule_dser_rearm(struct ds5 *state, int pipe_id)
+static void ds5_finish_dser_prestart(struct ds5 *state, bool reset_performed)
 {
 	struct dser_control *ctrl = state->ds5_dev->dser_control;
 
 	mutex_lock(&ctrl->lock);
-	if (!ctrl->rearm_pending) {
-		ctrl->datapath_armed = false;
-		ctrl->rearm_pending = true;
-		ctrl->rearm_started = false;
-		ctrl->rearm_owner_pipe = pipe_id;
-		ctrl->rearm_waiters = 0;
-	}
-	mutex_unlock(&ctrl->lock);
-}
-
-static bool ds5_begin_dser_rearm(struct ds5 *state, int pipe_id,
-				 int *owner_pipe)
-{
-	struct dser_control *ctrl = state->ds5_dev->dser_control;
-	bool can_begin = true;
-
-	mutex_lock(&ctrl->lock);
-	if (ctrl->rearm_pending && ctrl->rearm_started &&
-	    ctrl->rearm_owner_pipe != pipe_id) {
-		can_begin = false;
-		if (owner_pipe)
-			*owner_pipe = ctrl->rearm_owner_pipe;
-	} else {
-		ctrl->datapath_armed = false;
-		ctrl->rearm_pending = true;
-		ctrl->rearm_started = true;
-		ctrl->rearm_owner_pipe = pipe_id;
-		if (owner_pipe)
-			*owner_pipe = pipe_id;
-	}
-	mutex_unlock(&ctrl->lock);
-
-	return can_begin;
-}
-
-static void ds5_mark_dser_rearm_done(struct ds5 *state, bool datapath_armed)
-{
-	struct dser_control *ctrl = state->ds5_dev->dser_control;
-
-	mutex_lock(&ctrl->lock);
-	ctrl->datapath_armed = datapath_armed;
-	ctrl->rearm_pending = false;
-	ctrl->rearm_started = false;
-	ctrl->rearm_owner_pipe = PIPE_NOT_CONFIGURED;
-	ctrl->rearm_waiters = 0;
-	ctrl->rearm_gen++;
+	ctrl->datapath_armed = reset_performed;
+	if (reset_performed)
+		ctrl->rearm_gen++;
 	mutex_unlock(&ctrl->lock);
 }
 
@@ -869,7 +809,7 @@ static void ds5_post_start_dser_datapath_kick(struct ds5 *state, u16 stream_id)
 	 * frames, while leaving the datapath untouched does not resynchronize
 	 * tunnel detection after the camera starts transmitting. */
 	state->dser_ops->retrigger_datapath(state->dser_dev);
-	ds5_cancel_dser_rearm(state);
+	ds5_clear_dser_start_state(state);
 	ds5_set_dser_datapath_pipe_mask(state, active_pipe_mask);
 	ds5_set_dser_post_start_kick_pending(state, false);
 
@@ -930,81 +870,11 @@ static bool ds5_rearm_dser_datapath_before_start(struct ds5 *state, int pipe_id,
 	return true;
 }
 
-static int ds5_wait_for_dser_rearm(struct ds5 *state, int pipe_id)
-{
-	struct dser_control *ctrl = state->ds5_dev->dser_control;
-	unsigned long timeout;
-	unsigned long fallback_timeout;
-	bool started;
-	bool pending;
-	int owner_pipe;
-
-	if (!state->dser_ops->get_active_pipe_count)
-		return 0;
-
-	mutex_lock(&ctrl->lock);
-	pending = ctrl->rearm_pending;
-	owner_pipe = ctrl->rearm_owner_pipe;
-	if (!pending) {
-		mutex_unlock(&ctrl->lock);
-		return 0;
-	}
-	mutex_unlock(&ctrl->lock);
-
-	dev_info(&state->client->dev,
-		 "pipe %d waiting for DES datapath re-arm owner pipe %d before camera I2C config\n",
-		 pipe_id, owner_pipe);
-	fallback_timeout = jiffies + msecs_to_jiffies(DS5_DSER_REARM_FALLBACK_MS);
-	timeout = jiffies + msecs_to_jiffies(DS5_DSER_REARM_WAIT_MS);
-	do {
-		mutex_lock(&ctrl->lock);
-		pending = ctrl->rearm_pending;
-		started = ctrl->rearm_started;
-		owner_pipe = ctrl->rearm_owner_pipe;
-		mutex_unlock(&ctrl->lock);
-		if (!pending)
-			return 0;
-
-		if (!started && owner_pipe == pipe_id &&
-		    time_after_eq(jiffies, fallback_timeout)) {
-			int active_pipes;
-			int link_locked;
-
-			if (!ds5_begin_dser_rearm(state, pipe_id, &owner_pipe))
-				continue;
-
-			active_pipes = state->dser_ops->get_active_pipe_count ?
-				state->dser_ops->get_active_pipe_count(state->dser_dev) : 1;
-			link_locked = state->dser_ops->get_link_locked ?
-				state->dser_ops->get_link_locked(state->dser_dev) : -1;
-
-			dev_info(&state->client->dev,
-				 "pipe %d fallback re-arming DES datapath after waiting for pipe 0\n",
-				 pipe_id);
-			mutex_lock(&serdes_lock__);
-			ds5_mark_dser_rearm_done(state,
-				ds5_rearm_dser_datapath_before_start(state, pipe_id,
-								      active_pipes,
-								      link_locked,
-								      "fallback owner"));
-			mutex_unlock(&serdes_lock__);
-			return 0;
-		}
-		msleep(20);
-	} while (time_before(jiffies, timeout));
-
-	dev_warn(&state->client->dev,
-		 "pipe %d timed out waiting for DES datapath re-arm owner pipe %d\n",
-		 pipe_id, owner_pipe);
-	return -ETIMEDOUT;
-}
-
 static void ds5_disarm_dser_datapath_if_idle(struct ds5 *state)
 {
 	int active_pipes;
 	int link_locked;
 	bool armed;
-	bool pending;
 	struct dser_control *ctrl = state->ds5_dev->dser_control;
 
 	if (!state->dser_ops->get_active_pipe_count)
@@ -1018,25 +888,20 @@ static void ds5_disarm_dser_datapath_if_idle(struct ds5 *state)
 		state->dser_ops->get_link_locked(state->dser_dev) : -1;
 	mutex_lock(&ctrl->lock);
 	armed = ctrl->datapath_armed;
-	pending = ctrl->rearm_pending;
 	ctrl->datapath_armed = false;
 	ctrl->datapath_pipe_mask = 0;
 	ctrl->post_start_kick_pending = false;
-	ctrl->rearm_pending = false;
-	ctrl->rearm_started = false;
-	ctrl->rearm_owner_pipe = PIPE_NOT_CONFIGURED;
-	ctrl->rearm_waiters = 0;
 	ctrl->last_idle_jiffies = jiffies;
 	mutex_unlock(&ctrl->lock);
 
 	if (link_locked > 0) {
-		if (armed || pending)
+		if (armed)
 			dev_info(&state->client->dev,
 				 "all DES pipes released; preserving locked Link A for next start\n");
 		return;
 	}
 
-	if (armed || pending)
+	if (armed)
 		dev_info(&state->client->dev,
 			 "all DES pipes released; datapath marked unarmed for cooldown\n");
 }
@@ -1123,6 +988,15 @@ static inline void msleep_range(unsigned int delay_base)
 }
 #endif
 #endif
+
+static unsigned int ds5_stream_poll_delay(bool starting, unsigned int retry)
+{
+	unsigned int delay = retry * DS5_START_POLL_TIME;
+
+	if (starting)
+		return min(delay, (unsigned int)DS5_START_POLL_MAX_TIME);
+	return delay;
+}
 
 static int ds5_write(struct ds5 *state, u16 reg, u16 val)
 {
@@ -1853,39 +1727,24 @@ static int ds5_setup_pipeline(struct ds5 *state, u8 data_type1, u8 data_type2,
 			 "pipe %d mapping updated while DES datapath armed (%u streams active); keeping datapath armed\n",
 			 pipe_id, started_streams);
 	}
-	/*
-	 * Prefer pipe 0 as the deterministic re-arm owner.  If RGB/IR arrives
-	 * first, it maps its pipe and waits before camera-side I2C config until
-	 * depth/pipe 0 performs the early re-arm.  On an already-locked link,
-	 * avoid ONESHOT and only retrigger the DES CSI datapath before START.
-	 */
-	if (pipe_id == 0 && (link_locked <= 0 || !datapath_armed)) {
-		int owner_pipe = PIPE_NOT_CONFIGURED;
+	/* Pipe setup is serialized by serdes_lock__, so the first active pipe can
+	 * perform the pre-start recovery decision directly.  Waiting for a fixed
+	 * pipe owner delays the first frame and can exceed the VI startup timeout
+	 * when RGB intentionally starts before the stereo streams. */
+	if (active_pipes <= 1 && !datapath_armed) {
+		bool reset_performed;
 
 		dev_info(&state->client->dev,
-			 "pipe 0 re-arming DES datapath before camera I2C config (link %s, armed=%d, active_pipes=%d)\n",
+			 "pipe %d evaluating DES datapath before camera I2C config (link %s, active_pipes=%d)\n",
+			 pipe_id,
 			 link_locked > 0 ? "locked" :
 			 (link_locked == 0 ? "unlocked" : "unknown"),
-			 datapath_armed, active_pipes);
-		if (ds5_begin_dser_rearm(state, pipe_id, &owner_pipe)) {
-			datapath_armed =
-				ds5_rearm_dser_datapath_before_start(state, pipe_id,
-								      active_pipes,
-								      link_locked,
-								      "pipe 0");
-			ds5_mark_dser_rearm_done(state, datapath_armed);
-		} else {
-			dev_info(&state->client->dev,
-				 "pipe 0 waiting for active DES datapath re-arm owner pipe %d\n",
-				 owner_pipe);
-		}
-	} else if (active_pipes <= 1 && !datapath_armed) {
-		dev_info(&state->client->dev,
-			 "first non-depth pipe %d scheduling DES datapath re-arm for pipe 0 (link %s, armed=%d)\n",
-			 pipe_id, link_locked > 0 ? "locked" :
-			 (link_locked == 0 ? "unlocked" : "unknown"),
-			 datapath_armed);
-		ds5_schedule_dser_rearm(state, pipe_id);
+			 active_pipes);
+		reset_performed = ds5_rearm_dser_datapath_before_start(state,
+									 pipe_id, active_pipes,
+									 link_locked,
+									 "first active pipe");
+		ds5_finish_dser_prestart(state, reset_performed);
 	} else {
 		dev_info(&state->client->dev,
 			 "pipe %d mapping updated w/o link reset (%d pipes active, link %s)\n",
@@ -2056,10 +1915,6 @@ static int ds5_configure(struct ds5 *state)
 				"pipe %d already configured (dt1=0x%x dt2=0x%x vc=%u)\n",
 				sensor->pipe_id, data_type1, data_type2, vc_id);
 	}
-
-	ret = ds5_wait_for_dser_rearm(state, sensor->pipe_id);
-	if (ret < 0)
-		return ret;
 
 	pipe_reapply_gen = ds5_dser_rearm_gen(state);
 	if (sensor->pipe_reapply_gen != pipe_reapply_gen) {
@@ -2607,188 +2462,7 @@ static void ds5_reset_streaming_flags(struct ds5_dev *ds5_dev)
 	ds5_dev->ir_streaming = false;
 	ds5_dev->rgb_streaming = false;
 	ds5_dev->imu_streaming = false;
-	ds5_dev->rgb_start_pending = false;
-	ds5_dev->rgb_start_error = 0;
-	ds5_dev->ir_start_pending = false;
-	ds5_dev->ir_start_error = 0;
 	mutex_unlock(&ds5_dev->lock);
-}
-
-static void ds5_set_rgb_start_pending(struct ds5 *state, u16 stream_id, bool pending)
-{
-	if (stream_id != DS5_STREAM_RGB)
-		return;
-
-	mutex_lock(&state->ds5_dev->lock);
-	state->ds5_dev->rgb_start_pending = pending;
-	if (pending)
-		state->ds5_dev->rgb_start_error = 0;
-	mutex_unlock(&state->ds5_dev->lock);
-}
-
-static void ds5_finish_rgb_start(struct ds5 *state, u16 stream_id, int ret)
-{
-	if (stream_id != DS5_STREAM_RGB)
-		return;
-
-	mutex_lock(&state->ds5_dev->lock);
-	state->ds5_dev->rgb_start_error = ret < 0 ? ret : 0;
-	state->ds5_dev->rgb_start_pending = false;
-	mutex_unlock(&state->ds5_dev->lock);
-}
-
-static bool ds5_rgb_start_state(struct ds5 *state, int *error)
-{
-	bool pending;
-
-	mutex_lock(&state->ds5_dev->lock);
-	pending = state->ds5_dev->rgb_start_pending;
-	if (error)
-		*error = state->ds5_dev->rgb_start_error;
-	mutex_unlock(&state->ds5_dev->lock);
-
-	return pending;
-}
-
-static int ds5_wait_for_rgb_start_before_stereo(struct ds5 *state, u16 stream_id)
-{
-#ifdef CONFIG_VIDEO_D5XX_SERDES
-	unsigned long discover_timeout;
-	unsigned long timeout;
-	int rgb_error = 0;
-
-	if (stream_id == DS5_STREAM_RGB || stream_id == DS5_STREAM_IMU)
-		return 0;
-
-	/*
-	 * RGB joining an already-streaming stereo pipe can stall the shared HIF
-	 * CSI TX task (FW reports frame counter N, ack N-2).  Give a concurrent
-	 * RGB START a short window to announce itself, then let it complete first.
-	 */
-	discover_timeout = jiffies + msecs_to_jiffies(DS5_RGB_START_DEBOUNCE_MS);
-	while (!ds5_rgb_start_state(state, &rgb_error)) {
-		if (!time_before(jiffies, discover_timeout))
-			return 0;
-		msleep(20);
-	}
-
-	dev_info(&state->client->dev,
-		 "stream %d waiting for RGB START to complete before stereo START\n",
-		 stream_id);
-	timeout = jiffies + msecs_to_jiffies(DS5_RGB_START_WAIT_MS);
-	while (ds5_rgb_start_state(state, &rgb_error)) {
-		if (!time_before(jiffies, timeout)) {
-			dev_warn(&state->client->dev,
-				 "stream %d timed out waiting for RGB START; aborting stereo START\n",
-				 stream_id);
-			return -ETIMEDOUT;
-		}
-		msleep(20);
-	}
-
-	if (rgb_error < 0) {
-		dev_warn(&state->client->dev,
-			 "stream %d observed RGB START failure (%d); aborting stereo START\n",
-			 stream_id, rgb_error);
-		return rgb_error;
-	}
-
-	dev_info(&state->client->dev,
-		 "stream %d observed RGB START complete; continuing stereo START\n",
-		 stream_id);
-	return 0;
-#else
-	(void)state;
-	(void)stream_id;
-	return 0;
-#endif
-}
-
-static void ds5_set_ir_start_pending(struct ds5 *state, u16 stream_id, bool pending)
-{
-	if (stream_id != DS5_STREAM_IR)
-		return;
-
-	mutex_lock(&state->ds5_dev->lock);
-	state->ds5_dev->ir_start_pending = pending;
-	if (pending)
-		state->ds5_dev->ir_start_error = 0;
-	mutex_unlock(&state->ds5_dev->lock);
-}
-
-static void ds5_finish_ir_start(struct ds5 *state, u16 stream_id, int ret)
-{
-	if (stream_id != DS5_STREAM_IR)
-		return;
-
-	mutex_lock(&state->ds5_dev->lock);
-	state->ds5_dev->ir_start_error = ret < 0 ? ret : 0;
-	state->ds5_dev->ir_start_pending = false;
-	mutex_unlock(&state->ds5_dev->lock);
-}
-
-static bool ds5_ir_start_state(struct ds5 *state, int *error)
-{
-	bool pending;
-
-	mutex_lock(&state->ds5_dev->lock);
-	pending = state->ds5_dev->ir_start_pending;
-	if (error)
-		*error = state->ds5_dev->ir_start_error;
-	mutex_unlock(&state->ds5_dev->lock);
-
-	return pending;
-}
-
-static int ds5_wait_for_ir_start_before_depth(struct ds5 *state, u16 stream_id)
-{
-#ifdef CONFIG_VIDEO_D5XX_SERDES
-	unsigned long discover_timeout;
-	unsigned long timeout;
-	int ir_error = 0;
-
-	if (stream_id != DS5_STREAM_DEPTH)
-		return 0;
-
-	/* The PR #282 FW keeps one gated stereo pipeline alive, so IR can build
-	 * it first and Depth can enable its pre-built branch without a rebuild. */
-	discover_timeout = jiffies + msecs_to_jiffies(DS5_IR_START_DEBOUNCE_MS);
-	while (!ds5_ir_start_state(state, &ir_error)) {
-		if (!time_before(jiffies, discover_timeout))
-			return 0;
-		msleep(20);
-	}
-
-	dev_info(&state->client->dev,
-		 "stream %d waiting for IR START to complete before depth gate\n",
-		 stream_id);
-	timeout = jiffies + msecs_to_jiffies(DS5_IR_START_WAIT_MS);
-	while (ds5_ir_start_state(state, &ir_error)) {
-		if (!time_before(jiffies, timeout)) {
-			dev_warn(&state->client->dev,
-				 "stream %d timed out waiting for IR START; aborting depth START\n",
-				 stream_id);
-			return -ETIMEDOUT;
-		}
-		msleep(20);
-	}
-
-	if (ir_error < 0) {
-		dev_warn(&state->client->dev,
-			 "stream %d observed IR START failure (%d); aborting depth START\n",
-			 stream_id, ir_error);
-		return ir_error;
-	}
-
-	dev_info(&state->client->dev,
-		 "stream %d observed IR START complete; enabling depth gate\n",
-		 stream_id);
-	return 0;
-#else
-	(void)state;
-	(void)stream_id;
-	return 0;
-#endif
 }
 
 #ifdef CONFIG_VIDEO_D5XX_SERDES
@@ -3017,7 +2691,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	ds5_reset_streaming_flags(state->ds5_dev);
 #ifdef CONFIG_VIDEO_D5XX_SERDES
 	ds5_set_dser_datapath_armed(state, false);
-	ds5_cancel_dser_rearm(state);
+	ds5_clear_dser_start_state(state);
 #endif
 
 	/* 3. Scratch one control-status register before reset.
@@ -4156,10 +3830,6 @@ static int ds5_setup_and_link(struct ds5 *state)
 						if (NULL == dser_inited[j].dser_dev) {
 							dser_inited[j].dser_dev = state->dser_dev;
 							dser_inited[j].datapath_armed = false;
-							dser_inited[j].rearm_pending = false;
-							dser_inited[j].rearm_started = false;
-							dser_inited[j].rearm_owner_pipe = PIPE_NOT_CONFIGURED;
-							dser_inited[j].rearm_waiters = 0;
 							state->ds5_dev->dser_control = &dser_inited[j];
 						}
 						mutex_unlock(&dser_inited[j].lock);
@@ -5520,14 +5190,9 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		state->reset_ref_dser = cur_dser;
 	}
 
-	/* spare duplicate calls */
+	/* Ignore requests that already match the cached stream state. */
 	if (sensor->streaming == on)
 		return 0;
-
-	if (on) {
-		ds5_set_rgb_start_pending(state, stream_id, true);
-		ds5_set_ir_start_pending(state, stream_id, true);
-	}
 
 	if (on) {
 		stream_cmd = (DS5_STREAM_START | stream_id);
@@ -5537,27 +5202,6 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		stream_cmd = (DS5_STREAM_STOP | stream_id);
 		expected_streaming_state = DS5_STREAM_IDLE;
 		status = DS5_STATUS_STREAMING;
-	}
-
-	if (on) {
-		ret = ds5_wait_for_rgb_start_before_stereo(state, stream_id);
-		if (ret < 0) {
-#ifdef CONFIG_VIDEO_D5XX_SERDES
-			ds5_release_serdes_pipe(state, sensor, "RGB START dependency failure");
-#endif
-			ds5_finish_rgb_start(state, stream_id, ret);
-			ds5_finish_ir_start(state, stream_id, ret);
-			return ret;
-		}
-		ret = ds5_wait_for_ir_start_before_depth(state, stream_id);
-		if (ret < 0) {
-#ifdef CONFIG_VIDEO_D5XX_SERDES
-			ds5_release_serdes_pipe(state, sensor, "IR START dependency failure");
-#endif
-			ds5_finish_rgb_start(state, stream_id, ret);
-			ds5_finish_ir_start(state, stream_id, ret);
-			return ret;
-		}
 	}
 
 	/* START changes pipeline topology and remains fully serialized. STOP only
@@ -5577,26 +5221,17 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 #endif
 			mutex_unlock(&state->ds5_dev->stream_ctrl_lock);
 			stream_ctrl_locked = false;
-			ds5_finish_rgb_start(state, stream_id, ret);
-			ds5_finish_ir_start(state, stream_id, ret);
 			return ret;
 		}
 		ds5_config_done = true;
-#ifdef CONFIG_VIDEO_D5XX_SERDES
-		if (state->dser_ops->get_active_pipe_count &&
-		    state->dser_ops->get_active_pipe_count(state->dser_dev) == 1) {
-			dev_info(&state->client->dev,
-				 "first active pipe configured; yielding briefly before START\n");
-			msleep(80);
-		}
-#endif
 	}
 
 	/* Verify stream is in the expected state before issuing command */
 	ts = jiffies;
 	for (timeout = ts + msecs_to_jiffies(on ? DS5_START_MAX_TIME :
 							 DS5_STOP_MAX_TIME), i = 0;
-			time_before(jiffies, timeout); i++, msleep_range(i*DS5_START_POLL_TIME))
+			time_before(jiffies, timeout);
+			i++, msleep_range(ds5_stream_poll_delay(on, i)))
 	{
 		ret = ds5_read(state, config_status_base, &status);
 		if (ret < 0 || status == DS5_STATUS_UNAVAILABLE ||
@@ -5627,57 +5262,37 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			"stream %d in expected state, toggling to %d (status: 0x%04x) %dms\n",
 			stream_id, on, status, jiffies_to_msecs(jiffies - ts));
 	} else {
+		if (on && reset_invalidated && (status & DS5_STATUS_STREAMING))
+			dev_warn(&state->client->dev,
+				"stream %d state mismatch after reset invalidation: host=off HKR=streaming (status: 0x%04x)\n",
+				stream_id, status);
+
 		/*
-		 * If state was invalidated by a reset-generation bump and FW
-		 * still reports this stream as active, force a stop to guarantee
-		 * the next start goes through full reconfiguration.  During a
-		 * normal batched stereo/RGB start, another stream may legitimately
-		 * bring the shared datapath up first; treat that as an already-on
-		 * no-op below.
+		 * The device status is authoritative. Do not inject a compensating
+		 * STOP/START sequence here: it reorders the caller's stream commands
+		 * and hides the lifecycle bug that produced a stale host cache.
+		 *
+		 * After HW reset the FW reboots and all streams return to idle. If VI
+		 * error recovery asks to stop an already-idle stream, or start an
+		 * already-streaming one, synchronize the local cache and let the upper
+		 * layer continue instead of entering an EBUSY retry loop.
 		 */
-		if (on && reset_invalidated && (status & DS5_STATUS_STREAMING)) {
-			dev_warn(&state->client->dev,
-				"stream %d reports streaming while host state is off (status: 0x%04x, reset_invalidated=%d), forcing stop and reconfigure\n",
-				stream_id, status, reset_invalidated);
-
-			ret = ds5_write(state, DS5_START_STOP_STREAM,
-					DS5_STREAM_STOP | stream_id);
-			if (ret < 0)
-				dev_warn(&state->client->dev,
-					"stream %d forced stop write failed (%d), continuing with reconfigure\n",
-					stream_id, ret);
-
-			mutex_lock(&state->ds5_dev->lock);
-			*streaming_flag = false;
-			mutex_unlock(&state->ds5_dev->lock);
-			sensor->streaming = false;
-		} else {
-			/*
-			 * After HW reset the FW reboots and all streams return to
-			 * idle.  If VI error recovery tries to stop a stream that
-			 * is already stopped (or start one already started), treat
-			 * it as a no-op so the upper layer can proceed with
-			 * restart instead of getting stuck in an EBUSY loop.
-			 */
-			dev_warn(&state->client->dev,
-				"stream %d in %d state already (status: 0x%04x) %dms, treating as no-op\n",
-				stream_id, on, status, jiffies_to_msecs(jiffies - ts));
-			mutex_lock(&state->ds5_dev->lock);
-			*streaming_flag = on;
-			mutex_unlock(&state->ds5_dev->lock);
-			sensor->streaming = on;
+		dev_warn(&state->client->dev,
+			"stream %d in %d state already (status: 0x%04x) %dms, treating as no-op\n",
+			stream_id, on, status, jiffies_to_msecs(jiffies - ts));
+		mutex_lock(&state->ds5_dev->lock);
+		*streaming_flag = on;
+		mutex_unlock(&state->ds5_dev->lock);
+		sensor->streaming = on;
 #ifdef CONFIG_VIDEO_D5XX_SERDES
-			if (on)
-				ds5_post_start_dser_datapath_kick(state, stream_id);
+		if (on)
+			ds5_post_start_dser_datapath_kick(state, stream_id);
 #endif
-			if (stream_ctrl_locked) {
-				mutex_unlock(&state->ds5_dev->stream_ctrl_lock);
-				stream_ctrl_locked = false;
-			}
-			ds5_finish_rgb_start(state, stream_id, 0);
-			ds5_finish_ir_start(state, stream_id, 0);
-			return 0;
+		if (stream_ctrl_locked) {
+			mutex_unlock(&state->ds5_dev->stream_ctrl_lock);
+			stream_ctrl_locked = false;
 		}
+		return 0;
 	}
 
 	restore_val = sensor->streaming;
@@ -5694,7 +5309,8 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	streaming = ~expected_streaming_state; /* force initial toggle */
 		for (timeout = ts + msecs_to_jiffies(on ? DS5_START_MAX_TIME :
 								 DS5_STOP_MAX_TIME), i = 0;
-				time_before(jiffies, timeout); i++, msleep_range(i*DS5_START_POLL_TIME))
+				time_before(jiffies, timeout);
+				i++, msleep_range(ds5_stream_poll_delay(on, i)))
 		{
 			command_read_status = false;
 			if (!ds5_config_done) {
@@ -5706,8 +5322,6 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 						mutex_unlock(&state->ds5_dev->stream_ctrl_lock);
 						stream_ctrl_locked = false;
 					}
-					ds5_finish_rgb_start(state, stream_id, ret);
-					ds5_finish_ir_start(state, stream_id, ret);
 					return ret;
 				}
 				dev_warn(&state->client->dev, "stream %d config failed, retry %d, %dms\n",
@@ -5875,8 +5489,6 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 #endif
 	if (stream_ctrl_locked)
 		mutex_unlock(&state->ds5_dev->stream_ctrl_lock);
-	ds5_finish_rgb_start(state, stream_id, ret);
-	ds5_finish_ir_start(state, stream_id, ret);
 	return ret;
 #endif /* !DS5_BYPASS_CAMERA_I2C */
 }

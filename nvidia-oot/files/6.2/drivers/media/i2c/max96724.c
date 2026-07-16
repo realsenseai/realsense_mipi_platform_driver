@@ -1523,6 +1523,7 @@ EXPORT_SYMBOL(max96724_get_available_pipe_id);
 int max96724_release_pipe(struct device *dev, int pipe_id)
 {
 	struct max96724 *priv = dev_get_drvdata(dev);
+	int i;
 
 	if (pipe_id < 0 || pipe_id >= MAX96724_MAX_PIPES)
 		return -EINVAL;
@@ -1530,6 +1531,14 @@ int max96724_release_pipe(struct device *dev, int pipe_id)
 	mutex_lock(&priv->lock);
 	priv->pipe[pipe_id].st_count = 0;
 	priv->retriggered_pipe_mask &= ~BIT(pipe_id);
+	for (i = 0; i < MAX96724_MAX_PIPES; i++) {
+		if (priv->pipe[i].st_count)
+			break;
+	}
+	if (i == MAX96724_MAX_PIPES) {
+		priv->datapath_retriggered = false;
+		priv->retriggered_pipe_mask = 0;
+	}
 	mutex_unlock(&priv->lock);
 
 	return 0;
