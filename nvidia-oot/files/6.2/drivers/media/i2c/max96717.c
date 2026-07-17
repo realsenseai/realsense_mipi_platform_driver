@@ -19,6 +19,7 @@
 #include <media/camera_common.h>
 #include <linux/of.h>
 #include <linux/module.h>
+#include <linux/version.h>
 #include <media/max96717.h>
 
 /* ===== Register Addresses ===== */
@@ -918,8 +919,11 @@ static struct regmap_config max96717_regmap_config = {
 	.cache_type = REGCACHE_RBTREE,
 };
 
-static int max96717_probe(struct i2c_client *client,
-			   const struct i2c_device_id *id)
+static int max96717_probe(struct i2c_client *client
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
+			   , const struct i2c_device_id *id
+#endif
+			   )
 {
 	struct max96717 *priv;
 	int err = 0;
@@ -966,7 +970,11 @@ static int max96717_probe(struct i2c_client *client,
 	return err;
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 12)
 static int max96717_remove(struct i2c_client *client)
+#else
+static void max96717_remove(struct i2c_client *client)
+#endif
 {
 	struct max96717 *priv = dev_get_drvdata(&client->dev);
 
@@ -974,7 +982,9 @@ static int max96717_remove(struct i2c_client *client)
 		prim_priv__ = NULL;
 	mutex_destroy(&priv->lock);
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 12)
 	return 0;
+#endif
 }
 
 static const struct i2c_device_id max96717_id[] = {

@@ -179,6 +179,8 @@ struct dser_interface {
 #define DS5_STATUS_INVALID_FPS		0x8
 
 #define MIPI_LANE_RATE			1000
+#define DS5_MIPI_METADATA_CAPACITY	255
+#define DS5_MIPI_METADATA_BYTESUSED	68
 
 #define MAX_DEPTH_EXP			200000
 #define MAX_RGB_EXP			10000
@@ -2677,6 +2679,26 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 }
 
 static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on);
+
+#if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && defined(CONFIG_TEGRA_EMBEDDED_METADATA_OPS)
+/*
+ * Legacy D4xx MIPI sidecar ABI on Tegra allocates a 255-byte metadata
+ * buffer but reports only the fixed 68-byte D4XX payload as bytesused.
+ * Keep this policy in the D4xx sensor ops instead of the generic VI path.
+ */
+static size_t ds5_mipi_metadata_bytesused(const u8 *data, size_t captured_size)
+{
+	(void)data;
+
+	return min_t(size_t, captured_size, DS5_MIPI_METADATA_BYTESUSED);
+}
+
+static const struct tegra_embedded_metadata_ops ds5_mipi_metadata_ops = {
+	.dataformat = V4L2_META_FMT_D4XX,
+	.max_buffer_size = DS5_MIPI_METADATA_CAPACITY,
+	.get_bytesused = ds5_mipi_metadata_bytesused,
+};
+#endif
 
 static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 {
@@ -5376,6 +5398,9 @@ static int ds5_mux_init(struct i2c_client *c, struct ds5 *state)
 		state->mux.last_set = &state->imu.sensor;
 
 	state->mux.sd.dev = &c->dev;
+#if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && defined(CONFIG_TEGRA_EMBEDDED_METADATA_OPS)
+	state->mux.sd.embedded_metadata_ops = &ds5_mipi_metadata_ops;
+#endif
 	ret = camera_common_initialize(&state->mux.sd, "d4xx");
 	if (ret) {
 		dev_err(&c->dev, "Failed to initialize d4xx.\n");
