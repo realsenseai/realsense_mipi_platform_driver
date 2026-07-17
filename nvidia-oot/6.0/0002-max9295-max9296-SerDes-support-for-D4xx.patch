@@ -8,11 +8,11 @@ Consolidated MAX9295 serializer / MAX9296 deserializer support:
  - max9295/max9296 GPIO tunneling for external sync (was 0004/0005)
  - external address assignment on max9295 (was 0007)
  drivers/media/i2c/max9295.c | 281 ++++++++++++++++++++++++++++++++++++++------
- drivers/media/i2c/max9296.c | 225 ++++++++++++++++++++++++++++++++++-
+ drivers/media/i2c/max9296.c | 222 +++++++++++++++++++++++++++++++++-
  include/media/gmsl-link.h   |   3 +
  include/media/max9295.h     |   8 ++
  include/media/max9296.h     |  27 +++++
- 5 files changed, 507 insertions(+), 37 deletions(-)
+ 5 files changed, 504 insertions(+), 37 deletions(-)
 
 diff --git a/drivers/media/i2c/max9295.c b/drivers/media/i2c/max9295.c
 index b363d5f6..5b9a4dcf 100644
@@ -361,7 +361,7 @@ index b363d5f6..5b9a4dcf 100644
  
  	/* dev communication gets validated when GMSL link setup is done */
 diff --git a/drivers/media/i2c/max9296.c b/drivers/media/i2c/max9296.c
-index 1ceaf3cd..bc95e5b2 100644
+index 1ceaf3cd..5dfb262e 100644
 --- a/drivers/media/i2c/max9296.c
 +++ b/drivers/media/i2c/max9296.c
 @@ -16,6 +16,10 @@
@@ -418,7 +418,7 @@ index 1ceaf3cd..bc95e5b2 100644
  
  	priv->sdev_ref++;
  
-@@ -769,6 +788,210 @@ ret:
+@@ -769,6 +788,207 @@ ret:
  }
  EXPORT_SYMBOL(max9296_setup_streaming);
  
@@ -490,11 +490,8 @@ index 1ceaf3cd..bc95e5b2 100644
 +}
 +EXPORT_SYMBOL(max9296_reset_oneshot);
 +
-+/* RSDEV-12608: dser_interface arm_link_reset() implementation for max9296.
-+ * Unlike max96712, __max9296_set_pipe() does not issue a GMSL one-shot link
-+ * reset, so there is nothing to gate here — this is a deliberate no-op kept
-+ * for interface completeness across all deserializers (and to future-proof
-+ * should a per-alloc reset ever be added to this path). */
++/* RSDEV-12608: no-op — __max9296_set_pipe() issues no link reset, so there's
++ * nothing to gate; kept for dser_interface completeness across deserializers. */
 +void max9296_arm_link_reset(struct device *dev, bool reset)
 +{
 +	(void)dev;
@@ -629,7 +626,7 @@ index 1ceaf3cd..bc95e5b2 100644
  static const struct of_device_id max9296_of_match[] = {
  	{ .compatible = "maxim,max9296", },
  	{ },
-@@ -845,7 +1068,7 @@ static int max9296_parse_dt(struct max9296 *priv,
+@@ -845,7 +1065,7 @@ static int max9296_parse_dt(struct max9296 *priv,
  static struct regmap_config max9296_regmap_config = {
  	.reg_bits = 16,
  	.val_bits = 8,

@@ -172,3 +172,7 @@ After every confirmed code patch, review both `.github/copilot-instructions.md` 
 - If the patch changed the locking, usage, or API contract of a helper or utility function (e.g. moved lock acquisition inside/outside, changed required caller context, or altered error handling), immediately update all documentation and instructions to reflect the new contract. Always check for this class of change after any helper edit.
 - If no new convention was exposed, state that explicitly in the final report and include a short justification.
 - Do not treat the task as complete until that review outcome has been reported.
+
+## Comment style
+
+Keep comments concise and high-signal — both in-code and external (Jira/PR/status updates). Lead with the finding or the "why", in the fewest lines that stay correct; cut restated context and prose. Jira/PR comments especially: a few skimmable lines or bullets, not walls of text.

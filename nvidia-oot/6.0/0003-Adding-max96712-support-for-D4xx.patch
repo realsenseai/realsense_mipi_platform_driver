@@ -7,14 +7,14 @@ Add MAX96712 deserializer driver support for D4XX/D5XX cameras.
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- drivers/media/i2c/max96712.c | 940 +++++++++++++++++++++++++++++++++++++++++--
- 1 file changed, 905 insertions(+), 35 deletions(-)
+ drivers/media/i2c/max96712.c | 931 +++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 896 insertions(+), 35 deletions(-)
 
 diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
-index 8e237eef..ec66c247 100644
+index 8e237eef..bc1310e0 100644
 --- a/drivers/media/i2c/max96712.c
 +++ b/drivers/media/i2c/max96712.c
-@@ -16,32 +16,167 @@
+@@ -16,32 +16,165 @@
  #include <linux/gpio.h>
  #include <linux/of.h>
  #include <linux/of_gpio.h>
@@ -159,10 +159,8 @@ index 8e237eef..ec66c247 100644
 +	int lane_cnt;
 +	bool fangzhu_fg12_reverse_lane_polarity;
 +	bool fangzhu_fg12_poc_enable;
-+	/* RSDEV-12608: when true, the next __max96712_set_pipe() issues the
-+	 * one-shot GMSL link reset (CTRL1). d4xx arms this only for a cold link
-+	 * bring-up so a pipe re-alloc does not re-train a link carrying a
-+	 * sibling's frames. Defaults true (fail-safe). */
++	/* RSDEV-12608: gates the one-shot link reset (CTRL1) in set_pipe; d4xx arms
++	 * it only for a cold link bring-up. Defaults true (fail-safe). */
 +	bool pending_link_reset;
  };
  static struct max96712 *global_priv[4];
@@ -187,7 +185,7 @@ index 8e237eef..ec66c247 100644
  	i2c_client = global_priv[channel]->i2c_client;
  	bak = i2c_client->addr;
  
-@@ -53,7 +188,6 @@ int max96712_write_reg_Dser(int slaveAddr, int channel,
+@@ -53,7 +186,6 @@ int max96712_write_reg_Dser(int slaveAddr, int channel,
  		dev_err(&i2c_client->dev, "%s: addr = 0x%x, val = 0x%x\n",
  				__func__, addr, val);
  	}
@@ -195,7 +193,7 @@ index 8e237eef..ec66c247 100644
  	return err;
  }
  EXPORT_SYMBOL(max96712_write_reg_Dser);
-@@ -68,8 +202,6 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
+@@ -68,8 +200,6 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
  
  	if (channel > 3 || channel < 0 || global_priv[channel] == NULL)
  		return -1;
@@ -204,7 +202,7 @@ index 8e237eef..ec66c247 100644
  	i2c_client = global_priv[channel]->i2c_client;
  	bak = i2c_client->addr;
  	i2c_client->addr = slaveAddr / 2;
-@@ -80,11 +212,56 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
+@@ -80,11 +210,56 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
  		dev_err(&i2c_client->dev, "%s: addr = 0x%x, val = 0x%x\n",
  				__func__, addr, *val);
  	}
@@ -262,7 +260,7 @@ index 8e237eef..ec66c247 100644
  static int max96712_read_reg(struct max96712 *priv,
  			u16 addr, unsigned int *val)
  {
-@@ -99,6 +276,20 @@ static int max96712_read_reg(struct max96712 *priv,
+@@ -99,6 +274,20 @@ static int max96712_read_reg(struct max96712 *priv,
  	return err;
  }
  
@@ -283,7 +281,7 @@ index 8e237eef..ec66c247 100644
  
  static int max96712_stats_show(struct seq_file *s, void *data)
  {
-@@ -153,24 +344,6 @@ static const struct file_operations max96712_debugfs_fops = {
+@@ -153,24 +342,6 @@ static const struct file_operations max96712_debugfs_fops = {
  	.release = single_release,
  };
  
@@ -308,7 +306,7 @@ index 8e237eef..ec66c247 100644
  static int max96712_debugfs_init(const char *dir_name,
  				struct dentry **d_entry,
  				struct dentry **f_entry,
-@@ -225,7 +398,8 @@ static int max96712_debugfs_init(const char *dir_name,
+@@ -225,7 +396,8 @@ static int max96712_debugfs_init(const char *dir_name,
  static  struct regmap_config max96712_regmap_config = {
  	.reg_bits = 16,
  	.val_bits = 8,
@@ -318,7 +316,7 @@ index 8e237eef..ec66c247 100644
  };
  
  #if defined(NV_I2C_DRIVER_STRUCT_PROBE_WITHOUT_I2C_DEVICE_ID_ARG) /* Linux 6.3 */
-@@ -237,10 +411,16 @@ static int max96712_probe(struct i2c_client *client,
+@@ -237,10 +409,16 @@ static int max96712_probe(struct i2c_client *client,
  {
  	struct max96712 *priv;
  	int err = 0;
@@ -335,7 +333,7 @@ index 8e237eef..ec66c247 100644
  	priv->i2c_client = client;
  	priv->regmap = devm_regmap_init_i2c(priv->i2c_client,
  				&max96712_regmap_config);
-@@ -249,15 +429,56 @@ static int max96712_probe(struct i2c_client *client,
+@@ -249,15 +427,56 @@ static int max96712_probe(struct i2c_client *client,
  			"regmap init failed: %ld\n", PTR_ERR(priv->regmap));
  		return -ENODEV;
  	}
@@ -397,7 +395,7 @@ index 8e237eef..ec66c247 100644
  	err = max96712_debugfs_init(NULL, NULL, NULL, priv);
  	if (err)
  		return err;
-@@ -274,8 +495,11 @@ static int max96712_remove(struct i2c_client *client)
+@@ -274,8 +493,11 @@ static int max96712_remove(struct i2c_client *client)
  static void max96712_remove(struct i2c_client *client)
  #endif
  {
@@ -410,7 +408,7 @@ index 8e237eef..ec66c247 100644
  		i2c_unregister_device(client);
  		client = NULL;
  	}
-@@ -284,13 +508,658 @@ static void max96712_remove(struct i2c_client *client)
+@@ -284,13 +506,651 @@ static void max96712_remove(struct i2c_client *client)
  #endif
  }
  
@@ -628,10 +626,8 @@ index 8e237eef..ec66c247 100644
 +}
 +EXPORT_SYMBOL(max96712_reset_oneshot);
 +
-+/* RSDEV-12608: arm/disarm the one-shot GMSL link reset consumed by the next
-+ * __max96712_set_pipe(). d4xx sets reset=true only for a cold link bring-up
-+ * (or a camera that opts in via DT) so a pipe re-alloc on an already-locked
-+ * link does not re-train it and truncate sibling frames. */
++/* RSDEV-12608: arm/disarm the one-shot link reset consumed by the next
++ * set_pipe. d4xx arms it only for a cold link bring-up. */
 +void max96712_arm_link_reset(struct device *dev, bool reset)
 +{
 +	struct max96712 *priv = dev_get_drvdata(dev);
@@ -687,12 +683,9 @@ index 8e237eef..ec66c247 100644
 +	if (err) {
 +		return err;
 +	}
-+	/* vc_id_msb is this pipe's link_id.
-+	 * RSDEV-12608: the CTRL1 one-shot re-trains the whole GMSL link and
-+	 * truncates any sibling pipe's in-flight frames on the same link. Only
-+	 * issue it when d4xx has armed a link reset (cold link bring-up, HW-reset
-+	 * recovery, or a camera needing per-alloc re-init via DT); re-arm true
-+	 * afterwards so the reset stays the fail-safe default. */
++	/* vc_id_msb = this pipe's link_id. RSDEV-12608: the CTRL1 one-shot re-trains
++	 * the whole link and truncates siblings' in-flight frames — only fire it when
++	 * d4xx armed a reset (cold bring-up); re-arm true after (fail-safe default). */
 +	if (priv->pending_link_reset) {
 +		dev_info(dev, "RSDEV-12608: GMSL link %d one-shot reset fired\n",
 +			 vc_id_msb);
@@ -792,10 +785,8 @@ index 8e237eef..ec66c247 100644
 +		return err;
 +	}
 +
-+	/* RSDEV-12608: same one-shot link reset as __max96712_set_pipe(), here on
-+	 * the MAX96717 multi-VC pipe path. Gate it on the d4xx-armed decision so a
-+	 * pipe re-alloc on an already-locked link does not re-train it and truncate
-+	 * sibling frames; re-arm true afterwards (fail-safe default). */
++	/* RSDEV-12608: same gated one-shot link reset as __max96712_set_pipe(), on
++	 * the MAX96717 multi-VC path; re-arm true after (fail-safe default). */
 +	if (priv->pending_link_reset) {
 +		dev_info(dev, "RSDEV-12608: GMSL link %d one-shot reset fired (multi-vc)\n",
 +			 link_id);
@@ -1070,7 +1061,7 @@ index 8e237eef..ec66c247 100644
  	{ },
  };
  
-@@ -300,6 +1169,7 @@ static struct i2c_driver max96712_i2c_driver = {
+@@ -300,6 +1160,7 @@ static struct i2c_driver max96712_i2c_driver = {
  	.driver = {
  		.name = "max96712",
  		.owner = THIS_MODULE,
