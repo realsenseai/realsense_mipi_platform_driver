@@ -37,6 +37,20 @@ if [ "${JETPACK_VERSION}" = "5.0.2" ] || [ "${JETPACK_VERSION}" = "5.1.2" ]; the
     fi
 fi
 
+# JetPack 5.x installs only a few .ko into /lib/modules/$(uname -r), so the new
+# Image must match the running kernel; a mismatched-JetPack Image boots without
+# modules and can latch the bootloader into recovery. Override: SKIP_KERNEL_CHECK=1.
+if [ "${JETPACK_VERSION}" = "5.0.2" ] || [ "${JETPACK_VERSION}" = "5.1.2" ]; then
+    NEW_IMAGE=$(ls boot/Image Image 2>/dev/null | head -n1)
+    if [ -n "${NEW_IMAGE}" ] && [ "${SKIP_KERNEL_CHECK:-0}" != "1" ]; then
+        NEW_KVER=$(grep -a -m1 -oE 'Linux version [0-9][^ ]+' "${NEW_IMAGE}" | awk '{print $3}')
+        if [ "${NEW_KVER}" != "$(uname -r)" ]; then
+            echo "Error: new Image kernel (${NEW_KVER:-unknown}) != running kernel ($(uname -r)); wrong JetPack build. Set SKIP_KERNEL_CHECK=1 to override."
+            exit 1
+        fi
+    fi
+fi
+
 echo "Copying kernel files for JetPack ${JETPACK_VERSION}..."
 if [ "${JETPACK_VERSION}" = "5.0.2" ]; then
     echo "sudo cp tegra194-p2888-0001-p2822-0000.dtb /boot/${FOLDER}/"

@@ -37,6 +37,19 @@
  */
 
 int max96712_get_available_pipe_id(struct device *dev, int vc_id);
+/**
+ * @brief  Returns the multi-VC pipe dedicated to the link that owns vc_id,
+ * allocating one on first request. Used for MAX96717 serializers, which route
+ * all of a camera's virtual channels through a single pipe. The pipe is sticky
+ * for the driver's lifetime and is never freed by max96712_release_pipe().
+ *
+ * @param  [in]  dev    The deserializer device handle.
+ * @param  [in]  vc_id  A virtual channel id of the requesting camera; the link
+ *                      is derived as vc_id / 4.
+ *
+ * @return  pipe id (>= 0) on success, negative error code otherwise.
+ */
+int max96712_get_multi_vc_pipe_id(struct device *dev, int vc_id);
 int max96712_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
 		     u8 data_type2, u32 vc_id);
 int max96712_release_pipe(struct device *dev, int pipe_id);
