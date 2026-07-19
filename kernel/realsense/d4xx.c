@@ -689,9 +689,7 @@ static const struct dser_interface max96712_interface = {
 	.set_pipe = max96712_set_pipe,
 	.release_pipe = max96712_release_pipe,
 	.reset_oneshot = max96712_reset_oneshot,
-#ifdef MAX96712_HAS_ARM_LINK_RESET
 	.arm_link_reset = max96712_arm_link_reset,
-#endif
 	.setup_link = max96712_setup_link,
 	.setup_control = max96712_setup_control,
 	.reset_control = max96712_reset_control,
