@@ -7,210 +7,33 @@ Consolidated MAX9295 serializer / MAX9296 deserializer support:
  - base port (from the original jetpack-6.0 porting patch)
  - max9295/max9296 GPIO tunneling for external sync (was 0004/0005)
  - external address assignment on max9295 (was 0007)
- drivers/media/i2c/max9295.c | 281 ++++++++++++++++++++++++++++++++++++++------
- drivers/media/i2c/max9296.c | 222 +++++++++++++++++++++++++++++++++-
- include/media/gmsl-link.h   |   3 +
- include/media/max9295.h     |   8 ++
- include/media/max9296.h     |  27 +++++
- 5 files changed, 504 insertions(+), 37 deletions(-)
+ - align max9296 API to max96712 (was 0008)
+ - regmap cache-type change (was 0009)
+All hunks are verbatim copies of the originals; only regrouped.
+
+Signed-off-by: Dmitry Perchanov <dmitry.perchanov@realsenseai.com>
+---
+ drivers/media/i2c/max9295.c |  139 +++++++++++++++++++++++++++++++
+ drivers/media/i2c/max9296.c |  193 +++++++++++++++++++++++++++++++++++++++++++
+ include/media/gmsl-link.h   |    3 +
+ include/media/max9295.h     |    4 +
+ include/media/max9296.h     |    8 ++
+ drivers/media/i2c/max9295.c |   69 +++++++++++++++
+ include/media/max9295.h     |    4 +
+ drivers/media/i2c/max9296.c |   11 ++
+ drivers/media/i2c/max9295.c |   93 ++++++++++-----------
+ drivers/media/i2c/max9296.c |   7 ++
+ include/media/max9296.h     |   13 ++
+ drivers/media/i2c/max9295.c |    2 
+ drivers/media/i2c/max9296.c |    2 
+ 13 files changed, 508 insertions(+), 48 deletions(-)
 
 diff --git a/drivers/media/i2c/max9295.c b/drivers/media/i2c/max9295.c
-index b363d5f6..5b9a4dcf 100644
+index b363d5f6..e7c77845 100644
 --- a/drivers/media/i2c/max9295.c
 +++ b/drivers/media/i2c/max9295.c
-@@ -24,6 +24,10 @@
- #define MAX9295_CTRL0_ADDR 0x10
- #define MAX9295_SRC_CTRL_ADDR 0x2BF
- #define MAX9295_SRC_PWDN_ADDR 0x02BE
-+#define MAX9295_2C0_ADDR 0x02C0
-+#define MAX9295_2C1_ADDR 0x02C1
-+#define MAX9295_2C2_ADDR 0x02C2
-+#define MAX9295_2C3_ADDR 0x02C3
- #define MAX9295_SRC_OUT_RCLK_ADDR 0x3F1
- #define MAX9295_START_PIPE_ADDR 0x311
- #define MAX9295_PIPE_EN_ADDR 0x2
-@@ -84,7 +88,15 @@
- 
- #define MAX9295_RESET_ALL 0x80
- #define MAX9295_RESET_SRC 0x60
-+#define MAX9295_RESET_ESYNC 0x77
-+
- #define MAX9295_PWDN_GPIO 0x90
-+#define MAX9295_PWDN_ESYNC_EXT 0x24
-+
-+#define MAX9295_2C0_ESYNC 0x57
-+#define MAX9295_2C1_ESYNC 0x05
-+#define MAX9295_2C2_ESYNC 0x1F
-+#define MAX9295_2C3_ESYNC 0x57
- 
- #define MAX9295_MAX_PIPES 0x4
- 
-@@ -98,6 +110,7 @@ struct max9295 {
- 	struct regmap *regmap;
- 	struct max9295_client_ctx g_client;
- 	struct mutex lock;
-+	bool external_addr_reassign;
- 	/* primary serializer properties */
- 	__u32 def_addr;
- 	__u32 pst2_ref;
-@@ -301,50 +314,52 @@ int max9295_setup_control(struct device *dev)
- 
- 	g_ctx = priv->g_client.g_ctx;
- 
--	if (prim_priv__) {
--		/* update address reassingment */
--		max9295_write_reg(&prim_priv__->i2c_client->dev,
--				MAX9295_DEV_ADDR, (g_ctx->ser_reg << 1));
--	}
-+	if (!priv->external_addr_reassign) {
-+		if (prim_priv__) {
-+			/* update address reassingment */
-+			max9295_write_reg(&prim_priv__->i2c_client->dev,
-+					MAX9295_DEV_ADDR, (g_ctx->ser_reg << 1));
-+		}
- 
--	if (g_ctx->serdes_csi_link == GMSL_SERDES_CSI_LINK_A)
--		err = max9295_write_reg(dev, MAX9295_CTRL0_ADDR, 0x21);
--	else
--		err = max9295_write_reg(dev, MAX9295_CTRL0_ADDR, 0x22);
-+		if (g_ctx->serdes_csi_link == GMSL_SERDES_CSI_LINK_A)
-+			err = max9295_write_reg(dev, MAX9295_CTRL0_ADDR, 0x21);
-+		else
-+			err = max9295_write_reg(dev, MAX9295_CTRL0_ADDR, 0x22);
- 
--	/* check if serializer device exists */
--	if (err) {
--		dev_err(dev, "%s: ERROR: ser device not found\n", __func__);
--		goto error;
--	}
-+		/* check if serializer device exists */
-+		if (err) {
-+			dev_err(dev, "%s: ERROR: ser device not found\n", __func__);
-+			goto error;
-+		}
- 
--	/* delay to settle link */
--	msleep(100);
-+		/* delay to settle link */
-+		msleep(100);
- 
--	for (i = 0; i < ARRAY_SIZE(addr_offset); i += 3) {
--		if ((g_ctx->ser_reg << 1) == addr_offset[i]) {
--			offset1 = addr_offset[i+1];
--			offset2 = addr_offset[i+2];
--			break;
-+		for (i = 0; i < ARRAY_SIZE(addr_offset); i += 3) {
-+			if ((g_ctx->ser_reg << 1) == addr_offset[i]) {
-+				offset1 = addr_offset[i+1];
-+				offset2 = addr_offset[i+2];
-+				break;
-+			}
- 		}
--	}
- 
--	if (i == ARRAY_SIZE(addr_offset)) {
--		dev_err(dev, "%s: invalid ser slave address\n", __func__);
--		err = -EINVAL;
--		goto error;
--	}
-+		if (i == ARRAY_SIZE(addr_offset)) {
-+			dev_err(dev, "%s: invalid ser slave address\n", __func__);
-+			err = -EINVAL;
-+			goto error;
-+		}
- 
--	for (i = 0; i < ARRAY_SIZE(i2c_ovrd); i += 2) {
--		/* update address overrides */
--		i2c_ovrd[i+1] += (i < 4) ? offset1 : offset2;
-+		for (i = 0; i < ARRAY_SIZE(i2c_ovrd); i += 2) {
-+			/* update address overrides */
-+			i2c_ovrd[i+1] += (i < 4) ? offset1 : offset2;
- 
--		/* i2c passthrough2 must be configured once for all devices */
--		if ((i2c_ovrd[i] == 0x8B) && prim_priv__ &&
--				prim_priv__->pst2_ref)
--			continue;
-+			/* i2c passthrough2 must be configured once for all devices */
-+			if ((i2c_ovrd[i] == 0x8B) && prim_priv__ &&
-+					prim_priv__->pst2_ref)
-+				continue;
- 
--		max9295_write_reg(dev, i2c_ovrd[i], i2c_ovrd[i+1]);
-+			max9295_write_reg(dev, i2c_ovrd[i], i2c_ovrd[i+1]);
-+		}
- 	}
- 
- 	/* dev addr pass-through2 ref */
-@@ -366,6 +381,63 @@ error:
- }
- EXPORT_SYMBOL(max9295_setup_control);
- 
-+static int max9295_write_acc(struct device *dev, struct regmap *regmap,
-+			     u16 addr, u8 val, int *err)
-+{
-+	unsigned int readback = 0;
-+
-+	if (*err)
-+		return *err;
-+	*err = max9295_write_reg(dev, addr, val);
-+	if (!*err)
-+		regmap_read(regmap, addr, &readback);
-+	dev_dbg(dev, "%s: reg 0x%04x written 0x%02x readback 0x%02x\n",
-+		__func__, addr, val, readback);
-+	return *err;
-+}
-+
-+int max9295_enable_gpio_tunneling(struct device *dev)
-+{
-+	struct max9295 *priv = dev_get_drvdata(dev);
-+	int err = 0;
-+
-+	mutex_lock(&priv->lock);
-+
-+	/* Configure ESYNC registers for MAX96712A deserializer */
-+	max9295_write_acc(dev, priv->regmap, MAX9295_SRC_PWDN_ADDR, MAX9295_PWDN_ESYNC_EXT, &err);
-+	max9295_write_acc(dev, priv->regmap, MAX9295_SRC_CTRL_ADDR, MAX9295_RESET_ESYNC, &err);
-+	max9295_write_acc(dev, priv->regmap, MAX9295_2C0_ADDR, MAX9295_2C0_ESYNC, &err);
-+	max9295_write_acc(dev, priv->regmap, MAX9295_2C1_ADDR, MAX9295_2C1_ESYNC, &err);
-+	max9295_write_acc(dev, priv->regmap, MAX9295_2C2_ADDR, MAX9295_2C2_ESYNC, &err);
-+	max9295_write_acc(dev, priv->regmap, MAX9295_2C3_ADDR, MAX9295_2C3_ESYNC, &err);
-+
-+	mutex_unlock(&priv->lock);
-+
-+	return err;
-+}
-+EXPORT_SYMBOL(max9295_enable_gpio_tunneling);
-+
-+int max9295_disable_gpio_tunneling(struct device *dev)
-+{
-+	struct max9295 *priv = dev_get_drvdata(dev);
-+	int err = 0;
-+
-+	mutex_lock(&priv->lock);
-+
-+	/* Restore default SRC pin function — plain GPIO, no ESYNC tunneling */
-+	max9295_write_acc(dev, priv->regmap, MAX9295_SRC_PWDN_ADDR, MAX9295_PWDN_GPIO, &err);
-+	max9295_write_acc(dev, priv->regmap, MAX9295_SRC_CTRL_ADDR, MAX9295_RESET_SRC, &err);
-+	max9295_write_acc(dev, priv->regmap, MAX9295_2C0_ADDR, 0x00, &err);
-+	max9295_write_acc(dev, priv->regmap, MAX9295_2C1_ADDR, 0x00, &err);
-+	max9295_write_acc(dev, priv->regmap, MAX9295_2C2_ADDR, 0x00, &err);
-+	max9295_write_acc(dev, priv->regmap, MAX9295_2C3_ADDR, 0x00, &err);
-+
-+	mutex_unlock(&priv->lock);
-+
-+	return err;
-+}
-+EXPORT_SYMBOL(max9295_disable_gpio_tunneling);
-+
- int max9295_reset_control(struct device *dev)
- {
- 	struct max9295 *priv = dev_get_drvdata(dev);
-@@ -462,9 +534,140 @@ EXPORT_SYMBOL(max9295_sdev_unpair);
- static  struct regmap_config max9295_regmap_config = {
- 	.reg_bits = 16,
- 	.val_bits = 8,
--	.cache_type = REGCACHE_RBTREE,
-+	.cache_type = REGCACHE_NONE,
+@@ -465,6 +465,145 @@ static  struct regmap_config max9295_regmap_config = {
+ 	.cache_type = REGCACHE_RBTREE,
  };
  
 +struct reg_pair {
@@ -239,6 +62,10 @@ index b363d5f6..5b9a4dcf 100644
 +{
 +	int err = 0;
 +	u8 bpp = 0x30;
++	static u8 pipe_x_val = 0x0;
++	struct reg_pair map_multi_pipe_en[] = {
++		{0x0315, 0x80},
++	};
 +	struct reg_pair map_bpp8dbl[] = {
 +		{0x0312, 0x0F},
 +	};
@@ -272,16 +99,20 @@ index b363d5f6..5b9a4dcf 100644
 +
 +	map_pipe_control[0].val = 0x40 | data_type1;
 +	map_pipe_control[1].val = 0x40 | data_type2;
-+	if (pipe_id == 0) {
-+		map_pipe_control[1].val |= 0x80;
-+	}
 +	map_pipe_control[2].val = 1 << vc_id;
 +	map_pipe_control[3].val = 0x00;
 +	map_pipe_control[4].val = bpp;
 +	map_pipe_control[5].val = 0x0E;
 +
++	if (pipe_id == 0)
++		pipe_x_val = map_pipe_control[1].val;
++
 +	err |= max9295_set_registers(dev, map_pipe_control,
 +				     ARRAY_SIZE(map_pipe_control));
++
++	map_multi_pipe_en[0].val = 0x80 | pipe_x_val;
++	err |= max9295_set_registers(dev, map_multi_pipe_en,
++				     ARRAY_SIZE(map_multi_pipe_en));
 +
 +	return err;
 +}
@@ -347,35 +178,11 @@ index b363d5f6..5b9a4dcf 100644
  #if defined(NV_I2C_DRIVER_STRUCT_PROBE_WITHOUT_I2C_DEVICE_ID_ARG) /* Linux 6.3 */
  static int max9295_probe(struct i2c_client *client)
  #else
-@@ -506,6 +709,12 @@ static int max9295_probe(struct i2c_client *client,
- 		prim_priv__ = priv;
- 	}
- 
-+	if (of_get_property(node, "external_addr_reassign", NULL)) {
-+		priv->external_addr_reassign = true;
-+	} else {
-+		priv->external_addr_reassign = false;
-+	}
-+
- 	dev_set_drvdata(&client->dev, priv);
- 
- 	/* dev communication gets validated when GMSL link setup is done */
 diff --git a/drivers/media/i2c/max9296.c b/drivers/media/i2c/max9296.c
-index 1ceaf3cd..5dfb262e 100644
+index 1ceaf3cd..97559460 100644
 --- a/drivers/media/i2c/max9296.c
 +++ b/drivers/media/i2c/max9296.c
-@@ -16,6 +16,10 @@
- #include <media/max9296.h>
- 
- /* register specifics */
-+#define MAX9296_2C5_ADDR 0x2C5
-+#define MAX9296_2C6_ADDR 0x2C6
-+#define MAX9296_2C7_ADDR 0x2C7
-+
- #define MAX9296_DST_CSI_MODE_ADDR 0x330
- #define MAX9296_LANE_MAP1_ADDR 0x333
- #define MAX9296_LANE_MAP2_ADDR 0x334
-@@ -34,6 +38,8 @@
+@@ -34,6 +34,8 @@
  #define MAX9296_PIPE_X_DST_1_MAP_ADDR 0x410
  #define MAX9296_PIPE_X_SRC_2_MAP_ADDR 0x411
  #define MAX9296_PIPE_X_DST_2_MAP_ADDR 0x412
@@ -384,21 +191,10 @@ index 1ceaf3cd..5dfb262e 100644
  
  #define MAX9296_PIPE_X_ST_SEL_ADDR 0x50
  
-@@ -42,6 +48,10 @@
- #define MAX9296_CTRL0_ADDR 0x10
- 
- /* data defines */
-+#define MAX9296_2C5_ESYNC 0xAA
-+#define MAX9296_2C6_ESYNC 0x17
-+#define MAX9296_2C7_ESYNC 0x47
-+
- #define MAX9296_CSI_MODE_4X2 0x1
- #define MAX9296_CSI_MODE_2X4 0x4
- #define MAX9296_LANE_MAP1_4X2 0x44
-@@ -250,6 +260,12 @@ void max9296_power_off(struct device *dev)
+@@ -250,6 +252,12 @@ void max9296_power_off(struct device *dev)
  	mutex_lock(&priv->lock);
  	priv->pw_ref--;
- 
+
 +	if (priv->pw_ref < 0) {
 +		priv->pw_ref = 0;
 +		mutex_unlock(&priv->lock);
@@ -408,17 +204,7 @@ index 1ceaf3cd..5dfb262e 100644
  	if (priv->pw_ref == 0) {
  		/* enter reset mode: XCLR */
  		usleep_range(1, 2);
-@@ -349,6 +365,9 @@ int max9296_setup_control(struct device *dev, struct device *s_dev)
- 
- 	max9296_write_reg(dev,
- 			MAX9296_PWDN_PHYS_ADDR, MAX9296_ALLPHYS_NOSTDBY);
-+	max9296_write_reg(dev, MAX9296_2C5_ADDR, MAX9296_2C5_ESYNC);
-+	max9296_write_reg(dev, MAX9296_2C6_ADDR, MAX9296_2C6_ESYNC);
-+	max9296_write_reg(dev, MAX9296_2C7_ADDR, MAX9296_2C7_ESYNC);
- 
- 	priv->sdev_ref++;
- 
-@@ -769,6 +788,207 @@ ret:
+@@ -769,6 +774,191 @@ ret:
  }
  EXPORT_SYMBOL(max9296_setup_streaming);
  
@@ -489,15 +275,6 @@ index 1ceaf3cd..5dfb262e 100644
 +	mutex_unlock(&priv->lock);
 +}
 +EXPORT_SYMBOL(max9296_reset_oneshot);
-+
-+/* RSDEV-12608: no-op — __max9296_set_pipe() issues no link reset, so there's
-+ * nothing to gate; kept for dser_interface completeness across deserializers. */
-+void max9296_arm_link_reset(struct device *dev, bool reset)
-+{
-+	(void)dev;
-+	(void)reset;
-+}
-+EXPORT_SYMBOL(max9296_arm_link_reset);
 +
 +static int __max9296_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
 +			      u8 data_type2, u32 vc_id)
@@ -591,13 +368,6 @@ index 1ceaf3cd..5dfb262e 100644
 +}
 +EXPORT_SYMBOL(max9296_init_settings);
 +
-+int max9296_bind_ser_to_dser_pipe(struct device *dev, int dser_pipe_id, int ser_pipe_id, u32 vc_id)
-+{
-+	/* pipe id's are 1:1 in this deserializer */
-+	return 0;
-+}
-+EXPORT_SYMBOL(max9296_bind_ser_to_dser_pipe);
-+
 +int max9296_set_pipe(struct device *dev, int pipe_id,
 +		     u8 data_type1, u8 data_type2, u32 vc_id)
 +{
@@ -626,15 +396,6 @@ index 1ceaf3cd..5dfb262e 100644
  static const struct of_device_id max9296_of_match[] = {
  	{ .compatible = "maxim,max9296", },
  	{ },
-@@ -845,7 +1065,7 @@ static int max9296_parse_dt(struct max9296 *priv,
- static struct regmap_config max9296_regmap_config = {
- 	.reg_bits = 16,
- 	.val_bits = 8,
--	.cache_type = REGCACHE_RBTREE,
-+	.cache_type = REGCACHE_NONE,
- };
- 
- #if defined(NV_I2C_DRIVER_STRUCT_PROBE_WITHOUT_I2C_DEVICE_ID_ARG) /* Linux 6.3 */
 diff --git a/include/media/gmsl-link.h b/include/media/gmsl-link.h
 index ad902d0a..7dce2356 100644
 --- a/include/media/gmsl-link.h
@@ -650,7 +411,7 @@ index ad902d0a..7dce2356 100644
  #define GMSL_ST_ID_UNUSED 0xFF
  
 diff --git a/include/media/max9295.h b/include/media/max9295.h
-index bf801aa2..f64307f6 100644
+index bf801aa2..c576e3e5 100644
 --- a/include/media/max9295.h
 +++ b/include/media/max9295.h
 @@ -12,6 +12,7 @@
@@ -670,20 +431,16 @@ index bf801aa2..f64307f6 100644
  
  /**
   * @brief  Powers on a serializer device and performs the I2C overrides
-@@ -82,6 +85,11 @@ int max9295_sdev_unpair(struct device *dev, struct device *s_dev);
+@@ -82,6 +85,7 @@ int max9295_sdev_unpair(struct device *dev, struct device *s_dev);
   */
  int max9295_setup_streaming(struct device *dev);
  
 +int max9295_init_settings(struct device *dev);
-+
-+int max9295_enable_gpio_tunneling(struct device *dev);
-+int max9295_disable_gpio_tunneling(struct device *dev);
-+
  /** @} */
  
  #endif  /* __MAX9295_H__ */
 diff --git a/include/media/max9296.h b/include/media/max9296.h
-index 210dbc80..796d2590 100644
+index 210dbc80..6b4c796e 100644
 --- a/include/media/max9296.h
 +++ b/include/media/max9296.h
 @@ -12,6 +12,7 @@
@@ -694,7 +451,7 @@ index 210dbc80..796d2590 100644
  #include <media/gmsl-link.h>
  /**
   * \defgroup max9296 MAX9296 deserializer driver
-@@ -22,6 +23,18 @@
+@@ -22,6 +23,12 @@
   * @{
   */
  
@@ -703,21 +460,339 @@ index 210dbc80..796d2590 100644
 +		     u8 data_type2, u32 vc_id);
 +int max9296_release_pipe(struct device *dev, int pipe_id);
 +void max9296_reset_oneshot(struct device *dev);
-+/* RSDEV-12608: this deserializer header provides max9296_arm_link_reset().
-+ * d4xx keys its arm_link_reset wiring on this macro so JetPack versions whose
-+ * max9296 header predates the symbol still build (the op stays NULL, which for
-+ * max9296 is behaviourally identical since it never resets in set_pipe). */
-+#define MAX9296_HAS_ARM_LINK_RESET 1
-+void max9296_arm_link_reset(struct device *dev, bool reset);
 +
  /**
   * Puts a deserializer device in single exclusive link mode, so link-specific
   * I2C overrides can be performed for sensor and serializer devices.
-@@ -146,6 +159,20 @@ int max9296_power_on(struct device *dev);
+@@ -146,6 +153,7 @@ int max9296_power_on(struct device *dev);
   */
  void max9296_power_off(struct device *dev);
  
 +int max9296_init_settings(struct device *dev);
+ /** @} */
+ 
+ #endif  /* __MAX9296_H__ */
+diff --git a/drivers/media/i2c/max9295.c b/drivers/media/i2c/max9295.c
+index e7c77845..eff47e1d 100644
+--- a/drivers/media/i2c/max9295.c
++++ b/drivers/media/i2c/max9295.c
+@@ -24,6 +24,10 @@
+ #define MAX9295_CTRL0_ADDR 0x10
+ #define MAX9295_SRC_CTRL_ADDR 0x2BF
+ #define MAX9295_SRC_PWDN_ADDR 0x02BE
++#define MAX9295_2C0_ADDR 0x02C0
++#define MAX9295_2C1_ADDR 0x02C1
++#define MAX9295_2C2_ADDR 0x02C2
++#define MAX9295_2C3_ADDR 0x02C3
+ #define MAX9295_SRC_OUT_RCLK_ADDR 0x3F1
+ #define MAX9295_START_PIPE_ADDR 0x311
+ #define MAX9295_PIPE_EN_ADDR 0x2
+@@ -84,7 +88,15 @@
+ 
+ #define MAX9295_RESET_ALL 0x80
+ #define MAX9295_RESET_SRC 0x60
++#define MAX9295_RESET_ESYNC 0x77
++
+ #define MAX9295_PWDN_GPIO 0x90
++#define MAX9295_PWDN_ESYNC_EXT 0x24
++
++#define MAX9295_2C0_ESYNC 0x57
++#define MAX9295_2C1_ESYNC 0x05
++#define MAX9295_2C2_ESYNC 0x1F
++#define MAX9295_2C3_ESYNC 0x57
+ 
+ #define MAX9295_MAX_PIPES 0x4
+ 
+@@ -373,6 +385,63 @@ error:
+ }
+ EXPORT_SYMBOL(max9295_setup_control);
+ 
++static int max9295_write_acc(struct device *dev, struct regmap *regmap,
++			     u16 addr, u8 val, int *err)
++{
++	unsigned int readback = 0;
++
++	if (*err)
++		return *err;
++	*err = max9295_write_reg(dev, addr, val);
++	if (!*err)
++		regmap_read(regmap, addr, &readback);
++	dev_dbg(dev, "%s: reg 0x%04x written 0x%02x readback 0x%02x\n",
++		__func__, addr, val, readback);
++	return *err;
++}
++
++int max9295_enable_gpio_tunneling(struct device *dev)
++{
++	struct max9295 *priv = dev_get_drvdata(dev);
++	int err = 0;
++
++	mutex_lock(&priv->lock);
++
++	/* Configure ESYNC registers for MAX96712A deserializer */
++	max9295_write_acc(dev, priv->regmap, MAX9295_SRC_PWDN_ADDR, MAX9295_PWDN_ESYNC_EXT, &err);
++	max9295_write_acc(dev, priv->regmap, MAX9295_SRC_CTRL_ADDR, MAX9295_RESET_ESYNC, &err);
++	max9295_write_acc(dev, priv->regmap, MAX9295_2C0_ADDR, MAX9295_2C0_ESYNC, &err);
++	max9295_write_acc(dev, priv->regmap, MAX9295_2C1_ADDR, MAX9295_2C1_ESYNC, &err);
++	max9295_write_acc(dev, priv->regmap, MAX9295_2C2_ADDR, MAX9295_2C2_ESYNC, &err);
++	max9295_write_acc(dev, priv->regmap, MAX9295_2C3_ADDR, MAX9295_2C3_ESYNC, &err);
++
++	mutex_unlock(&priv->lock);
++
++	return err;
++}
++EXPORT_SYMBOL(max9295_enable_gpio_tunneling);
++
++int max9295_disable_gpio_tunneling(struct device *dev)
++{
++	struct max9295 *priv = dev_get_drvdata(dev);
++	int err = 0;
++
++	mutex_lock(&priv->lock);
++
++	/* Restore default SRC pin function — plain GPIO, no ESYNC tunneling */
++	max9295_write_acc(dev, priv->regmap, MAX9295_SRC_PWDN_ADDR, MAX9295_PWDN_GPIO, &err);
++	max9295_write_acc(dev, priv->regmap, MAX9295_SRC_CTRL_ADDR, MAX9295_RESET_SRC, &err);
++	max9295_write_acc(dev, priv->regmap, MAX9295_2C0_ADDR, 0x00, &err);
++	max9295_write_acc(dev, priv->regmap, MAX9295_2C1_ADDR, 0x00, &err);
++	max9295_write_acc(dev, priv->regmap, MAX9295_2C2_ADDR, 0x00, &err);
++	max9295_write_acc(dev, priv->regmap, MAX9295_2C3_ADDR, 0x00, &err);
++
++	mutex_unlock(&priv->lock);
++
++	return err;
++}
++EXPORT_SYMBOL(max9295_disable_gpio_tunneling);
++
+ int max9295_reset_control(struct device *dev)
+ {
+ 	struct max9295 *priv = dev_get_drvdata(dev);
+diff --git a/include/media/max9295.h b/include/media/max9295.h
+index c576e3e5..1acfe0fe 100644
+--- a/include/media/max9295.h
++++ b/include/media/max9295.h
+@@ -86,6 +86,10 @@ int max9295_sdev_unpair(struct device *dev, struct device *s_dev);
+ int max9295_setup_streaming(struct device *dev);
+ 
+ int max9295_init_settings(struct device *dev);
++
++int max9295_enable_gpio_tunneling(struct device *dev);
++int max9295_disable_gpio_tunneling(struct device *dev);
++
+ /** @} */
+ 
+ #endif  /* __MAX9295_H__ */
+diff --git a/drivers/media/i2c/max9296.c b/drivers/media/i2c/max9296.c
+index 97559460..d50bea51 100644
+--- a/drivers/media/i2c/max9296.c
++++ b/drivers/media/i2c/max9296.c
+@@ -16,6 +16,10 @@
+ #include <media/max9296.h>
+ 
+ /* register specifics */
++#define MAX9296_2C5_ADDR 0x2C5
++#define MAX9296_2C6_ADDR 0x2C6
++#define MAX9296_2C7_ADDR 0x2C7
++
+ #define MAX9296_DST_CSI_MODE_ADDR 0x330
+ #define MAX9296_LANE_MAP1_ADDR 0x333
+ #define MAX9296_LANE_MAP2_ADDR 0x334
+@@ -44,6 +48,10 @@
+ #define MAX9296_CTRL0_ADDR 0x10
+ 
+ /* data defines */
++#define MAX9296_2C5_ESYNC 0xAA
++#define MAX9296_2C6_ESYNC 0x17
++#define MAX9296_2C7_ESYNC 0x47
++
+ #define MAX9296_CSI_MODE_4X2 0x1
+ #define MAX9296_CSI_MODE_2X4 0x4
+ #define MAX9296_LANE_MAP1_4X2 0x44
+@@ -354,6 +362,9 @@ int max9296_setup_control(struct device *dev, struct device *s_dev)
+ 
+ 	max9296_write_reg(dev,
+ 			MAX9296_PWDN_PHYS_ADDR, MAX9296_ALLPHYS_NOSTDBY);
++	max9296_write_reg(dev, MAX9296_2C5_ADDR, MAX9296_2C5_ESYNC);
++	max9296_write_reg(dev, MAX9296_2C6_ADDR, MAX9296_2C6_ESYNC);
++	max9296_write_reg(dev, MAX9296_2C7_ADDR, MAX9296_2C7_ESYNC);
+ 
+ 	priv->sdev_ref++;
+ 
+diff --git a/drivers/media/i2c/max9295.c b/drivers/media/i2c/max9295.c
+index 0c86332d..12b5db00 100644
+--- a/drivers/media/i2c/max9295.c
++++ b/drivers/media/i2c/max9295.c
+@@ -110,6 +110,7 @@ struct max9295 {
+ 	struct regmap *regmap;
+ 	struct max9295_client_ctx g_client;
+ 	struct mutex lock;
++	bool external_addr_reassign;
+ 	/* primary serializer properties */
+ 	__u32 def_addr;
+ 	__u32 pst2_ref;
+@@ -313,50 +314,52 @@ int max9295_setup_control(struct device *dev)
+ 
+ 	g_ctx = priv->g_client.g_ctx;
+ 
+-	if (prim_priv__) {
+-		/* update address reassingment */
+-		max9295_write_reg(&prim_priv__->i2c_client->dev,
+-				MAX9295_DEV_ADDR, (g_ctx->ser_reg << 1));
+-	}
++	if (!priv->external_addr_reassign) {
++		if (prim_priv__) {
++			/* update address reassingment */
++			max9295_write_reg(&prim_priv__->i2c_client->dev,
++					MAX9295_DEV_ADDR, (g_ctx->ser_reg << 1));
++		}
+ 
+-	if (g_ctx->serdes_csi_link == GMSL_SERDES_CSI_LINK_A)
+-		err = max9295_write_reg(dev, MAX9295_CTRL0_ADDR, 0x21);
+-	else
+-		err = max9295_write_reg(dev, MAX9295_CTRL0_ADDR, 0x22);
++		if (g_ctx->serdes_csi_link == GMSL_SERDES_CSI_LINK_A)
++			err = max9295_write_reg(dev, MAX9295_CTRL0_ADDR, 0x21);
++		else
++			err = max9295_write_reg(dev, MAX9295_CTRL0_ADDR, 0x22);
+ 
+-	/* check if serializer device exists */
+-	if (err) {
+-		dev_err(dev, "%s: ERROR: ser device not found\n", __func__);
+-		goto error;
+-	}
++		/* check if serializer device exists */
++		if (err) {
++			dev_err(dev, "%s: ERROR: ser device not found\n", __func__);
++			goto error;
++		}
+ 
+-	/* delay to settle link */
+-	msleep(100);
++		/* delay to settle link */
++		msleep(100);
+ 
+-	for (i = 0; i < ARRAY_SIZE(addr_offset); i += 3) {
+-		if ((g_ctx->ser_reg << 1) == addr_offset[i]) {
+-			offset1 = addr_offset[i+1];
+-			offset2 = addr_offset[i+2];
+-			break;
++		for (i = 0; i < ARRAY_SIZE(addr_offset); i += 3) {
++			if ((g_ctx->ser_reg << 1) == addr_offset[i]) {
++				offset1 = addr_offset[i+1];
++				offset2 = addr_offset[i+2];
++				break;
++			}
+ 		}
+-	}
+ 
+-	if (i == ARRAY_SIZE(addr_offset)) {
+-		dev_err(dev, "%s: invalid ser slave address\n", __func__);
+-		err = -EINVAL;
+-		goto error;
+-	}
++		if (i == ARRAY_SIZE(addr_offset)) {
++			dev_err(dev, "%s: invalid ser slave address\n", __func__);
++			err = -EINVAL;
++			goto error;
++		}
+ 
+-	for (i = 0; i < ARRAY_SIZE(i2c_ovrd); i += 2) {
+-		/* update address overrides */
+-		i2c_ovrd[i+1] += (i < 4) ? offset1 : offset2;
++		for (i = 0; i < ARRAY_SIZE(i2c_ovrd); i += 2) {
++			/* update address overrides */
++			i2c_ovrd[i+1] += (i < 4) ? offset1 : offset2;
+ 
+-		/* i2c passthrough2 must be configured once for all devices */
+-		if ((i2c_ovrd[i] == 0x8B) && prim_priv__ &&
+-				prim_priv__->pst2_ref)
+-			continue;
++			/* i2c passthrough2 must be configured once for all devices */
++			if ((i2c_ovrd[i] == 0x8B) && prim_priv__ &&
++					prim_priv__->pst2_ref)
++				continue;
+ 
+-		max9295_write_reg(dev, i2c_ovrd[i], i2c_ovrd[i+1]);
++			max9295_write_reg(dev, i2c_ovrd[i], i2c_ovrd[i+1]);
++		}
+ 	}
+ 
+ 	/* dev addr pass-through2 ref */
+@@ -524,10 +527,6 @@ static int __max9295_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
+ {
+ 	int err = 0;
+ 	u8 bpp = 0x30;
+-	static u8 pipe_x_val = 0x0;
+-	struct reg_pair map_multi_pipe_en[] = {
+-		{0x0315, 0x80},
+-	};
+ 	struct reg_pair map_bpp8dbl[] = {
+ 		{0x0312, 0x0F},
+ 	};
+@@ -561,21 +560,17 @@ static int __max9295_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
+ 
+ 	map_pipe_control[0].val = 0x40 | data_type1;
+ 	map_pipe_control[1].val = 0x40 | data_type2;
++	if (pipe_id == 0) {
++		map_pipe_control[1].val |= 0x80;
++	}
+ 	map_pipe_control[2].val = 1 << vc_id;
+ 	map_pipe_control[3].val = 0x00;
+ 	map_pipe_control[4].val = bpp;
+ 	map_pipe_control[5].val = 0x0E;
+ 
+-	if (pipe_id == 0)
+-		pipe_x_val = map_pipe_control[1].val;
+-
+ 	err |= max9295_set_registers(dev, map_pipe_control,
+ 				     ARRAY_SIZE(map_pipe_control));
+ 
+-	map_multi_pipe_en[0].val = 0x80 | pipe_x_val;
+-	err |= max9295_set_registers(dev, map_multi_pipe_en,
+-				     ARRAY_SIZE(map_multi_pipe_en));
+-
+ 	return err;
+ }
+ 
+@@ -678,6 +673,12 @@ static int max9295_probe(struct i2c_client *client,
+ 		prim_priv__ = priv;
+ 	}
+ 
++	if (of_get_property(node, "external_addr_reassign", NULL)) {
++		priv->external_addr_reassign = true;
++	} else {
++		priv->external_addr_reassign = false;
++	}
++
+ 	dev_set_drvdata(&client->dev, priv);
+ 
+ 	/* dev communication gets validated when GMSL link setup is done */
+diff --git a/drivers/media/i2c/max9296.c b/drivers/media/i2c/max9296.c
+index d50bea51..92b483b6 100644
+--- a/drivers/media/i2c/max9296.c
++++ b/drivers/media/i2c/max9296.c
+@@ -938,6 +945,13 @@ int max9296_init_settings(struct device *dev)
+ }
+ EXPORT_SYMBOL(max9296_init_settings);
+ 
++int max9296_bind_ser_to_dser_pipe(struct device *dev, int dser_pipe_id, int ser_pipe_id, u32 vc_id)
++{
++	/* pipe id's are 1:1 in this deserializer */
++	return 0;
++}
++EXPORT_SYMBOL(max9296_bind_ser_to_dser_pipe);
++
+ int max9296_set_pipe(struct device *dev, int pipe_id,
+ 		     u8 data_type1, u8 data_type2, u32 vc_id)
+ {
+diff --git a/include/media/max9296.h b/include/media/max9296.h
+index 6b4c796e..db7365d7 100644
+--- a/include/media/max9296.h
++++ b/include/media/max9296.h
+@@ -153,6 +154,19 @@ int max9296_power_on(struct device *dev);
+ void max9296_power_off(struct device *dev);
+ 
+ int max9296_init_settings(struct device *dev);
 +
 +/**
 + * @brief  Maps dserializer to serializer pipe id
@@ -734,5 +809,32 @@ index 210dbc80..796d2590 100644
  /** @} */
  
  #endif  /* __MAX9296_H__ */
+diff --git a/drivers/media/i2c/max9295.c b/drivers/media/i2c/max9295.c
+index 12b5db00..2149b1a8 100644
+--- a/drivers/media/i2c/max9295.c
++++ b/drivers/media/i2c/max9295.c
+@@ -498,7 +498,7 @@ EXPORT_SYMBOL(max9295_sdev_unpair);
+ static  struct regmap_config max9295_regmap_config = {
+ 	.reg_bits = 16,
+ 	.val_bits = 8,
+-	.cache_type = REGCACHE_RBTREE,
++	.cache_type = REGCACHE_NONE,
+ };
+ 
+ struct reg_pair {
+diff --git a/drivers/media/i2c/max9296.c b/drivers/media/i2c/max9296.c
+index 92b483b6..d6f9f30c 100644
+--- a/drivers/media/i2c/max9296.c
++++ b/drivers/media/i2c/max9296.c
+@@ -1060,7 +1060,7 @@ static int max9296_parse_dt(struct max9296 *priv,
+ static struct regmap_config max9296_regmap_config = {
+ 	.reg_bits = 16,
+ 	.val_bits = 8,
+-	.cache_type = REGCACHE_RBTREE,
++	.cache_type = REGCACHE_NONE,
+ };
+ 
+ #if defined(NV_I2C_DRIVER_STRUCT_PROBE_WITHOUT_I2C_DEVICE_ID_ARG) /* Linux 6.3 */
 -- 
-2.43.0
+2.34.1
+
