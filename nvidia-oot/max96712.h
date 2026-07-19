@@ -41,12 +41,9 @@ int max96712_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
 		     u8 data_type2, u32 vc_id);
 int max96712_release_pipe(struct device *dev, int pipe_id);
 void max96712_reset_oneshot(struct device *dev);
-/* RSDEV-12608: this deserializer header provides max96712_arm_link_reset().
- * d4xx keys its one-shot-link-reset gating on this macro so JetPack versions
- * whose max96712 header predates the symbol (e.g. JP5 kernel/nvidia/max96712.h)
- * still build (the op stays NULL and d4xx guards it). */
-#define MAX96712_HAS_ARM_LINK_RESET 1
-void max96712_arm_link_reset(struct device *dev, bool reset);
+/* RSDEV-12608: flush one GMSL link's pixel line buffer after a camera HW reset;
+ * called per-link from d4xx's ds5_hw_reset_with_recovery(). */
+void max96712_reset_link_now(struct device *dev, u32 vc_id);
 int max96712_setup_link(struct device *dev, struct device *s_dev);
 int max96712_setup_control(struct device *dev, struct device *s_dev);
 int max96712_reset_control(struct device *dev, struct device *s_dev);

@@ -56,9 +56,10 @@ struct dser_interface {
 	int (*set_pipe)(struct device *dev, int pipe_id, u8 data_type1, u8 data_type2, u32 vc_id);
 	int (*release_pipe)(struct device *dev, int pipe_id);
 	void (*reset_oneshot)(struct device *dev);
-	/* RSDEV-12608: arm/disarm the deser one-shot link reset for the next
-	 * set_pipe. Optional (NULL = deser never re-trains on pipe alloc, e.g. max9296). */
-	void (*arm_link_reset)(struct device *dev, bool reset);
+	/* RSDEV-12608: flush one GMSL link's pixel line buffer after a camera HW
+	 * reset (called from ds5_hw_reset_with_recovery). Optional (NULL = deser
+	 * leaves no stale line buffer after a camera reset, e.g. max9296). */
+	void (*reset_link_now)(struct device *dev, u32 vc_id);
 
 	/* Setup and control */
 	int (*setup_link)(struct device *dev, struct device *s_dev);
@@ -561,9 +562,6 @@ struct ds5 {
 	const struct ds5_variant *variant;
 	int is_depth, is_y8, is_rgb, is_imu;
 	bool metadata_enabled;
-	/* RSDEV-12608: set per stream-start = no sibling up yet (first on the link);
-	 * gates the deser one-shot link reset. */
-	bool link_cold_bringup;
 	int aggregated;
 	int reset_ref_ds5;
 	u16 fw_version;
@@ -689,7 +687,7 @@ static const struct dser_interface max96712_interface = {
 	.set_pipe = max96712_set_pipe,
 	.release_pipe = max96712_release_pipe,
 	.reset_oneshot = max96712_reset_oneshot,
-	.arm_link_reset = max96712_arm_link_reset,
+	.reset_link_now = max96712_reset_link_now,
 	.setup_link = max96712_setup_link,
 	.setup_control = max96712_setup_control,
 	.reset_control = max96712_reset_control,
@@ -1988,11 +1986,6 @@ static int ds5_setup_pipeline(struct ds5 *state, u8 data_type1, u8 data_type2,
 			ser_pipe_id, pipe_id, data_type1, data_type2, ser_vc_id, vc_id);
 	ret |= state->ser_ops->set_pipe(state->ser_dev, ser_pipe_id,
 				data_type1, data_type2, ser_vc_id);
-	/* RSDEV-12608: arm the one-shot link reset only for a cold bring-up; under
-	 * serdes_lock__ just before set_pipe so it's atomic vs siblings on the link. */
-	if (state->dser_ops->arm_link_reset)
-		state->dser_ops->arm_link_reset(state->dser_dev,
-				state->link_cold_bringup);
 	ret |= state->dser_ops->set_pipe(state->dser_dev, pipe_id,
 				data_type1, data_type2, vc_id);
 	if (ret)
@@ -2857,6 +2850,15 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 		dev_type,
 		(state->fw_version >> 8) & 0xff, state->fw_version & 0xff,
 		(state->fw_build >> 8) & 0xff, state->fw_build & 0xff);
+
+	/* RSDEV-12608: a mid-stream camera HW reset can leave a stale partial frame
+	 * in the deserializer's pixel line buffer for this camera's link (the ser is
+	 * not reset, so nothing else clears it). Flush it once, per-link, so the next
+	 * stream start comes up clean; without it the stream never completes a frame
+	 * -> VI 2500ms timeouts -> capture err_rec exhaustion. NULL for deserializers
+	 * that leave no stale buffer after a camera reset (max9296). */
+	if (state->dser_ops->reset_link_now)
+		state->dser_ops->reset_link_now(state->dser_dev, state->g_ctx.dst_vc);
 
 	/* Re-apply ESYNC tunneling to match cached sync_mode control */
 	if (state->ctrls.sync_mode) {
@@ -5422,14 +5424,6 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 
 	restore_val = sensor->streaming;
 	mutex_lock(&state->ds5_dev->lock);
-	/* RSDEV-12608: "no sibling up yet" (before setting our own flag) = cold link
-	 * bring-up → fire the one-shot reset in ds5_setup_pipeline; else skip it so we
-	 * don't re-train a link carrying a sibling's frames. */
-	if (on)
-		state->link_cold_bringup = !(state->ds5_dev->depth_streaming ||
-					     state->ds5_dev->rgb_streaming ||
-					     state->ds5_dev->ir_streaming ||
-					     state->ds5_dev->imu_streaming);
 	*streaming_flag = on;
 	mutex_unlock(&state->ds5_dev->lock);
 	sensor->streaming = on;

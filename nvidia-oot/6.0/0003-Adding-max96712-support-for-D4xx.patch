@@ -7,14 +7,14 @@ Add MAX96712 deserializer driver support for D4XX/D5XX cameras.
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- drivers/media/i2c/max96712.c | 931 +++++++++++++++++++++++++++++++++++++++++--
- 1 file changed, 896 insertions(+), 35 deletions(-)
+ drivers/media/i2c/max96712.c | 924 +++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 889 insertions(+), 35 deletions(-)
 
 diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
-index 8e237eef..bc1310e0 100644
+index 8e237eef..f0386b73 100644
 --- a/drivers/media/i2c/max96712.c
 +++ b/drivers/media/i2c/max96712.c
-@@ -16,32 +16,165 @@
+@@ -16,32 +16,162 @@
  #include <linux/gpio.h>
  #include <linux/of.h>
  #include <linux/of_gpio.h>
@@ -159,9 +159,6 @@ index 8e237eef..bc1310e0 100644
 +	int lane_cnt;
 +	bool fangzhu_fg12_reverse_lane_polarity;
 +	bool fangzhu_fg12_poc_enable;
-+	/* RSDEV-12608: gates the one-shot link reset (CTRL1) in set_pipe; d4xx arms
-+	 * it only for a cold link bring-up. Defaults true (fail-safe). */
-+	bool pending_link_reset;
  };
  static struct max96712 *global_priv[4];
  
@@ -185,7 +182,7 @@ index 8e237eef..bc1310e0 100644
  	i2c_client = global_priv[channel]->i2c_client;
  	bak = i2c_client->addr;
  
-@@ -53,7 +186,6 @@ int max96712_write_reg_Dser(int slaveAddr, int channel,
+@@ -53,7 +183,6 @@ int max96712_write_reg_Dser(int slaveAddr, int channel,
  		dev_err(&i2c_client->dev, "%s: addr = 0x%x, val = 0x%x\n",
  				__func__, addr, val);
  	}
@@ -193,7 +190,7 @@ index 8e237eef..bc1310e0 100644
  	return err;
  }
  EXPORT_SYMBOL(max96712_write_reg_Dser);
-@@ -68,8 +200,6 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
+@@ -68,8 +197,6 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
  
  	if (channel > 3 || channel < 0 || global_priv[channel] == NULL)
  		return -1;
@@ -202,7 +199,7 @@ index 8e237eef..bc1310e0 100644
  	i2c_client = global_priv[channel]->i2c_client;
  	bak = i2c_client->addr;
  	i2c_client->addr = slaveAddr / 2;
-@@ -80,11 +210,56 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
+@@ -80,11 +207,56 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
  		dev_err(&i2c_client->dev, "%s: addr = 0x%x, val = 0x%x\n",
  				__func__, addr, *val);
  	}
@@ -260,7 +257,7 @@ index 8e237eef..bc1310e0 100644
  static int max96712_read_reg(struct max96712 *priv,
  			u16 addr, unsigned int *val)
  {
-@@ -99,6 +274,20 @@ static int max96712_read_reg(struct max96712 *priv,
+@@ -99,6 +271,20 @@ static int max96712_read_reg(struct max96712 *priv,
  	return err;
  }
  
@@ -281,7 +278,7 @@ index 8e237eef..bc1310e0 100644
  
  static int max96712_stats_show(struct seq_file *s, void *data)
  {
-@@ -153,24 +342,6 @@ static const struct file_operations max96712_debugfs_fops = {
+@@ -153,24 +339,6 @@ static const struct file_operations max96712_debugfs_fops = {
  	.release = single_release,
  };
  
@@ -306,7 +303,7 @@ index 8e237eef..bc1310e0 100644
  static int max96712_debugfs_init(const char *dir_name,
  				struct dentry **d_entry,
  				struct dentry **f_entry,
-@@ -225,7 +396,8 @@ static int max96712_debugfs_init(const char *dir_name,
+@@ -225,7 +393,8 @@ static int max96712_debugfs_init(const char *dir_name,
  static  struct regmap_config max96712_regmap_config = {
  	.reg_bits = 16,
  	.val_bits = 8,
@@ -316,7 +313,7 @@ index 8e237eef..bc1310e0 100644
  };
  
  #if defined(NV_I2C_DRIVER_STRUCT_PROBE_WITHOUT_I2C_DEVICE_ID_ARG) /* Linux 6.3 */
-@@ -237,10 +409,16 @@ static int max96712_probe(struct i2c_client *client,
+@@ -237,10 +406,16 @@ static int max96712_probe(struct i2c_client *client,
  {
  	struct max96712 *priv;
  	int err = 0;
@@ -333,12 +330,11 @@ index 8e237eef..bc1310e0 100644
  	priv->i2c_client = client;
  	priv->regmap = devm_regmap_init_i2c(priv->i2c_client,
  				&max96712_regmap_config);
-@@ -249,15 +427,56 @@ static int max96712_probe(struct i2c_client *client,
+@@ -249,15 +424,55 @@ static int max96712_probe(struct i2c_client *client,
  			"regmap init failed: %ld\n", PTR_ERR(priv->regmap));
  		return -ENODEV;
  	}
 +	mutex_init(&priv->lock);
-+	priv->pending_link_reset = true;
  
 -	mutex_init(&max96712_rw);
 +	np = client->dev.of_node;
@@ -395,7 +391,7 @@ index 8e237eef..bc1310e0 100644
  	err = max96712_debugfs_init(NULL, NULL, NULL, priv);
  	if (err)
  		return err;
-@@ -274,8 +493,11 @@ static int max96712_remove(struct i2c_client *client)
+@@ -274,8 +489,11 @@ static int max96712_remove(struct i2c_client *client)
  static void max96712_remove(struct i2c_client *client)
  #endif
  {
@@ -408,7 +404,7 @@ index 8e237eef..bc1310e0 100644
  		i2c_unregister_device(client);
  		client = NULL;
  	}
-@@ -284,13 +506,651 @@ static void max96712_remove(struct i2c_client *client)
+@@ -284,13 +502,648 @@ static void max96712_remove(struct i2c_client *client)
  #endif
  }
  
@@ -626,17 +622,22 @@ index 8e237eef..bc1310e0 100644
 +}
 +EXPORT_SYMBOL(max96712_reset_oneshot);
 +
-+/* RSDEV-12608: arm/disarm the one-shot link reset consumed by the next
-+ * set_pipe. d4xx arms it only for a cold link bring-up. */
-+void max96712_arm_link_reset(struct device *dev, bool reset)
++/* RSDEV-12608: flush ONE GMSL link's pixel line buffer (CTRL1 one-shot). Called
++ * by d4xx's HW-reset recovery path so the next stream start on this link comes up
++ * without the stale partial frame a mid-stream camera reset leaves behind (the
++ * serializer is not reset, so nothing else clears it). Per-link
++ * (link = vc_id / MAX9295_MAX_STREAMS) so a sibling camera's link is untouched. */
++void max96712_reset_link_now(struct device *dev, u32 vc_id)
 +{
 +	struct max96712 *priv = dev_get_drvdata(dev);
++	unsigned int link = vc_id / MAX9295_MAX_STREAMS;
 +
++	dev_info(dev, "RSDEV-12608: link %u line-buffer flush (post-HW-reset)\n", link);
 +	mutex_lock(&priv->lock);
-+	priv->pending_link_reset = reset;
++	max96712_reset_oneshot_link_mask(priv, 1 << link);
 +	mutex_unlock(&priv->lock);
 +}
-+EXPORT_SYMBOL(max96712_arm_link_reset);
++EXPORT_SYMBOL(max96712_reset_link_now);
 +
 +static int __max96712_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
 +			      u8 data_type2, u32 vc_id)
@@ -683,15 +684,11 @@ index 8e237eef..bc1310e0 100644
 +	if (err) {
 +		return err;
 +	}
-+	/* vc_id_msb = this pipe's link_id. RSDEV-12608: the CTRL1 one-shot re-trains
-+	 * the whole link and truncates siblings' in-flight frames — only fire it when
-+	 * d4xx armed a reset (cold bring-up); re-arm true after (fail-safe default). */
-+	if (priv->pending_link_reset) {
-+		dev_info(dev, "RSDEV-12608: GMSL link %d one-shot reset fired\n",
-+			 vc_id_msb);
-+		max96712_reset_oneshot_link_mask(priv, 1 << vc_id_msb);
-+	}
-+	priv->pending_link_reset = true;
++	/* RSDEV-12608: no one-shot link reset here — a pipe (re)alloc on a plain
++	 * stream toggle must not flush the shared link's line buffer and truncate a
++	 * sibling stream's in-flight frames. The only flush that is needed (after a
++	 * camera HW reset) is issued per-link from d4xx's ds5_hw_reset_with_recovery
++	 * via max96712_reset_link_now(). */
 +
 +	err |= max96712_read_reg(priv, MAX96712_VIDEO_PIPE_EN_ADDR, &pipe_en_val);
 +	if (err == 0) {
@@ -785,14 +782,10 @@ index 8e237eef..bc1310e0 100644
 +		return err;
 +	}
 +
-+	/* RSDEV-12608: same gated one-shot link reset as __max96712_set_pipe(), on
-+	 * the MAX96717 multi-VC path; re-arm true after (fail-safe default). */
-+	if (priv->pending_link_reset) {
-+		dev_info(dev, "RSDEV-12608: GMSL link %d one-shot reset fired (multi-vc)\n",
-+			 link_id);
-+		max96712_reset_oneshot_link_mask(priv, 1 << link_id);
-+	}
-+	priv->pending_link_reset = true;
++	/* RSDEV-12608: no one-shot link reset here (multi-VC / MAX96717 path) — same
++	 * reason as __max96712_set_pipe(): a pipe (re)alloc must not flush the shared
++	 * link and truncate sibling frames. Post-HW-reset flush is issued per-link
++	 * from d4xx via max96712_reset_link_now(). */
 +	max96712_write_reg(priv, MAX96712_VIDEO_PIPE_EN_ADDR, 1 << pipe_id);
 +
 +	return err;
@@ -1061,7 +1054,7 @@ index 8e237eef..bc1310e0 100644
  	{ },
  };
  
-@@ -300,6 +1160,7 @@ static struct i2c_driver max96712_i2c_driver = {
+@@ -300,6 +1153,7 @@ static struct i2c_driver max96712_i2c_driver = {
  	.driver = {
  		.name = "max96712",
  		.owner = THIS_MODULE,
