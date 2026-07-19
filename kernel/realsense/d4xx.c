@@ -444,8 +444,7 @@ struct ds5_ctrls {
 		struct v4l2_ctrl *ae_roi_set;
 		struct v4l2_ctrl *ae_setpoint_get;
 		struct v4l2_ctrl *ae_setpoint_set;
-		struct v4l2_ctrl *ae_type_get;
-		struct v4l2_ctrl *ae_type_set;
+		struct v4l2_ctrl *ae_mode;
 		struct v4l2_ctrl *erb;
 		struct v4l2_ctrl *ewb;
 		struct v4l2_ctrl *hwmc;
@@ -2388,9 +2387,14 @@ enum ds5_sync_mode {
 #define DS5_CAMERA_CID_HW_RESET		(DS5_CAMERA_CID_BASE+33)
 #define DS5_CAMERA_CID_READOUT_SHAPING	(DS5_CAMERA_CID_BASE+34)
 
-/* Auto-exposure algorithm type (HWMC SETAETYPE 0x87 / GETAETYPE 0x88) */
-#define DS5_CAMERA_CID_AE_TYPE_GET	(DS5_CAMERA_CID_BASE+35)
-#define DS5_CAMERA_CID_AE_TYPE_SET	(DS5_CAMERA_CID_BASE+36)
+/*
+ * Depth auto-exposure algorithm mode — single read/write control.
+ * librealsense maps USB depth XU selector 0x11 (RS_DEPTH_AUTO_EXPOSURE_MODE)
+ * to this CID; get_xu/set_xu both resolve to the same CID, so a single
+ * VOLATILE | EXECUTE_ON_WRITE control serves both directions:
+ *   read  -> HWMC GETAETYPE 0x88, write -> HWMC SETAETYPE 0x87.
+ */
+#define DS5_CAMERA_CID_AE_MODE		(DS5_CAMERA_CID_BASE+35)
 
 /* Auto-exposure algorithm types — mirrors FW ETAeType */
 enum ds5_ae_type {
@@ -3051,14 +3055,14 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			devm_kfree(&state->client->dev, ae_setpoint_cmd);
 		}
 		break;
-	case DS5_CAMERA_CID_AE_TYPE_SET: {
+	case DS5_CAMERA_CID_AE_MODE: {
 		/* FW (bchSetAeType) accepts the AE algo selector in param1 and
 		 * rejects the command while streaming (ERR_HWNotReady). */
 		struct hwm_cmd ae_type_cmd;
 
 		memcpy(&ae_type_cmd, &set_ae_type, sizeof(ae_type_cmd));
 		ae_type_cmd.param1 = ctrl->val;
-		dev_dbg(&state->client->dev, "%s(): AE_TYPE_SET %d\n",
+		dev_dbg(&state->client->dev, "%s(): AE_MODE set %d\n",
 			__func__, ctrl->val);
 		ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd), &ae_type_cmd);
 		if (!ret)
@@ -3514,7 +3518,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		devm_kfree(&state->client->dev, ae_setpoint_cmd);
 		}
 		break;
-	case DS5_CAMERA_CID_AE_TYPE_GET:
+	case DS5_CAMERA_CID_AE_MODE:
 	if (ctrl->p_new.p_s32) {
 		/* FW (bchGetAeType) returns ETAeType (4 bytes) after the
 		 * 4-byte HWMC status header in the response payload. */
@@ -3541,7 +3545,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		if (!ret)
 			memcpy(&ae_type, ae_type_cmd->Data + 4, sizeof(ae_type));
 		*(ctrl->p_new.p_s32) = ae_type;
-		dev_dbg(&state->client->dev, "%s(): AE_TYPE_GET %d, len %d\n",
+		dev_dbg(&state->client->dev, "%s(): AE_MODE get %d, len %d\n",
 			__func__, *(ctrl->p_new.p_s32), dataLen);
 		devm_kfree(&state->client->dev, ae_type_cmd);
 		}
@@ -3733,24 +3737,19 @@ static const struct v4l2_ctrl_config ds5_ctrl_ae_setpoint_set = {
 	.def = 0,
 };
 
-static const struct v4l2_ctrl_config ds5_ctrl_ae_type_get = {
+/*
+ * Single read/write control for depth AE mode. VOLATILE routes every read to
+ * ds5_g_volatile_ctrl (GETAETYPE 0x88); EXECUTE_ON_WRITE routes every write to
+ * ds5_s_ctrl (SETAETYPE 0x87). NOT read-only, so the same CID accepts both
+ * VIDIOC_G_EXT_CTRLS and VIDIOC_S_EXT_CTRLS — matching librealsense's XU model
+ * where get_xu/set_xu share one CID for depth selector 0x11.
+ */
+static const struct v4l2_ctrl_config ds5_ctrl_ae_mode = {
 	.ops = &ds5_ctrl_ops,
-	.id = DS5_CAMERA_CID_AE_TYPE_GET,
-	.name = "ae type get",
+	.id = DS5_CAMERA_CID_AE_MODE,
+	.name = "depth ae mode",
 	.type = V4L2_CTRL_TYPE_INTEGER,
-	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_READ_ONLY,
-	.min = DS5_AE_TYPE_LEGACY,
-	.max = DS5_AE_TYPE_V2,
-	.step = 1,
-	.def = DS5_AE_TYPE_LEGACY,
-};
-
-static const struct v4l2_ctrl_config ds5_ctrl_ae_type_set = {
-	.ops = &ds5_ctrl_ops,
-	.id = DS5_CAMERA_CID_AE_TYPE_SET,
-	.name = "ae type set",
-	.type = V4L2_CTRL_TYPE_INTEGER,
-	.flags = V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 	.min = DS5_AE_TYPE_LEGACY,
 	.max = DS5_AE_TYPE_V2,
 	.step = 1,
@@ -4734,10 +4733,8 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 				v4l2_ctrl_new_custom(hdl, &ds5_ctrl_ae_setpoint_get, sensor);
 		ctrls->ae_setpoint_set =
 				v4l2_ctrl_new_custom(hdl, &ds5_ctrl_ae_setpoint_set, sensor);
-		ctrls->ae_type_get =
-				v4l2_ctrl_new_custom(hdl, &ds5_ctrl_ae_type_get, sensor);
-		ctrls->ae_type_set =
-				v4l2_ctrl_new_custom(hdl, &ds5_ctrl_ae_type_set, sensor);
+		ctrls->ae_mode =
+				v4l2_ctrl_new_custom(hdl, &ds5_ctrl_ae_mode, sensor);
 		ctrls->erb = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_erb, sensor);
 		ctrls->ewb = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_ewb, sensor);
 		ctrls->hwmc = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_hwmc, sensor);
