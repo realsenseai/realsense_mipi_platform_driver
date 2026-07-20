@@ -2387,13 +2387,7 @@ enum ds5_sync_mode {
 #define DS5_CAMERA_CID_HW_RESET		(DS5_CAMERA_CID_BASE+33)
 #define DS5_CAMERA_CID_READOUT_SHAPING	(DS5_CAMERA_CID_BASE+34)
 
-/*
- * Depth auto-exposure algorithm mode — single read/write control.
- * librealsense maps USB depth XU selector 0x11 (RS_DEPTH_AUTO_EXPOSURE_MODE)
- * to this CID; get_xu/set_xu both resolve to the same CID, so a single
- * VOLATILE | EXECUTE_ON_WRITE control serves both directions:
- *   read  -> HWMC GETAETYPE 0x88, write -> HWMC SETAETYPE 0x87.
- */
+/* Depth AE mode: single R/W control, maps to librealsense XU selector 0x11 */
 #define DS5_CAMERA_CID_AE_MODE		(DS5_CAMERA_CID_BASE+35)
 
 /* Auto-exposure algorithm types — mirrors FW ETAeType */
@@ -3056,8 +3050,7 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 		}
 		break;
 	case DS5_CAMERA_CID_AE_MODE: {
-		/* FW (bchSetAeType) accepts the AE algo selector in param1 and
-		 * rejects the command while streaming (ERR_HWNotReady). */
+		/* selector in param1; FW rejects while streaming (ERR_HWNotReady) */
 		struct hwm_cmd ae_type_cmd;
 
 		memcpy(&ae_type_cmd, &set_ae_type, sizeof(ae_type_cmd));
@@ -3520,8 +3513,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 	case DS5_CAMERA_CID_AE_MODE:
 	if (ctrl->p_new.p_s32) {
-		/* FW (bchGetAeType) returns ETAeType (4 bytes) after the
-		 * 4-byte HWMC status header in the response payload. */
+		/* ETAeType (4 bytes) follows the 4-byte HWMC status header */
 		u16 len = sizeof(struct hwm_cmd) + 8;
 		u16 dataLen = 0;
 		u32 ae_type = 0;
@@ -3737,13 +3729,7 @@ static const struct v4l2_ctrl_config ds5_ctrl_ae_setpoint_set = {
 	.def = 0,
 };
 
-/*
- * Single read/write control for depth AE mode. VOLATILE routes every read to
- * ds5_g_volatile_ctrl (GETAETYPE 0x88); EXECUTE_ON_WRITE routes every write to
- * ds5_s_ctrl (SETAETYPE 0x87). NOT read-only, so the same CID accepts both
- * VIDIOC_G_EXT_CTRLS and VIDIOC_S_EXT_CTRLS — matching librealsense's XU model
- * where get_xu/set_xu share one CID for depth selector 0x11.
- */
+/* Single R/W control: VOLATILE read (GETAETYPE), EXECUTE_ON_WRITE (SETAETYPE); not read-only */
 static const struct v4l2_ctrl_config ds5_ctrl_ae_mode = {
 	.ops = &ds5_ctrl_ops,
 	.id = DS5_CAMERA_CID_AE_MODE,
