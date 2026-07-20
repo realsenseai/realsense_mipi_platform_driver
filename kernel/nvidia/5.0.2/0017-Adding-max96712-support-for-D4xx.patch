@@ -7,11 +7,11 @@ Add MAX96712 deserializer driver support for D4XX cameras.
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- drivers/media/i2c/max96712.c | 892 ++++++++++++++++++++++++++++++++++++++++++-
- 1 file changed, 889 insertions(+), 3 deletions(-)
+ drivers/media/i2c/max96712.c | 884 ++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 881 insertions(+), 3 deletions(-)
 
 diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
-index 8081385f0..ab3c21a08 100644
+index 8081385f0..0b940a784 100644
 --- a/drivers/media/i2c/max96712.c
 +++ b/drivers/media/i2c/max96712.c
 @@ -21,18 +21,148 @@
@@ -350,7 +350,7 @@ index 8081385f0..ab3c21a08 100644
  		i2c_unregister_device(client);
  		client = NULL;
  	}
-@@ -252,13 +506,644 @@ max96712_remove(struct i2c_client *client)
+@@ -252,13 +506,636 @@ max96712_remove(struct i2c_client *client)
  	return 0;
  }
  
@@ -574,22 +574,17 @@ index 8081385f0..ab3c21a08 100644
 +}
 +EXPORT_SYMBOL(max96712_reset_oneshot);
 +
-+/* RSDEV-12608: flush ONE GMSL link's pixel line buffer (CTRL1 one-shot). Called
-+ * by d4xx's HW-reset recovery path so the next stream start on this link comes up
-+ * without the stale partial frame a mid-stream camera reset leaves behind (the
-+ * serializer is not reset, so nothing else clears it). Per-link
-+ * (link = vc_id / MAX9295_MAX_STREAMS) so a sibling camera's link is untouched. */
-+void max96712_reset_link_now(struct device *dev, u32 vc_id)
++/* RSDEV-12608: one-shot flush of the link carrying vc_id (link = vc_id / MAX9295_MAX_STREAMS).
++ * Called from d4xx HW-reset recovery to drop the stale post-reset partial frame. */
++void max96712_reset_oneshot_mask(struct device *dev, u32 vc_id)
 +{
 +	struct max96712 *priv = dev_get_drvdata(dev);
-+	unsigned int link = vc_id / MAX9295_MAX_STREAMS;
++	unsigned int link_id = vc_id / MAX9295_MAX_STREAMS;
 +
-+	dev_info(dev, "RSDEV-12608: link %u line-buffer flush (post-HW-reset)\n", link);
-+	mutex_lock(&priv->lock);
-+	max96712_reset_oneshot_link_mask(priv, 1 << link);
-+	mutex_unlock(&priv->lock);
++	dev_info(dev, "RSDEV-12608: link %u line-buffer flush (post-HW-reset)\n", link_id);
++	max96712_reset_oneshot_link_mask(priv, 1 << link_id);
 +}
-+EXPORT_SYMBOL(max96712_reset_link_now);
++EXPORT_SYMBOL(max96712_reset_oneshot_mask);
 +
 +static int __max96712_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
 +			      u8 data_type2, u32 vc_id)
@@ -636,9 +631,8 @@ index 8081385f0..ab3c21a08 100644
 +	if (err) {
 +		return err;
 +	}
-+	/* RSDEV-12608: no one-shot link reset on pipe (re)alloc — must not flush the
-+	 * shared link and truncate a sibling stream's frames. The post-HW-reset flush
-+	 * is issued per-link from d4xx via max96712_reset_link_now(). */
++	/* RSDEV-12608: no flush on pipe (re)alloc (would truncate sibling streams);
++	 * post-HW-reset flush is per-link from d4xx (max96712_reset_oneshot_mask). */
 +
 +	err |= max96712_read_reg(priv, MAX96712_VIDEO_PIPE_EN_ADDR, &pipe_en_val);
 +	if (err == 0) {
@@ -813,9 +807,7 @@ index 8081385f0..ab3c21a08 100644
 +		return err;
 +	}
 +
-+	/* RSDEV-12608: no one-shot link reset here (multi-VC path) — same reason as
-+	 * __max96712_set_pipe(); post-HW-reset flush is per-link via
-+	 * max96712_reset_link_now(). */
++	/* RSDEV-12608: no flush here either (multi-VC path); see __max96712_set_pipe(). */
 +	max96712_write_reg(priv, MAX96712_VIDEO_PIPE_EN_ADDR, 1 << pipe_id);
 +
 +	return err;
@@ -996,7 +988,7 @@ index 8081385f0..ab3c21a08 100644
  	{ },
  };
  
-@@ -268,6 +1153,7 @@ static struct i2c_driver max96712_i2c_driver = {
+@@ -268,6 +1145,7 @@ static struct i2c_driver max96712_i2c_driver = {
  	.driver = {
  		.name = "max96712",
  		.owner = THIS_MODULE,

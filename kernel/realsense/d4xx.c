@@ -56,10 +56,9 @@ struct dser_interface {
 	int (*set_pipe)(struct device *dev, int pipe_id, u8 data_type1, u8 data_type2, u32 vc_id);
 	int (*release_pipe)(struct device *dev, int pipe_id);
 	void (*reset_oneshot)(struct device *dev);
-	/* RSDEV-12608: flush one GMSL link's pixel line buffer after a camera HW
-	 * reset (called from ds5_hw_reset_with_recovery). Optional (NULL = deser
-	 * leaves no stale line buffer after a camera reset, e.g. max9296). */
-	void (*reset_link_now)(struct device *dev, u32 vc_id);
+	/* RSDEV-12608: flush one link's line buffer after a camera HW reset;
+	 * NULL if the deser leaves no stale buffer (max9296). */
+	void (*reset_oneshot_mask)(struct device *dev, u32 vc_id);
 
 	/* Setup and control */
 	int (*setup_link)(struct device *dev, struct device *s_dev);
@@ -687,7 +686,7 @@ static const struct dser_interface max96712_interface = {
 	.set_pipe = max96712_set_pipe,
 	.release_pipe = max96712_release_pipe,
 	.reset_oneshot = max96712_reset_oneshot,
-	.reset_link_now = max96712_reset_link_now,
+	.reset_oneshot_mask = max96712_reset_oneshot_mask,
 	.setup_link = max96712_setup_link,
 	.setup_control = max96712_setup_control,
 	.reset_control = max96712_reset_control,
@@ -2851,14 +2850,10 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 		(state->fw_version >> 8) & 0xff, state->fw_version & 0xff,
 		(state->fw_build >> 8) & 0xff, state->fw_build & 0xff);
 
-	/* RSDEV-12608: a mid-stream camera HW reset can leave a stale partial frame
-	 * in the deserializer's pixel line buffer for this camera's link (the ser is
-	 * not reset, so nothing else clears it). Flush it once, per-link, so the next
-	 * stream start comes up clean; without it the stream never completes a frame
-	 * -> VI 2500ms timeouts -> capture err_rec exhaustion. NULL for deserializers
-	 * that leave no stale buffer after a camera reset (max9296). */
-	if (state->dser_ops->reset_link_now)
-		state->dser_ops->reset_link_now(state->dser_dev, state->g_ctx.dst_vc);
+	/* RSDEV-12608: drop the stale partial frame a mid-stream camera reset leaves
+	 * in this link's line buffer (NULL-safe; max9296 leaves none). */
+	if (state->dser_ops->reset_oneshot_mask)
+		state->dser_ops->reset_oneshot_mask(state->dser_dev, state->g_ctx.dst_vc);
 
 	/* Re-apply ESYNC tunneling to match cached sync_mode control */
 	if (state->ctrls.sync_mode) {
