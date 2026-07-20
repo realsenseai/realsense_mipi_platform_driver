@@ -18,6 +18,7 @@ Linux kernel driver and userspace utilities for Intel RealSense D4XX series 3D d
 - **Function naming**: prefix all functions with `ds5_`. Mux-related functions use `ds5_mux_`. Examples: `ds5_read()`, `ds5_write()`, `ds5_probe()`, `ds5_mux_s_stream()`.
 - **Struct naming**: prefix with `ds5_`. Examples: `struct ds5`, `struct ds5_sensor`, `struct ds5_ctrls`, `struct ds5_format`.
 - **Macro naming**: prefix with `DS5_`. Register addresses: `DS5_FW_VERSION`, `DS5_START_STOP_STREAM`, `DS5_DEPTH_STREAM_DT`.
+- **D5xx naming**: the rules above apply to `d4xx.c`; use `d5x_*` and `D5X_*` in `d5xx.c`, including D5xx diagnostic sysfs attributes. Keep shared ABI names required by existing character devices, media graph discovery, and DT matching unchanged unless an ABI migration is explicitly required.
 - **Driver name**: `DS5_DRIVER_NAME` = `"d4xx"`, with variants `-awg`, `-asr`, `-class`, `-dfu`.
 - **I2C access**: use `ds5_read()` / `ds5_write()` wrappers around `regmap_raw_read()` / `regmap_raw_write()` with built-in retry logic (`DS5_I2C_RETRY_COUNT=5`, `DS5_I2C_RETRY_DELAY_US=5000`).
 - **Polling vs. normal I2C semantics**: for transient-failure-expected polling loops (HWMC status checks, reset readiness polls, DFU timeout checks), use `ds5_read_poll()` instead of `ds5_read()`. `ds5_read_poll()` performs a single direct `regmap_raw_read()` call without retry or logging, preventing false warnings and excessive log spam on expected transients. Reserve `ds5_read()` for normal I2C operations where retry logic and verbose failure logging are desired.

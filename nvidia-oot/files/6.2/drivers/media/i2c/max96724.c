@@ -445,7 +445,18 @@
 #define MAX96724_LANE_MAP2_2X4		0x44  /* keep unused PHY2/3 straight in 0x08 mode */
 
 struct max96724_source_ctx {
+	/*
+	 * g_ctx is borrowed for live stream operations. Registry identity and
+	 * compatibility checks use the copied fields below, so unregister never
+	 * dereferences sensor-owned state that may already have been released.
+	 */
 	struct gmsl_link_ctx *g_ctx;
+	struct device *s_dev;
+	u32 serdes_csi_link;
+	u32 num_csi_lanes;
+	u32 csi_mode;
+	bool control_setup;
+	bool serdev_found;
 	bool st_enabled;
 };
 
@@ -655,30 +666,24 @@ static int max96724_wait_link_lock(struct device *dev, u32 link)
  * Internal Helpers
  * ================================================================ */
 
-static int max96724_get_sdev_idx(struct device *dev,
-				 struct device *s_dev, unsigned int *idx)
+/* Caller must hold priv->lock. */
+static int max96724_get_sdev_idx_locked(struct max96724 *priv,
+					struct device *s_dev,
+					unsigned int *idx)
 {
-	struct max96724 *priv = dev_get_drvdata(dev);
 	unsigned int i;
-	int err = 0;
 
-	mutex_lock(&priv->lock);
-	for (i = 0; i < priv->max_src; i++) {
-		if (priv->sources[i].g_ctx->s_dev == s_dev)
+	for (i = 0; i < priv->num_src; i++) {
+		if (priv->sources[i].s_dev == s_dev)
 			break;
 	}
-	if (i == priv->max_src) {
-		dev_err(dev, "no sdev found\n");
-		err = -EINVAL;
-		goto ret;
-	}
+	if (i == priv->num_src)
+		return -EINVAL;
 
 	if (idx)
 		*idx = i;
 
-ret:
-	mutex_unlock(&priv->lock);
-	return err;
+	return 0;
 }
 
 static void max96724_pipes_reset(struct max96724 *priv)
@@ -712,8 +717,53 @@ static void max96724_reset_ctx(struct max96724 *priv)
 	priv->src_link = 0;
 	priv->splitter_enabled = false;
 	max96724_pipes_reset(priv);
-	for (i = 0; i < priv->num_src; i++)
+	for (i = 0; i < priv->num_src; i++) {
+		priv->sources[i].control_setup = false;
+		priv->sources[i].serdev_found = false;
 		priv->sources[i].st_enabled = false;
+	}
+}
+
+static bool max96724_source_control_put(struct max96724 *priv,
+					unsigned int source_idx)
+{
+	struct max96724_source_ctx *source = &priv->sources[source_idx];
+
+	if (!source->control_setup)
+		return false;
+
+	source->control_setup = false;
+	if (source->serdev_found) {
+		if (WARN_ON(!priv->num_src_found))
+			priv->num_src_found = 0;
+		else
+			priv->num_src_found--;
+		source->serdev_found = false;
+	}
+
+	if (WARN_ON(!priv->sdev_ref))
+		priv->sdev_ref = 0;
+	else
+		priv->sdev_ref--;
+
+	return priv->sdev_ref == 0;
+}
+
+static int max96724_reset_control_locked(struct device *dev,
+					 struct max96724 *priv,
+					 unsigned int source_idx)
+{
+	int err = 0;
+
+	if (!max96724_source_control_put(priv, source_idx))
+		return 0;
+
+	max96724_reset_ctx(priv);
+	err = max96724_write_reg(dev, MAX96724_REG13_ADDR,
+				 MAX96724_SOFT_RESET);
+	msleep(100);
+
+	return err;
 }
 
 static void max96724_apply_porta_subset(struct device *dev,
@@ -971,10 +1021,6 @@ int max96724_setup_link(struct device *dev, struct device *s_dev)
 	int err = 0;
 	unsigned int i = 0;
 
-	err = max96724_get_sdev_idx(dev, s_dev, &i);
-	if (err)
-		return err;
-
 	/*
 	 * [FG24-4CH] Enable board POC / MFP8 output path BEFORE the GMSL
 	 * link is brought up.  The camera draws power over coax (PoC), so
@@ -989,10 +1035,15 @@ int max96724_setup_link(struct device *dev, struct device *s_dev)
 	}
 
 	mutex_lock(&priv->lock);
+	err = max96724_get_sdev_idx_locked(priv, s_dev, &i);
+	if (err) {
+		dev_err(dev, "%s: no sdev found\n", __func__);
+		goto ret;
+	}
 
 	if (!priv->splitter_enabled) {
 		err = max96724_write_link(dev,
-					  priv->sources[i].g_ctx->serdes_csi_link);
+					  priv->sources[i].serdes_csi_link);
 		if (err)
 			goto ret;
 
@@ -1019,8 +1070,15 @@ EXPORT_SYMBOL(max96724_setup_link);
 int max96724_setup_control(struct device *dev, struct device *s_dev)
 {
 	struct max96724 *priv = dev_get_drvdata(dev);
+	struct max96724_source_ctx *source;
+	u32 next_num_src_found;
+	u32 next_sdev_ref;
+	u32 next_src_link;
+	bool next_splitter_enabled;
+	bool source_found;
 	int err = 0;
-	unsigned int i = 0;
+	unsigned int i;
+	unsigned int source_idx;
 
 	static const u16 tun_en_addrs[] = {
 		MAX96724_PIPE0_TUN_EN_ADDR,
@@ -1036,11 +1094,13 @@ int max96724_setup_control(struct device *dev, struct device *s_dev)
 		MAX96724_PIPE3_TUN_DEST_ADDR,
 	};
 
-	err = max96724_get_sdev_idx(dev, s_dev, &i);
-	if (err)
-		return err;
-
 	mutex_lock(&priv->lock);
+	err = max96724_get_sdev_idx_locked(priv, s_dev, &source_idx);
+	if (err) {
+		dev_err(dev, "%s: no sdev found\n", __func__);
+		goto error;
+	}
+	source = &priv->sources[source_idx];
 
 	if (!priv->link_setup) {
 		dev_err(dev, "%s: invalid state\n", __func__);
@@ -1048,15 +1108,26 @@ int max96724_setup_control(struct device *dev, struct device *s_dev)
 		goto error;
 	}
 
-	if (priv->sources[i].g_ctx->serdev_found) {
-		priv->num_src_found++;
-		priv->src_link = priv->sources[i].g_ctx->serdes_csi_link;
+	if (source->control_setup)
+		goto error;
+
+	if (!source->g_ctx) {
+		dev_err(dev, "%s: source context is not live\n", __func__);
+		err = -EINVAL;
+		goto error;
 	}
+
+	source_found = source->g_ctx->serdev_found;
+	next_num_src_found = priv->num_src_found + source_found;
+	next_sdev_ref = priv->sdev_ref + 1;
+	next_src_link = source_found ? source->serdes_csi_link :
+			priv->src_link;
+	next_splitter_enabled = priv->splitter_enabled;
 
 	/* Enable splitter mode for multi-camera configurations */
 	if ((priv->max_src > 1U) &&
-	    (priv->num_src_found > 0U) &&
-	    (priv->splitter_enabled == false)) {
+	    (next_num_src_found > 0U) &&
+	    (next_splitter_enabled == false)) {
 		/*
 		 * [UG Table 3] Multi-camera: set link rates and enable all links
 		 */
@@ -1081,7 +1152,7 @@ int max96724_setup_control(struct device *dev, struct device *s_dev)
 					   MAX96724_ERRCH_FORCE_ON);
 		}
 
-		priv->splitter_enabled = true;
+		next_splitter_enabled = true;
 
 		msleep(100);
 	}
@@ -1095,7 +1166,6 @@ int max96724_setup_control(struct device *dev, struct device *s_dev)
 				   MAX96724_MIPI_CTRL_SEL_PIXEL);
 		max96724_write_reg(dev, MAX96724_ONESHOT_ADDR,
 				   MAX96724_ONESHOT_ALL);
-		priv->sdev_ref++;
 		goto maybe_reset_splitter;
 	}
 
@@ -1124,21 +1194,33 @@ int max96724_setup_control(struct device *dev, struct device *s_dev)
 	max96724_write_reg(dev, MAX96724_ONESHOT_ADDR,
 			   MAX96724_ONESHOT_ALL);
 
-	priv->sdev_ref++;
-
 maybe_reset_splitter:
 
 	/* Reset splitter mode if not all devices found */
-	if ((priv->sdev_ref == priv->max_src) &&
-	    (priv->splitter_enabled == true) &&
-	    (priv->num_src_found > 0U) &&
-	    (priv->num_src_found < priv->max_src)) {
-		err = max96724_write_link(dev, priv->src_link);
-		if (err)
+	if ((next_sdev_ref == priv->max_src) &&
+	    (next_splitter_enabled == true) &&
+	    (next_num_src_found > 0U) &&
+	    (next_num_src_found < priv->max_src)) {
+		err = max96724_write_link(dev, next_src_link);
+		if (err) {
+			if (!priv->sdev_ref) {
+				max96724_reset_ctx(priv);
+				max96724_write_reg(dev, MAX96724_REG13_ADDR,
+						   MAX96724_SOFT_RESET);
+				msleep(100);
+			}
 			goto error;
+		}
 
-		priv->splitter_enabled = false;
+		next_splitter_enabled = false;
 	}
+
+	source->control_setup = true;
+	source->serdev_found = source_found;
+	priv->num_src_found = next_num_src_found;
+	priv->sdev_ref = next_sdev_ref;
+	priv->src_link = next_src_link;
+	priv->splitter_enabled = next_splitter_enabled;
 
 error:
 	mutex_unlock(&priv->lock);
@@ -1149,22 +1231,22 @@ EXPORT_SYMBOL(max96724_setup_control);
 int max96724_reset_control(struct device *dev, struct device *s_dev)
 {
 	struct max96724 *priv = dev_get_drvdata(dev);
+	unsigned int i;
 	int err = 0;
 
 	mutex_lock(&priv->lock);
-	if (!priv->sdev_ref) {
-		dev_info(dev, "%s: dev is already in reset state\n", __func__);
+	err = max96724_get_sdev_idx_locked(priv, s_dev, &i);
+	if (err) {
+		dev_err(dev, "%s: no sdev found\n", __func__);
 		goto ret;
 	}
 
-	priv->sdev_ref--;
-	if (priv->sdev_ref == 0) {
-		max96724_reset_ctx(priv);
-		max96724_write_reg(dev, MAX96724_REG13_ADDR,
-				   MAX96724_SOFT_RESET);
-
-		msleep(100);
+	if (!priv->sources[i].control_setup) {
+		dev_info(dev, "%s: source is already in reset state\n", __func__);
+		goto ret;
 	}
+
+	err = max96724_reset_control_locked(dev, priv, i);
 
 ret:
 	mutex_unlock(&priv->lock);
@@ -1191,49 +1273,69 @@ int max96724_sdev_register(struct device *dev, struct gmsl_link_ctx *g_ctx)
 
 	mutex_lock(&priv->lock);
 
-	if (priv->num_src > priv->max_src) {
-		dev_err(dev,
-			"%s: MAX96724 inputs size exhausted\n", __func__);
-		err = -ENOMEM;
-		goto error;
-	}
-
 	if (priv->csi_mode == MAX96724_CSI_MODE_2X4) {
 		if (!((g_ctx->csi_mode == GMSL_CSI_1X4_MODE) ||
 		      (g_ctx->csi_mode == GMSL_CSI_2X4_MODE))) {
 			dev_err(dev, "%s: csi mode not supported\n", __func__);
 			err = -EINVAL;
-			goto error;
+			goto done;
 		}
 	} else {
 		dev_err(dev, "%s: only csi 2x4 mode is supported\n", __func__);
 		err = -EINVAL;
-		goto error;
+		goto done;
 	}
 
 	for (i = 0; i < priv->num_src; i++) {
-		if (g_ctx->serdes_csi_link ==
-		    priv->sources[i].g_ctx->serdes_csi_link) {
+		struct max96724_source_ctx *source = &priv->sources[i];
+
+		if (source->s_dev == g_ctx->s_dev) {
+			if (source->g_ctx == g_ctx)
+				goto done;
+
 			dev_err(dev,
-				"%s: serdes csi link is in use\n", __func__);
-			err = -EINVAL;
-			goto error;
+				"%s: source %s is already registered\n",
+				__func__, dev_name(g_ctx->s_dev));
+			err = -EBUSY;
+			goto done;
 		}
-		if (g_ctx->num_csi_lanes !=
-		    priv->sources[i].g_ctx->num_csi_lanes) {
+
+		if (g_ctx->serdes_csi_link == source->serdes_csi_link) {
+			dev_err(dev,
+				"%s: serdes csi link %u is already registered\n",
+				__func__, g_ctx->serdes_csi_link);
+			err = -EBUSY;
+			goto done;
+		}
+		if (g_ctx->num_csi_lanes != source->num_csi_lanes) {
 			dev_err(dev,
 				"%s: csi num lanes mismatch\n", __func__);
 			err = -EINVAL;
-			goto error;
+			goto done;
 		}
 	}
 
+	if (priv->num_src >= priv->max_src ||
+	    priv->num_src >= MAX96724_MAX_SOURCES) {
+		dev_err(dev,
+			"%s: MAX96724 inputs size exhausted\n", __func__);
+		err = -ENOMEM;
+		goto done;
+	}
+
+	memset(&priv->sources[priv->num_src], 0,
+	       sizeof(priv->sources[priv->num_src]));
 	priv->sources[priv->num_src].g_ctx = g_ctx;
-	priv->sources[priv->num_src].st_enabled = false;
+	priv->sources[priv->num_src].s_dev = g_ctx->s_dev;
+	priv->sources[priv->num_src].serdes_csi_link =
+		g_ctx->serdes_csi_link;
+	priv->sources[priv->num_src].num_csi_lanes =
+		g_ctx->num_csi_lanes;
+	priv->sources[priv->num_src].csi_mode = g_ctx->csi_mode;
 
 	priv->num_src++;
 
-error:
+done:
 	mutex_unlock(&priv->lock);
 	return err;
 }
@@ -1254,27 +1356,37 @@ int max96724_sdev_unregister(struct device *dev, struct device *s_dev)
 	mutex_lock(&priv->lock);
 
 	if (priv->num_src == 0) {
-		dev_err(dev, "%s: no source found\n", __func__);
-		err = -ENODATA;
-		goto error;
+		dev_dbg(dev, "%s: no source registered\n", __func__);
+		goto done;
 	}
 
 	for (i = 0; i < priv->num_src; i++) {
-		if (s_dev == priv->sources[i].g_ctx->s_dev) {
-			priv->sources[i].g_ctx = NULL;
+		if (s_dev == priv->sources[i].s_dev)
 			break;
-		}
 	}
 
 	if (i == priv->num_src) {
-		dev_err(dev,
-			"%s: requested device not found\n", __func__);
-		err = -EINVAL;
-		goto error;
+		dev_dbg(dev,
+			"%s: requested device is not registered\n", __func__);
+		goto done;
 	}
-	priv->num_src--;
 
-error:
+	if (priv->sources[i].control_setup) {
+		err = max96724_reset_control_locked(dev, priv, i);
+		if (err)
+			dev_warn(dev,
+				 "%s: failed to reset source control: %d\n",
+				 __func__, err);
+	}
+
+	for (; i + 1 < priv->num_src; i++)
+		priv->sources[i] = priv->sources[i + 1];
+
+	priv->num_src--;
+	memset(&priv->sources[priv->num_src], 0,
+	       sizeof(priv->sources[priv->num_src]));
+
+done:
 	mutex_unlock(&priv->lock);
 	return err;
 }
@@ -1311,11 +1423,12 @@ int max96724_setup_streaming(struct device *dev, struct device *s_dev)
 	u8 pipe_sel1;
 	u8 dpll_cfg;
 
-	err = max96724_get_sdev_idx(dev, s_dev, &i);
-	if (err)
-		return err;
-
 	mutex_lock(&priv->lock);
+	err = max96724_get_sdev_idx_locked(priv, s_dev, &i);
+	if (err) {
+		dev_err(dev, "%s: no sdev found\n", __func__);
+		goto ret;
+	}
 
 	dev_info(dev, "=== setup_streaming ENTER src=%u st_enabled=%d ===\n",
 		 i, priv->sources[i].st_enabled);
@@ -1448,11 +1561,12 @@ int max96724_start_streaming(struct device *dev, struct device *s_dev)
 	int err = 0;
 	unsigned int i = 0;
 
-	err = max96724_get_sdev_idx(dev, s_dev, &i);
-	if (err)
-		return err;
-
 	mutex_lock(&priv->lock);
+	err = max96724_get_sdev_idx_locked(priv, s_dev, &i);
+	if (err) {
+		dev_err(dev, "%s: no sdev found\n", __func__);
+		goto ret;
+	}
 	g_ctx = priv->sources[i].g_ctx;
 
 	for (i = 0; i < g_ctx->num_streams; i++) {
@@ -1462,9 +1576,10 @@ int max96724_start_streaming(struct device *dev, struct device *s_dev)
 			max96724_write_reg(dev, g_stream->des_pipe,
 					   g_stream->st_id_sel);
 	}
+ret:
 	mutex_unlock(&priv->lock);
 
-	return 0;
+	return err;
 }
 EXPORT_SYMBOL(max96724_start_streaming);
 
@@ -1476,11 +1591,12 @@ int max96724_stop_streaming(struct device *dev, struct device *s_dev)
 	int err = 0;
 	unsigned int i = 0;
 
-	err = max96724_get_sdev_idx(dev, s_dev, &i);
-	if (err)
-		return err;
-
 	mutex_lock(&priv->lock);
+	err = max96724_get_sdev_idx_locked(priv, s_dev, &i);
+	if (err) {
+		dev_err(dev, "%s: no sdev found\n", __func__);
+		goto ret;
+	}
 	g_ctx = priv->sources[i].g_ctx;
 
 	for (i = 0; i < g_ctx->num_streams; i++) {
@@ -1491,9 +1607,10 @@ int max96724_stop_streaming(struct device *dev, struct device *s_dev)
 					   MAX96724_RESET_ST_ID);
 	}
 
+ret:
 	mutex_unlock(&priv->lock);
 
-	return 0;
+	return err;
 }
 EXPORT_SYMBOL(max96724_stop_streaming);
 

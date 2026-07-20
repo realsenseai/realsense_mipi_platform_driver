@@ -76,6 +76,7 @@ RealSense D4XX camera module
 ### Key directories
 
 - **`kernel/realsense/d4xx.c`** — The main driver. Single-file V4L2 subdevice driver handling I2C communication, MIPI CSI-2 stream config, firmware control (DFU), calibration data, metadata capture, and V4L2 controls (exposure, laser power, AE ROI, etc.). Registers four sensor subdevices per camera: Depth, RGB, IR (Y8/Y8I/Y12I), and IMU.
+- **D4xx/D5xx naming** — Keep `ds5_*`/`DS5_*` for `d4xx.c` and use `d5x_*`/`D5X_*` for `d5xx.c`, including D5xx diagnostic sysfs attributes. Preserve shared ABI names required by existing character devices, media graph discovery, and DT matching unless an ABI migration is explicitly required.
 - **`kernel/kernel-4.9/`, `kernel/kernel-5.10/`, `kernel/kernel-jammy-src/`** — Kernel patches organized by JetPack generation: 4.6.1 uses kernel 4.9, 5.x uses kernel 5.10, 6.x uses kernel-jammy-src.
 - **`kernel/nvidia/`** — NVIDIA driver patches (max9295/max9296 SerDes, VI capture engine) organized by JetPack version.
 - **`nvidia-oot/`** — Out-of-tree NVIDIA module patches for JetPack 6.x/7.x. New SERDES source overlays live under `nvidia-oot/files/<version>/...`; non-6.2 selectors currently link to the shared 6.2 overlay.
