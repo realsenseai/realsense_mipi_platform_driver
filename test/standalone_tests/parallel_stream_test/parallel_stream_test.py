@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Parallel streaming test for two V4L2 video devices.
+Parallel streaming test for any number of V4L2 video devices.
 
-Starts streaming on two video devices in parallel, verifies frames arrive
-on both after a defined period, stops streams, and repeats for N iterations.
+Starts streaming on all video devices in parallel, verifies frames arrive
+on all after a defined period, stops streams, and repeats for N iterations.
 
 Usage:
-    python3 parallel_stream_test.py /dev/video0 /dev/video7 [--iterations N] [--duration SECS]
+    python3 parallel_stream_test.py /dev/video0 /dev/video2 /dev/video7 [--iterations N] [--duration SECS]
 """
 
 import argparse
@@ -16,7 +16,7 @@ import signal
 import sys
 import os
 import re
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
 
 
 def start_stream(video_dev: str) -> subprocess.Popen:
@@ -83,69 +83,54 @@ def verify_device_exists(video_dev: str) -> bool:
     return os.path.exists(video_dev)
 
 
-def run_iteration(dev1: str, dev2: str, duration: float) -> Tuple[bool, dict]:
+def run_iteration(devices: List[str], duration: float) -> Tuple[bool, dict]:
     """
-    Run one iteration of parallel streaming test.
-    
+    Run one iteration of parallel streaming test on any number of devices.
+
     Returns:
         Tuple of (success, results_dict)
     """
     results = {
-        "dev1": dev1,
-        "dev2": dev2,
-        "dev1_frames": 0,
-        "dev2_frames": 0,
-        "dev1_success": False,
-        "dev2_success": False,
-        "error": None
+        "devices": devices,
+        "frames": {dev: 0 for dev in devices},
+        "success": {dev: False for dev in devices},
+        "error": None,
     }
-    
-    # Start both streams in parallel
+
+    # Start all streams in parallel
     try:
-        proc1 = start_stream(dev1)
-        proc2 = start_stream(dev2)
+        procs = {dev: start_stream(dev) for dev in devices}
     except Exception as e:
         results["error"] = f"Failed to start streams: {e}"
         return False, results
-    
-    # Wait for the specified duration
+
     time.sleep(duration)
-    
-    # Stop both streams
-    success1, output1 = stop_stream(proc1)
-    success2, output2 = stop_stream(proc2)
-    
-    # Parse frame counts
-    frames1 = parse_frame_count(output1)
-    frames2 = parse_frame_count(output2)
-    
-    results["dev1_frames"] = frames1
-    results["dev2_frames"] = frames2
-    results["dev1_success"] = success1 and frames1 > 0
-    results["dev2_success"] = success2 and frames2 > 0
-    
-    overall_success = results["dev1_success"] and results["dev2_success"]
-    
+
+    # Stop all streams and collect results
+    for dev, proc in procs.items():
+        ok, output = stop_stream(proc)
+        frames = parse_frame_count(output)
+        results["frames"][dev] = frames
+        results["success"][dev] = ok and frames > 0
+
+    overall_success = all(results["success"].values())
     return overall_success, results
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Test parallel streaming on two V4L2 video devices"
+        description="Test parallel streaming on any number of V4L2 video devices"
     )
     parser.add_argument(
-        "device1",
-        help="First video device (e.g., /dev/video0)"
-    )
-    parser.add_argument(
-        "device2",
-        help="Second video device (e.g., /dev/video7)"
+        "devices",
+        nargs="+",
+        help="Video devices to stream in parallel (e.g., /dev/video0 /dev/video2 /dev/video7)"
     )
     parser.add_argument(
         "-i", "--iterations",
         type=int,
         default=100,
-        help="Number of test iterations (default: 10)"
+        help="Number of test iterations (default: 100)"
     )
     parser.add_argument(
         "-d", "--duration",
@@ -158,57 +143,49 @@ def main():
         action="store_true",
         help="Verbose output"
     )
-    
+
     args = parser.parse_args()
-    
-    # Verify devices exist
-    if not verify_device_exists(args.device1):
-        print(f"ERROR: Device {args.device1} does not exist")
-        sys.exit(1)
-    if not verify_device_exists(args.device2):
-        print(f"ERROR: Device {args.device2} does not exist")
-        sys.exit(1)
-    
+
+    for dev in args.devices:
+        if not verify_device_exists(dev):
+            print(f"ERROR: Device {dev} does not exist")
+            sys.exit(1)
+
     print(f"Parallel Streaming Test")
     print(f"========================")
-    print(f"Device 1: {args.device1}")
-    print(f"Device 2: {args.device2}")
+    for i, dev in enumerate(args.devices, 1):
+        print(f"Device {i}: {dev}")
     print(f"Iterations: {args.iterations}")
     print(f"Duration per iteration: {args.duration}s")
     print()
-    
+
     passed = 0
     failed = 0
-    
+
     for i in range(1, args.iterations + 1):
         print(f"Iteration {i}/{args.iterations}: ", end="", flush=True)
-        
-        success, results = run_iteration(
-            args.device1,
-            args.device2,
-            args.duration
-        )
-        
+
+        success, results = run_iteration(args.devices, args.duration)
+
         if success:
             passed += 1
-            print(f"PASS (frames: {results['dev1_frames']}, {results['dev2_frames']})")
+            frame_summary = ", ".join(str(results["frames"][d]) for d in args.devices)
+            print(f"PASS (frames: {frame_summary})")
         else:
             failed += 1
             print(f"FAIL")
             if args.verbose or results["error"]:
                 if results["error"]:
                     print(f"  Error: {results['error']}")
-                print(f"  {args.device1}: {results['dev1_frames']} frames, success={results['dev1_success']}")
-                print(f"  {args.device2}: {results['dev2_frames']} frames, success={results['dev2_success']}")
-        
-        # Small delay between iterations
+                for dev in args.devices:
+                    print(f"  {dev}: {results['frames'][dev]} frames, success={results['success'][dev]}")
+
         if i < args.iterations:
             time.sleep(0.5)
-    
+
     print()
     print(f"Results: {passed}/{args.iterations} passed, {failed} failed")
-    
-    # Exit with error code if any failures
+
     sys.exit(0 if failed == 0 else 1)
 
 

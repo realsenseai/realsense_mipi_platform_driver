@@ -6,7 +6,6 @@
 - RealSense™ camera driver for GMSL* interface [Front Page](./README.md)
 - NVIDIA® Jetson AGX Orin™ board setup - AGX Orin™ [JetPack 6.x](./README_JP6.md) setup guide
 - NVIDIA® Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 5.x.2](./README_JP5.md) setup guide
-- NVIDIA® Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 4.6.1](./README_JP4.md) setup guide
 - Build Tools manual page [Build Manual page](./README_tools.md)
 - Driver API manual page [Driver API page](./README_driver.md)
 
@@ -24,7 +23,6 @@ If JetPack version is not given, default version, 5.0.2, will be chosen.
 This script prepare all necessary tools and sources to build JetPack BSP.
 
 The following directories will be created:
-- JetPack 4.6.1: `sources_4.6.1`
 - JetPack 5.x.2: `sources_5.x`
 - JetPack 6.x: `sources_6.x`
 ```
@@ -78,12 +76,11 @@ Example: build JetPack 5.0.2 workspace created by direct source download
 ./build_all.sh 6.0 ./Linux_for_tegra/source
 ```
 The following directories will be created:
-- JetPack 4.6.1: `images/4.6.1`
 - JetPack 5.x.2: `images/5.x`
 - JetPack 6.x: `images/6.x`
 
 # build_all_deb.sh
-Build kernel Debian packages for JetPack 5.0.2 or 4.6.1
+Build kernel Debian packages for JetPack 5.0.2
 ```
 ./build_all_deb.sh [--no-dbg-pkg] [JetPack_version] [JetPack_source_dir]
 ```
@@ -99,6 +96,5 @@ Example:
 
 **NOTE**
 
-- Each JetPack version's kernel may be different, the user needs to change the kernel version in file names and paths accordingly, for example for JetPack 4.6.1 the version is `4.9.253-d457` or `4.9.253-tegra`, depending on the build method applied.
-- For JetPack 4.6.1, the dtb file is not included in the deb package. User needs to manually copy `images/4.6.1/arch/arm64/boot/dts/tegra194-p2888-0001-p2822-0000.dtb` file to board and edit `extlinux.conf` to point to it.
+- Each JetPack version's kernel may be different, the user needs to change the kernel version in file names and paths accordingly.
 - It's recommended to save the original kernel image as backup boot option in `/boot/extlinux/extlinux.conf`.

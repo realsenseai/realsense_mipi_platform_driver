@@ -49,8 +49,6 @@ else
         CROSS_COMPILE=$DEVDIR/l4t-gcc/$JETPACK_VERSION/bin/aarch64-buildroot-linux-gnu-
     elif [[ "$JETPACK_VERSION" == "5.x" ]]; then
         CROSS_COMPILE=$DEVDIR/l4t-gcc/$JETPACK_VERSION/bin/aarch64-buildroot-linux-gnu-
-    elif [[ "$JETPACK_VERSION" == "4.x" ]]; then
-        CROSS_COMPILE=$DEVDIR/l4t-gcc/$JETPACK_VERSION/bin/aarch64-linux-gnu-
     fi
     export CROSS_COMPILE
 fi
@@ -75,7 +73,7 @@ export KERNEL_MODULES_OUT=$TEGRA_KERNEL_OUT/modules
 # following: 
 # https://docs.nvidia.com/jetson/archives/r36.2/DeveloperGuide/SD/Kernel/KernelCustomization.html#building-the-jetson-linux-kernel
 if version_lt "$JETPACK_VERSION" "6.0"; then
-    #JP4/5
+    #JP5
     cd $BUILD_SRCS/$KERNEL_DIR
     make O=$TEGRA_KERNEL_OUT tegra_defconfig
     if [[ "$DEVDBG" == "1" ]]; then
@@ -109,7 +107,18 @@ else
         # Building the Image with default defconfig
         make -C kernel
     fi
-    make modules
+    # JP7 (Thor): don't build/install the NVIDIA display stack - keep the BSP's
+    # matched nvidia.ko/nvidia-modeset.ko/nvidia-drm.ko (the bundled nvdisplay
+    # source is a non-matching pre-release that breaks the GPU/display init).
+    DISPLAY_SKIP=""
+    # JP7.2 (R39.2): the nvvse security-engine module needs nvvse_osi/ sources that
+    # NVIDIA gitignores/ships separately, so it cannot be built from the public tree.
+    # NVIDIA's own switch (NV_OOT_NVVSE_SKIP_BUILD) gates the synced nvvse/Makefile;
+    # pass it as a command-line override so it reaches the kbuild M= descent (the
+    # configs/Makefile.config.l4t export does not apply via this build path).
+    NVVSE_SKIP=""
+    version_lt "$JETPACK_VERSION" "7.0" || { DISPLAY_SKIP="SKIP_NVIDIA_DISPLAY=1"; NVVSE_SKIP="NV_OOT_NVVSE_SKIP_BUILD=y"; }
+    make modules $DISPLAY_SKIP $NVVSE_SKIP
     D4XX_CMD_FILE="$BUILD_SRCS/nvidia-oot/drivers/media/i2c/.d4xx.o.cmd"
     mkdir -p $TEGRA_KERNEL_OUT/rootfs/boot/dtb
     if version_lt "$JETPACK_VERSION" "7.0"; then
@@ -122,7 +131,7 @@ else
     fi
     export INSTALL_MOD_PATH=$TEGRA_KERNEL_OUT/rootfs/
     make -C kernel install
-    make modules_install
+    make modules_install $DISPLAY_SKIP $NVVSE_SKIP
     # iio support
     KERNELVERSION=$(cat $KERNEL_HEADERS/include/config/kernel.release)
     KERNEL_MODULES_OUT=$INSTALL_MOD_PATH/lib/modules/${KERNELVERSION}

@@ -7,7 +7,7 @@ if [ "$#" -lt 1 ] || [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
       echo "Update the kernel modules and boot files on the local device for a specific JetPack version."
       echo ""
       echo "Arguments:"
-      echo "  JETPACK_VERSION   JetPack version (e.g., 5.0.2, 5.1.2, 6.0, 6.1, 6.2, 6.2.1, 7.0, 7.1)"
+      echo "  JETPACK_VERSION   JetPack version (e.g., 5.0.2, 5.1.2, 6.0, 6.1, 6.2, 6.2.1, 7.0, 7.1, 7.2)"
       echo "  BOOT_FOLDER       Folder name under /boot to copy Image (default: dev)"
       echo "  DELAY_SECONDS     Delay before reboot in seconds (default: 0)"
       echo ""
@@ -55,31 +55,50 @@ if [ "${JETPACK_VERSION}" = "5.0.2" ]; then
           sudo cp videobuf-core.ko /lib/modules/$(uname -r)/updates/
     echo "sudo cp videobuf-vmalloc.ko /lib/modules/$(uname -r)/updates/"
           sudo cp videobuf-vmalloc.ko /lib/modules/$(uname -r)/updates/
-elif [ "${JETPACK_VERSION}" = "6.0" ] || [ "${JETPACK_VERSION}" = "6.1" ] || [ "${JETPACK_VERSION}" = "6.2" ] || [ "${JETPACK_VERSION}" = "6.2.1" ] || [ "${JETPACK_VERSION}" = "7.0" ] || [ "${JETPACK_VERSION}" = "7.1" ]; then
+elif [ "${JETPACK_VERSION}" = "6.0" ] || [ "${JETPACK_VERSION}" = "6.1" ] || [ "${JETPACK_VERSION}" = "6.2" ] || [ "${JETPACK_VERSION}" = "6.2.1" ] || [ "${JETPACK_VERSION}" = "7.0" ] || [ "${JETPACK_VERSION}" = "7.1" ] || [ "${JETPACK_VERSION}" = "7.2" ]; then
     MODULES_DIR="lib/modules/$(uname -r)"
-    echo "Extracting rootfs.tar.gz..."
-    if ! tar xf rootfs.tar.gz; then
-        echo "Error: Failed to extract rootfs.tar.gz; not modifying kernel modules."
+    # Accept any compression (rootfs.tar.gz, rootfs.tar.bz2, rootfs.tar.xz, ...);
+    # tar autodetects the format from the file contents.
+    ROOTFS_TARBALL=$(ls rootfs.tar.* 2>/dev/null | head -n1)
+    echo "Extracting ${ROOTFS_TARBALL:-rootfs.tar.*}..."
+    if [ -z "${ROOTFS_TARBALL}" ] || ! tar xf "${ROOTFS_TARBALL}"; then
+        echo "Error: Failed to extract rootfs tarball (rootfs.tar.*); not modifying kernel modules."
         exit 1
     fi
     if [ ! -d "${MODULES_DIR}" ] || [ -z "$(ls -A "${MODULES_DIR}" 2>/dev/null)" ]; then
         echo "Error: Extracted modules directory '${MODULES_DIR}' is missing or empty; not modifying kernel modules."
         exit 1
     fi
-    echo "sudo rm -rf /${MODULES_DIR}"
-    if ! sudo rm -rf /${MODULES_DIR}; then
-        echo "Error: Failed to remove existing modules directory '${MODULES_DIR}', DON'T REBOOT"
-        exit 1
+    # JP7 overlays onto the existing module tree (keeps the BSP NVIDIA display
+    # stack: nvidia.ko / nvidia-modeset.ko / nvidia-drm.ko, which the build no
+    # longer produces). JP6 keeps the full replace.
+    if [ "${JETPACK_VERSION}" != "7.0" ] && [ "${JETPACK_VERSION}" != "7.1" ] && [ "${JETPACK_VERSION}" != "7.2" ]; then
+        echo "sudo rm -rf /${MODULES_DIR}"
+        if ! sudo rm -rf /${MODULES_DIR}; then
+            echo "Error: Failed to remove existing modules directory '${MODULES_DIR}', DON'T REBOOT"
+            exit 1
+        fi
+    else
+        echo "JP7: overlay install - keeping existing /${MODULES_DIR} (incl. BSP NVIDIA display modules)"
     fi
     echo "sudo cp -r ${MODULES_DIR} /lib/modules/."
     if ! sudo cp -r ${MODULES_DIR} /lib/modules/.; then
         echo "Error: Failed to copy modules to '/lib/modules/', DON'T REBOOT"
         exit 1
     fi
-    echo "sudo cp boot/tegra234-camera-d4xx-overlay*.dtbo /boot/."
-          sudo cp boot/tegra234-camera-d4xx-overlay*.dtbo /boot/.
-    echo "sudo cp boot/dtb/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/dtb/."
-          sudo cp boot/dtb/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/dtb/.
+    if [ "${JETPACK_VERSION}" = "7.0" ] || [ "${JETPACK_VERSION}" = "7.1" ] || [ "${JETPACK_VERSION}" = "7.2" ]; then
+        # Thor (tegra264) overlays; "|| true" so an Orin-only target without them does not fail.
+        echo "sudo cp boot/tegra264-camera-d4xx-overlay*.dtbo /boot/."
+              sudo cp boot/tegra264-camera-d4xx-overlay*.dtbo /boot/. 2>/dev/null || true
+        # Orin (tegra234) overlays built for JP7.x on Orin (e.g. Fangzhu single-cam).
+        echo "sudo cp boot/tegra234-camera-d4xx-overlay*.dtbo /boot/."
+              sudo cp boot/tegra234-camera-d4xx-overlay*.dtbo /boot/. 2>/dev/null || true
+    else
+        echo "sudo cp boot/tegra234-camera-d4xx-overlay*.dtbo /boot/."
+              sudo cp boot/tegra234-camera-d4xx-overlay*.dtbo /boot/.
+        echo "sudo cp boot/dtb/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/dtb/."
+              sudo cp boot/dtb/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/dtb/.
+    fi
 fi
 
 if [ -f boot/Image ]; then
