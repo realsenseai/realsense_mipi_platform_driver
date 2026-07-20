@@ -6006,7 +6006,11 @@ static int ds5_dfu_wait_for_get_dfu_status(struct ds5 *state,
 		dfu_wr_wait_msec = (((unsigned int)dfu_asw_buf[3]) << 16)
 						| (((unsigned int)dfu_asw_buf[2]) << 8)
 						| dfu_asw_buf[1];
-	} while (dfu_asw_buf[4] == dfuDNBUSY && exp_state == dfuDNLOAD_IDLE);
+	} while ((dfu_asw_buf[4] == dfuDNBUSY &&
+		  exp_state == dfuDNLOAD_IDLE) ||
+		 ((dfu_asw_buf[4] == dfuMANIFEST_SYNC ||
+		   dfu_asw_buf[4] == dfuMANIFEST) &&
+		  exp_state == dfuMANIFEST_WAIT_RESET));
 
 	if (dfu_asw_buf[4] != exp_state) {
 		dev_notice(&state->client->dev,
@@ -6162,7 +6166,8 @@ static ssize_t ds5_dfu_device_write(struct file *flip,
 			if (!ret)
 				ret = ds5_write(state, 0x4a04, 0x00); /*Download complete */
 			if (!ret)
-				ret = ds5_dfu_wait_for_get_dfu_status(state, dfuMANIFEST);
+				ret = ds5_dfu_wait_for_get_dfu_status(state,
+								      dfuMANIFEST_WAIT_RESET);
 			if (ret < 0)
 				goto dfu_write_error;
 			state->dfu_dev.dfu_state_flag = DS5_DFU_DONE;
