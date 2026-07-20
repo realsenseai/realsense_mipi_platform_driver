@@ -58,7 +58,7 @@ struct dser_interface {
 	void (*reset_oneshot)(struct device *dev);
 	/* RSDEV-12608: flush one link's line buffer after a camera HW reset;
 	 * NULL if the deser leaves no stale buffer (max9296). */
-	void (*reset_oneshot_mask)(struct device *dev, u32 vc_id);
+	void (*reset_oneshot_link)(struct device *dev, u32 vc_id);
 
 	/* Setup and control */
 	int (*setup_link)(struct device *dev, struct device *s_dev);
@@ -686,7 +686,7 @@ static const struct dser_interface max96712_interface = {
 	.set_pipe = max96712_set_pipe,
 	.release_pipe = max96712_release_pipe,
 	.reset_oneshot = max96712_reset_oneshot,
-	.reset_oneshot_mask = max96712_reset_oneshot_mask,
+	.reset_oneshot_link = max96712_reset_oneshot_link,
 	.setup_link = max96712_setup_link,
 	.setup_control = max96712_setup_control,
 	.reset_control = max96712_reset_control,
@@ -2852,8 +2852,8 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 
 	/* RSDEV-12608: drop the stale partial frame a mid-stream camera reset leaves
 	 * in this link's line buffer (NULL-safe; max9296 leaves none). */
-	if (state->dser_ops->reset_oneshot_mask)
-		state->dser_ops->reset_oneshot_mask(state->dser_dev, state->g_ctx.dst_vc);
+	if (state->dser_ops->reset_oneshot_link)
+		state->dser_ops->reset_oneshot_link(state->dser_dev, state->g_ctx.dst_vc);
 
 	/* Re-apply ESYNC tunneling to match cached sync_mode control */
 	if (state->ctrls.sync_mode) {
