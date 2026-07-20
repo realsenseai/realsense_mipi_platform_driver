@@ -177,8 +177,6 @@ struct dser_interface {
 #define D5X_EXPOSURE_ROI_BOTTOM		0x0018
 #define D5X_EXPOSURE_ROI_RIGHT		0x001C
 #define D5X_MANUAL_LASER_POWER		0x0024
-#define D5X_PWM_FREQUENCY			0x0028
-#define D5X_CAMERA_SYNC_MODE		0x002C
 
 #define D5X_DEPTH_CONFIG_STATUS		0x4800
 #define D5X_RGB_CONFIG_STATUS		0x4802
@@ -366,6 +364,9 @@ static const struct hwm_cmd cmd_hw_reset = {
 	.magic_word = 0xCDAB,
 	.opcode = 0x20,  /* HW reset opcode */
 };
+
+#define D5X_HWMC_OPCODE_SET_CAM_SYNC	0x69
+#define D5X_HWMC_OPCODE_GET_CAM_SYNC	0x6A
 
 static const struct hwm_cmd log_prepare = {
 	.header = 0x014,
@@ -2185,17 +2186,16 @@ static int d5x_hw_set_exposure(struct d5x *state, u32 base, s32 val)
 #define D5X_CAMERA_CID_HWMC			(D5X_CAMERA_CID_BASE+15)
 #define D5X_CAMERA_CID_SYNC_MODE		(D5X_CAMERA_CID_BASE+16)
 
-/* Sync mode values — indices into sync_mode_menu_full[] */
+/*
+ * D5xx HWM sync-mode values. Value 1 was the former RGB-master mode and is
+ * intentionally unsupported; HKR accepts only Disabled, PWM Master, External.
+ */
 enum d5x_sync_mode {
-	D5X_SYNC_MODE_DEFAULT,
-	D5X_SYNC_MODE_MASTER,
-	D5X_SYNC_MODE_SLAVE,
-	D5X_SYNC_MODE_FULL_SLAVE,
-	D5X_SYNC_MODE_SUB_PREMASTER,
-	D5X_SYNC_MODE_FULL_MASTER,
+	D5X_SYNC_MODE_DISABLED = 0,
+	D5X_SYNC_MODE_RGB_MASTER_UNSUPPORTED = 1,
+	D5X_SYNC_MODE_PWM_MASTER = 2,
+	D5X_SYNC_MODE_EXTERNAL = 3,
 };
-
-#define D5X_CAMERA_CID_PWM			(D5X_CAMERA_CID_BASE+22)
 
 /* 
  * The HWMC will remain for legacy tools compatibility,
@@ -2329,6 +2329,61 @@ static int d5x_hwmc_send(struct d5x *state,
 	d5x_raw_write_with_check(state, D5X_HWMC_DATA, cmd, cmdLen); /* Write command data */
 
 	d5x_write_with_check(state, D5X_HWMC_EXEC, 0x01); /* execute cmd */
+
+	return 0;
+}
+
+static int d5x_hwmc_set_sync_mode(struct d5x *state, u16 sync_mode)
+{
+	struct hwm_cmd cmd = {
+		.header = 0x14,
+		.magic_word = 0xCDAB,
+		.opcode = D5X_HWMC_OPCODE_SET_CAM_SYNC,
+		.param1 = sync_mode,
+	};
+	int ret;
+
+	if (sync_mode == D5X_SYNC_MODE_RGB_MASTER_UNSUPPORTED ||
+	    sync_mode > D5X_SYNC_MODE_EXTERNAL)
+		return -EINVAL;
+
+	ret = d5x_hwmc_send(state, sizeof(cmd), &cmd);
+	if (!ret)
+		ret = d5x_hwmc_wait(state);
+
+	return ret;
+}
+
+static int d5x_hwmc_get_sync_mode(struct d5x *state, u16 *sync_mode)
+{
+	struct hwm_cmd cmd = {
+		.header = 0x14,
+		.magic_word = 0xCDAB,
+		.opcode = D5X_HWMC_OPCODE_GET_CAM_SYNC,
+	};
+	unsigned char response[6];
+	u16 response_len = 0;
+	__le16 sync_mode_le;
+	int ret;
+
+	if (!sync_mode)
+		return -EINVAL;
+
+	ret = d5x_hwmc_send(state, sizeof(cmd), &cmd);
+	if (ret)
+		return ret;
+
+	ret = d5x_get_hwmc(state, response, sizeof(response), &response_len);
+	if (ret)
+		return ret;
+	if (response_len < sizeof(response))
+		return -EBADMSG;
+
+	memcpy(&sync_mode_le, response + 4, sizeof(sync_mode_le));
+	*sync_mode = le16_to_cpu(sync_mode_le);
+	if (*sync_mode == D5X_SYNC_MODE_RGB_MASTER_UNSUPPORTED ||
+	    *sync_mode > D5X_SYNC_MODE_EXTERNAL)
+		return -ERANGE;
 
 	return 0;
 }
@@ -2587,18 +2642,17 @@ static int d5x_set_des_fsync(struct d5x *state, bool enable)
 
 static bool d5x_sync_mode_uses_esync(struct d5x *state)
 {
-	int sync_mode = D5X_SYNC_MODE_DEFAULT;
+	int sync_mode = D5X_SYNC_MODE_DISABLED;
 
 	if (!state)
 		return false;
 
 	if (state->d5x_dev)
 		sync_mode = READ_ONCE(state->d5x_dev->sync_mode);
-	if (sync_mode == D5X_SYNC_MODE_DEFAULT && state->ctrls.sync_mode)
+	if (sync_mode == D5X_SYNC_MODE_DISABLED && state->ctrls.sync_mode)
 		sync_mode = state->ctrls.sync_mode->cur.val;
 
-	return sync_mode == D5X_SYNC_MODE_SLAVE ||
-	       sync_mode == D5X_SYNC_MODE_FULL_SLAVE;
+	return sync_mode == D5X_SYNC_MODE_EXTERNAL;
 }
 
 /*
@@ -3180,15 +3234,15 @@ static int d5x_s_ctrl(struct v4l2_ctrl *ctrl)
 		ret = d5x_hw_reset_with_recovery(state);
 		break;
 	case D5X_CAMERA_CID_SYNC_MODE:
-		dev_info(&state->client->dev, "%s(): XU SYNC_MODE control received, value: %d\n",
+		dev_info(&state->client->dev, "%s(): HWM SYNC_MODE control received, value: %d\n",
 			__func__, ctrl->val);
 		if (state->is_depth) {
-			ret = d5x_write(state, base | D5X_CAMERA_SYNC_MODE, ctrl->val);
-			dev_info(&state->client->dev, "%s(): SYNC_MODE command passed to FW, addr: 0x%x, value: %d, ret: %d\n",
-				__func__, base | D5X_CAMERA_SYNC_MODE, ctrl->val, ret);
+			ret = d5x_hwmc_set_sync_mode(state, ctrl->val);
+			dev_info(&state->client->dev,
+				"%s(): HWM SET_CAM_SYNC value: %d, ret: %d\n",
+				__func__, ctrl->val, ret);
 			if (!ret) {
-				bool need_esync = (ctrl->val == D5X_SYNC_MODE_SLAVE ||
-						   ctrl->val == D5X_SYNC_MODE_FULL_SLAVE);
+				bool need_esync = ctrl->val == D5X_SYNC_MODE_EXTERNAL;
 
 				if (state->d5x_dev)
 					WRITE_ONCE(state->d5x_dev->sync_mode, ctrl->val);
@@ -3205,10 +3259,6 @@ static int d5x_s_ctrl(struct v4l2_ctrl *ctrl)
 					ret = d5x_set_des_fsync(state, false);
 			}
 		}
-		break;
-	case D5X_CAMERA_CID_PWM:
-		if (state->is_depth)
-			ret = d5x_write(state, base | D5X_PWM_FREQUENCY, ctrl->val);
 		break;
 	}
 
@@ -3492,12 +3542,16 @@ static int d5x_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		}
 		break;
 	case D5X_CAMERA_CID_SYNC_MODE:
-		if (state->is_depth)
-			d5x_read(state, base | D5X_CAMERA_SYNC_MODE, ctrl->p_new.p_u16);
-		break;
-	case D5X_CAMERA_CID_PWM:
-		if (state->is_depth)
-			d5x_read(state, base | D5X_PWM_FREQUENCY, ctrl->p_new.p_u16);
+		if (state->is_depth && ctrl->p_new.p_u16) {
+			u16 sync_mode;
+
+			ret = d5x_hwmc_get_sync_mode(state, &sync_mode);
+			if (!ret) {
+				*ctrl->p_new.p_u16 = sync_mode;
+				if (state->d5x_dev)
+					WRITE_ONCE(state->d5x_dev->sync_mode, sync_mode);
+			}
+		}
 		break;
 	}
 	return ret;
@@ -3739,13 +3793,11 @@ static const struct v4l2_ctrl_config d5x_ctrl_hw_reset = {
 };
 
 /* Sync mode menu arrays for different camera platforms */
-static const char * const sync_mode_menu_full[] = {
-	[D5X_SYNC_MODE_DEFAULT]       = "Default",
-	[D5X_SYNC_MODE_MASTER]        = "Master",
-	[D5X_SYNC_MODE_SLAVE]         = "Slave",
-	[D5X_SYNC_MODE_FULL_SLAVE]    = "Full Slave",
-	[D5X_SYNC_MODE_SUB_PREMASTER] = "Sub Pre-Master",
-	[D5X_SYNC_MODE_FULL_MASTER]   = "Full Master",
+static const char * const sync_mode_menu[] = {
+	[D5X_SYNC_MODE_DISABLED] = "Disabled",
+	[D5X_SYNC_MODE_RGB_MASTER_UNSUPPORTED] = "(unsupported)",
+	[D5X_SYNC_MODE_PWM_MASTER] = "PWM Master",
+	[D5X_SYNC_MODE_EXTERNAL] = "External",
 };
 
 static struct v4l2_ctrl_config d5x_ctrl_sync_mode = {
@@ -3753,22 +3805,11 @@ static struct v4l2_ctrl_config d5x_ctrl_sync_mode = {
 	.id = D5X_CAMERA_CID_SYNC_MODE,
 	.name = "Camera Sync Mode",
 	.type = V4L2_CTRL_TYPE_MENU,
-	.min = 0,
-	.max = 5,
-	.def = 0,
-	.qmenu = sync_mode_menu_full,
-	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
-};
-
-static const struct v4l2_ctrl_config d5x_ctrl_pwm = {
-	.ops = &d5x_ctrl_ops,
-	.id = D5X_CAMERA_CID_PWM,
-	.name = "PWM Frequency Selector",
-	.type = V4L2_CTRL_TYPE_INTEGER,
-	.min = 0,
-	.max = 1,
-	.step = 1,
-	.def = 1,
+	.min = D5X_SYNC_MODE_DISABLED,
+	.max = D5X_SYNC_MODE_EXTERNAL,
+	.def = D5X_SYNC_MODE_DISABLED,
+	.qmenu = sync_mode_menu,
+	.menu_skip_mask = BIT(D5X_SYNC_MODE_RGB_MASTER_UNSUPPORTED),
 	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 };
 static int d5x_mux_open(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
@@ -3812,7 +3853,7 @@ static void d5x_init_d5x_dev(struct d5x *state, struct d5x_dev *d5x_dev)
 	mutex_lock(&d5x_dev->lock);
 	d5x_dev->d5x_primary = state;
 	d5x_dev->cached_device_type = D5X_DEVICE_TYPE_UNKNOWN;
-	d5x_dev->sync_mode = D5X_SYNC_MODE_DEFAULT;
+	d5x_dev->sync_mode = D5X_SYNC_MODE_DISABLED;
 	mutex_unlock(&d5x_dev->lock);
 	d5x_reset_streaming_flags(d5x_dev);
 }
@@ -4595,7 +4636,6 @@ static int d5x_ctrl_init(struct d5x *state, int sid)
 	/* DEPTH custom */
 	if (sid == DEPTH_SID) {
 		ctrls->sync_mode = v4l2_ctrl_new_custom(hdl, &d5x_ctrl_sync_mode, sensor);
-		v4l2_ctrl_new_custom(hdl, &d5x_ctrl_pwm, sensor);
 	}
 	/* IMU custom */
 	if (sid == IMU_SID)
@@ -6376,10 +6416,15 @@ static void d5x_adjust_sync_mode_control(struct i2c_client *client, struct d5x *
 #endif
 	switch (dev_type) {
 	case D5X_DEVICE_TYPE_D58X:
-		/* D58X supports all 6 sync modes (0-5) */
-		__v4l2_ctrl_modify_range(state->ctrls.sync_mode, 0, 5, 0, 0);
-		state->ctrls.sync_mode->qmenu = sync_mode_menu_full;
-		dev_dbg(&client->dev, "%s(): D58X sync mode: all modes 0-5 supported\n", __func__);
+		/* HWM supports 0=Disabled, 2=PWM Master and 3=External. */
+		__v4l2_ctrl_modify_range(state->ctrls.sync_mode,
+					 D5X_SYNC_MODE_DISABLED,
+					 D5X_SYNC_MODE_EXTERNAL, 0,
+					 D5X_SYNC_MODE_DISABLED);
+		state->ctrls.sync_mode->qmenu = sync_mode_menu;
+		dev_dbg(&client->dev,
+			"%s(): D58X HWM sync modes: 0=Disabled, 2=PWM Master, 3=External\n",
+			__func__);
 		break;
 	default:
 		/* Unknown device - disable sync mode */
