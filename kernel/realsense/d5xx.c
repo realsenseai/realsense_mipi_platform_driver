@@ -31,6 +31,7 @@
 #include <linux/videodev2.h>
 #include <linux/version.h>
 #include <linux/mutex.h>
+#include <asm/unaligned.h>
 #include <media/media-entity.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
@@ -192,6 +193,10 @@ struct dser_interface {
 #define DS5_STATUS_UNAVAILABLE		0xffff
 
 #define MIPI_LANE_RATE				1300
+#define DS5_CSI_METADATA_MAGIC		0x484B524D
+#define DS5_CSI_METADATA_HEADER_SIZE	20
+#define DS5_CSI_METADATA_PAYLOAD_OFFSET	8
+#define DS5_CSI_METADATA_MAX_WC		4096
 
 #define MAX_DEPTH_EXP				200000
 #define MAX_RGB_EXP					10000
@@ -2818,6 +2823,39 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 }
 
 static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on);
+
+#if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && defined(CONFIG_TEGRA_EMBEDDED_METADATA_OPS)
+/*
+ * D5xx CSI metadata carries an HKRM transport header. The kernel only
+ * validates the framing needed to publish the actual sidecar bytesused;
+ * semantic metadata parsing stays in userspace.
+ */
+static size_t ds5_csi_metadata_bytesused(const u8 *data, size_t captured_size)
+{
+	u16 payload_size;
+	size_t bytesused;
+
+	if (!data || captured_size < DS5_CSI_METADATA_HEADER_SIZE)
+		return 0;
+
+	if (get_unaligned_le32(data) != DS5_CSI_METADATA_MAGIC)
+		return 0;
+
+	payload_size = get_unaligned_le16(data + DS5_CSI_METADATA_PAYLOAD_OFFSET);
+	bytesused = DS5_CSI_METADATA_HEADER_SIZE + payload_size;
+	if (!payload_size || bytesused > captured_size)
+		return 0;
+
+	return bytesused;
+}
+
+static const struct tegra_embedded_metadata_ops ds5_csi_metadata_ops = {
+	.dataformat = V4L2_META_FMT_RSMD,
+	.compat_dataformat = V4L2_META_FMT_D4XX,
+	.max_buffer_size = DS5_CSI_METADATA_MAX_WC,
+	.get_bytesused = ds5_csi_metadata_bytesused,
+};
+#endif
 
 static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 {
@@ -5505,8 +5543,9 @@ static int ds5_mux_get_frame_desc(struct v4l2_subdev *sd,
 		desc->entry[i].pixelcode = MEDIA_BUS_FMT_FIXED;
 		desc->entry[i].length = 0;
 		if (i == desc->num_entries - 1) {
-			desc->entry[i].pixelcode = 0x12;
-			desc->entry[i].length = 68;
+			desc->entry[i].flags = V4L2_MBUS_FRAME_DESC_FL_LEN_MAX;
+			desc->entry[i].pixelcode = MEDIA_BUS_FMT_FIXED;
+			desc->entry[i].length = DS5_CSI_METADATA_MAX_WC;
 		}
 	}
 	return 0;
@@ -5737,6 +5776,9 @@ static int ds5_mux_init(struct i2c_client *c, struct ds5 *state)
 		state->mux.last_set = &state->imu.sensor;
 
 	state->mux.sd.dev = &c->dev;
+#if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && defined(CONFIG_TEGRA_EMBEDDED_METADATA_OPS)
+	state->mux.sd.embedded_metadata_ops = &ds5_csi_metadata_ops;
+#endif
 	ret = camera_common_initialize(&state->mux.sd, "d5xx");
 	if (ret) {
 		dev_err(&c->dev, "Failed to initialize d5xx.\n");

@@ -23,6 +23,7 @@
 #include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/of_gpio.h>
+#include <linux/version.h>
 #include <media/camera_common.h>
 #include <linux/module.h>
 #include <media/max96724.h>
@@ -2378,8 +2379,11 @@ static struct regmap_config max96724_regmap_config = {
 	.cache_type = REGCACHE_NONE,
 };
 
-static int max96724_probe(struct i2c_client *client,
-			   const struct i2c_device_id *id)
+static int max96724_probe(struct i2c_client *client
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
+			   , const struct i2c_device_id *id
+#endif
+			   )
 {
 	struct max96724 *priv;
 	int err = 0;
@@ -2424,13 +2428,19 @@ static int max96724_probe(struct i2c_client *client,
 	return err;
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 12)
 static int max96724_remove(struct i2c_client *client)
+#else
+static void max96724_remove(struct i2c_client *client)
+#endif
 {
 	struct max96724 *priv = dev_get_drvdata(&client->dev);
 
 	mutex_destroy(&priv->lock);
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 12)
 	return 0;
+#endif
 }
 
 static const struct i2c_device_id max96724_id[] = {
