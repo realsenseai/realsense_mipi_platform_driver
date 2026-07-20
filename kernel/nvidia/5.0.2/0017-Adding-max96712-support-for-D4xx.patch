@@ -7,11 +7,11 @@ Add MAX96712 deserializer driver support for D4XX cameras.
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- drivers/media/i2c/max96712.c | 873 ++++++++++++++++++++++++++++++++++++++++++-
-  1 file changed, 870 insertions(+), 3 deletions(-)
+ drivers/media/i2c/max96712.c | 881 ++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 878 insertions(+), 3 deletions(-)
 
 diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
-index 8081385f0..dcf538b36 100644
+index 8081385f0..17ddaf4e7 100644
 --- a/drivers/media/i2c/max96712.c
 +++ b/drivers/media/i2c/max96712.c
 @@ -21,18 +21,148 @@
@@ -350,7 +350,7 @@ index 8081385f0..dcf538b36 100644
  		i2c_unregister_device(client);
  		client = NULL;
  	}
-@@ -252,13 +506,625 @@ max96712_remove(struct i2c_client *client)
+@@ -252,13 +506,633 @@ max96712_remove(struct i2c_client *client)
  	return 0;
  }
  
@@ -574,6 +574,18 @@ index 8081385f0..dcf538b36 100644
 +}
 +EXPORT_SYMBOL(max96712_reset_oneshot);
 +
++/* RSDEV-12608: one-shot flush of the link carrying vc_id (link = vc_id / MAX9295_MAX_STREAMS).
++ * Called from d4xx HW-reset recovery to drop the stale post-reset partial frame. */
++void max96712_reset_oneshot_link(struct device *dev, u32 vc_id)
++{
++	struct max96712 *priv = dev_get_drvdata(dev);
++	unsigned int link_id = vc_id / MAX9295_MAX_STREAMS;
++
++	dev_info(dev, "RSDEV-12608: link %u line-buffer flush (post-HW-reset)\n", link_id);
++	max96712_reset_oneshot_link_mask(priv, 1 << link_id);
++}
++EXPORT_SYMBOL(max96712_reset_oneshot_link);
++
 +static int __max96712_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
 +			      u8 data_type2, u32 vc_id)
 +{
@@ -619,7 +631,6 @@ index 8081385f0..dcf538b36 100644
 +	if (err) {
 +		return err;
 +	}
-+	max96712_reset_oneshot_link_mask(priv, 1 << vc_id_msb);
 +
 +	err |= max96712_read_reg(priv, MAX96712_VIDEO_PIPE_EN_ADDR, &pipe_en_val);
 +	if (err == 0) {
@@ -794,9 +805,6 @@ index 8081385f0..dcf538b36 100644
 +		return err;
 +	}
 +
-+	/* Bring up the link that owns this multi-VC pipe. The mask is a
-+	 * per-link bit (bit N = link N), so link 0 must reset with 0x01, not 0. */
-+	max96712_reset_oneshot_link_mask(priv, 1 << link_id);
 +	max96712_write_reg(priv, MAX96712_VIDEO_PIPE_EN_ADDR, 1 << pipe_id);
 +
 +	return err;
@@ -977,7 +985,7 @@ index 8081385f0..dcf538b36 100644
  	{ },
  };
  
-@@ -268,6 +1134,7 @@ static struct i2c_driver max96712_i2c_driver = {
+@@ -268,6 +1142,7 @@ static struct i2c_driver max96712_i2c_driver = {
  	.driver = {
  		.name = "max96712",
  		.owner = THIS_MODULE,

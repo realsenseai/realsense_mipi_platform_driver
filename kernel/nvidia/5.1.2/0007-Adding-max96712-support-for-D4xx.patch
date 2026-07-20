@@ -7,11 +7,11 @@ Add MAX96712 deserializer driver support for D4XX cameras.
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- drivers/media/i2c/max96712.c | 585 ++++++++++++++++++++++++++++++++---
- 1 file changed, 544 insertions(+), 41 deletions(-)
+ drivers/media/i2c/max96712.c | 926 +++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 886 insertions(+), 40 deletions(-)
 
 diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
-index 329a10dfd..0d5bbbd5b 100644
+index 329a10dfd..f7dbb5521 100644
 --- a/drivers/media/i2c/max96712.c
 +++ b/drivers/media/i2c/max96712.c
 @@ -21,32 +21,156 @@
@@ -351,21 +351,20 @@ index 329a10dfd..0d5bbbd5b 100644
  		return -ENODEV;
  	}
 +	mutex_init(&priv->lock);
-+
+ 
+-	mutex_init(&max96712_rw);
 +	/* No multi-VC pipe is assigned to any link until requested. */
 +	{
 +		int i;
-+
-+		for (i = 0; i < MAX96712_MAX_LINKS; i++)
-+			priv->link_multi_vc_pipe[i] = -1;
-+	}
  
--	mutex_init(&max96712_rw);
--
 -	err = max96712_power_on(priv);
 -	if (err) {
 -		dev_err(&client->dev, "Failed to power on err =%d\n",err);
 -		return err;
++		for (i = 0; i < MAX96712_MAX_LINKS; i++)
++			priv->link_multi_vc_pipe[i] = -1;
+ 	}
+ 
 +	np = client->dev.of_node;
 +	if (np) {
 +		priv->pwdn_gpio = of_get_named_gpio(np, "pwdn-gpios", 0);
@@ -409,8 +408,8 @@ index 329a10dfd..0d5bbbd5b 100644
 +			of_property_read_bool(np, "fangzhu,fg12-reverse-lane-polarity");
 +		priv->fangzhu_fg12_poc_enable =
 +			of_property_read_bool(np, "fangzhu,fg12-poc-enable");
- 	}
- 
++	}
++
 +	dev_set_drvdata(&client->dev, priv);
 +
  	err = max96712_debugfs_init(NULL, NULL, NULL, priv);
@@ -434,7 +433,7 @@ index 329a10dfd..0d5bbbd5b 100644
  		i2c_unregister_device(client);
  		client = NULL;
  	}
-@@ -285,13 +510,623 @@ max96712_remove(struct i2c_client *client)
+@@ -285,13 +510,633 @@ max96712_remove(struct i2c_client *client)
  	return 0;
  }
  
@@ -658,6 +657,18 @@ index 329a10dfd..0d5bbbd5b 100644
 +}
 +EXPORT_SYMBOL(max96712_reset_oneshot);
 +
++/* RSDEV-12608: one-shot flush of the link carrying vc_id (link = vc_id / MAX9295_MAX_STREAMS).
++ * Called from d4xx HW-reset recovery to drop the stale post-reset partial frame. */
++void max96712_reset_oneshot_link(struct device *dev, u32 vc_id)
++{
++	struct max96712 *priv = dev_get_drvdata(dev);
++	unsigned int link_id = vc_id / MAX9295_MAX_STREAMS;
++
++	dev_info(dev, "RSDEV-12608: link %u line-buffer flush (post-HW-reset)\n", link_id);
++	max96712_reset_oneshot_link_mask(priv, 1 << link_id);
++}
++EXPORT_SYMBOL(max96712_reset_oneshot_link);
++
 +static int __max96712_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
 +			      u8 data_type2, u32 vc_id)
 +{
@@ -703,7 +714,6 @@ index 329a10dfd..0d5bbbd5b 100644
 +	if (err) {
 +		return err;
 +	}
-+	max96712_reset_oneshot_link_mask(priv, 1 << vc_id_msb);
 +
 +	err |= max96712_read_reg(priv, MAX96712_VIDEO_PIPE_EN_ADDR, &pipe_en_val);
 +	if (err == 0) {
@@ -878,7 +888,6 @@ index 329a10dfd..0d5bbbd5b 100644
 +		return err;
 +	}
 +
-+	max96712_reset_oneshot_link_mask(priv, 1 << link_id);
 +	max96712_write_reg(priv, MAX96712_VIDEO_PIPE_EN_ADDR, 1 << pipe_id);
 +
 +	return err;
@@ -1059,7 +1068,7 @@ index 329a10dfd..0d5bbbd5b 100644
  	{ },
  };
  
-@@ -301,6 +1136,7 @@ static struct i2c_driver max96712_i2c_driver = {
+@@ -301,6 +1146,7 @@ static struct i2c_driver max96712_i2c_driver = {
  	.driver = {
  		.name = "max96712",
  		.owner = THIS_MODULE,
@@ -1069,4 +1078,3 @@ index 329a10dfd..0d5bbbd5b 100644
  	.remove = max96712_remove,
 -- 
 2.43.0
-

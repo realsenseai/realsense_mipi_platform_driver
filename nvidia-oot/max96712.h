@@ -41,6 +41,9 @@ int max96712_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
 		     u8 data_type2, u32 vc_id);
 int max96712_release_pipe(struct device *dev, int pipe_id);
 void max96712_reset_oneshot(struct device *dev);
+/* RSDEV-12608: flush one GMSL link's pixel line buffer after a camera HW reset;
+ * called per-link from d4xx's ds5_hw_reset_with_recovery(). */
+void max96712_reset_oneshot_link(struct device *dev, u32 vc_id);
 int max96712_setup_link(struct device *dev, struct device *s_dev);
 int max96712_setup_control(struct device *dev, struct device *s_dev);
 int max96712_reset_control(struct device *dev, struct device *s_dev);
