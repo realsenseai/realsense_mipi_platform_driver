@@ -4268,10 +4268,70 @@ error:
 	return err;
 }
 
+static void ds5_serdes_cleanup(struct ds5 *state, bool reset_control)
+{
+	int ret;
+	bool do_cleanup = false;
+	struct device *dev;
+
+	if (!state || !state->serdes_primary)
+		return;
+
+	dev = &state->client->dev;
+
+	mutex_lock(&serdes_lock__);
+	if (state->ds5_dev) {
+		mutex_lock(&state->ds5_dev->lock);
+		if (state->ds5_dev->ds5_primary == state) {
+			state->ds5_dev->ds5_primary = NULL;
+			do_cleanup = true;
+		}
+		mutex_unlock(&state->ds5_dev->lock);
+	}
+
+	if (do_cleanup) {
+		if (reset_control && state->ser_dev) {
+			ret = max96717_reset_control(state->ser_dev);
+			if (ret)
+				dev_warn(dev, "failed in 96717 reset control\n");
+		}
+
+		if (reset_control && state->dser_ops && state->dser_dev) {
+			ret = state->dser_ops->reset_control(state->dser_dev,
+							    state->g_ctx.s_dev);
+			if (ret)
+				dev_warn(dev, "failed in %s reset control\n",
+					 state->dser_ops->name);
+		}
+
+		if (state->ser_dev) {
+			ret = max96717_sdev_unpair(state->ser_dev,
+						   state->g_ctx.s_dev);
+			if (ret)
+				dev_warn(dev, "failed to unpair sdev\n");
+		}
+
+		if (state->dser_ops && state->dser_dev) {
+			ret = state->dser_ops->sdev_unregister(state->dser_dev,
+							      state->g_ctx.s_dev);
+			if (ret)
+				dev_warn(dev, "failed to %s unregister sdev\n",
+					 state->dser_ops->name);
+		}
+
+		if (reset_control && state->dser_ops && state->dser_dev)
+			state->dser_ops->power_off(state->dser_dev);
+	}
+	mutex_unlock(&serdes_lock__);
+
+	state->serdes_primary = false;
+}
+
 static int ds5_serdes_setup(struct ds5 *state)
 {
 	int ret = 0;
 	struct i2c_client *c = state->client;
+	bool control_setup_done = false;
 
 	ret = ds5_board_setup(state);
 	if (ret) {
@@ -4309,6 +4369,7 @@ static int ds5_serdes_setup(struct ds5 *state)
 		dev_err(&c->dev, "%s gmsl serdes setup failed\n", __func__);
 		goto serdes_setup_end;
 	}
+	control_setup_done = true;
 
 	/*
 	 * max96717_init_settings is now called inside ds5_gmsl_serdes_setup,
@@ -4365,10 +4426,8 @@ static int ds5_serdes_setup(struct ds5 *state)
 	state->dser_ops->reset_oneshot(state->dser_dev);
 
 serdes_setup_end:
-	if (ret) {
-		max96717_sdev_unpair(state->ser_dev, state->g_ctx.s_dev);
-		state->dser_ops->sdev_unregister(state->dser_dev, state->g_ctx.s_dev);
-	}
+	if (ret)
+		ds5_serdes_cleanup(state, control_setup_done);
 
 	return ret;
 }
@@ -6665,6 +6724,9 @@ static int ds5_probe(struct i2c_client *c
 	uint32_t override_addr = 0;
 	struct device_node *mode0_node;
 #endif
+#ifdef CONFIG_VIDEO_D5XX_SERDES
+	bool serdes_setup_done = false;
+#endif
 	if (!state)
 		return -ENOMEM;
 
@@ -6709,6 +6771,7 @@ static int ds5_probe(struct i2c_client *c
 	ret = ds5_serdes_setup(state);
 	if (ret < 0)
 		goto e_regulator;
+	serdes_setup_done = true;
 	state->reset_ref_dser = atomic_read(dser_get_reset_gen(state));
 #else
 	ds5_init_global_slots_once();
@@ -6861,6 +6924,9 @@ e_chardev:
 	if (state->dfu_dev.ds5_class)
 		ds5_chrdev_remove(state);
 e_regulator:
+#ifdef CONFIG_VIDEO_D5XX_SERDES
+	ds5_serdes_cleanup(state, serdes_setup_done);
+#endif
 	if (state->vcc)
 		regulator_disable(state->vcc);
 #ifdef CONFIG_VIDEO_D5XX_SERDES
@@ -6886,45 +6952,7 @@ static void ds5_remove(struct i2c_client *c)
 	}
 
 #ifdef CONFIG_VIDEO_D5XX_SERDES
-	if (state->serdes_primary) {
-		int ret;
-		bool do_cleanup = false;
-
-		mutex_lock(&serdes_lock__);
-		mutex_lock(&state->ds5_dev->lock);
-
-		if (state->ds5_dev->ds5_primary) {
-			state->ds5_dev->ds5_primary = NULL;
-			do_cleanup = true;
-		}
-
-		mutex_unlock(&state->ds5_dev->lock);
-
-		if (do_cleanup) {
-			ret = max96717_reset_control(state->ser_dev);
-			if (ret)
-				dev_warn(&c->dev,
-					"failed in 96717 reset control\n");
-			ret = state->dser_ops->reset_control(state->dser_dev,
-				state->g_ctx.s_dev);
-			if (ret)
-				dev_warn(&c->dev,
-					"failed in %s reset control\n", state->dser_ops->name);
-			ret = max96717_sdev_unpair(state->ser_dev,
-				state->g_ctx.s_dev);
-			if (ret)
-				dev_warn(&c->dev, "failed to unpair sdev\n");
-			ret = state->dser_ops->sdev_unregister(state->dser_dev,
-				state->g_ctx.s_dev);
-			if (ret)
-				dev_warn(&c->dev,
-					"failed to %s unregister sdev\n", state->dser_ops->name);
-			state->dser_ops->power_off(state->dser_dev);
-		}
-
-		mutex_unlock(&serdes_lock__);
-
-	}
+	ds5_serdes_cleanup(state, true);
 #ifndef CONFIG_OF
 	if (state->ser_i2c)
 		i2c_unregister_device(state->ser_i2c);

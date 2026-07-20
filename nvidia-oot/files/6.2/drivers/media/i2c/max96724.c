@@ -663,11 +663,12 @@ static int max96724_get_sdev_idx(struct device *dev,
 	int err = 0;
 
 	mutex_lock(&priv->lock);
-	for (i = 0; i < priv->max_src; i++) {
-		if (priv->sources[i].g_ctx->s_dev == s_dev)
+	for (i = 0; i < priv->num_src; i++) {
+		if (priv->sources[i].g_ctx &&
+		    priv->sources[i].g_ctx->s_dev == s_dev)
 			break;
 	}
-	if (i == priv->max_src) {
+	if (i == priv->num_src) {
 		dev_err(dev, "no sdev found\n");
 		err = -EINVAL;
 		goto ret;
@@ -714,6 +715,15 @@ static void max96724_reset_ctx(struct max96724 *priv)
 	max96724_pipes_reset(priv);
 	for (i = 0; i < priv->num_src; i++)
 		priv->sources[i].st_enabled = false;
+}
+
+static bool max96724_same_link_source(const struct gmsl_link_ctx *a,
+				      const struct gmsl_link_ctx *b)
+{
+	return a && b &&
+	       a->serdes_csi_link == b->serdes_csi_link &&
+	       a->num_csi_lanes == b->num_csi_lanes &&
+	       a->csi_mode == b->csi_mode;
 }
 
 static void max96724_apply_porta_subset(struct device *dev,
@@ -1191,41 +1201,63 @@ int max96724_sdev_register(struct device *dev, struct gmsl_link_ctx *g_ctx)
 
 	mutex_lock(&priv->lock);
 
-	if (priv->num_src > priv->max_src) {
-		dev_err(dev,
-			"%s: MAX96724 inputs size exhausted\n", __func__);
-		err = -ENOMEM;
-		goto error;
-	}
-
 	if (priv->csi_mode == MAX96724_CSI_MODE_2X4) {
 		if (!((g_ctx->csi_mode == GMSL_CSI_1X4_MODE) ||
 		      (g_ctx->csi_mode == GMSL_CSI_2X4_MODE))) {
 			dev_err(dev, "%s: csi mode not supported\n", __func__);
 			err = -EINVAL;
-			goto error;
+			goto done;
 		}
 	} else {
 		dev_err(dev, "%s: only csi 2x4 mode is supported\n", __func__);
 		err = -EINVAL;
-		goto error;
+		goto done;
 	}
 
 	for (i = 0; i < priv->num_src; i++) {
-		if (g_ctx->serdes_csi_link ==
-		    priv->sources[i].g_ctx->serdes_csi_link) {
-			dev_err(dev,
-				"%s: serdes csi link is in use\n", __func__);
-			err = -EINVAL;
-			goto error;
+		struct gmsl_link_ctx *old_ctx = priv->sources[i].g_ctx;
+
+		if (!old_ctx)
+			continue;
+
+		if (old_ctx->s_dev == g_ctx->s_dev) {
+			priv->sources[i].g_ctx = g_ctx;
+			priv->sources[i].st_enabled = false;
+			goto done;
 		}
-		if (g_ctx->num_csi_lanes !=
-		    priv->sources[i].g_ctx->num_csi_lanes) {
+
+		if (g_ctx->serdes_csi_link ==
+		    old_ctx->serdes_csi_link) {
+			if (max96724_same_link_source(g_ctx, old_ctx)) {
+				dev_info(dev,
+					 "%s: reusing GMSL link %u for %s\n",
+					 __func__, g_ctx->serdes_csi_link,
+					 dev_name(g_ctx->s_dev));
+				priv->sources[i].g_ctx = g_ctx;
+				priv->sources[i].st_enabled = false;
+				goto done;
+			}
+
+			dev_err(dev,
+				"%s: serdes csi link %u is already registered with incompatible source settings\n",
+				__func__, g_ctx->serdes_csi_link);
+			err = -EINVAL;
+			goto done;
+		}
+		if (g_ctx->num_csi_lanes != old_ctx->num_csi_lanes) {
 			dev_err(dev,
 				"%s: csi num lanes mismatch\n", __func__);
 			err = -EINVAL;
-			goto error;
+			goto done;
 		}
+	}
+
+	if (priv->num_src >= priv->max_src ||
+	    priv->num_src >= MAX96724_MAX_SOURCES) {
+		dev_err(dev,
+			"%s: MAX96724 inputs size exhausted\n", __func__);
+		err = -ENOMEM;
+		goto done;
 	}
 
 	priv->sources[priv->num_src].g_ctx = g_ctx;
@@ -1233,7 +1265,7 @@ int max96724_sdev_register(struct device *dev, struct gmsl_link_ctx *g_ctx)
 
 	priv->num_src++;
 
-error:
+done:
 	mutex_unlock(&priv->lock);
 	return err;
 }
@@ -1254,27 +1286,30 @@ int max96724_sdev_unregister(struct device *dev, struct device *s_dev)
 	mutex_lock(&priv->lock);
 
 	if (priv->num_src == 0) {
-		dev_err(dev, "%s: no source found\n", __func__);
-		err = -ENODATA;
-		goto error;
+		dev_dbg(dev, "%s: no source registered\n", __func__);
+		goto done;
 	}
 
 	for (i = 0; i < priv->num_src; i++) {
-		if (s_dev == priv->sources[i].g_ctx->s_dev) {
-			priv->sources[i].g_ctx = NULL;
+		if (priv->sources[i].g_ctx &&
+		    s_dev == priv->sources[i].g_ctx->s_dev)
 			break;
-		}
 	}
 
 	if (i == priv->num_src) {
-		dev_err(dev,
-			"%s: requested device not found\n", __func__);
-		err = -EINVAL;
-		goto error;
+		dev_dbg(dev,
+			"%s: requested device is not registered\n", __func__);
+		goto done;
 	}
-	priv->num_src--;
 
-error:
+	for (; i + 1 < priv->num_src; i++)
+		priv->sources[i] = priv->sources[i + 1];
+
+	priv->num_src--;
+	priv->sources[priv->num_src].g_ctx = NULL;
+	priv->sources[priv->num_src].st_enabled = false;
+
+done:
 	mutex_unlock(&priv->lock);
 	return err;
 }
