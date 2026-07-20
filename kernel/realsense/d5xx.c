@@ -5393,7 +5393,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		}
 
 		if (streaming != expected_streaming_state) {
-			dev_warn(&state->client->dev, "stream %d status not as expected (%d != %d), retry %d, %dms\n",
+			dev_dbg(&state->client->dev, "stream %d status not as expected (%d != %d), retry %d, %dms\n",
 				stream_id, streaming, expected_streaming_state, i, jiffies_to_msecs(jiffies - ts));
 			continue;
 		}
