@@ -52,7 +52,7 @@ if [ "${JETPACK_VERSION}" = "5.0.2" ] || [ "${JETPACK_VERSION}" = "5.1.2" ]; the
 fi
 
 echo "Copying kernel files for JetPack ${JETPACK_VERSION}..."
-if [ "${JETPACK_VERSION}" = "5.0.2" ]; then
+if [ "${JETPACK_VERSION}" = "5.0.2" ] || [ "${JETPACK_VERSION}" = "5.1.2" ]; then
     echo "sudo cp tegra194-p2888-0001-p2822-0000.dtb /boot/${FOLDER}/"
           sudo cp tegra194-p2888-0001-p2822-0000.dtb /boot/${FOLDER}/
     echo "sudo cp d4xx.ko /lib/modules/$(uname -r)/updates/"
