@@ -1,5 +1,5 @@
 diff --git a/drivers/media/platform/tegra/camera/csi/csi.c b/drivers/media/platform/tegra/camera/csi/csi.c
-index 7e3dfb3a..fea546c5 100644
+index 7e3dfb3a..b3023a15 100644
 --- a/drivers/media/platform/tegra/camera/csi/csi.c
 +++ b/drivers/media/platform/tegra/camera/csi/csi.c
 @@ -7,7 +7,9 @@
@@ -21,7 +21,7 @@ index 7e3dfb3a..fea546c5 100644
  
  #include <media/media-entity.h>
  #include <media/v4l2-async.h>
-@@ -155,6 +159,191 @@ u64 read_mipi_clk_from_dt(struct tegra_csi_channel *chan)
+@@ -155,6 +159,390 @@ u64 read_mipi_clk_from_dt(struct tegra_csi_channel *chan)
  	return mipi_clk;
  }
  
@@ -86,6 +86,24 @@ index 7e3dfb3a..fea546c5 100644
 +	out[4] = '\0';
 +}
 +
++static struct tegra_channel *
++tegra_csi_debugfs_vi_channel(struct tegra_csi_channel *chan)
++{
++	return v4l2_get_subdev_hostdata(&chan->subdev);
++}
++
++static const char *
++tegra_csi_debugfs_source_name(struct tegra_csi_channel *chan,
++			      struct tegra_channel *vi_chan)
++{
++	if (vi_chan && vi_chan->subdev_on_csi)
++		return vi_chan->subdev_on_csi->name;
++	if (chan->sensor_sd)
++		return chan->sensor_sd->name;
++
++	return "unbound";
++}
++
 +static void tegra_csi_debugfs_mode_show(struct seq_file *s,
 +					struct camera_common_data *s_data)
 +{
@@ -97,20 +115,22 @@ index 7e3dfb3a..fea546c5 100644
 +	char pixel_fourcc[5];
 +
 +	if (!s_data) {
-+		seq_puts(s, "  sensor: unavailable\n");
++		seq_puts(s,
++			 "  sensor_mode: unavailable (camera_common_data not attached)\n");
 +		return;
 +	}
 +
 +	idx = s_data->mode_prop_idx;
 +	num_modes = s_data->sensor_props.num_modes;
 +	seq_printf(s,
-+		   "  sensor: csi_port=%d (%s) numlanes=%d mode_prop_idx=%d num_modes=%u\n",
++		   "  sensor_config: csi_port=%d (%s) numlanes=%d mode_prop_idx=%d num_modes=%u\n",
 +		   s_data->csi_port,
 +		   tegra_csi_debugfs_port_name(s_data->csi_port),
 +		   s_data->numlanes, idx, num_modes);
 +
-+	if (idx < 0 || idx >= (int)num_modes) {
-+		seq_puts(s, "  mode: unavailable\n");
++	if (!s_data->sensor_props.sensor_modes ||
++	    idx < 0 || idx >= (int)num_modes) {
++		seq_puts(s, "  sensor_mode: unavailable\n");
 +		return;
 +	}
 +
@@ -120,7 +140,7 @@ index 7e3dfb3a..fea546c5 100644
 +	tegra_csi_debugfs_fourcc(img->pixel_format, pixel_fourcc);
 +
 +	seq_printf(s,
-+		   "  mode: width=%u height=%u line_length=%u embedded_metadata_height=%u pixel_format=0x%x (%s)\n",
++		   "  sensor_mode: width=%u height=%u line_length=%u embedded_metadata_height=%u pixel_format=0x%x (%s)\n",
 +		   img->width, img->height, img->line_length,
 +		   img->embedded_metadata_height, img->pixel_format,
 +		   pixel_fourcc);
@@ -137,39 +157,209 @@ index 7e3dfb3a..fea546c5 100644
 +		   sig->deskew_periodic_enable);
 +}
 +
-+static int tegra_csi_debugfs_summary_show(struct seq_file *s, void *unused)
++static int tegra_csi_debugfs_status_show(struct seq_file *s, void *unused)
 +{
 +	struct tegra_csi_device *csi = s->private;
 +	struct tegra_csi_channel *chan;
-+	int i;
 +
 +	if (!csi)
 +		return 0;
 +
 +	seq_printf(s, "device: %s\n", dev_name(csi->dev));
 +	seq_printf(s, "channels: %d\n", csi->num_channels);
-+	seq_printf(s, "power_ref: %d\n", atomic_read(&csi->power_ref));
-+	seq_printf(s, "tpg_active: %d\n", csi->tpg_active);
-+	seq_printf(s, "sensor_active: %d\n", csi->sensor_active);
++	seq_printf(s,
++		   "controller: power_ref=%d sensor_active=%d tpg_active=%d\n",
++		   atomic_read(&csi->power_ref), csi->sensor_active,
++		   csi->tpg_active);
 +
 +	list_for_each_entry(chan, &csi->csi_chans, list) {
++		struct tegra_channel *vi_chan =
++			tegra_csi_debugfs_vi_channel(chan);
++		const char *source =
++			tegra_csi_debugfs_source_name(chan, vi_chan);
++
 +		seq_printf(s,
-+			   "\nchannel%u: streaming=%d pg_mode=%u numports=%u numlanes=%u of_node=%pOF\n",
++			   "\nchannel%u: nvcsi_streaming=%d vi_streaming=%d pg_mode=%u bound=%s source=\"%s\"\n",
 +			   chan->id, atomic_read(&chan->is_streaming),
-+			   chan->pg_mode, chan->numports, chan->numlanes,
-+			   chan->of_node);
++			   vi_chan ? atomic_read(&vi_chan->is_streaming) : -1,
++			   chan->pg_mode,
++			   vi_chan && vi_chan->subdev_on_csi ? "yes" : "no",
++			   source);
++		seq_printf(s,
++			   "  topology: numports=%u numlanes=%u of_node=%pOF\n",
++			   chan->numports, chan->numlanes, chan->of_node);
++
++		if (!vi_chan) {
++			seq_puts(s, "  capture: unavailable (VI channel not bound)\n");
++			continue;
++		}
++
++		seq_printf(s,
++			   "  capture: video=%s sequence=%u descriptor_sequence=%u queued_requests=%u queue_error=%u\n",
++			   vi_chan->video ?
++				video_device_node_name(vi_chan->video) :
++				"unregistered",
++			   vi_chan->sequence, vi_chan->capture_descr_sequence,
++			   vi_chan->capture_reqs_enqueued, vi_chan->queue_error);
++		seq_printf(s,
++			   "  metadata_queue: registered=%s queued_buffers=%u\n",
++			   vi_chan->embedded.video ? "yes" : "no",
++			   vi_chan->embedded.num_buffers);
++	}
++
++	return 0;
++}
++
++static int tegra_csi_debugfs_routes_show(struct seq_file *s, void *unused)
++{
++	struct tegra_csi_device *csi = s->private;
++	struct tegra_csi_channel *chan;
++
++	if (!csi)
++		return 0;
++
++	seq_printf(s, "device: %s\n", dev_name(csi->dev));
++	seq_puts(s, "route fields marked runtime come from the bound VI channel\n");
++
++	list_for_each_entry(chan, &csi->csi_chans, list) {
++		struct tegra_channel *vi_chan =
++			tegra_csi_debugfs_vi_channel(chan);
++		struct device_node *endpoint = NULL;
++		struct device_node *remote = NULL;
++		u32 dt_port = 0;
++		u32 dt_vc = 0;
++		u32 dt_lanes = 0;
++		bool have_port = false;
++		bool have_vc = false;
++		bool have_lanes = false;
++		int i;
++
++		if (chan->of_node)
++			endpoint = of_graph_get_next_endpoint(chan->of_node, NULL);
++		if (endpoint) {
++			have_port = !of_property_read_u32(endpoint, "port-index",
++							  &dt_port);
++			have_vc = !of_property_read_u32(endpoint, "vc-id",
++							&dt_vc);
++			have_lanes = !of_property_read_u32(endpoint, "bus-width",
++							   &dt_lanes);
++			remote = of_graph_get_remote_endpoint(endpoint);
++		}
++
++		seq_printf(s,
++			   "\nchannel%u: source=\"%s\" endpoint=%pOF remote=%pOF\n",
++			   chan->id,
++			   tegra_csi_debugfs_source_name(chan, vi_chan),
++			   endpoint, remote);
++		seq_printf(s, "  dt: csi_port=");
++		if (have_port)
++			seq_printf(s, "%u (%s)", dt_port,
++				   tegra_csi_debugfs_port_name(dt_port));
++		else
++			seq_puts(s, "unavailable");
++		seq_puts(s, " vc=");
++		if (have_vc)
++			seq_printf(s, "%u", dt_vc);
++		else
++			seq_puts(s, "unavailable");
++		seq_puts(s, " lanes=");
++		if (have_lanes)
++			seq_printf(s, "%u\n", dt_lanes);
++		else
++			seq_puts(s, "unavailable\n");
++
++		if (!vi_chan) {
++			seq_puts(s, "  runtime: unavailable (VI channel not bound)\n");
++			goto put_nodes;
++		}
 +
 +		for (i = 0; i < chan->numports; i++) {
 +			struct tegra_csi_port *port = &chan->ports[i];
 +
 +			seq_printf(s,
-+				   "  port%d: csi_port=%u (%s) stream_id=%u vc=%u lanes=%u format=%ux%u code=0x%x (%s)\n",
++				   "  runtime_port%d: csi_port=%u (%s) stream_id=",
 +				   i, port->csi_port,
-+				   tegra_csi_debugfs_port_name(port->csi_port),
-+				   port->stream_id, port->virtual_channel_id,
-+				   port->lanes, port->format.width,
-+				   port->format.height, port->format.code,
-+				   tegra_csi_debugfs_mbus_code_name(port->format.code));
++				   tegra_csi_debugfs_port_name(port->csi_port));
++			if (i < vi_chan->valid_ports)
++				seq_printf(s, "%u", vi_chan->port[i]);
++			else
++				seq_puts(s, "unavailable");
++			seq_printf(s, " vc=%u lanes=%u\n",
++				   vi_chan->virtual_channel, port->lanes);
++		}
++
++put_nodes:
++		of_node_put(remote);
++		of_node_put(endpoint);
++	}
++
++	return 0;
++}
++
++static int tegra_csi_debugfs_formats_show(struct seq_file *s, void *unused)
++{
++	struct tegra_csi_device *csi = s->private;
++	struct tegra_csi_channel *chan;
++
++	if (!csi)
++		return 0;
++
++	seq_printf(s, "device: %s\n", dev_name(csi->dev));
++	seq_puts(s,
++		 "nvcsi_format_cache is a driver default for sensor channels, not a negotiated format\n");
++
++	list_for_each_entry(chan, &csi->csi_chans, list) {
++		struct tegra_channel *vi_chan =
++			tegra_csi_debugfs_vi_channel(chan);
++		int i;
++
++		seq_printf(s, "\nchannel%u: source=\"%s\"\n", chan->id,
++			   tegra_csi_debugfs_source_name(chan, vi_chan));
++
++		if (vi_chan) {
++			char video_fourcc[5];
++			char metadata_fourcc[5];
++			u32 metadata_format = vi_chan->embedded.dataformat;
++
++			tegra_csi_debugfs_fourcc(vi_chan->format.pixelformat,
++						 video_fourcc);
++			tegra_csi_debugfs_fourcc(metadata_format,
++						 metadata_fourcc);
++			seq_printf(s,
++				   "  vi_format: state=%s width=%u height=%u pixelformat=0x%x (%s) bytesperline=%u sizeimage=%u\n",
++				   atomic_read(&vi_chan->is_streaming) ?
++					"active" : "configured",
++				   vi_chan->format.width, vi_chan->format.height,
++				   vi_chan->format.pixelformat, video_fourcc,
++				   vi_chan->format.bytesperline,
++				   vi_chan->format.sizeimage);
++			seq_printf(s,
++				   "  metadata: node=%s dataformat=0x%x (%s) capacity=%u embedded_width=%u embedded_height=%u\n",
++				   vi_chan->embedded.video ?
++					video_device_node_name(
++						vi_chan->embedded.video) :
++					"unregistered",
++				   metadata_format, metadata_fourcc,
++				   vi_chan->embedded.ops ?
++					vi_chan->embedded.ops->max_buffer_size : 0,
++				   vi_chan->embedded_data_width,
++				   vi_chan->embedded_data_height);
++		} else {
++			seq_puts(s,
++				 "  vi_format: unavailable (VI channel not bound)\n");
++		}
++
++		for (i = 0; i < chan->numports; i++) {
++			struct tegra_csi_port *port = &chan->ports[i];
++
++			seq_printf(s,
++				   "  nvcsi_format_cache%d: state=%s width=%u height=%u code=0x%x (%s)\n",
++				   i, chan->pg_mode ? "tpg-active" :
++					"driver-default",
++				   port->format.width, port->format.height,
++				   port->format.code,
++				   tegra_csi_debugfs_mbus_code_name(
++						port->format.code));
 +		}
 +
 +		tegra_csi_debugfs_mode_show(s, chan->s_data);
@@ -178,7 +368,9 @@ index 7e3dfb3a..fea546c5 100644
 +	return 0;
 +}
 +
-+DEFINE_SHOW_ATTRIBUTE(tegra_csi_debugfs_summary);
++DEFINE_SHOW_ATTRIBUTE(tegra_csi_debugfs_status);
++DEFINE_SHOW_ATTRIBUTE(tegra_csi_debugfs_routes);
++DEFINE_SHOW_ATTRIBUTE(tegra_csi_debugfs_formats);
 +
 +static void tegra_csi_debugfs_init(struct tegra_csi_device *csi)
 +{
@@ -191,8 +383,15 @@ index 7e3dfb3a..fea546c5 100644
 +		return;
 +	}
 +
++	/* Keep summary as a compatibility entry for existing debug workflows. */
 +	debugfs_create_file("summary", 0444, csi->debugdir, csi,
-+			    &tegra_csi_debugfs_summary_fops);
++			    &tegra_csi_debugfs_status_fops);
++	debugfs_create_file("status", 0444, csi->debugdir, csi,
++			    &tegra_csi_debugfs_status_fops);
++	debugfs_create_file("routes", 0444, csi->debugdir, csi,
++			    &tegra_csi_debugfs_routes_fops);
++	debugfs_create_file("formats", 0444, csi->debugdir, csi,
++			    &tegra_csi_debugfs_formats_fops);
 +}
 +
 +static void tegra_csi_debugfs_remove(struct tegra_csi_device *csi)
@@ -213,7 +412,7 @@ index 7e3dfb3a..fea546c5 100644
  void set_csi_portinfo(struct tegra_csi_device *csi,
  	unsigned int port, unsigned int numlanes)
  {
-@@ -1154,6 +1343,8 @@ int tegra_csi_media_controller_init(struct tegra_csi_device *csi,
+@@ -1154,6 +1542,8 @@ int tegra_csi_media_controller_init(struct tegra_csi_device *csi,
  	if (ret < 0)
  		dev_err(&pdev->dev, "Failed to init csi property,clks\n");
  
@@ -222,7 +421,7 @@ index 7e3dfb3a..fea546c5 100644
  	return 0;
  }
  EXPORT_SYMBOL(tegra_csi_media_controller_init);
-@@ -1163,6 +1354,8 @@ int tegra_csi_media_controller_remove(struct tegra_csi_device *csi)
+@@ -1163,6 +1553,8 @@ int tegra_csi_media_controller_remove(struct tegra_csi_device *csi)
  	struct tegra_csi_channel *chan;
  	struct v4l2_subdev *sd;
  
