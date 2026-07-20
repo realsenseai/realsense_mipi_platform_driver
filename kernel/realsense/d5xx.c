@@ -531,6 +531,8 @@ struct d5x {
 	struct i2c_client *dser_i2c;
 	const struct dser_interface *dser_ops;
 	bool serdes_primary; /* true for the instance that ran SERDES setup */
+	bool ser_control_setup;
+	bool dser_control_setup;
 #endif
 	struct d5x_dev *d5x_dev; /* D5xx device state */
 };
@@ -4241,6 +4243,7 @@ static int d5x_gmsl_serdes_setup(struct d5x *state)
 		dev_err(dev, "gmsl serializer setup failed\n");
 		goto error;
 	}
+	state->ser_control_setup = true;
 
 	/*
 	 * Configure serializer registers (PIPE_EN,
@@ -4261,6 +4264,8 @@ static int d5x_gmsl_serdes_setup(struct d5x *state)
 	if (des_err) {
 		dev_err(dev, "gmsl deserializer setup failed\n");
 		err = des_err;
+	} else {
+		state->dser_control_setup = true;
 	}
 
 error:
@@ -4268,10 +4273,11 @@ error:
 	return err;
 }
 
-static void d5x_serdes_cleanup(struct d5x *state, bool reset_control)
+static void d5x_serdes_cleanup(struct d5x *state)
 {
 	int ret;
 	bool do_cleanup = false;
+	bool power_off = false;
 	struct device *dev;
 
 	if (!state || !state->serdes_primary)
@@ -4290,18 +4296,23 @@ static void d5x_serdes_cleanup(struct d5x *state, bool reset_control)
 	}
 
 	if (do_cleanup) {
-		if (reset_control && state->ser_dev) {
+		if (state->ser_control_setup && state->ser_dev) {
+			power_off = true;
 			ret = max96717_reset_control(state->ser_dev);
 			if (ret)
 				dev_warn(dev, "failed in 96717 reset control\n");
+			state->ser_control_setup = false;
 		}
 
-		if (reset_control && state->dser_ops && state->dser_dev) {
+		if (state->dser_control_setup &&
+		    state->dser_ops && state->dser_dev) {
+			power_off = true;
 			ret = state->dser_ops->reset_control(state->dser_dev,
 							    state->g_ctx.s_dev);
 			if (ret)
 				dev_warn(dev, "failed in %s reset control\n",
 					 state->dser_ops->name);
+			state->dser_control_setup = false;
 		}
 
 		if (state->ser_dev) {
@@ -4319,7 +4330,7 @@ static void d5x_serdes_cleanup(struct d5x *state, bool reset_control)
 					 state->dser_ops->name);
 		}
 
-		if (reset_control && state->dser_ops && state->dser_dev)
+		if (power_off && state->dser_ops && state->dser_dev)
 			state->dser_ops->power_off(state->dser_dev);
 	}
 	mutex_unlock(&serdes_lock__);
@@ -4331,7 +4342,6 @@ static int d5x_serdes_setup(struct d5x *state)
 {
 	int ret = 0;
 	struct i2c_client *c = state->client;
-	bool control_setup_done = false;
 
 	ret = d5x_board_setup(state);
 	if (ret) {
@@ -4369,8 +4379,6 @@ static int d5x_serdes_setup(struct d5x *state)
 		dev_err(&c->dev, "%s gmsl serdes setup failed\n", __func__);
 		goto serdes_setup_end;
 	}
-	control_setup_done = true;
-
 	/*
 	 * max96717_init_settings is now called inside d5x_gmsl_serdes_setup,
 	 * after setup_control(ser) but before setup_control(dser) to avoid
@@ -4427,7 +4435,7 @@ static int d5x_serdes_setup(struct d5x *state)
 
 serdes_setup_end:
 	if (ret)
-		d5x_serdes_cleanup(state, control_setup_done);
+		d5x_serdes_cleanup(state);
 
 	return ret;
 }
@@ -6724,9 +6732,6 @@ static int d5x_probe(struct i2c_client *c
 	uint32_t override_addr = 0;
 	struct device_node *mode0_node;
 #endif
-#ifdef CONFIG_VIDEO_D5XX_SERDES
-	bool serdes_setup_done = false;
-#endif
 	if (!state)
 		return -ENOMEM;
 
@@ -6771,7 +6776,6 @@ static int d5x_probe(struct i2c_client *c
 	ret = d5x_serdes_setup(state);
 	if (ret < 0)
 		goto e_regulator;
-	serdes_setup_done = true;
 	state->reset_ref_dser = atomic_read(dser_get_reset_gen(state));
 #else
 	d5x_init_global_slots_once();
@@ -6925,7 +6929,7 @@ e_chardev:
 		d5x_chrdev_remove(state);
 e_regulator:
 #ifdef CONFIG_VIDEO_D5XX_SERDES
-	d5x_serdes_cleanup(state, serdes_setup_done);
+	d5x_serdes_cleanup(state);
 #endif
 	if (state->vcc)
 		regulator_disable(state->vcc);
@@ -6952,7 +6956,7 @@ static void d5x_remove(struct i2c_client *c)
 	}
 
 #ifdef CONFIG_VIDEO_D5XX_SERDES
-	d5x_serdes_cleanup(state, true);
+	d5x_serdes_cleanup(state);
 #ifndef CONFIG_OF
 	if (state->ser_i2c)
 		i2c_unregister_device(state->ser_i2c);
