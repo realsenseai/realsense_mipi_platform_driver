@@ -21,7 +21,7 @@ index 7e3dfb3a..b3023a15 100644
  
  #include <media/media-entity.h>
  #include <media/v4l2-async.h>
-@@ -155,6 +159,390 @@ u64 read_mipi_clk_from_dt(struct tegra_csi_channel *chan)
+@@ -155,6 +159,394 @@ u64 read_mipi_clk_from_dt(struct tegra_csi_channel *chan)
  	return mipi_clk;
  }
  
@@ -234,20 +234,24 @@ index 7e3dfb3a..b3023a15 100644
 +		bool have_lanes = false;
 +		int i;
 +
-+		if (chan->of_node)
-+			endpoint = of_graph_get_next_endpoint(chan->of_node, NULL);
-+		if (endpoint) {
-+			have_port = !of_property_read_u32(endpoint, "port-index",
-+							  &dt_port);
-+			have_vc = !of_property_read_u32(endpoint, "vc-id",
-+							&dt_vc);
-+			have_lanes = !of_property_read_u32(endpoint, "bus-width",
-+							   &dt_lanes);
-+			remote = of_graph_get_remote_endpoint(endpoint);
++		if (chan->of_node) {
++			for_each_endpoint_of_node(chan->of_node, endpoint) {
++				have_port = !of_property_read_u32(
++					endpoint, "port-index", &dt_port);
++				have_vc = !of_property_read_u32(
++					endpoint, "vc-id", &dt_vc);
++				have_lanes = !of_property_read_u32(
++					endpoint, "bus-width", &dt_lanes);
++				if (!have_port && !have_vc && !have_lanes)
++					continue;
++
++				remote = of_graph_get_remote_endpoint(endpoint);
++				break;
++			}
 +		}
 +
 +		seq_printf(s,
-+			   "\nchannel%u: source=\"%s\" endpoint=%pOF remote=%pOF\n",
++			   "\nchannel%u: source=\"%s\" input_endpoint=%pOF remote=%pOF\n",
 +			   chan->id,
 +			   tegra_csi_debugfs_source_name(chan, vi_chan),
 +			   endpoint, remote);
