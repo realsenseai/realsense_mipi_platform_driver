@@ -1,25 +1,21 @@
 diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-index 7d07ccd7..c64dcc38 100644
+index 845d0cedf..4784b949e 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
 +++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-@@ -582,7 +641,18 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
+@@ -717,7 +717,15 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
+ #else
  	trace_tegra_channel_capture_frame("sof", &ts);
+ #endif
 -	vb->vb2_buf.timestamp = descr->status.sof_timestamp;
 +	/* RSDSO-20101: stamp at frame-done with CLOCK_MONOTONIC so
 +	 * librealsense BACKEND_TIMESTAMP (= monotonic_to_realtime(buf.timestamp))
 +	 * is by construction <= TIME_OF_ARRIVAL (= system_clock::now() at callback).
 +	 * The buffer queue flag advertises V4L2_BUF_FLAG_TSTAMP_SRC_EOF, which
-+	 * now matches the value's semantics. Hardware SOF time remains
++	 * now matches the value semantics. Hardware SOF time remains
 +	 * available to userspace via the per-frame FW hwTimestamp in the MIPI
 +	 * metadata payload (-> RS2_FRAME_METADATA_FRAME_TIMESTAMP).
 +	 */
 +	vb->vb2_buf.timestamp = ktime_get_ns();
  
--	if (frame_err)
-+	/* TODO: Remove Y12I frame_err workaround once Y12I is fixed
-+	 * Currently there is a black-bar at the bottom of the frame.
-+	 */
-+	if (frame_err && chan->fmtinfo->fourcc != V4L2_PIX_FMT_Y12I)
- 		buf->vb2_state = VB2_BUF_STATE_ERROR;
- 	else
- 		buf->vb2_state = VB2_BUF_STATE_DONE;
+ 	if (frame_err)
+ #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 4, 0)
