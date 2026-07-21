@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yogev Modlin <yogev.modlin@realsenseai.com>
+Date: Wed, 2 Jul 2026 15:30:00 +0300
+Subject: [PATCH] vi: channel: verify s/g callbacks
+
+Port of 5.1.2/0003-vi-channel-verify-s-g-callbacks.patch to the 5.1.6
+patch set, where it was lost when the directory was created from 5.1.2
+(0001 absorbed the wrapped v4l2_subdev_call() but dropped the direct-op
+fallback).
+
+Without the fallback, VIDIOC_G_PARM always fails with EINVAL on kernel
+5.10: the on-stack v4l2_subdev_frame_interval is passed to
+v4l2_subdev_call() with an uninitialized pad field, and the subdev-call
+wrapper's check_pad() rejects it before the sensor op is ever invoked.
+librealsense cannot start any stream on JP 5.1.6 as a result
+(rs2_pipeline_start() -> "xioctl(VIDIOC_G_PARM) failed").
+
+Signed-off-by: Yogev Modlin <yogev.modlin@realsenseai.com>
+---
+ drivers/media/platform/tegra/camera/vi/channel.c | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
+index e01ef8665..10dc73681 100644
+--- a/drivers/media/platform/tegra/camera/vi/channel.c
++++ b/drivers/media/platform/tegra/camera/vi/channel.c
+@@ -2263,7 +2263,10 @@ __tegra_channel_get_parm(struct tegra_channel *chan,
+ 
+ 	/* dmipx: fixing G_PARM EINVAL error */
+ 	ret = v4l2_subdev_call(sd, video, g_frame_interval, &interval);
+-
++	if (ret) {
++		if (sd && sd->ops->video && sd->ops->video->g_frame_interval)
++			ret = sd->ops->video->g_frame_interval(sd, &interval);
++	}
+ 	a->parm.capture.timeperframe.numerator = interval.interval.numerator;
+ 	a->parm.capture.timeperframe.denominator = interval.interval.denominator;
+ 
+@@ -2293,6 +2296,11 @@ __tegra_channel_set_parm(struct tegra_channel *chan,
+ 	interval.interval.denominator = a->parm.capture.timeperframe.denominator;
+ 
+ 	ret = v4l2_subdev_call(sd, video, s_frame_interval, &interval);
++	if (ret) {
++		if (sd && sd->ops->video && sd->ops->video->s_frame_interval)
++			ret = sd->ops->video->s_frame_interval(sd, &interval);
++	}
++
+ 	if (ret == -ENOIOCTLCMD)
+ 			return -ENOTTY;
+ 
+-- 
+2.34.1
