@@ -9,7 +9,7 @@ Subject: [PATCH] d4xx: enablement of old driver on kernel 4.9
 Signed-off-by: Nael Masalha <nael.masalha@intel.com>
 ---
  drivers/media/i2c/Kconfig                     |   10 +
- drivers/media/i2c/Makefile                    |    1 +
+ drivers/media/i2c/Makefile                    |    2 +
  drivers/media/i2c/d4xx.c                      | 3085 +++++++++++++++++
  .../platform/tegra/camera/sensor_common.c     |    4 +
  .../media/platform/tegra/camera/vi/channel.c  |   61 +-
@@ -3300,4 +3300,3 @@ index 788cf77dc..421c22491 100644
  /* Supported CSI to VI Data Formats */
 -- 
 2.17.1
-

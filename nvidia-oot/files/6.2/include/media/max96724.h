@@ -1,19 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * max96724.h - MAX96724 GMSL2 Quad Deserializer driver (Tunnel Mode)
  *
  * Copyright (c) 2026, RealSense, Inc.  All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 /**
@@ -157,8 +146,7 @@ void max96724_power_off(struct device *dev);
 /**
  * @brief  Applies initial register settings for the deserializer.
  *
- * Configures default pipe mappings, tunnel mode, and CSI output for
- * the D5xx/SC1.2 use case.
+ * Configures default pipe mappings, tunnel mode, and CSI output.
  *
  * @param  [in]  dev          The deserializer device handle.
  *
@@ -191,8 +179,8 @@ int max96724_disable_fsync(struct device *dev);
 /**
  * @brief  Maps deserializer pipe ID to serializer pipe ID.
  *
- * In tunnel mode with MAX96717, all data flows through a single pipe
- * per camera, so the mapping is 1:1.
+ * In tunnel mode with MAX96717, each source uses one pipe, so the mapping
+ * is 1:1.
  *
  * @param  [in]  dev             The deserializer device handle.
  * @param  [in]  dser_pipe_id    Deserializer pipe ID.

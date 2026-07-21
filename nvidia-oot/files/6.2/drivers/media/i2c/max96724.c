@@ -1,36 +1,25 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * max96724.c - MAX96724 GMSL2 Quad Deserializer driver (Tunnel Mode)
  *
  * Copyright (c) 2026, RealSense, Inc.  All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 
-#include <linux/gpio.h>
+#include <linux/gpio/consumer.h>
 #include <linux/types.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
-#include <linux/of_gpio.h>
 #include <linux/version.h>
 #include <media/camera_common.h>
-#include <linux/module.h>
 #include <media/max96724.h>
 
-/* ================================================================
+/*
+ * ================================================================
  * Register Addresses
- * ================================================================ */
+ * ================================================================
+ */
 
 /* --- Device ID / Configuration --- */
 
@@ -181,12 +170,10 @@
 /*
  *   MIPI output lane polarity (P/N swap) registers.
  *   0x08A5 = PHY0/PHY1 lane polarity, 0x08A6 = PHY2/PHY3 lane polarity.
- *   The FangZhu FG24-4CH PCB swaps the differential P/N pairs on the
- *   MAX96724 CSI output, so the deserializer must invert lane polarity
+ *   Polarity is board-routing dependent and is configured from device tree.
  */
 #define MAX96724_CSI_PHY_POL0_ADDR	0x08A5
 #define MAX96724_CSI_PHY_POL1_ADDR	0x08A6
-#define MAX96724_CSI_PHY_POL_SWAP	0x3F
 
 /* Pipe-to-controller mapping */
 #define MAX96724_MIPI_CTRL_SEL_ADDR	0x08CA
@@ -267,9 +254,11 @@
 #define MAX96724_PIPE2_TUN_DEST_ADDR	0x09B9
 #define MAX96724_PIPE3_TUN_DEST_ADDR	0x09F9
 
-/* ================================================================
+/*
+ * ================================================================
  * Register Values
- * ================================================================ */
+ * ================================================================
+ */
 
 /* Soft reset value (write to 0x000D) */
 #define MAX96724_SOFT_RESET		0x40
@@ -304,7 +293,7 @@
 /*
  *   VIDEO_RX0: DIS_PKT_DET=1 (bit0) required for tunnel mode.
  *   Without it, DES rejects tunnel data as invalid GMSL2 video packets.
- *   SEQ_MISS_EN=1 (bit4), LINE_CRC_EN=1 (bit1).  XML value: 0x33.
+ *   SEQ_MISS_EN=1 (bit4), LINE_CRC_EN=1 (bit1).
  */
 #define MAX96724_VID_RX0_CFG_VAL	0x33
 #define MAX96724_VID_RX6_CFG_VAL	0x0A
@@ -318,7 +307,7 @@
  *   bit[0] = TUN_EN = 1
  *   bits[6:5] = DESKEW_TUN = 1, periodic deskew follows SER.
  *   This keeps the MAX96724 D-PHY output deskew cadence aligned with
- *   the tunneled CSI-2 source when HKR->SER runs at >= 1.5Gbps/lane.
+ *   the tunneled CSI-2 source when the input runs at >= 1.5Gbps/lane.
  */
 #define MAX96724_TUN_EN			0x21
 
@@ -338,7 +327,7 @@
 /*
  *   0x84 = 2x4 mode (bit2) + bit[7] "force ALL MIPI clocks running".  The bit[7]
  *   clock-force is the key part: it keeps the D-PHY clock lane in continuous HS
- *   mode so the Orin NVCSI/CIL can lock.
+ *   mode so the receiving CSI controller can lock.
  */
 #define MAX96724_CSI_OUT_EN_VAL		0x84  /* 2x4 + bit[7] force all MIPI clocks running */
 
@@ -419,9 +408,11 @@
 /* Three mappings to controller 1 */
 #define MAX96724_MAP3_CTRL1		0x15
 
-/* ================================================================
+/*
+ * ================================================================
  * Data Structures
- * ================================================================ */
+ * ================================================================
+ */
 
 /* Quad GMSL: up to 4 sources */
 #define MAX96724_MAX_SOURCES		4
@@ -441,7 +432,7 @@
 #define MAX96724_CSI_MODE_2X4		0x08  /* enum tag for the 4-lane Port A (Ctrl1) path */
 
 /* Lane map presets */
-#define MAX96724_LANE_MAP1_2X4		0xE4  /* SC20190112 subset: PHY0 data + PHY1 clock */
+#define MAX96724_LANE_MAP1_2X4		0xE4  /* PHY0 data + PHY1 clock */
 #define MAX96724_LANE_MAP2_2X4		0x44  /* keep unused PHY2/3 straight in 0x08 mode */
 
 struct max96724_source_ctx {
@@ -477,13 +468,17 @@ struct max96724 {
 	u8 csi_mode;
 	u8 lane_mp1;
 	u8 lane_mp2;
-	int reset_gpio;
+	struct gpio_desc *reset_gpio;
 	int pw_ref;
 	struct regulator *vdd_cam_1v2;
 	u8 link_speed;  /* DT-configurable: 3 or 6 Gbps */
 	bool pixel_mode;
-	bool poc_enabled; /* FG24-4CH board POC/IO enable applied once */
+	bool enable_poc_control;
+	bool poc_enabled;
+	bool has_csi_phy_polarity;
+	u8 csi_phy_polarity[2];
 	bool datapath_retriggered;
+	bool stream_batch_started;
 	u8 retriggered_pipe_mask;
 };
 
@@ -492,9 +487,11 @@ struct reg_pair {
 	u8 val;
 };
 
-/* ================================================================
+/*
+ * ================================================================
  * Low-level I2C
- * ================================================================ */
+ * ================================================================
+ */
 
 static int max96724_write_reg(struct device *dev, u16 addr, u8 val)
 {
@@ -613,7 +610,7 @@ void max96724_log_control_status(struct device *dev)
 		"GMSL I2C bridge A: p0 i2c0=0x%02x i2c1=0x%02x p1 i2c0=0x%02x i2c1=0x%02x tx3=0x%02x rx0=0x%02x\n",
 		val[20], val[21], val[22], val[23], val[24], val[25]);
 }
-EXPORT_SYMBOL(max96724_log_control_status);
+EXPORT_SYMBOL_GPL(max96724_log_control_status);
 
 static int max96724_wait_link_lock(struct device *dev, u32 link)
 {
@@ -651,9 +648,11 @@ static int max96724_wait_link_lock(struct device *dev, u32 link)
 	return -ETIMEDOUT;
 }
 
-/* ================================================================
+/*
+ * ================================================================
  * Internal Helpers
- * ================================================================ */
+ * ================================================================
+ */
 
 static int max96724_get_sdev_idx(struct device *dev,
 				 struct device *s_dev, unsigned int *idx)
@@ -684,9 +683,9 @@ ret:
 static void max96724_pipes_reset(struct max96724 *priv)
 {
 	/*
-	 * Default pipe configuration for D5xx/SC1.2:
+	 * Default tunnel-mode pipe configuration:
 	 * In tunnel mode, DT types are not used for filtering
-	 * but we initialize them for d4xx framework compatibility.
+	 * but initialize them for sensor-driver framework compatibility.
 	 */
 	struct pipe_ctx pipe_defaults[] = {
 		{MAX96724_PIPE_X, GMSL_CSI_DT_RAW_12,
@@ -720,41 +719,28 @@ static void max96724_apply_porta_subset(struct device *dev,
 						 struct max96724 *priv)
 {
 	/*
-	 * [XML-verified 4-lane] D-PHY Port A output, 4 data lanes.
-	 * [FG24-4CH working-config verified] 0x04 = 2x4 mode so Port A
-	 * maps to PHY0+PHY1 (the lanes the FG24 PCB wires to Orin).  Output is
-	 * not yet enabled here (bit7 = 0); setup_streaming() asserts 0x84 after
-	 * the full pipeline is configured.
+	 * D-PHY Port A output, four data lanes. Output is not enabled here;
+	 * setup_streaming() enables it after the full pipeline is configured.
 	 */
 	max96724_write_reg(dev, MAX96724_CSI_OUT_CFG_ADDR,
 			   MAX96724_CSI_MODE_2X4_VAL);
 	/*
-	 * [FG24-4CH working dump] Enable ALL four CSI PHYs (0x08A2=0xF0).
-	 * The working FangZhu config powers every PHY; the MAX96724 DPLL
-	 * needs all PHYs powered to lock reliably (single-PHY enable was
-	 * observed to never lock the output clock). Port A data still
-	 * leaves on PHY0/1 in 2x4 mode; PHY2/3 are just powered.
+	 * Power all CSI PHYs to keep the DPLL locked reliably. Port A data
+	 * still leaves on PHY0/1 in 2x4 mode; PHY2/3 remain idle.
 	 */
 	max96724_write_reg(dev, MAX96724_CSI_PHY_EN_ADDR,
 			   MAX96724_CSI_PHY_EN_ALL);
 	max96724_write_reg(dev, MAX96724_CSI_LANE_MAP1_ADDR,
 			   priv->lane_mp1);
-	/*
-	 * [FG24-4CH working dump] LANE_MAP2 (PHY2/3) = 0xE4 straight mapping.
-	 * The working config writes 0x08A4=0xE4 (not the chip default 0x44).
-	 */
+	/* Keep unused PHY2/3 on the straight lane mapping. */
 	max96724_write_reg(dev, MAX96724_CSI_LANE_MAP2_ADDR,
 			   MAX96724_CSI_LANE_MAP_DEFAULT);
-	/*
-	 * [FG24-4CH board] Switch MIPI output lane polarity (P/N swap).
-	 * The FG24-4CH PCB inverts the differential pairs on the DES->Orin
-	 * output; without this the Orin CIL never locks the HS clock.
-	 * Per FangZhu MAX4CH_FG24_POC_Enable table: 0x08A5/0x08A6 = 0x3F.
-	 */
-	max96724_write_reg(dev, MAX96724_CSI_PHY_POL0_ADDR,
-			   MAX96724_CSI_PHY_POL_SWAP);
-	max96724_write_reg(dev, MAX96724_CSI_PHY_POL1_ADDR,
-			   MAX96724_CSI_PHY_POL_SWAP);
+	if (priv->has_csi_phy_polarity) {
+		max96724_write_reg(dev, MAX96724_CSI_PHY_POL0_ADDR,
+				  priv->csi_phy_polarity[0]);
+		max96724_write_reg(dev, MAX96724_CSI_PHY_POL1_ADDR,
+				  priv->csi_phy_polarity[1]);
+	}
 	max96724_write_reg(dev, MAX96724_LANE_CTRL0_ADDR,
 			   MAX96724_LANE_CTRL_4LANE);
 	max96724_write_reg(dev, MAX96724_LANE_CTRL1_ADDR,
@@ -770,27 +756,25 @@ static inline bool max96724_is_pixel_mode(struct max96724 *priv)
 	return priv->pixel_mode;
 }
 
-/* ================================================================
+/*
+ * ================================================================
  * Power Management
- * ================================================================ */
-
-/* [FG24-4CH board] POC (Power-over-Coax) / IO enable sequence.
- *   Per FangZhu MAX4CH_FG24_POC_Enable table. On the FG24-4CH board the
- *   MFP8 line (0x0319 bit4) and the POC IO enable (0x0001 bit5) gate the
- *   board-level output / POC path. Without these the DES PLL still locks
- *   and shows internal activity, but no clock reaches the Orin connector.
+ * ================================================================
  */
-#define MAX96724_POC_IO_EN_ADDR		0x0001
-#define MAX96724_POC_IO_EN_VAL		0xE0  /* Enable POC IO (working dump: 0xE0) */
-#define MAX96724_POC_MFP8_ADDR		0x0319
-#define MAX96724_POC_MFP8_PRE		0x80  /* MFP8 pre-enable */
-#define MAX96724_POC_MFP8_HIGH		0x98  /* Enable POC MFP8 High (working dump: 0x98) */
 
 /*
- * max96724_board_poc_enable - Apply FG24-4CH POC/IO enable (one-time).
- * Mirrors the vendor MAX4CH_FG24_POC_Enable table.
+ * Optional Power-over-Coax control sequence.
+ *
+ * Some carrier boards use the MAX96724 MFP8 and IO control bits to gate
+ * their PoC path. Device tree opts in to this board-level behavior.
  */
-static void max96724_board_poc_enable(struct device *dev)
+#define MAX96724_POC_IO_EN_ADDR		0x0001
+#define MAX96724_POC_IO_EN_VAL		0xE0  /* Enable PoC I/O */
+#define MAX96724_POC_MFP8_ADDR		0x0319
+#define MAX96724_POC_MFP8_PRE		0x80  /* MFP8 pre-enable */
+#define MAX96724_POC_MFP8_HIGH		0x98  /* Drive PoC MFP8 high */
+
+static void max96724_poc_enable(struct device *dev)
 {
 	max96724_write_reg(dev, MAX96724_POC_IO_EN_ADDR,
 			   MAX96724_POC_IO_EN_VAL);
@@ -813,8 +797,8 @@ int max96724_power_on(struct device *dev)
 	mutex_lock(&priv->lock);
 	if (priv->pw_ref == 0) {
 		usleep_range(1, 2);
-		if (gpio_is_valid(priv->reset_gpio))
-			gpio_set_value(priv->reset_gpio, 0);
+		if (priv->reset_gpio)
+			gpiod_set_value_cansleep(priv->reset_gpio, 0);
 
 		usleep_range(30, 50);
 
@@ -827,10 +811,10 @@ int max96724_power_on(struct device *dev)
 		usleep_range(30, 50);
 
 		/* exit reset mode: XCLR */
-		if (gpio_is_valid(priv->reset_gpio)) {
-			gpio_set_value(priv->reset_gpio, 0);
+		if (priv->reset_gpio) {
+			gpiod_set_value_cansleep(priv->reset_gpio, 0);
 			usleep_range(30, 50);
-			gpio_set_value(priv->reset_gpio, 1);
+			gpiod_set_value_cansleep(priv->reset_gpio, 1);
 			usleep_range(30, 50);
 		}
 
@@ -843,7 +827,7 @@ ret:
 	mutex_unlock(&priv->lock);
 	return err;
 }
-EXPORT_SYMBOL(max96724_power_on);
+EXPORT_SYMBOL_GPL(max96724_power_on);
 
 void max96724_power_off(struct device *dev)
 {
@@ -857,8 +841,8 @@ void max96724_power_off(struct device *dev)
 
 	if (priv->pw_ref == 0) {
 		usleep_range(1, 2);
-		if (gpio_is_valid(priv->reset_gpio))
-			gpio_set_value(priv->reset_gpio, 0);
+		if (priv->reset_gpio)
+			gpiod_set_value_cansleep(priv->reset_gpio, 0);
 
 		if (priv->vdd_cam_1v2)
 			regulator_disable(priv->vdd_cam_1v2);
@@ -866,11 +850,13 @@ void max96724_power_off(struct device *dev)
 
 	mutex_unlock(&priv->lock);
 }
-EXPORT_SYMBOL(max96724_power_off);
+EXPORT_SYMBOL_GPL(max96724_power_off);
 
-/* ================================================================
+/*
+ * ================================================================
  * Link Setup
- * ================================================================ */
+ * ================================================================
+ */
 
 /*
  * max96724_write_link - Configure a specific GMSL link
@@ -879,7 +865,7 @@ EXPORT_SYMBOL(max96724_power_off);
  *   Register 0x0006: Link Enable and Mode Select
  *   Register 0x0010: Link Rate (Links A/B)
  *
- * The link speed is DT-configurable via the "gmsl-link-speed" property.
+ * The link speed is DT-configurable via "adi,gmsl-link-speed".
  */
 static int max96724_write_link(struct device *dev, u32 link)
 {
@@ -908,18 +894,16 @@ static int max96724_write_link(struct device *dev, u32 link)
 	 * For 3G + Link B: bits[7:2]=000100, bits[1:0]=01 → 0x11 (? or 0x09)
 	 */
 	if (priv->link_speed == 6) {
-		if (link == GMSL_SERDES_CSI_LINK_B) {
+		if (link == GMSL_SERDES_CSI_LINK_B)
 			link_rate_ab = 0x21; /* 6G rate + CC via Link B */
-		} else {
+		else
 			link_rate_ab = 0x22; /* 6G rate + CC via Link A */
-		}
 		link_rate_cd = 0x22; /* C/D: 6G rate (CC routing don't care) */
 	} else {
-		if (link == GMSL_SERDES_CSI_LINK_B) {
+		if (link == GMSL_SERDES_CSI_LINK_B)
 			link_rate_ab = 0x09; /* 3G rate + CC via Link B */
-		} else {
+		else
 			link_rate_ab = 0x12; /* 3G rate + CC via Link A */
-		}
 		link_rate_cd = 0x11; /* C/D: 3G rate */
 	}
 
@@ -945,9 +929,8 @@ static int max96724_write_link(struct device *dev, u32 link)
 	}
 
 	/*
-	 * [XML-verified sequence] One-shot reset applies rate configuration
-	 * to the link state machine, then link enable starts training.
-	 * XML order: rate → ONE-SHOT → LINK_EN → wait 1000ms.
+	 * One-shot reset applies rate configuration to the link state machine,
+	 * then link enable starts training.
 	 */
 	max96724_write_reg(dev, MAX96724_ONESHOT_ADDR,
 			   MAX96724_ONESHOT_ALL);
@@ -975,16 +958,9 @@ int max96724_setup_link(struct device *dev, struct device *s_dev)
 	if (err)
 		return err;
 
-	/*
-	 * [FG24-4CH] Enable board POC / MFP8 output path BEFORE the GMSL
-	 * link is brought up.  The camera draws power over coax (PoC), so
-	 * without this the remote camera never powers on and the link can
-	 * never lock.  NOTE: this must live here (a path d5xx actually
-	 * invokes via dser_ops->setup_link) and NOT in max96724_power_on(),
-	 * which ds5_gmsl_serdes_setup() deliberately skips.  Run once.
-	 */
-	if (!priv->poc_enabled) {
-		max96724_board_poc_enable(dev);
+	/* Apply optional board-level PoC control before link training. */
+	if (priv->enable_poc_control && !priv->poc_enabled) {
+		max96724_poc_enable(dev);
 		priv->poc_enabled = true;
 	}
 
@@ -1003,11 +979,13 @@ ret:
 	mutex_unlock(&priv->lock);
 	return err;
 }
-EXPORT_SYMBOL(max96724_setup_link);
+EXPORT_SYMBOL_GPL(max96724_setup_link);
 
-/* ================================================================
+/*
+ * ================================================================
  * Control Setup
- * ================================================================ */
+ * ================================================================
+ */
 
 /*
  * max96724_setup_control - Configure deserializer control pipeline
@@ -1100,10 +1078,10 @@ int max96724_setup_control(struct device *dev, struct device *s_dev)
 	}
 
 	/*
-	 * [SC20190112] Enable tunnel mode and route to Controller 1.
+	 * Enable tunnel mode and route to Controller 1.
 	 *   - TUN_EN   (0x0936): 0x01 (TUN_EN=1)
 	 *   - TUN_DEST (0x0939): 0x10 = Controller 1
-	 *   CSI_OUT_CFG=0x04 (2x4 mode): Controller 1 -> PHY0+1 -> Port A -> Orin
+	 *   CSI_OUT_CFG=0x04 (2x4 mode): Controller 1 -> PHY0+1 -> Port A
 	 */
 	{
 		for (i = 0; i < MAX96724_MAX_PIPES; i++) {
@@ -1144,7 +1122,7 @@ error:
 	mutex_unlock(&priv->lock);
 	return err;
 }
-EXPORT_SYMBOL(max96724_setup_control);
+EXPORT_SYMBOL_GPL(max96724_setup_control);
 
 int max96724_reset_control(struct device *dev, struct device *s_dev)
 {
@@ -1170,11 +1148,13 @@ ret:
 	mutex_unlock(&priv->lock);
 	return err;
 }
-EXPORT_SYMBOL(max96724_reset_control);
+EXPORT_SYMBOL_GPL(max96724_reset_control);
 
-/* ================================================================
+/*
+ * ================================================================
  * Device Registration
- * ================================================================ */
+ * ================================================================
+ */
 
 int max96724_sdev_register(struct device *dev, struct gmsl_link_ctx *g_ctx)
 {
@@ -1237,7 +1217,7 @@ error:
 	mutex_unlock(&priv->lock);
 	return err;
 }
-EXPORT_SYMBOL(max96724_sdev_register);
+EXPORT_SYMBOL_GPL(max96724_sdev_register);
 
 int max96724_sdev_unregister(struct device *dev, struct device *s_dev)
 {
@@ -1278,11 +1258,13 @@ error:
 	mutex_unlock(&priv->lock);
 	return err;
 }
-EXPORT_SYMBOL(max96724_sdev_unregister);
+EXPORT_SYMBOL_GPL(max96724_sdev_unregister);
 
-/* ================================================================
+/*
+ * ================================================================
  * Streaming Setup
- * ================================================================ */
+ * ================================================================
+ */
 
 /*
  * max96724_setup_streaming - Configure CSI-2 output pipeline
@@ -1390,17 +1372,17 @@ int max96724_setup_streaming(struct device *dev, struct device *s_dev)
 
 	/*
 	 * BACKTOP: enable Controller 1 / CSI-B (0x02).
-	 * In 2x4 mode, Controller 1 is master for Port A -> Orin CSI.
+	 * In 2x4 mode, Controller 1 is master for Port A.
 	 */
 	max96724_write_reg(dev, MAX96724_BACKTOP_EN_ADDR,
 			   MAX96724_BACKTOP_CSIB_EN);
 
-	dev_info(dev, "=== setup_streaming: writing 0x84 (force all MIPI clocks) ===\n");
+	dev_dbg(dev, "enabling continuous CSI output clocks\n");
 
 	/*
 	 * Assert 0x08A0=0x84 LAST: 2x4 mode + bit[7] "force all MIPI clocks running".
-	 * The clock-force keeps the D-PHY clock lane continuous so the Orin CIL can lock;
-	 * written only after the full pipeline is configured.
+	 * The clock-force keeps the D-PHY clock lane continuous so the receiver can
+	 * lock; write it only after the full pipeline is configured.
 	 */
 	max96724_write_reg(dev, MAX96724_CSI_OUT_CFG_ADDR,
 			   MAX96724_CSI_OUT_EN_VAL);
@@ -1434,11 +1416,13 @@ ret:
 	mutex_unlock(&priv->lock);
 	return err;
 }
-EXPORT_SYMBOL(max96724_setup_streaming);
+EXPORT_SYMBOL_GPL(max96724_setup_streaming);
 
-/* ================================================================
+/*
+ * ================================================================
  * Start / Stop Streaming
- * ================================================================ */
+ * ================================================================
+ */
 
 int max96724_start_streaming(struct device *dev, struct device *s_dev)
 {
@@ -1466,7 +1450,7 @@ int max96724_start_streaming(struct device *dev, struct device *s_dev)
 
 	return 0;
 }
-EXPORT_SYMBOL(max96724_start_streaming);
+EXPORT_SYMBOL_GPL(max96724_start_streaming);
 
 int max96724_stop_streaming(struct device *dev, struct device *s_dev)
 {
@@ -1495,11 +1479,13 @@ int max96724_stop_streaming(struct device *dev, struct device *s_dev)
 
 	return 0;
 }
-EXPORT_SYMBOL(max96724_stop_streaming);
+EXPORT_SYMBOL_GPL(max96724_stop_streaming);
 
-/* ================================================================
+/*
+ * ================================================================
  * Pipe Management
- * ================================================================ */
+ * ================================================================
+ */
 
 int max96724_get_available_pipe_id(struct device *dev, int vc_id)
 {
@@ -1519,7 +1505,7 @@ int max96724_get_available_pipe_id(struct device *dev, int vc_id)
 
 	return pipe_id;
 }
-EXPORT_SYMBOL(max96724_get_available_pipe_id);
+EXPORT_SYMBOL_GPL(max96724_get_available_pipe_id);
 
 int max96724_release_pipe(struct device *dev, int pipe_id)
 {
@@ -1537,14 +1523,21 @@ int max96724_release_pipe(struct device *dev, int pipe_id)
 			break;
 	}
 	if (i == MAX96724_MAX_PIPES) {
-		priv->datapath_retriggered = false;
+		/*
+		 * Keep the shared tunnel detector and global CSI datapath armed
+		 * across an idle interval.  Firmware keeps its DPHY configured and
+		 * cadence-gates each VC, so a new first stream only needs its own
+		 * pipe mapping/enable toggled.  Re-running the global sequence on
+		 * every start interrupts the still-running transmitter and can
+		 * leave VI waiting for a fresh synchronization point.
+		 */
 		priv->retriggered_pipe_mask = 0;
 	}
 	mutex_unlock(&priv->lock);
 
 	return 0;
 }
-EXPORT_SYMBOL(max96724_release_pipe);
+EXPORT_SYMBOL_GPL(max96724_release_pipe);
 
 /*
  * Number of pipes currently allocated (st_count != 0).  Used by the
@@ -1567,7 +1560,7 @@ int max96724_active_pipe_count(struct device *dev)
 
 	return cnt;
 }
-EXPORT_SYMBOL(max96724_active_pipe_count);
+EXPORT_SYMBOL_GPL(max96724_active_pipe_count);
 
 /*
  * Whether GMSL link A is currently locked.  Used by the sensor driver
@@ -1585,14 +1578,14 @@ int max96724_link_locked(struct device *dev)
 	regmap_read(priv->regmap, MAX96724_LINK_A_LOCK_ADDR, &lock);
 	return (lock & MAX96724_LINK_LOCKED) ? 1 : 0;
 }
-EXPORT_SYMBOL(max96724_link_locked);
+EXPORT_SYMBOL_GPL(max96724_link_locked);
 
 int max96724_get_ser_pipe_id(struct device *dev, int dser_pipe_id, int vc_id)
 {
 	/* In Tunnel Mode with MAX96717, all VCs are carried in a single tunnel pipe. */
 	return dser_pipe_id;
 }
-EXPORT_SYMBOL(max96724_get_ser_pipe_id);
+EXPORT_SYMBOL_GPL(max96724_get_ser_pipe_id);
 
 void max96724_reset_oneshot(struct device *dev)
 {
@@ -1609,6 +1602,7 @@ void max96724_reset_oneshot(struct device *dev)
 
 	mutex_lock(&priv->lock);
 	priv->datapath_retriggered = false;
+	priv->stream_batch_started = false;
 	priv->retriggered_pipe_mask = 0;
 	if (priv->splitter_enabled) {
 		/* Multi-camera: reset all links */
@@ -1769,11 +1763,13 @@ void max96724_reset_oneshot(struct device *dev)
 	priv->datapath_retriggered = true;
 	mutex_unlock(&priv->lock);
 }
-EXPORT_SYMBOL(max96724_reset_oneshot);
+EXPORT_SYMBOL_GPL(max96724_reset_oneshot);
 
-/* ================================================================
+/*
+ * ================================================================
  * Init Settings / Set Pipe
- * ================================================================ */
+ * ================================================================
+ */
 
 /*
  * __max96724_set_pipe - Configure per-pipe mapping registers
@@ -1910,7 +1906,15 @@ void max96724_retrigger_datapath(struct device *dev)
 		goto out;
 	}
 
-	full_retrigger = !priv->datapath_retriggered;
+	/*
+	 * reset_oneshot() also runs while the sensor driver is probing.  That
+	 * prepares the CSI block but does not constitute a real stream batch:
+	 * the first userspace STREAMON still needs the full retrigger sequence.
+	 * Once that first batch has started successfully, retain the shared
+	 * datapath across later idle intervals and retrigger only joining pipes.
+	 */
+	full_retrigger = !priv->datapath_retriggered ||
+			 !priv->stream_batch_started;
 	retrigger_mask = active_mask & ~priv->retriggered_pipe_mask;
 	if (!full_retrigger && !retrigger_mask) {
 		dev_info(dev, "CSI datapath already retriggered for active pipes 0x%02x\n",
@@ -1918,10 +1922,12 @@ void max96724_retrigger_datapath(struct device *dev)
 		goto out;
 	}
 	if (!full_retrigger && priv->retriggered_pipe_mask) {
-		/* All logical pipes on Link A share one tunnel detector. Once the
+		/*
+		 * All logical pipes on Link A share one tunnel detector. Once the
 		 * first stream has armed it, toggling any PIPE_EN bit can interrupt
 		 * VCs that are already live. set_pipe() has already installed the
-		 * joining stream's mapping, so only track it here. */
+		 * joining stream's mapping, so only track it here.
+		 */
 		dev_info(dev,
 			 "Link A tunnel already active; adding CSI pipes 0x%02x without toggling live pipes 0x%02x\n",
 			 retrigger_mask, priv->retriggered_pipe_mask);
@@ -2050,31 +2056,33 @@ void max96724_retrigger_datapath(struct device *dev)
 
 	err |= max96724_write_reg(dev, MAX96724_CSI_OUT_CFG_ADDR,
 				  MAX96724_CSI_OUT_EN_VAL);
-	if (full_retrigger) {
+	if (full_retrigger)
 		err |= max96724_write_reg(dev, MAX96724_PIPE_EN_ADDR,
 					  MAX96724_PIPE_EN_4);
-		if (!err)
-			priv->datapath_retriggered = true;
-	} else {
+	else
 		err |= max96724_write_reg(dev, MAX96724_PIPE_EN_ADDR,
 					  pipe_en | retrigger_mask);
+
+	if (!err && full_retrigger) {
+		priv->datapath_retriggered = true;
+		priv->stream_batch_started = true;
 	}
-	if (err) {
+
+	if (err)
 		dev_warn(dev, "failed to retrigger CSI datapath: %d\n", err);
-	} else {
+	else
 		priv->retriggered_pipe_mask |= retrigger_mask;
-	}
 
 out:
 	mutex_unlock(&priv->lock);
 }
-EXPORT_SYMBOL(max96724_retrigger_datapath);
+EXPORT_SYMBOL_GPL(max96724_retrigger_datapath);
 
 /*
  * max96724_init_settings - Initialize default pipe and tunnel configuration
  *
  * Sets up all 4 pipes with default YUV422_8 + EMBED for VC0-3,
- * matching the d4xx framework expectations.
+ * matching the sensor-driver framework expectations.
  *
  */
 int max96724_init_settings(struct device *dev)
@@ -2093,15 +2101,15 @@ int max96724_init_settings(struct device *dev)
 
 	return err;
 }
-EXPORT_SYMBOL(max96724_init_settings);
+EXPORT_SYMBOL_GPL(max96724_init_settings);
 
 int max96724_bind_ser_to_dser_pipe(struct device *dev, int dser_pipe_id,
 				   int ser_pipe_id, u32 vc_id)
 {
-	/* In Tunnel Mode, pipe mapping is 1:1 (each camera → one pipe) */
+	/* In tunnel mode, pipe mapping is 1:1 (each source uses one pipe). */
 	return 0;
 }
-EXPORT_SYMBOL(max96724_bind_ser_to_dser_pipe);
+EXPORT_SYMBOL_GPL(max96724_bind_ser_to_dser_pipe);
 
 int max96724_set_pipe(struct device *dev, int pipe_id,
 		      u8 data_type1, u8 data_type2, u32 vc_id)
@@ -2126,11 +2134,13 @@ int max96724_set_pipe(struct device *dev, int pipe_id,
 
 	return err;
 }
-EXPORT_SYMBOL(max96724_set_pipe);
+EXPORT_SYMBOL_GPL(max96724_set_pipe);
 
-/* ================================================================
+/*
+ * ================================================================
  * Frame Sync (FSYNC) — internal generator, broadcast to all links
- * ================================================================ */
+ * ================================================================
+ */
 
 /*
  * Multi-camera frame synchronization.
@@ -2160,8 +2170,10 @@ EXPORT_SYMBOL(max96724_set_pipe);
 /* FSYNC_PERIOD is a 24-bit field (0x04A5..0x04A7). */
 #define MAX96724_FSYNC_PERIOD_MAX	0x00FFFFFFU
 
-/* GMSL2 GPIO channel the serializers receive sync on
- * (matches MAX96717 GPIO0/GPIO1 RX_ID=23). */
+/*
+ * GMSL2 GPIO channel the serializers receive sync on
+ * (matches MAX96717 GPIO0/GPIO1 RX_ID=23).
+ */
 #define MAX96724_FSYNC_TX_CH		23
 
 /*
@@ -2243,7 +2255,7 @@ int max96724_setup_fsync(struct device *dev, u32 fps)
 
 	return err;
 }
-EXPORT_SYMBOL(max96724_setup_fsync);
+EXPORT_SYMBOL_GPL(max96724_setup_fsync);
 
 /*
  * max96724_disable_fsync - disable internal FSYNC generation
@@ -2271,14 +2283,17 @@ int max96724_disable_fsync(struct device *dev)
 
 	return err;
 }
-EXPORT_SYMBOL(max96724_disable_fsync);
+EXPORT_SYMBOL_GPL(max96724_disable_fsync);
 
-/* ================================================================
+/*
+ * ================================================================
  * Device Tree Parsing
- * ================================================================ */
+ * ================================================================
+ */
 
 static const struct of_device_id max96724_of_match[] = {
 	{ .compatible = "adi,max96724", },
+	{ .compatible = "maxim,max96724", },
 	{ },
 };
 MODULE_DEVICE_TABLE(of, max96724_of_match);
@@ -2290,6 +2305,7 @@ static int max96724_parse_dt(struct max96724 *priv,
 	int err = 0;
 	const char *str_value;
 	int value;
+	u32 polarity[2];
 	const struct of_device_id *match;
 
 	if (!node)
@@ -2301,10 +2317,12 @@ static int max96724_parse_dt(struct max96724 *priv,
 		return -EFAULT;
 	}
 
-	/* CSI mode: "2x4" or "4x2" */
-	err = of_property_read_string(node, "csi-mode", &str_value);
+	/* CSI mode: prefer the vendor-prefixed binding, accept the legacy name. */
+	err = of_property_read_string(node, "adi,csi-mode", &str_value);
+	if (err)
+		err = of_property_read_string(node, "csi-mode", &str_value);
 	if (err < 0) {
-		dev_err(&client->dev, "csi-mode property not found\n");
+		dev_err(&client->dev, "CSI mode property not found\n");
 		return err;
 	}
 
@@ -2317,33 +2335,35 @@ static int max96724_parse_dt(struct max96724 *priv,
 		return -EINVAL;
 	}
 
-	/* Max sources */
-	err = of_property_read_u32(node, "max-src", &value);
+	/* Maximum attached sources. */
+	err = of_property_read_u32(node, "adi,max-sources", &value);
+	if (err)
+		err = of_property_read_u32(node, "max-src", &value);
 	if (err < 0) {
-		dev_err(&client->dev, "No max-src info\n");
+		dev_err(&client->dev, "maximum source count not found\n");
 		return err;
 	}
 	priv->max_src = value;
 
-	/* Reset GPIO */
-	priv->reset_gpio = of_get_named_gpio(node, "reset-gpios", 0);
-	if (priv->reset_gpio < 0) {
-		dev_info(&client->dev,
-			 "reset-gpios not found, continuing without external reset\n");
-		priv->reset_gpio = -1;
-	}
+	/* Optional external reset, asserted until the first power-on request. */
+	priv->reset_gpio = devm_gpiod_get_optional(&client->dev, "reset",
+						   GPIOD_OUT_LOW);
+	if (IS_ERR(priv->reset_gpio))
+		return PTR_ERR(priv->reset_gpio);
 
-	/* GMSL link speed from DT: 3 or 6 (Gbps) */
-	err = of_property_read_u32(node, "gmsl-link-speed", &value);
+	/* GMSL link speed from DT: 3 or 6 (Gbps). */
+	err = of_property_read_u32(node, "adi,gmsl-link-speed", &value);
+	if (err)
+		err = of_property_read_u32(node, "gmsl-link-speed", &value);
 	if (err < 0) {
 		/* Default to 3 Gbps if not specified */
 		priv->link_speed = 3;
 		dev_info(&client->dev,
-			 "gmsl-link-speed not specified, defaulting to 3 Gbps\n");
+			 "GMSL link speed not specified, defaulting to 3 Gbps\n");
 	} else {
 		if (value != 3 && value != 6) {
 			dev_err(&client->dev,
-				"invalid gmsl-link-speed %d (must be 3 or 6)\n",
+				"invalid GMSL link speed %d (must be 3 or 6)\n",
 				value);
 			return -EINVAL;
 		}
@@ -2351,10 +2371,32 @@ static int max96724_parse_dt(struct max96724 *priv,
 	}
 
 	priv->pixel_mode = of_property_read_bool(node, "adi,pixel-mode");
+	priv->enable_poc_control =
+		of_property_read_bool(node, "adi,enable-poc-control");
+
+	if (of_find_property(node, "adi,csi-phy-polarity", NULL)) {
+		err = of_property_read_u32_array(node, "adi,csi-phy-polarity",
+						 polarity, ARRAY_SIZE(polarity));
+		if (err) {
+			dev_err(&client->dev,
+				"invalid adi,csi-phy-polarity property\n");
+			return err;
+		}
+		if (polarity[0] > 0xff || polarity[1] > 0xff) {
+			dev_err(&client->dev,
+				"adi,csi-phy-polarity values must fit in 8 bits\n");
+			return -ERANGE;
+		}
+
+		priv->csi_phy_polarity[0] = polarity[0];
+		priv->csi_phy_polarity[1] = polarity[1];
+		priv->has_csi_phy_polarity = true;
+	}
 
 	/* 1.2V regulator (optional) */
 	if (of_get_property(node, "vdd_cam_1v2-supply", NULL)) {
-		priv->vdd_cam_1v2 = regulator_get(&client->dev, "vdd_cam_1v2");
+		priv->vdd_cam_1v2 =
+			devm_regulator_get(&client->dev, "vdd_cam_1v2");
 		if (IS_ERR(priv->vdd_cam_1v2)) {
 			dev_err(&client->dev,
 				"vdd_cam_1v2 regulator get failed\n");
@@ -2369,11 +2411,13 @@ static int max96724_parse_dt(struct max96724 *priv,
 	return 0;
 }
 
-/* ================================================================
+/*
+ * ================================================================
  * Probe / Remove
- * ================================================================ */
+ * ================================================================
+ */
 
-static struct regmap_config max96724_regmap_config = {
+static const struct regmap_config max96724_regmap_config = {
 	.reg_bits = 16,
 	.val_bits = 8,
 	.cache_type = REGCACHE_NONE,
@@ -2401,13 +2445,13 @@ static int max96724_probe(struct i2c_client *client
 	if (IS_ERR(priv->regmap)) {
 		dev_err(&client->dev,
 			"regmap init failed: %ld\n", PTR_ERR(priv->regmap));
-		return -ENODEV;
+		return PTR_ERR(priv->regmap);
 	}
 
 	err = max96724_parse_dt(priv, client);
 	if (err) {
 		dev_err(&client->dev, "unable to parse dt\n");
-		return -EFAULT;
+		return err;
 	}
 
 	max96724_pipes_reset(priv);
@@ -2476,4 +2520,4 @@ module_exit(max96724_exit);
 
 MODULE_DESCRIPTION("Quad GMSL2 Deserializer driver max96724 (Tunnel Mode)");
 MODULE_AUTHOR("RealSense AI");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

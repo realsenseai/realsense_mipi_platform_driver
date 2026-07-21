@@ -77,6 +77,14 @@ cleanup_reset_artifacts() {
     local -a reset_artifacts=(
         "drivers/media/i2c/d4xx.c"
         "drivers/media/i2c/d5xx.c"
+        "drivers/media/i2c/d4xx-family.c"
+        "drivers/media/i2c/d5xx-family.c"
+        "drivers/media/i2c/realsense-core.c"
+        "drivers/media/i2c/realsense-dfu.c"
+        "drivers/media/i2c/realsense-dfu.h"
+        "drivers/media/i2c/realsense-platform.h"
+        "drivers/media/i2c/realsense-v4l2.c"
+        "drivers/media/i2c/realsense-v4l2.h"
         "drivers/media/i2c/max96717.c"
         "drivers/media/i2c/max96724.c"
         "include/media/max96712.h"
@@ -178,8 +186,11 @@ fi
 echo "Patches applied successfully"
 
 if [[ "$ACTION" = "apply" ]]; then
-    version_lt "$JETPACK_VERSION" "5.0" || ln -f -s "$(pwd)/kernel/realsense/d4xx.c" "${BUILD_SRCS}/${D4XX_SRC_DST}/drivers/media/i2c/"
-    version_lt "$JETPACK_VERSION" "5.0" || ln -f -s "$(pwd)/kernel/realsense/d5xx.c" "${BUILD_SRCS}/${D4XX_SRC_DST}/drivers/media/i2c/"
+    if ! version_lt "$JETPACK_VERSION" "5.0"; then
+        rm -f "${BUILD_SRCS}/${D4XX_SRC_DST}/drivers/media/i2c/d4xx.c"
+        rm -f "${BUILD_SRCS}/${D4XX_SRC_DST}/drivers/media/i2c/d5xx.c"
+        ln -f -s "$(pwd)/kernel/realsense/d4xx.c" "${BUILD_SRCS}/${D4XX_SRC_DST}/drivers/media/i2c/"
+    fi
     if version_lt "$JETPACK_VERSION" "6.0"; then
         # device tree
         cp "hardware/realsense/${JP5_D4XX_DTSI}" "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen/kernel-dts/common/tegra194-camera-d4xx.dtsi"
@@ -216,7 +227,8 @@ if [[ "$ACTION" = "apply" ]]; then
 
     # Stage all modified files after patching
     if ! version_lt "$JETPACK_VERSION" "5.0"; then
-        git -C "${BUILD_SRCS}/$D4XX_SRC_DST" add drivers/media/i2c/d4xx.c drivers/media/i2c/d5xx.c
+        git -C "${BUILD_SRCS}/$D4XX_SRC_DST" add \
+            drivers/media/i2c/d4xx.c
     fi
     if ! version_lt "$JETPACK_VERSION" "6.0"; then
         [[ -e "${BUILD_SRCS}/${D4XX_SRC_DST}/include/media/max96712.h" ]] && \

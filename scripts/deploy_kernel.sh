@@ -8,7 +8,7 @@ if [ "$#" -eq 0 ] || [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
     echo "Package kernel modules, optionally copy them to the TARGET, update boot files and reboot the TARGET."
     echo ""
     echo "Arguments:"
-    echo "  JETPACK_VERSION   JetPack version (e.g., 5.0.2, 5.1.2, 6.0, 6.1, 6.2, 6.2.1, 7.0, 7.1) - REQUIRED"
+    echo "  JETPACK_VERSION   JetPack version (e.g., 5.0.2, 5.1.2, 6.0, 6.1, 6.2, 6.2.1, 7.0, 7.1, 7.2) - REQUIRED"
     echo "  TARGET            Target device hostname or IP address"
     echo "  USERNAME          SSH username for TARGET (default: administrator)"
     echo "  REMOTE_PATH       Remote path to copy files to (default: dev)"
@@ -51,14 +51,26 @@ DEST_DIR="${LOCAL_DIR}/kernel_mod/${JETPACK_VERSION}"
 
 if [ "${JETPACK_VERSION}" = "5.0.2" ]; then
     echo "Copying kernel files to ${DEST_DIR} (5.0.2 only)..."
+    if [ ! -f "${IMG_DIR}/drivers/media/i2c/d4xx.ko" ]; then
+        echo "Error: D4xx deployment requires d4xx.ko"
+        echo "Run ./build_all.sh --clean ${JETPACK_VERSION} before deploying."
+        exit 1
+    fi
     cp "${IMG_DIR}/arch/arm64/boot/Image" "${DEST_DIR}/" 2>/dev/null || true
     cp "${IMG_DIR}/arch/arm64/boot/dts/nvidia/tegra194-p2888-0001-p2822-0000.dtb" "${DEST_DIR}/" 2>/dev/null || true
-    cp "${IMG_DIR}/drivers/media/i2c/d4xx.ko" "${DEST_DIR}/" 2>/dev/null || true
+    cp "${IMG_DIR}/drivers/media/i2c/d4xx.ko" "${DEST_DIR}/"
     cp "${IMG_DIR}/drivers/media/i2c/max96712.ko" "${DEST_DIR}/" 2>/dev/null || true
     cp "${IMG_DIR}/drivers/media/usb/uvc/uvcvideo.ko" "${DEST_DIR}/" 2>/dev/null || true
     cp "${IMG_DIR}/drivers/media/v4l2-core/videobuf-core.ko" "${DEST_DIR}/" 2>/dev/null || true
     cp "${IMG_DIR}/drivers/media/v4l2-core/videobuf-vmalloc.ko" "${DEST_DIR}/" 2>/dev/null || true
-elif [ "${JETPACK_VERSION}" = "6.0" ] || [ "${JETPACK_VERSION}" = "6.1" ] || [ "${JETPACK_VERSION}" = "6.2" ] || [ "${JETPACK_VERSION}" = "6.2.1" ] || [ "${JETPACK_VERSION}" = "7.0" ] || [ "${JETPACK_VERSION}" = "7.1" ]; then
+elif [ "${JETPACK_VERSION}" = "6.0" ] || [ "${JETPACK_VERSION}" = "6.1" ] || [ "${JETPACK_VERSION}" = "6.2" ] || [ "${JETPACK_VERSION}" = "6.2.1" ] || [ "${JETPACK_VERSION}" = "7.0" ] || [ "${JETPACK_VERSION}" = "7.1" ] || [ "${JETPACK_VERSION}" = "7.2" ]; then
+    MODULES_DIR="${IMG_DIR}/rootfs/lib/modules"
+    D4XX_MODULE=$(find "${MODULES_DIR}" -type f -name d4xx.ko -print -quit 2>/dev/null)
+    if [ -z "${D4XX_MODULE}" ]; then
+        echo "Error: D4xx deployment archive requires d4xx.ko"
+        echo "Run ./build_all.sh --clean ${JETPACK_VERSION} before deploying."
+        exit 1
+    fi
     echo "Packing ${DEST_DIR}/rootfs.tar.gz"
     tar czf ${DEST_DIR}/rootfs.tar.gz -C images/${JETPACK_VERSION}/rootfs boot lib
 fi

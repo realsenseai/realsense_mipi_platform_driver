@@ -325,17 +325,19 @@
 						/*
 						 * MAX96724 Deserializer
 						 * I2C addr: 0x27 (7-bit)
-						 * csi-mode: "2x4" — Controller1→PortA, 4-lane output
-						 * max-src: 1 — single D585 camera on link
-						 * gmsl-link-speed: 6 — 6Gbps GMSL2
+						 * adi,csi-mode: "2x4" — Controller1 to Port A
+						 * adi,max-sources: one camera on the active link
+						 * adi,gmsl-link-speed: 6 Gbps
 						 */
 						dser: max96724@27 {
 							status = "okay";
 							reg = <0x27>;
 							compatible = "adi,max96724";
-							csi-mode = "2x4";
-							max-src = <1>;
-							gmsl-link-speed = <6>;
+							adi,csi-mode = "2x4";
+							adi,max-sources = <1>;
+							adi,gmsl-link-speed = <6>;
+							adi,enable-poc-control;
+							adi,csi-phy-polarity = <0x3f 0x3f>;
 						};
 
 						/*
@@ -347,7 +349,7 @@
 							status = "okay";
 							compatible = "adi,max96717";
 							reg = <0x40>;
-							is-prim-ser;
+							adi,primary-serializer;
 						};
 
 						/*
@@ -358,6 +360,8 @@
 							status = "okay";
 							compatible = "adi,max96717";
 							reg = <0x60>;
+							adi,release-mfp7-mfp8;
+							adi,enable-fsync-gpio-tunnel;
 							maxim,gmsl-dser-device = <&dser>;
 						};
 

@@ -57,8 +57,16 @@ elif [[ "$JETPACK_VERSION" != "7.x" ]]; then
     apply_external_patches "$JETPACK_VERSION" "hardware/nvidia/platform/t19x/galen/kernel-dts" "$2"
 fi
 
-# For a common driver for JP4 + JP5 we override the i2c driver and ignore the previous that was created from patches
-cp kernel/realsense/d4xx.c "$TARGET/${D4XX_SRC_DST}/drivers/media/i2c/"
+# Install the unified camera driver source. JetPack 4 keeps its legacy
+# patch-contained D4xx driver; JetPack 5+ use one d4xx.c for both families.
+if [[ "$JETPACK_VERSION" != "4.x" ]]; then
+    rm -f "$TARGET/${D4XX_SRC_DST}/drivers/media/i2c/d4xx.c"
+    rm -f "$TARGET/${D4XX_SRC_DST}/drivers/media/i2c/d5xx.c"
+    cp kernel/realsense/d4xx.c "$TARGET/${D4XX_SRC_DST}/drivers/media/i2c/"
+fi
+if [[ "$JETPACK_VERSION" == "6.x" || "$JETPACK_VERSION" == "7.x" ]]; then
+    cp -a "nvidia-oot/files/${JP_INPUT_VERSION}/." "$TARGET/nvidia-oot/"
+fi
 if [[ "$JETPACK_VERSION" == "6.x" ]]; then
     # jp6 overlay
     cp hardware/realsense/tegra234-camera-d4xx-overlay*.dts "$TARGET/hardware/nvidia/t23x/nv-public/overlay/"

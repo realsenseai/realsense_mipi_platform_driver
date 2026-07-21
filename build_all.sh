@@ -48,6 +48,8 @@ NPROC=$(nproc)
 
 if [[ "$1" == "-h" ]]; then
     echo "build_all.sh [--clean] [--dev-dbg] [--d5xx] [--fg] [--lane 2|4] [JetPack_version [JetPack_Linux_source]]"
+    echo "  JetPack 6/7 builds one d4xx.ko containing D4xx and D5xx support."
+    echo "  --d5xx     Install D5xx device-tree overlays in addition to D4xx overlays (JetPack 6/7)"
     echo "  --fg       Build D5xx overlay for FangZhu FG24-4CH board (4-lane CSI-C)"
     echo "  --lane 2   Build with 2-lane CSI output (SC20190112 adapter, experimental)"
     echo "  --lane 4   Build with 4-lane CSI output (default, verified working)"
@@ -81,12 +83,19 @@ fi
 export LOCALVERSION=-tegra
 export TEGRA_KERNEL_OUT="$DEVDIR/images/${JP_INPUT_VERSION}"
 
-# D5XX driver selection
-if [[ "$D5XX" == "1" ]]; then
-    export RS_USE_D5XX=ON
-    echo "Building D5XX driver (max96717/max96724 SERDES)"
+# JetPack 6/7 builds one unified source/module for both camera families.
+# This flag only selects the D5xx device-tree artifacts installed for the
+# target platform.
+if version_lt "$JETPACK_VERSION" "6.0"; then
+    echo "Building D4XX camera driver"
+    if [[ "$D5XX" == "1" ]]; then
+        echo "Warning: D5XX support requires JetPack 6 or newer"
+    fi
 else
-    export RS_USE_D5XX=OFF
+    echo "Building unified D4XX/D5XX camera driver"
+    if [[ "$D5XX" == "1" ]]; then
+        echo "Installing D5XX device-tree overlays (max96717/max96724 SERDES)"
+    fi
 fi
 
 # FG24-4CH board selection
@@ -107,6 +116,11 @@ if [[ $CLEAN == 1 ]]; then
     echo "Cleaning build artifacts for ${JP_INPUT_VERSION}..."
     rm -rf $TEGRA_KERNEL_OUT
     rm -rf $BUILD_SRCS/out
+    # Remove outputs from the former split/composite implementation. They are
+    # no longer referenced by Kbuild, so a normal incremental make cannot
+    # discover and delete them.
+    rm -f "$BUILD_SRCS"/nvidia-oot/drivers/media/i2c/{d5xx,realsense-core,realsense-dfu,realsense-v4l2,d4xx-family,d5xx-family}.{o,ko,mod,mod.c}
+    rm -f "$BUILD_SRCS"/nvidia-oot/drivers/media/i2c/.{d5xx,realsense-core,realsense-dfu,realsense-v4l2,d4xx-family,d5xx-family}.o.cmd
 fi
 
 mkdir -p $TEGRA_KERNEL_OUT
@@ -153,12 +167,18 @@ else
         # Building the Image with default defconfig
         make -C kernel
     fi
-    make RS_USE_D5XX=$RS_USE_D5XX RS_CSI_LANES=$RS_CSI_LANES modules
-    if [[ "$D5XX" == "1" ]]; then
-        D4XX_CMD_FILE="$BUILD_SRCS/nvidia-oot/drivers/media/i2c/.d5xx.o.cmd"
-    else
-        D4XX_CMD_FILE="$BUILD_SRCS/nvidia-oot/drivers/media/i2c/.d4xx.o.cmd"
-    fi
+    # JP7 (Thor): do not build/install the NVIDIA display stack. Keep the
+    # target BSP's matching nvidia.ko/nvidia-modeset.ko/nvidia-drm.ko.
+    DISPLAY_SKIP=""
+    # JP7.2 public sources do not contain the separately shipped nvvse_osi
+    # sources, so use NVIDIA's supported switch to skip that module.
+    NVVSE_SKIP=""
+    version_lt "$JETPACK_VERSION" "7.0" || {
+        DISPLAY_SKIP="SKIP_NVIDIA_DISPLAY=1"
+        NVVSE_SKIP="NV_OOT_NVVSE_SKIP_BUILD=y"
+    }
+    make RS_CSI_LANES=$RS_CSI_LANES modules $DISPLAY_SKIP $NVVSE_SKIP
+    D4XX_CMD_FILE="$BUILD_SRCS/nvidia-oot/drivers/media/i2c/.d4xx.o.cmd"
     mkdir -p $TEGRA_KERNEL_OUT/rootfs/boot/dtb
     if version_lt "$JETPACK_VERSION" "7.0"; then
         # Sync FG24 DTS into build tree before make dtbs (apply_patches ln may fail cross-fs)
@@ -166,7 +186,7 @@ else
             cp -f "$DEVDIR/hardware/realsense/tegra234-camera-d5xx-overlay-fg24-4ch.dts" \
                   "$BUILD_SRCS/hardware/nvidia/t23x/nv-public/overlay/" 2>/dev/null || true
         fi
-        make RS_USE_D5XX=$RS_USE_D5XX RS_CSI_LANES=$RS_CSI_LANES dtbs
+        make RS_CSI_LANES=$RS_CSI_LANES dtbs
         cp $BUILD_SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/ 2>/dev/null || true
         if [[ "$D5XX" == "1" ]]; then
             cp $BUILD_SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-camera-d5xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/ 2>/dev/null || true
@@ -191,7 +211,7 @@ else
     fi
     export INSTALL_MOD_PATH=$TEGRA_KERNEL_OUT/rootfs/
     make -C kernel install
-    make RS_USE_D5XX=$RS_USE_D5XX RS_CSI_LANES=$RS_CSI_LANES modules_install
+    make RS_CSI_LANES=$RS_CSI_LANES modules_install $DISPLAY_SKIP $NVVSE_SKIP
     # iio support
     KERNELVERSION=$(cat $KERNEL_HEADERS/include/config/kernel.release)
     KERNEL_MODULES_OUT=$INSTALL_MOD_PATH/lib/modules/${KERNELVERSION}
@@ -214,5 +234,5 @@ if [ -n "${D4XX_CMD_FILE:-}" ] && [ -f "$D4XX_CMD_FILE" ]; then
     "$DEVDIR/scripts/generate_compile_commands.sh" "$D4XX_CMD_FILE" || \
         echo "Warning: compile_commands.json generation failed (non-fatal)"
 else
-    echo "Warning: .d4xx.o.cmd not found; skipping compile_commands.json generation"
+    echo "Warning: unified camera .cmd file not found; skipping compile_commands.json generation"
 fi

@@ -1,19 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * max96717.c - MAX96717 GMSL2 Serializer driver (Tunnel Mode)
  *
  * Copyright (c) 2026, RealSense, Inc.  All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <media/camera_common.h>
@@ -229,6 +218,8 @@ struct max96717 {
 	struct max96717_client_ctx g_client;
 	struct mutex lock;
 	bool pixel_mode;
+	bool release_mfp7_mfp8;
+	bool enable_fsync_gpio_tunnel;
 	/* primary serializer properties */
 	__u32 def_addr;
 	__u32 pst2_ref;
@@ -324,7 +315,7 @@ error:
 	mutex_unlock(&priv->lock);
 	return err;
 }
-EXPORT_SYMBOL(max96717_setup_streaming);
+EXPORT_SYMBOL_GPL(max96717_setup_streaming);
 
 /* ===== Control Setup ===== */
 
@@ -458,12 +449,12 @@ int max96717_setup_control(struct device *dev)
 	/*
 	 * I2C address translation for sensor passthrough.
 	 *
-	 * I2C4 / SRC_B (0x44): sensor proxy addr visible to Orin host
+	 * I2C4 / SRC_B (0x44): sensor proxy address visible to the host
 	 * I2C5 / DST_B (0x45): sensor real addr on GMSL back-channel
 	 *
 	 * When host sends I2C to sdev_reg (e.g., 0x1a), the MAX96717
 	 * translates it to sdev_def (e.g., 0x42) and forwards via GMSL
-	 * back-channel to the HKR sensor.
+	 * back-channel to the remote sensor.
 	 */
 	max96717_write_reg(dev, MAX96717_I2C4_ADDR,
 			   (g_ctx->sdev_reg << 1));
@@ -480,7 +471,7 @@ error:
 	mutex_unlock(&priv->lock);
 	return err;
 }
-EXPORT_SYMBOL(max96717_setup_control);
+EXPORT_SYMBOL_GPL(max96717_setup_control);
 
 /* ===== GPIO Tunneling ===== */
 
@@ -492,13 +483,9 @@ EXPORT_SYMBOL(max96717_setup_control);
  *   GPIO_n_B: GPIO_TX_ID[4:0]  - GMSL channel this pin transmits on
  *   GPIO_n_C: GPIO_RX_ID[4:0]  - GMSL channel this pin receives from
  *
- * Schematic signal mapping on the D585/D580 board:
- *   H_VSYNC_TRIG    → MFP0  (PIN 2) = GPIO0  (DES→SER, host sync trigger)
- *   RGB_FSYNC       → CFG0  (PIN 3) = GPIO1  (DES→SER, RGB frame sync; note
- *                          CFG0 is output-only after boot, so GPIO1 must be
- *                          RX-from-link driving the pin, not input)
- *   H_STROBE_OUT_1V8 → MFP6 (PIN22) = GPIO6  (SER→DES, camera strobe/EOF
- *                          feedback for host-side frame timing)
+ * The supported reference design maps two frame-sync inputs to GPIO0/GPIO1
+ * and one strobe output to GPIO6. Device tree must explicitly opt in because
+ * GPIO routing is board specific.
  *
  * GMSL2 GPIO channel assignment (mirrors validated MAX9295 ESYNC scheme):
  *   ch23: Host→Camera  sync edge (GPIO0 + GPIO1 both RX from ch23)
@@ -514,15 +501,15 @@ EXPORT_SYMBOL(max96717_setup_control);
 #define MAX96717_GPIO6_B_ADDR		0x02D1
 #define MAX96717_GPIO6_C_ADDR		0x02D2
 
-/* Enable: GPIO0 (H_VSYNC_TRIG) — RX from ch23, drives camera pin. */
+/* Enable GPIO0 as an RX endpoint for channel 23. */
 #define MAX96717_GPIO0_A_ESYNC		0x24	/* RX_EN=1, OUT_DIS=0, TX_COMP_EN=1 */
 #define MAX96717_GPIO0_B_ESYNC		0x77	/* TX_ID=23, push-pull, pull-up */
 #define MAX96717_GPIO0_C_ESYNC		0x57	/* RX_ID=23 */
-/* Enable: GPIO1 (RGB_FSYNC) — RX from ch23, drives camera pin (CFG0=output only). */
+/* Enable GPIO1 as an RX endpoint for channel 23. */
 #define MAX96717_GPIO1_A_ESYNC		0x05	/* OUT_DIS=1*, RX_EN=1, TX_EN=0 */
 #define MAX96717_GPIO1_B_ESYNC		0x1F	/* TX_ID=31 (unused, TX_EN=0) */
 #define MAX96717_GPIO1_C_ESYNC		0x57	/* RX_ID=23 */
-/* Enable: GPIO6 (H_STROBE_OUT_1V8) — TX on ch31, reads camera strobe pin. */
+/* Enable GPIO6 as a TX endpoint for channel 31. */
 #define MAX96717_GPIO6_A_ESYNC		0x27	/* TX_EN=1, RX_EN=0, OUT_DIS=1, TX_COMP_EN=1 */
 #define MAX96717_GPIO6_B_ESYNC		0x1F	/* TX_ID=31, push-pull, no pull */
 #define MAX96717_GPIO6_C_ESYNC		0x00	/* RX_ID=0 (unused, RX_EN=0) */
@@ -542,9 +529,9 @@ EXPORT_SYMBOL(max96717_setup_control);
  * max96717_setup_gpio_tunneling - enable sync/strobe GPIO tunneling
  *
  * Configures three GPIOs for external frame sync:
- *   GPIO0 (H_VSYNC_TRIG):  RX from ch23, drives camera MFP0 pin
- *   GPIO1 (RGB_FSYNC):     RX from ch23, drives camera CFG0/MFP1 pin
- *   GPIO6 (H_STROBE_OUT_1V8): TX on ch31, reads camera strobe for host timing
+ *   GPIO0: RX from channel 23
+ *   GPIO1: RX from channel 23
+ *   GPIO6: TX on channel 31
  *
  * Used for external sync (FSYNC/trigger).  The register values mirror the
  * validated MAX9295 ESYNC configuration.
@@ -565,6 +552,9 @@ int max96717_setup_gpio_tunneling(struct device *dev)
 	};
 	int err;
 
+	if (!priv->enable_fsync_gpio_tunnel)
+		return -EOPNOTSUPP;
+
 	mutex_lock(&priv->lock);
 
 	err = max96717_set_registers(dev, map, ARRAY_SIZE(map));
@@ -579,7 +569,7 @@ int max96717_setup_gpio_tunneling(struct device *dev)
 
 	return err;
 }
-EXPORT_SYMBOL(max96717_setup_gpio_tunneling);
+EXPORT_SYMBOL_GPL(max96717_setup_gpio_tunneling);
 
 /*
  * max96717_disable_gpio_tunneling - disable sync/strobe GPIO tunneling
@@ -604,6 +594,9 @@ int max96717_disable_gpio_tunneling(struct device *dev)
 	};
 	int err;
 
+	if (!priv->enable_fsync_gpio_tunnel)
+		return 0;
+
 	mutex_lock(&priv->lock);
 
 	err = max96717_set_registers(dev, map, ARRAY_SIZE(map));
@@ -618,7 +611,7 @@ int max96717_disable_gpio_tunneling(struct device *dev)
 
 	return err;
 }
-EXPORT_SYMBOL(max96717_disable_gpio_tunneling);
+EXPORT_SYMBOL_GPL(max96717_disable_gpio_tunneling);
 
 /* ===== Reset Control ===== */
 
@@ -651,7 +644,7 @@ error:
 	mutex_unlock(&priv->lock);
 	return err;
 }
-EXPORT_SYMBOL(max96717_reset_control);
+EXPORT_SYMBOL_GPL(max96717_reset_control);
 
 /* ===== Device Pairing ===== */
 
@@ -684,7 +677,7 @@ int max96717_sdev_pair(struct device *dev, struct gmsl_link_ctx *g_ctx)
 	mutex_unlock(&priv->lock);
 	return err;
 }
-EXPORT_SYMBOL(max96717_sdev_pair);
+EXPORT_SYMBOL_GPL(max96717_sdev_pair);
 
 int max96717_sdev_unpair(struct device *dev, struct device *s_dev)
 {
@@ -706,9 +699,8 @@ int max96717_sdev_unpair(struct device *dev, struct device *s_dev)
 		goto error;
 	}
 
-	if (priv->g_client.g_ctx->s_dev != s_dev) {
+	if (priv->g_client.g_ctx->s_dev != s_dev)
 		dev_warn(dev, "%s: s_dev mismatch, clearing anyway\n", __func__);
-	}
 
 	priv->g_client.g_ctx = NULL;
 	priv->g_client.st_done = false;
@@ -717,7 +709,7 @@ error:
 	mutex_unlock(&priv->lock);
 	return err;
 }
-EXPORT_SYMBOL(max96717_sdev_unpair);
+EXPORT_SYMBOL_GPL(max96717_sdev_unpair);
 
 /* ===== Pipe Configuration ===== */
 
@@ -725,7 +717,7 @@ EXPORT_SYMBOL(max96717_sdev_unpair);
  * __max96717_set_pipe - Configure a single pipe's DT/VC mapping
  *
  * In Tunnel Mode, per-pipe DT/VC filtering is bypassed on the serializer。
- * However, we still write the registers for d4xx framework compatibility.
+ * The registers are still programmed for sensor-driver API compatibility.
  *
  */
 static int __max96717_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
@@ -789,7 +781,7 @@ static int __max96717_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
  * max96717_init_settings - Initialize default pipe/streaming settings
  *
  * In Tunnel Mode, per-pipe DT config is not functionally needed
- * but we configure pipes for d4xx compatibility.
+ * but pipes are configured for sensor-driver API compatibility.
  * Default: 4 pipes with YUV422_8 + EMBED, VC0-3.
  */
 int max96717_init_settings(struct device *dev)
@@ -818,11 +810,7 @@ int max96717_init_settings(struct device *dev)
 		{MAX96717_VIDEO_TX2_ADDR, MAX96717_VIDEO_TX2_DRIFT_DIS},
 		{MAX96717_PIPE_EN_ADDR, MAX96717_PIPE_EN_ALL},
 	};
-	/*
-	 * Release MFP7/MFP8 before any other config so the serializer
-	 * stops driving the camera-side M2_I2C bus shared with the BMI088
-	 * IMU. Confirmed on HW: tri-stating GPIO8 restores IMU I2C access.
-	 */
+	/* Optional high-impedance state for board-shared MFP7/MFP8 lines. */
 	struct reg_pair gpio_release[] = {
 		{MAX96717_GPIO7_A_ADDR, MAX96717_GPIO_A_HIGH_Z},
 		{MAX96717_GPIO7_B_ADDR, MAX96717_GPIO_B_NO_PULL},
@@ -839,16 +827,15 @@ int max96717_init_settings(struct device *dev)
 	 */
 	usleep_range(5000, 6000);
 
-	/*
-	 * Tri-state MFP7/MFP8 first to release the camera-side M2_I2C
-	 * bus shared with the BMI088 IMU before configuring the rest of
-	 * the SER.
-	 */
-	err = max96717_set_registers(dev, gpio_release,
-				    ARRAY_SIZE(gpio_release));
-	if (err)
-		dev_warn(dev, "%s: failed to release MFP7/MFP8 (M2_I2C bus)\n",
-			 __func__);
+	/* Apply board-specific MFP release before configuring the data path. */
+	if (priv->release_mfp7_mfp8) {
+		err = max96717_set_registers(dev, gpio_release,
+					    ARRAY_SIZE(gpio_release));
+		if (err)
+			dev_warn(dev,
+				 "%s: failed to place MFP7/MFP8 in high impedance\n",
+				 __func__);
+	}
 
 	if (priv->pixel_mode) {
 		err = max96717_set_registers(dev, pixel_init,
@@ -867,7 +854,7 @@ int max96717_init_settings(struct device *dev)
 
 	return err;
 }
-EXPORT_SYMBOL(max96717_init_settings);
+EXPORT_SYMBOL_GPL(max96717_init_settings);
 
 int max96717_set_pipe(struct device *dev, int pipe_id,
 		      u8 data_type1, u8 data_type2, u32 vc_id)
@@ -892,7 +879,7 @@ int max96717_set_pipe(struct device *dev, int pipe_id,
 
 	return err;
 }
-EXPORT_SYMBOL(max96717_set_pipe);
+EXPORT_SYMBOL_GPL(max96717_set_pipe);
 
 /*
  * max96717_retrigger_tx - Toggle SER TX to restore tunnel detection after
@@ -909,11 +896,11 @@ void max96717_retrigger_tx(struct device *dev)
 	max96717_write_reg(dev, MAX96717_PIPE_EN_ADDR, MAX96717_PIPE_EN_ALL);
 	mutex_unlock(&priv->lock);
 }
-EXPORT_SYMBOL(max96717_retrigger_tx);
+EXPORT_SYMBOL_GPL(max96717_retrigger_tx);
 
 /* ===== Probe / Remove ===== */
 
-static struct regmap_config max96717_regmap_config = {
+static const struct regmap_config max96717_regmap_config = {
 	.reg_bits = 16,
 	.val_bits = 8,
 	.cache_type = REGCACHE_RBTREE,
@@ -946,8 +933,13 @@ static int max96717_probe(struct i2c_client *client
 
 	mutex_init(&priv->lock);
 	priv->pixel_mode = of_property_read_bool(node, "adi,pixel-mode");
+	priv->release_mfp7_mfp8 =
+		of_property_read_bool(node, "adi,release-mfp7-mfp8");
+	priv->enable_fsync_gpio_tunnel =
+		of_property_read_bool(node, "adi,enable-fsync-gpio-tunnel");
 
-	if (of_get_property(node, "is-prim-ser", NULL)) {
+	if (of_property_read_bool(node, "adi,primary-serializer") ||
+	    of_property_read_bool(node, "is-prim-ser")) {
 		if (prim_priv__) {
 			dev_err(&client->dev,
 				"prim-ser already exists\n");
@@ -1026,4 +1018,4 @@ module_exit(max96717_exit);
 
 MODULE_DESCRIPTION("GMSL2 Serializer driver max96717 (Tunnel Mode)");
 MODULE_AUTHOR("RealSense AI");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");
