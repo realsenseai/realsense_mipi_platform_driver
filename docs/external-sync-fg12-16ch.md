@@ -53,10 +53,7 @@ The `CAM_SYNCALL` pin does not have TSC routing in the Orin SoC, so it cannot be
 | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-1.dts` | 1 | `@380` | Yes |
 | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-1-2-3.dts` | 1 | `@380` | Yes |
 | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-4.dts` | 1, 2 | `@380`, `@480` | Yes |
-| `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-4.calib.dts` | 1, 2 | `@380`, `@480` | Yes |
 | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-4-8-12.dts` | 1, 2, 4 | `@380`, `@480`, `@500` | Yes |
-| `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-4-8-12.calib.dts` | 1, 2, 4 | `@380`, `@480`, `@500` | Yes |
-| `tegra234-camera-d4xx-overlay-fg12-16ch.calib.dts` | 1 | `@380` | Yes |
 | `tegra234-camera-d4xx-overlay-fg12-16ch-PWR-only.dts` | 1, 2, 4 | `@380`, `@480`, `@500` | Yes |
 
 All overlays configure:
@@ -66,7 +63,7 @@ All overlays configure:
 
 ## Prerequisites
 
-1. **Kernel patches applied:** The `0010-Runtime-tsc-rate-config.patch` must be applied for your JetPack version (6.0, 6.1, 6.2, 7.0, or 7.1). This patch adds the `CDI_TSC_SET_RATE` ioctl to the `cam_cdi_tsc` driver.
+1. **Kernel patches applied:** The Runtime-tsc-rate-config patch must be applied for your JetPack version — `0005-Runtime-tsc-rate-config.patch` for JetPack 6.x (6.0, 6.1, 6.2, 6.2.1, 6.2.2), or `0010-Runtime-tsc-rate-config.patch` for JetPack 7.x (7.0, 7.1). This patch adds the `CDI_TSC_SET_RATE` ioctl to the `cam_cdi_tsc` driver.
 
 2. **Device tree overlay loaded:** One of the fg12-16ch overlays listed above must be active. The overlay configures:
    - TSC signal generators (frequency, duty cycle, GPIO pinmux references)
@@ -138,8 +135,8 @@ When `--fps` or `--duty` is provided with `--enable`, the script first sends a `
 
 | JetPack | Patch File | Status |
 |---|---|---|
-| 6.0 | `nvidia-oot/6.0/0010-Runtime-tsc-rate-config.patch` | Supported |
-| 6.1 | `nvidia-oot/6.1/0010-Runtime-tsc-rate-config.patch` | Supported |
-| 6.2 | `nvidia-oot/6.2/0010-Runtime-tsc-rate-config.patch` | Supported |
+| 6.0 | `nvidia-oot/6.0/0005-Runtime-tsc-rate-config.patch` | Supported |
+| 6.1 | `nvidia-oot/6.1/0005-Runtime-tsc-rate-config.patch` | Supported |
+| 6.2 | `nvidia-oot/6.2/0005-Runtime-tsc-rate-config.patch` | Supported |
 | 7.0 | `nvidia-oot/7.0/0010-Runtime-tsc-rate-config.patch` | Supported |
 | 7.1 | `nvidia-oot/7.1/0010-Runtime-tsc-rate-config.patch` | Supported |

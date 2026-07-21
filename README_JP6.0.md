@@ -22,7 +22,6 @@ The system shall include:
 - NVIDIA® Jetson AGX Orin™ board setup - AGX Orin™ [JetPack 6.0](./README_JP6.0.md) setup guide
 - NVIDIA® Jetson AGX Orin™ board setup - AGX Orin™ [JetPack 6.2](./README_JP6.2.md) setup guide
 - NVIDIA® Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 5.x.2](./README_JP5.md) setup guide
-- NVIDIA® Jetson AGX Xavier™ board setup - AGX Xavier™ [JetPack 4.6.1](./README_JP4.md) setup guide
 - Build Tools manual page [Build Manual page](./README_tools.md)
 - Driver API manual page [Driver API page](./README_driver.md)
 
@@ -173,24 +172,22 @@ sudo ln -s /boot/initrd.img-5.15.136-tegra /boot/initrd
     | Overlay file | Description |
     |---|---|
     | `tegra234-camera-d4xx-overlay.dtbo` | max9296 deserializer board |
-    | `tegra234-camera-d4xx-overlay.calib.dtbo` | max9296 deserializer board w/o IR metadata (For calib) |
     | `tegra234-camera-d4xx-overlay-dual.dtbo` | max9296 deserializer board w/ two connected cameras |
-    | `tegra234-camera-d4xx-overlay-dual.calib.dtbo` | max9296 deserializer board w/ two connected cameras w/o IR metadata (For calib) |
     | `tegra234-camera-d4xx-overlay-max96712-EVB.dtbo` | max96712 evaluation board |
-    | `tegra234-camera-d4xx-overlay-max96712-EVB.calib.dtbo` | max96712 evaluation board w/o IR metadata (For calib) |
     | `tegra234-camera-d4xx-overlay-max96712-EVB-cams-0-1.dtbo` | max96712 evaluation board w/ two connected cameras |
     | `tegra234-camera-d4xx-overlay-fg12-16ch.dtbo` | Fangzhu fg12-16ch board with a single camera connected to cam0 |
-    | `tegra234-camera-d4xx-overlay-fg12-16ch.calib.dtbo` | Fangzhu fg12-16ch board with a single camera connected to cam0 w/o IR metadata (For calib) |
+    | `tegra234-camera-d4xx-overlay-fg12-16ch-d5xx.dtbo` | Fangzhu fg12-16ch board with a single D5xx camera (max96717 serializer, 4-lane) connected to cam0 |
     | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-1.dtbo` | Fangzhu fg12-16ch board with two cameras connected to cam0 & cam1 |
     | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-1-2-3.dtbo` | Fangzhu fg12-16ch board with four cameras connected to cam0,1,2 & 3 (all links of the first deserializer) |
     | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-4.dtbo` | Fangzhu fg12-16ch board with two cameras connected to cam0 & cam4 (one camera per deserializer) |
-    | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-4.calib.dtbo` | Fangzhu fg12-16ch board with two cameras connected to cam0 & cam4 (one camera per deserializer) w/o IR metadata (For calib) |
     | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-4-8-12.dtbo` | Fangzhu fg12-16ch board with four cameras connected to cam0,4,8 & 12 (one camera per deserializer) |
-    | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-4-8-12.calib.dtbo` | Fangzhu fg12-16ch board with four cameras connected to cam0,4,8 & 12 (one camera per deserializer) w/o IR metadata (For calib) |
+    | `tegra234-camera-d4xx-overlay-fg12-16ch-d5xx.dtbo` | Fangzhu fg12-16ch board with a single D5xx camera on cam0 (4-lane, max96717 serializer) |
+    | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-1-d5xx-d4xx.dtbo` | Fangzhu fg12-16ch board with a D5xx on cam0 (link 0, 4-lane) and a D4xx/D457 on cam1 (link 1, mixed 2-lane camera / 4-lane deserializer-to-Jetson) sharing one deserializer |
     | `tegra234-camera-d4xx-overlay-fg12-16ch-PWR-only.dtbo` | Fangzhu fg12-16ch board ONLY POWER GPIOS (driver will not be probed) - for development use |
     | `tegra234-camera-d4xx-overlay-advantech.dtbo` | Advantech board with one camera connected to bottom right of the left port |
     | `tegra234-camera-d4xx-overlay-avermedia.dtbo` | AverMedia board with one camera connected to bottom right of the right port |
     | `tegra234-camera-d4xx-overlay-seeed.dtbo` | Seeed reComputer board with one camera connected to top right link |
+    | `tegra234-camera-d4xx-overlay-seeed-d5xx.dtbo` | Seeed reComputer board with one D5xx camera (max96717 serializer, 4-lane) connected to top right link |
     | `tegra234-camera-d4xx-overlay-seeed-cams-0-1.dtbo` | Seeed reComputer board with two cameras connected to top two links |
     | `tegra234-camera-d4xx-overlay-seeed-cams-0-1-2-3.dtbo` | Seeed reComputer board with four cameras connected |
 
@@ -287,32 +284,7 @@ Output:
 nvidia,p3701-0000
 ```
 ### Notes
-- With the introduction of meta data support for depth IR starting from release r/1.0.1.27, calibration format streaming requires a separate DTB that disables meta data since the camera does not metadata in calibration mode.
-- If calibration is needed, it's recommended to add `d457_calib` boot option as shown below.
-
-```
-LABEL primary
-    MENU LABEL primary kernel
-    LINUX /boot/Image
-    INITRD /boot/initrd
-    APPEND ${cbootargs} root=PARTUUID=634b7e44-aacc-4dd9-a769-3a664b83b159 rw rootwait rootfstype=ext4 mminit_loglevel=4 console=ttyTCU0,115200 console=ttyAMA0,115200 firmware_class.path=/etc/firmware fbcon=map:0 net.ifnames=0 nospectre_bhb video=efifb:off console=tty0 nv-auto-config
-
-LABEL JetsonIO
-    MENU LABEL Custom Header Config: <CSI Jetson RealSense Camera D457 dual>
-    LINUX /boot/Image
-    FDT /boot/dtb/kernel_tegra234-p3737-0000+p3701-0000-nv.dtb
-    INITRD /boot/initrd
-    APPEND ${cbootargs} root=PARTUUID=634b7e44-aacc-4dd9-a769-3a664b83b159 rw rootwait rootfstype=ext4 mminit_loglevel=4 console=ttyTCU0,115200 console=ttyAMA0,115200 firmware_class.path=/etc/firmware fbcon=map:0 net.ifnames=0 nospectre_bhb video=efifb:off console=tty0 nv-auto-config
-    OVERLAYS /boot/tegra234-camera-d4xx-overlay-dual.dtbo
-
-LABEL JetsonIO_calib
-    MENU LABEL Custom Header Config: <CSI Jetson RealSense Camera D457 dual - Calibration>
-    LINUX /boot/Image
-    FDT /boot/dtb/kernel_tegra234-p3737-0000+p3701-0000-nv.dtb
-    INITRD /boot/initrd
-    APPEND ${cbootargs} root=PARTUUID=634b7e44-aacc-4dd9-a769-3a664b83b159 rw rootwait rootfstype=ext4 mminit_loglevel=4 console=ttyTCU0,115200 console=ttyAMA0,115200 firmware_class.path=/etc/firmware fbcon=map:0 net.ifnames=0 nospectre_bhb video=efifb:off console=tty0 nv-auto-config
-    OVERLAYS /boot/tegra234-camera-d4xx-overlay-dual.calib.dtbo
-```
+- Calibration format streams can be captured using the regular overlay — a separate `.calib` DTB is no longer required. Metadata is not populated while streaming in calibration format, but this no longer causes image corruption.
 
 ### External Sync (fg12-16ch)
 

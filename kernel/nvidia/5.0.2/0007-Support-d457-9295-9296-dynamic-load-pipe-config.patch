@@ -216,7 +216,7 @@ index 4de304360..d295df745 100644
 -	if (sensor_type != IR_SENSOR)
 -		return 0;
 +	if (data_type1 == GMSL_CSI_DT_RGB_888)
-+		bpp = 0x18;
++		bpp = 0x20 | 0x18; /* Enable soft_bpp and 24 bit */
  
 -	priv = dev_get_drvdata(dev);
 -	if ((priv->ir_type_value != Y8_Y8I) &&

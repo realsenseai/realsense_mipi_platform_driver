@@ -5,7 +5,7 @@ Subject: [PATCH] Porting nvidia driver patches to jetpack 6.0
 
 Signed-off-by: Dmitry Perchanov <dmitry.perchanov@intel.com>
 ---
-drivers/media/i2c/Makefile                    |   7 +++++++
+ drivers/media/i2c/Makefile                    |   6 +
  drivers/media/i2c/max9295.c                   | 139 ++++++
  drivers/media/i2c/max9296.c                   | 190 +++++++++
  .../platform/tegra/camera/sensor_common.c     |   4 +
@@ -19,7 +19,7 @@ drivers/media/i2c/Makefile                    |   7 +++++++
  include/media/max9296.h                       |   8 +
  include/media/mc_common.h                     |  22 +
  include/media/tegra_camera_core.h             |   8 +
- 14 files changed, 906 insertions(+), 11 deletions(-)
+ 14 files changed, 904 insertions(+), 11 deletions(-)
 
 diff --git a/drivers/media/i2c/Makefile b/drivers/media/i2c/Makefile
 index 7c5913c6..396b9bc3 100644
@@ -98,7 +98,7 @@ index b363d5f6..e7c77845 100644
 +	err |= max9295_set_registers(dev, map_bpp8dbl, ARRAY_SIZE(map_bpp8dbl));
 +
 +	if (data_type1 == GMSL_CSI_DT_RGB_888)
-+		bpp = 0x18;
++		bpp = 0x20 | 0x18; /* Enable soft_bpp and 24 bit */
 +
 +	map_pipe_control[0].addr += 0x2 * pipe_id;
 +	map_pipe_control[1].addr += 0x2 * pipe_id;

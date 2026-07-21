@@ -6,8 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Linux kernel driver and userspace utilities for Intel RealSense D4XX series 3D depth cameras operating over GMSL (Gigabit Multimedia Serial Link) MIPI CSI-2 interface on NVIDIA Jetson platforms. Licensed under GPL-2.0.
 
-**Supported platforms:** Jetson AGX Xavier (JetPack 4.6.1, 5.0.2, 5.1.2) and AGX Orin (JetPack 6.0, 6.1, 6.2, 6.2.1)
-**Supported cameras:** D457 (primary), D401, D40x, D41x, D43x, D45x, D46x series
+**Supported platforms:** Jetson AGX Xavier (JetPack 5.0.2, 5.1.2) and AGX Orin (JetPack 6.0, 6.1, 6.2, 6.2.1) and AGX Thor (JetPack 7.0, 7.1)
+**Supported cameras:** D457 (primary), D401, D40x, D41x, D43x, D45x series
 
 ## Build Commands
 
@@ -34,8 +34,7 @@ CI runs these three steps for each JetPack version (see `.github/workflows/build
 ./apply_patches.sh [--one-cam | --dual-cam] apply <version>  # Apply patches
 ./apply_patches.sh reset <version>                            # Reset all patches
 ```
-The `--one-cam`/`--dual-cam` options only apply to JetPack 5.0.2.
-For JP6+ generated SERDES source overlays, `apply_patches.sh` uses link mode by default so patched source files symlink back to `nvidia-oot/files/<version>/...`. Set `RS_SOURCE_OVERLAY_MODE=copy` only when an explicit standalone source copy is needed.
+The `--one-cam`/`--dual-cam` options only apply to JetPack 5.0.2. The target version comes from the `jetpack_version` file (written by `setup_workspace.sh`), not an argv. **Non-interactive:** `apply_patches.sh` prompts via `read` when a sub-repo has local changes and, under `set -e`, aborts (rc=1) on EOF — pipe confirmations with `yes '' | ./apply_patches.sh [reset]` when running headless.
 
 ### Deploy to Jetson
 
@@ -43,6 +42,8 @@ For JP6+ generated SERDES source overlays, `apply_patches.sh` uses link mode by 
 ./scripts/deploy_kernel.sh        # For JP 4.x/5.x
 ./scripts/deploy_kernel_6.2.sh    # For JP 6.2+
 ```
+
+On JetPack 5.x, `install_to_kernel.sh` refuses to install a kernel `Image` whose embedded `Linux version` differs from the running `uname -r` (JP5 installs only a few `.ko`, so a mismatched-JetPack Image boots with no modules and can latch the bootloader into recovery); `SKIP_KERNEL_CHECK=1` overrides. Keep this guard when editing the deploy scripts.
 
 ## Testing
 
@@ -76,10 +77,10 @@ RealSense D4XX camera module
 ### Key directories
 
 - **`kernel/realsense/d4xx.c`** — The main driver. Single-file V4L2 subdevice driver handling I2C communication, MIPI CSI-2 stream config, firmware control (DFU), calibration data, metadata capture, and V4L2 controls (exposure, laser power, AE ROI, etc.). Registers four sensor subdevices per camera: Depth, RGB, IR (Y8/Y8I/Y12I), and IMU.
-- **`kernel/kernel-4.9/`, `kernel/kernel-5.10/`, `kernel/kernel-jammy-src/`** — Kernel patches organized by JetPack generation: 4.6.1 uses kernel 4.9, 5.x uses kernel 5.10, 6.x uses kernel-jammy-src.
+- **`kernel/kernel-5.10/`, `kernel/kernel-jammy-src/`, `kernel/kernel-noble-src/`** — Kernel patches organized by JetPack generation: 5.x uses kernel 5.10, 6.x uses kernel-jammy-src, 7.x uses kernel-noble-src.
 - **`kernel/nvidia/`** — NVIDIA driver patches (max9295/max9296 SerDes, VI capture engine) organized by JetPack version.
-- **`nvidia-oot/`** — Out-of-tree NVIDIA module patches for JetPack 6.x/7.x. New SERDES source overlays live under `nvidia-oot/files/<version>/...`; non-6.2 selectors currently link to the shared 6.2 overlay.
-- **`hardware/realsense/`** — Device tree source files. Xavier uses `.dtsi` includes (`tegra194-camera-d4xx-*.dtsi`), Orin uses DT overlays (`tegra234-camera-d4xx-overlay*.dts`). Single-camera and dual-camera variants exist, plus `.calib.` variants for calibration.
+- **`nvidia-oot/`** — Out-of-tree NVIDIA module patches for JetPack 6.x/7.x (subdirs `6.0/`, `6.1/`, `6.2/`, plus `6.2.1/` and `6.2.2/` which are symlinks to `6.2/`; JP7 lives in `7.0/`, `7.1/`). Has its own Makefile for building conftest, hwpm, nvidia-oot, nvgpu, and (except on JP7) nvidia-display modules. The JP6.x patches are **subject-grouped**: `0001-embedded-metadata` (Tegra VI/camera-core + `d4xx.o` build wiring), `0002-max9295-max9296-SerDes` (GMSL serializer+deserializer pair), `0003-Adding-max96712`, `0004-Fix-y12i-calibration-stream`, `0005-Runtime-tsc-rate-config`. `6.0/` holds the real files; `6.1/`/`6.2/` symlink the byte-identical ones back to `6.0/` and only keep a real file where content differs. (The JP7 `7.0/`/`7.1/` dirs still use the older un-split numbering.) **JP7/Thor:** the build passes `SKIP_NVIDIA_DISPLAY=1` so it does **not** produce `nvidia.ko`/`nvidia-modeset.ko`/`nvidia-drm.ko` — the bundled `nvdisplay` source is a pre-release that doesn't match the board's BSP userspace driver and breaks GPU/display init. The board keeps its matched BSP display modules, and `scripts/install_to_kernel.sh` overlays modules on JP7 (no `rm -rf /lib/modules`) so those BSP modules survive.
+- **`hardware/realsense/`** — Device tree source files. Xavier uses `.dtsi` includes (`tegra194-camera-d4xx-*.dtsi`), Orin uses DT overlays (`tegra234-camera-d4xx-overlay*.dts`). Single-camera and dual-camera variants exist. (Separate `.calib.` overlay variants were removed once the driver stopped corrupting calibration-format streams on the standard overlay — calibration formats now stream on the regular DTB; metadata is simply not populated in calibration mode.) **JP7/noble Orin overlays** (e.g. `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0.dtso`) must use the `.dtso` extension — the noble Makefile overlay rule only builds `.dtso` — and must **not** use `JETSON_COMPATIBLE`, since the `tegra234-p3737-0000+p3701-0000.h` platform dt-bindings header is absent from the noble tree; hardcode the `compatible` string instead. Headers like `tegra234-gpio.h` / `pinctrl-tegra.h` (and thus the TSC/`MAX1_CSI_SYNC` ext-sync fragments) are present, so keep the external-sync GPIOs. `apply_patches.sh` links these `.dtso` files into the tree and the noble `0004` patch lists their `.dtbo` under `CONFIG_ARCH_TEGRA_234_SOC`. **DT describes only the static board/link topology and is parsed before the camera is probed — it does not know which camera model (D401/D457/D430/D45x…) is on a link (that is detected at runtime via `DS5_DEVICE_TYPE`).** Only put genuinely static board-/link-level facts in DT (lane count, `vc-id`, deserializer address, external-sync GPIOs); any behavior that depends on the *connected camera model* must be decided in-driver from the detected device type, never via a DT property (RSDEV-12608 dropped a `maxim,oneshot-on-alloc` DT flag for exactly this reason).
 - **`hardware/nvidia/`** — Platform-level DT patches (`t19x/galen/` for Xavier, `t23x/` for Orin T234).
 - **`scripts/`** — Build orchestration. `setup-common` defines version-to-revision mappings and kernel directory selection. `source_sync_*.sh` scripts clone NVIDIA kernel repos. `SerDes_D457_*.sh` scripts configure serializer/deserializer registers.
 - **`utilities/streamApp/`** — C++ streaming application with V4L2 interface (`v4l2_ds5_mipi.cpp`), camera capabilities enumeration, GUI, and firmware logging.
@@ -98,9 +99,9 @@ Each camera creates 6 V4L2 video devices:
 ### Cross-compilation
 
 The build system cross-compiles for ARM64. Toolchains vary by JetPack:
-- JP 4.6.1: Linaro GCC 7.3
 - JP 5.x: Bootlin GCC 9.3
 - JP 6.x: Bootlin GCC 11.3 (`aarch64-buildroot-linux-gnu`)
+- JP 7.x: ARM GNU toolchain (`aarch64-none-linux-gnu`)
 
 `setup_workspace.sh` automatically downloads the appropriate toolchain.
 
@@ -108,19 +109,32 @@ The build system cross-compiles for ARM64. Toolchains vary by JetPack:
 
 | JetPack | L4T Revision | Kernel Dir |
 |---------|-------------|------------|
-| 4.6.1   | 32.7.1      | kernel/kernel-4.9 |
 | 5.0.2   | 35.1        | kernel/kernel-5.10 |
 | 5.1.2   | 35.4.1      | kernel/kernel-5.10 |
 | 6.0     | 36.3        | kernel/kernel-jammy-src |
 | 6.1     | 36.4        | kernel/kernel-jammy-src |
 | 6.2     | 36.4.3      | kernel/kernel-jammy-src |
 | 6.2.1   | 36.4.4      | kernel/kernel-jammy-src |
+| 7.0     | 38.2        | kernel/kernel-noble-src |
+| 7.1     | 38.4        | kernel/kernel-noble-src |
 
 ## Branching
 
 - `master` — primary/release branch
-- `dev` — active development branch
+- `dev` — active development branch; **default target for all PRs**
 - CI builds run on pushes to `master` and `dev`, and on all PRs
+
+## V4L2 control conventions
+
+- A control that librealsense reaches through a **USB depth XU selector** must be a **single read/write V4L2 control**, not a split get/set pair. The MIPI backend's `xu_to_cid()` maps one selector to one CID, and both `get_xu()` and `set_xu()` use that same CID — so a read-only "get" CID plus a separate "set" CID cannot be reached by a single selector. Expose one control with flags `V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE` (do **not** set `READ_ONLY`): `VOLATILE` routes each read to `ds5_g_volatile_ctrl`, `EXECUTE_ON_WRITE` routes each write to `ds5_s_ctrl`. `DS5_CAMERA_CID_AE_MODE` (depth AE regular/accelerated, HWMC SETAETYPE 0x87 / GETAETYPE 0x88, XU selector 0x11) is the reference example.
+- Split get/set CID pairs (e.g. `ae_roi_get/set`, `ae_setpoint_get/set`) are only appropriate for controls librealsense drives via the HWMC blob passthrough (`RS_HWMONITOR → RS_CAMERA_CID_HWMC`), never via a direct XU selector. Adding a matching `case` in librealsense's `xu_to_cid()` is still required for the selector to resolve.
+
+## Kernel ABI / module compatibility notes
+
+- Never add a member to a public kernel struct referenced by exported symbols (e.g. `struct i2c_adapter` in `include/linux/i2c.h`). genksyms recomputes the CRC of every exported symbol referencing that struct, so prebuilt out-of-tree modules built against the unpatched headers — notably the BSP NVIDIA display stack (`nvidia.ko`/`nvidia-modeset.ko`/`nvidia-drm.ko`) — fail to load with "disagrees about version of symbol". Add only new exported functions; keep private state out of public headers. After any kernel-header patch, diff the rebuilt `vmlinux.symvers`/`Module.symvers` against what the BSP modules require (`modprobe --dump-modversions <module>.ko`).
+- The i2c bus-clk-rate feature (kernel patch `0005`) is functional only on 5.x/6.x, where `tegra_i2c_xfer()` reprograms the clock from `adap->bus_clk_rate`. On 7.x the noble i2c-tegra rewrite ignores it, so `0005` is removed for 7.x and the d4xx DFU call sites are version-guarded (`#if ... LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)`). Do not re-add or stub `0005` on 5.x/6.x.
+- JP7/Thor: do not rebuild/replace the BSP NVIDIA display stack — the bundled `nvdisplay` is a non-matching pre-release that breaks GPU/display init (black screen / blinking cursor; `/proc/driver/nvidia/version` shows `TempVersion`). `build_all.sh` passes `SKIP_NVIDIA_DISPLAY=1` for `>= 7.0`, and `install_to_kernel.sh` overlays modules on JP7 (no `rm -rf /lib/modules`).
+- `kernel/realsense/d4xx.c` is symlinked into **every** JetPack version's build tree, but the SerDes sources/headers are per-generation (`nvidia-oot/max96712.{c,h}` for 6.x/7.x via symlinked patch `0003`/`0006`; independent `kernel/nvidia/` patches + `kernel/nvidia/max96712.h` for 5.x). When d4xx wires a deserializer op that references a **new** exported SerDes symbol, that symbol must be provided by **every** JP's SerDes header/driver, since one d4xx.c builds against all of them (CI builds 5.0.2→7.2). Two ways to keep that consistent: (a) add the symbol to **all** generations' SerDes drivers+headers and wire it unconditionally (what `max96712_reset_oneshot_link` does — provided by both `nvidia-oot/max96712.h` and `kernel/nvidia/max96712.h`, so no ifdef); or (b) if a generation genuinely won't provide it, either guard the wiring with a feature macro defined only where the symbol exists, **or** — preferred when the op is a no-op there — don't wire it at all and rely on d4xx's `if (ops->op)` NULL check (what max9296 does for `reset_oneshot_link`: absent from `max9296_interface`, never wired). Do **not** leave a per-generation feature-macro ifdef once the symbol is present in all headers — it becomes dead. New module-to-module exported symbols are ABI-safe (both `.ko` rebuild+deploy together); this is distinct from the kernel-public-struct CRC hazard above.
 
 ## Concurrency notes
 
@@ -134,6 +148,24 @@ The build system cross-compiles for ARM64. Toolchains vary by JetPack:
 - On each HW reset, clear cached values for firmware-populated readiness registers before polling readiness (for example clear `cached_device_type` before waiting for `DS5_DEVICE_TYPE`). Do not let pre-reset cache values short-circuit post-reset readiness checks.
 - For polling loops expecting transient I2C failures (HWMC status checks, reset readiness polls, DFU timeout checks), use `ds5_read_poll()` which performs a single-shot regmap read without retry or logging. This prevents false warnings and excessive log spam. Reserve `ds5_read()` for normal I2C operations where retry semantics are desired.
 - In `ds5_mux_s_stream()`, treat pre-toggle "already streaming" as no-op only when state is coherent; after reset-generation invalidation on start path, force stop + state clear and proceed with normal reconfiguration flow.
+- In `ds5_probe()`, the DFU-magic recovery check (`DS5_DFU_MAGIC_REG` 0x5020 → `DS5_DFU_MAGIC_LSW` 0x0201) must run **before** `ds5_wait_device_type()`. A device sitting in the bootloader after an interrupted FW upgrade never serves `DS5_DEVICE_TYPE` (0x0310) — placing the device-type wait first causes a ~10 s timeout followed by `goto e_chardev` which tears down the `/dev/d4xx-dfu*` chardev, leaving the device unrecoverable over MIPI. Early-return `DS5_DFU_RECOVERY` on magic match; only then proceed to the device-type wait for operational devices.
+- GMSL one-shot reset semantics (per Maxim/ADI): the deserializer one-shot reset does **not** reset or re-train anything — its only effect is flushing the deserializer pixel line buffer. Separately, a camera HW reset does **not** reset the serializer (the ser keeps its config and link lock). So the one-shot's only legitimate job is discarding a stale partial frame left in the line buffer (e.g. camera reset mid-frame); fired while sibling streams are live it truncates their in-flight frames (PIXEL_INCOMPLETE). Do not describe it as "link re-training" in code or docs.
+- The deserializer GMSL one-shot link reset (max96712 `CTRL1` + `msleep(100)`) flushes **one** GMSL link's pixel line buffer (`link = vc_id / MAX9295_MAX_STREAMS`). **It is issued only from the HW-reset recovery path — never from `set_pipe`** (RSDEV-12608, adopted design 2026-07-19). `__max96712_set_pipe` / `__max96712_set_multi_vc_pipe` do **not** flush: all of a camera's streams share one physical link, so flushing on a plain toggle / pipe (re)alloc truncates the sibling streams' in-flight frames (the original bug). The flush **is** needed after a **camera HW reset**: the camera resets mid-frame but the serializer is not reset (keeps config + link lock), so a stale partial frame is left in the deser line buffer with nothing else to clear it. `ds5_hw_reset_with_recovery()` clears it by calling the additive per-link op `dser_interface.reset_oneshot_link(dev, vc_id)` (guarded `if (ops->reset_oneshot_link)`) after the device is ready; max96712 flushes `1 << (vc_id/MAX9295_MAX_STREAMS)`. The op is a **single unlocked `CTRL1` write** — `regmap` serializes the I2C and it does no shared-state RMW, so it needs no `priv->lock` (matching the sibling `max96712_reset_oneshot`); do **not** add a lock around it (holding `priv->lock` across its `msleep(100)` would needlessly stall a concurrent sibling `set_pipe`). max9296 wires **no** op (NULL) — its `set_pipe` re-establishes the pipe without leaving a stale line buffer, so it needs no flush (asymmetric design: max96712 flush, max9296 none, both HW-confirmed).
+  **Why the flush must exist and must live in the recovery path (HW-proven, fw-orin-nano-1, D457+D401 on one max96712):** a NOFLUSH build (no flush anywhere but `setup_link`'s probe-time one-shot) **kernel-panicked** during recovery — the post-reset restart came up on an un-flushed link, the stale frame made the depth stream never complete, VI `uncorr_err: request timed out after 2500 ms` cascaded unbounded until tegra_camera err_rec hit `vi_capture_setup: memoryinfo ringbuffer alloc failed` → NULL deref in `tegra_channel_kthread_capture_enqueue`/`__memset`. So it can't move to probe-time `init_settings`/`setup_link` only (camera HW reset is post-probe and re-runs neither). The adopted per-link recovery flush validated 4/4 recoveries D457-DUT+D401-load **and** D401-DUT, 0 panic, dmesg `RSDEV-12608: link N line-buffer flush (post-HW-reset)` firing once per reset on the correct link. Transient VI 2500ms still occur ([[RSDEV-13047]] residual) but err_rec self-recovers because the flush lets the stream produce valid frames.
+  **History:** the first shipped form gated the flush inside `set_pipe` via an `arm_link_reset(dev,bool)` op + `pending_link_reset` + a d4xx `link_cold_bringup` decision (fired on cold bring-up + recovery restart). That machinery was **removed** when the flush moved to the recovery path — the flush is now causally tied to the reset event, not inferred from "all `ds5_dev` streaming flags clear". Do not reintroduce `arm_link_reset`/`pending_link_reset`/`link_cold_bringup`.
+  The coarse `reset_oneshot(0x0F)` (all-links) on the Y12I/`is_calib` path is a **separate**, ungated reset, out of scope here (all-links → cross-glitches other cameras, [[RSDEV-13028]]). JP5's independent `kernel/nvidia` max96712 driver carries the **same** `reset_oneshot_link` (patches `5.1.2/0007` + `5.0.2/0017`); JP7 shares JP6's via the `0006→0003` symlink. Keep all generations in sync.
+
+## SerDes pipe allocation (MAX96712)
+
+Two allocation schemes coexist on one MAX96712 (up to 4 serializers):
+- **MAX9295 serializer** (default): dynamic — `ds5_configure()` allocates a fresh deserializer pipe per stream via `get_available_pipe_id()`, configures it per-stream in `set_pipe()`, and frees it in `release_pipe()` on stop.
+- **MAX96717 serializer**: it funnels all of a camera's streams through one serializer pipe (`MAX96717_PIPE_ID = 2`) as distinct VCs, so the deserializer must dedicate **one sticky "multi-VC" pipe** to that camera's link and reuse it for the driver's lifetime. `ds5_configure()` detects `ser_ops == &max96717_interface` and allocates via the optional `dser_interface::get_multi_vc_pipe_id()` hook (NULL for MAX9296).
+
+MAX96712 keys the sticky pipe by link (`link = vc_id / MAX9295_MAX_STREAMS`): `link_multi_vc_pipe[]` (-1 = none) + `multi_vc_configured[]`. Contract, when adding/using these helpers:
+- `max96712_release_pipe()` **no-ops** for a multi-VC pipe (never frees or disables it) — a stream stop must not tear it down. `max96712_pipe_is_multi_vc()` detects them and **requires `priv->lock` held**.
+- `max96712_set_pipe()` configures a multi-VC pipe **exactly once** (`__max96712_set_multi_vc_pipe()`, maps all 4 local VCs), guarded by `multi_vc_configured`; later starts no-op. `max96712_init_settings()` clears `multi_vc_configured` (it zeroes `PIPE_EN`, voiding the mapping) so a dser re-init forces re-apply, while pipe ownership persists.
+- The multi-VC register table is validated on **link 0** only; link>0 extended-VC-msb (`MIPI_TX_EXT0..3 = link_id << 2`) is generalized to match the dynamic path but unproven — validate on hardware.
+- `max96712.c` has **no repo copy** — it is carried entirely by `nvidia-oot/6.0/0003-…patch` (JP6.1/6.2 symlink to 6.0; JP7 = `7.x/0006-…patch`). Edit the `sources_<v>/nvidia-oot/.../max96712.c` working copy, then regenerate 0003 via `git diff HEAD^ -- drivers/media/i2c/max96712.c` (0003 touches only this file). JP7 patches are **not** updated by JP6 work — port separately after validation.
 
 ## Post-patch instruction hygiene
 
@@ -144,3 +176,9 @@ After every confirmed code patch, review both `.github/copilot-instructions.md` 
 - If the patch changed the locking, usage, or API contract of a helper or utility function (e.g. moved lock acquisition inside/outside, changed required caller context, or altered error handling), immediately update all documentation and instructions to reflect the new contract. Always check for this class of change after any helper edit.
 - If no new convention was exposed, state that explicitly in the final report and include a short justification.
 - Do not treat the task as complete until that review outcome has been reported.
+
+## Comment style
+
+Keep comments concise and high-signal — both in-code and external (Jira/PR/status updates). Lead with the finding or the "why", in the fewest lines that stay correct; cut restated context and prose. Jira/PR comments especially: a few skimmable lines or bullets, not walls of text.
+
+**No comments that describe an absence or a removal.** An in-code comment states what the code *does* (or a non-obvious *why*) — never what it no longer does, what was deleted, or what it deliberately omits. Delete comments like `no flush here`, `we no longer do X`, `removed Y`, `intentionally not calling Z`. If the absence carries a real invariant worth preserving (e.g. "don't re-add the flush at `set_pipe` — it truncates siblings"), record it **once** as a forward-looking rule in the commit message / PR description / this file, not as a per-site breadcrumb. This applies to the RSDEV-12608 flush sites specifically: the "flush lives only in the HW-reset recovery path, never in `set_pipe`" invariant is documented in the Concurrency notes above and the PR — the `set_pipe`/multi-VC bodies carry no such comment.

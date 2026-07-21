@@ -152,7 +152,12 @@ def _discover_via_querycap():
             with V4L2Device(path) as dev:
                 cap = dev.query_cap()
                 driver = cap.driver.split(b"\x00")[0]
-                if driver == C.D4XX_DRIVER_NAME:
+                card = cap.card.split(b"\x00")[0]
+                # On Orin/tegra-platform builds the d4xx subdev is registered behind
+                # the tegra-video driver rather than d4xx, so fall back to card name.
+                if driver == C.D4XX_DRIVER_NAME or (
+                    driver == C.TEGRA_VIDEO_DRIVER_NAME and b"DS5" in card
+                ):
                     d4xx_paths.append((path, cap))
         except (OSError, Exception):
             continue

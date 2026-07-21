@@ -17,6 +17,7 @@ from ..v4l2.controls import (
 
 
 @pytest.mark.d457
+@pytest.mark.d401
 class TestFirmwareVersion:
     """Read firmware version via control interface."""
 
@@ -32,6 +33,7 @@ class TestFirmwareVersion:
 
 
 @pytest.mark.d457
+@pytest.mark.d401
 class TestLaserControl:
     """Laser on/off toggle and manual laser power."""
 
@@ -75,6 +77,7 @@ class TestLaserControl:
 
 
 @pytest.mark.d457
+@pytest.mark.d401
 class TestExposureControl:
     """Manual exposure set/get."""
 
@@ -111,6 +114,7 @@ class TestExposureControl:
 
 
 @pytest.mark.d457
+@pytest.mark.d401
 class TestAEROI:
     """Auto-exposure ROI roundtrip."""
 
@@ -133,6 +137,7 @@ class TestAEROI:
 
 
 @pytest.mark.d457
+@pytest.mark.d401
 class TestGVD:
     """GVD (General Version Data) readable."""
 
@@ -148,6 +153,7 @@ class TestGVD:
 
 
 @pytest.mark.d457
+@pytest.mark.d401
 class TestCalibration:
     """Calibration table readable."""
 
@@ -173,6 +179,7 @@ class TestCalibration:
 
 
 @pytest.mark.d457
+@pytest.mark.d401
 class TestPWM:
     """PWM control range."""
 
@@ -191,6 +198,7 @@ class TestPWM:
 
 
 @pytest.mark.d457
+@pytest.mark.d401
 class TestAutoExposure:
     """Auto-exposure mode switching and manual exposure control."""
 
@@ -286,6 +294,7 @@ class TestAutoExposure:
 
 
 @pytest.mark.d457
+@pytest.mark.d401
 class TestHWReset:
     """Hardware reset via CID_HW_RESET button control.
 
@@ -348,6 +357,166 @@ class TestHWReset:
 
 
 @pytest.mark.d457
+@pytest.mark.d401
+class TestReadoutShaping:
+    """Readout shaping control (Depth register DS5_READOUT_SHAPING=0x0030), range 0-100."""
+
+    MIN = 0
+    MAX = 100
+    MID = 50
+    DEFAULT = 0
+
+    def test_readout_shaping_enumerated(self, depth_device):
+        controls = enumerate_controls(depth_device)
+        names = [c.name.decode("ascii", errors="replace").lower() for c in controls]
+        assert any("readout shaping" in n for n in names), \
+            "readout shaping not found in enumerated controls"
+
+    def test_readout_shaping_read(self, depth_device):
+        val = read_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING)
+        assert self.MIN <= val <= self.MAX, f"readout_shaping out of range: {val}"
+
+    def test_readout_shaping_set_legal(self, depth_device):
+        original = read_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING)
+        try:
+            for v in (self.MIN, self.MID, self.MAX):
+                write_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING, v)
+                val = read_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING)
+                assert val == v, f"set {v}: got {val}"
+        finally:
+            write_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING, original)
+
+    def test_readout_shaping_clamping(self, depth_device):
+        # V4L2 (VIDIOC_S_CTRL) clamps out-of-range writes to [min, max]
+        original = read_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING)
+        try:
+            write_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING, self.MAX + 1)
+            val = read_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING)
+            assert val == self.MAX, f"{self.MAX + 1} should clamp to {self.MAX}, got {val}"
+
+            write_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING, self.MIN - 1)
+            val = read_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING)
+            assert val == self.MIN, f"{self.MIN - 1} should clamp to {self.MIN}, got {val}"
+        finally:
+            write_int_control(depth_device, C.DS5_CAMERA_CID_READOUT_SHAPING, original)
+
+
+@pytest.mark.d457
+@pytest.mark.d401
+class TestAEType:
+    """Depth auto-exposure mode (HWMC SETAETYPE 0x87 / GETAETYPE 0x88).
+
+    Single read/write control 'depth ae mode' (DS5_CAMERA_CID_AE_MODE): reads
+    route to GETAETYPE, writes to SETAETYPE. Mirrors USB depth XU selector 0x11.
+    Values: 0=Legacy, 1=V2. FW rejects writes while streaming, so these tests
+    run on an idle device.
+    """
+
+    MIN = 0       # DS5_AE_TYPE_LEGACY
+    MAX = 1       # DS5_AE_TYPE_V2
+    DEFAULT = 0   # DS5_AE_TYPE_LEGACY
+
+    def test_ae_type_enumerated(self, depth_device):
+        controls = enumerate_controls(depth_device)
+        names = [c.name.decode("ascii", errors="replace").lower() for c in controls]
+        assert any("depth ae mode" in n for n in names), \
+            "depth ae mode not found in enumerated controls"
+
+    def test_ae_type_read(self, depth_device):
+        val = read_int_control(depth_device, C.DS5_CAMERA_CID_AE_MODE)
+        assert self.MIN <= val <= self.MAX, f"ae mode out of range: {val}"
+
+    def test_ae_type_write_legal(self, depth_device):
+        original = read_int_control(depth_device, C.DS5_CAMERA_CID_AE_MODE)
+        try:
+            for v in (self.MIN, self.MAX):
+                write_int_control(depth_device, C.DS5_CAMERA_CID_AE_MODE, v)
+                val = read_int_control(depth_device, C.DS5_CAMERA_CID_AE_MODE)
+                assert val == v, f"set {v}: got {val}"
+        finally:
+            write_int_control(depth_device, C.DS5_CAMERA_CID_AE_MODE, original)
+
+    def test_ae_type_set_illegal(self, depth_device):
+        # V4L2 (VIDIOC_S_CTRL) clamps out-of-range writes to [min, max]
+        original = read_int_control(depth_device, C.DS5_CAMERA_CID_AE_MODE)
+        try:
+            write_int_control(depth_device, C.DS5_CAMERA_CID_AE_MODE, self.MAX + 1)
+            val = read_int_control(depth_device, C.DS5_CAMERA_CID_AE_MODE)
+            assert val == self.MAX, f"{self.MAX + 1} should clamp to {self.MAX}, got {val}"
+
+            write_int_control(depth_device, C.DS5_CAMERA_CID_AE_MODE, self.MIN - 1)
+            val = read_int_control(depth_device, C.DS5_CAMERA_CID_AE_MODE)
+            assert val == self.MIN, f"{self.MIN - 1} should clamp to {self.MIN}, got {val}"
+        finally:
+            write_int_control(depth_device, C.DS5_CAMERA_CID_AE_MODE, original)
+
+    def test_ae_type_default(self, depth_device):
+        original = read_int_control(depth_device, C.DS5_CAMERA_CID_AE_MODE)
+        try:
+            write_int_control(depth_device, C.DS5_CAMERA_CID_AE_MODE, self.DEFAULT)
+            val = read_int_control(depth_device, C.DS5_CAMERA_CID_AE_MODE)
+            assert val == self.DEFAULT, f"default {self.DEFAULT}: got {val}"
+        finally:
+            write_int_control(depth_device, C.DS5_CAMERA_CID_AE_MODE, original)
+
+    def test_ae_type_roundtrip(self, depth_device):
+        original = read_int_control(depth_device, C.DS5_CAMERA_CID_AE_MODE)
+        try:
+            for v in (self.MIN, self.MAX):
+                write_int_control(depth_device, C.DS5_CAMERA_CID_AE_MODE, v)
+                val = read_int_control(depth_device, C.DS5_CAMERA_CID_AE_MODE)
+                assert val == v, f"roundtrip {v}: got {val}"
+        finally:
+            write_int_control(depth_device, C.DS5_CAMERA_CID_AE_MODE, original)
+
+
+@pytest.mark.d457
+@pytest.mark.d401
+class TestSyncMode:
+    """Sync mode control (RSDEV-6449): simplified 3-value public API.
+
+    Public values: 0=Default, 1=Master, 2=External Sync.
+    FW maps External Sync to Slave (D401) or SlaveFull (D457) internally.
+    """
+
+    SYNC_MODE_DEFAULT  = 0
+    SYNC_MODE_MASTER   = 1
+    SYNC_MODE_EXTERNAL = 2
+
+    def test_sync_mode_range(self, depth_device):
+        """Control must advertise min=0, max=2."""
+        qc = depth_device.query_ctrl(C.DS5_CAMERA_CID_SYNC_MODE)
+        assert qc.minimum == 0, f"Expected min=0, got {qc.minimum}"
+        assert qc.maximum == self.SYNC_MODE_EXTERNAL, \
+            f"Expected max={self.SYNC_MODE_EXTERNAL}, got {qc.maximum}"
+
+    def test_sync_mode_set_get_roundtrip(self, depth_device):
+        """SET/GET roundtrip for each valid public value."""
+        original = read_int_control(depth_device, C.DS5_CAMERA_CID_SYNC_MODE)
+        try:
+            for mode in (self.SYNC_MODE_DEFAULT,
+                         self.SYNC_MODE_MASTER,
+                         self.SYNC_MODE_EXTERNAL):
+                write_int_control(depth_device, C.DS5_CAMERA_CID_SYNC_MODE, mode)
+                val = read_int_control(depth_device, C.DS5_CAMERA_CID_SYNC_MODE)
+                assert val == mode, f"SET {mode} → GET returned {val}"
+        finally:
+            write_int_control(depth_device, C.DS5_CAMERA_CID_SYNC_MODE,
+                              self.SYNC_MODE_DEFAULT)
+
+    def test_sync_mode_default_after_reset(self, depth_device):
+        """After writing DEFAULT, readback must be DEFAULT."""
+        write_int_control(depth_device, C.DS5_CAMERA_CID_SYNC_MODE,
+                          self.SYNC_MODE_MASTER)
+        write_int_control(depth_device, C.DS5_CAMERA_CID_SYNC_MODE,
+                          self.SYNC_MODE_DEFAULT)
+        val = read_int_control(depth_device, C.DS5_CAMERA_CID_SYNC_MODE)
+        assert val == self.SYNC_MODE_DEFAULT, \
+            f"Expected DEFAULT(0) after reset, got {val}"
+
+
+@pytest.mark.d457
+@pytest.mark.d401
 class TestControlEnumeration:
     """Verify controls can be enumerated."""
 

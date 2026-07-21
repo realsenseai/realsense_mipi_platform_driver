@@ -5,8 +5,8 @@ Subject: [PATCH] Porting driver patches to jetpack 5.0.2
 
 Signed-off-by: Junze Wu <junze.wu@intel.com>
 ---
- drivers/media/i2c/Kconfig                     |  10 +
- drivers/media/i2c/Makefile                    |   1 +
+ drivers/media/i2c/Kconfig                     |  18 +
+ drivers/media/i2c/Makefile                    |   2 +
  drivers/media/i2c/max9295.c                   | 389 ++++++++++++++++
  drivers/media/i2c/max9296.c                   | 399 ++++++++++++++++
  .../platform/tegra/camera/sensor_common.c     |   4 +
@@ -28,10 +28,18 @@ diff --git a/drivers/media/i2c/Kconfig b/drivers/media/i2c/Kconfig
 index 8362bc85b..90f5a90e6 100644
 --- a/drivers/media/i2c/Kconfig
 +++ b/drivers/media/i2c/Kconfig
-@@ -184,6 +184,16 @@ config NV_VIDEO_AR0234
+@@ -184,6 +184,24 @@ config NV_VIDEO_AR0234
  	  To compile this driver as a module, choose M here: the module
  	  will be called ar0234.
  
++config NV_SER_MAX96717
++	tristate "MAX92717 Serializer"
++	help
++	  If you say yes here you get support for the MAX92717 serializer.
++
++	  To compile this driver as a module, choose M here: the module
++	  will be called max96717.
++
 +config VIDEO_D4XX
 +	tristate "D4XX camera sensor support"
 +	depends on I2C && VIDEO_V4L2 && VIDEO_V4L2_SUBDEV_API
@@ -49,10 +57,11 @@ diff --git a/drivers/media/i2c/Makefile b/drivers/media/i2c/Makefile
 index af6122bca..0784f0362 100644
 --- a/drivers/media/i2c/Makefile
 +++ b/drivers/media/i2c/Makefile
-@@ -23,3 +23,4 @@ obj-$(CONFIG_I2C_IOEXPANDER_DESER_MAX9296) += max9296.o
+@@ -23,3 +23,5 @@ obj-$(CONFIG_I2C_IOEXPANDER_DESER_MAX9296) += max9296.o
  obj-$(CONFIG_NV_VIDEO_IMX390) += nv_imx390.o
  obj-$(CONFIG_NV_VIDEO_AR0234) += nv_ar0234.o
  obj-$(CONFIG_NV_DESER_MAX96712) += max96712.o
++obj-$(CONFIG_NV_SER_MAX96717) += max96717.o
 +obj-$(CONFIG_VIDEO_D4XX) += d4xx.o
 diff --git a/drivers/media/i2c/max9295.c b/drivers/media/i2c/max9295.c
 index 110f861c3..03040ccb9 100644

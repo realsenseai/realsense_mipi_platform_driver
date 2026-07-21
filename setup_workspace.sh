@@ -61,9 +61,6 @@ else
         elif [[ "$JETPACK_VERSION" == "5.x" ]]; then
             wget --quiet https://developer.nvidia.com/embedded/jetson-linux/bootlin-toolchain-gcc-93 -O aarch64--glibc--stable-final.tar.gz
             tar xf aarch64--glibc--stable-final.tar.gz
-        elif [[ "$JETPACK_VERSION" == "4.x" ]]; then
-            wget --quiet https://releases.linaro.org/components/toolchain/binaries/7.3-2018.05/aarch64-linux-gnu/gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu.tar.xz
-            tar xf gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu.tar.xz --strip-components 1
         fi
         popd
     fi
@@ -111,9 +108,3 @@ if ! version_lt "$JETPACK_VERSION" "6.0"; then
     cp ./$KERNEL_DIR/Makefile "${BUILD_SRCS}/kernel/"
 fi
 
-# remove BUILD_NUMBER env dependency kernel vermagic
-if [[ "${JETPACK_VERSION}" == "4.x" ]]; then
-    sed -i s/'UTS_RELEASE=\$(KERNELRELEASE)-ab\$(BUILD_NUMBER)'/'UTS_RELEASE=\$(KERNELRELEASE)'/g ./${BUILD_SRCS}/kernel/kernel-4.9/Makefile
-    sed -i 's/the-space :=/E =/g' ./${BUILD_SRCS}/kernel/kernel-4.9/scripts/Kbuild.include
-    sed -i 's/the-space += /the-space = \$E \$E/g' ./${BUILD_SRCS}/kernel/kernel-4.9/scripts/Kbuild.include
-fi

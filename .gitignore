@@ -3,11 +3,12 @@
 /kernel_mod
 /sources_*
 /.claude/skills/v4l2-test/v4l2-test_results
+/.claude/skills/v4l2-test/v4l2_test_results
 **__pycache__
 /test.logs
 /.vscode/*.db*
 /.vscode/compile_commands.json
 jetpack_version
-*.code-workspace
-*.tar.gz
-logs
+/.d4xx_build_version
+/log
+config.ini

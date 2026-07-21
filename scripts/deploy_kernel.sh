@@ -45,12 +45,12 @@ if [ "$(ls -A ${LOCAL_DIR}/kernel_mod/${JETPACK_VERSION} 2>/dev/null)" ]; then
 fi
 
 
-# Copy specific kernel files for compatibility with legacy scripts (only for 5.0.2)
+# Copy specific kernel files for compatibility with legacy scripts (5.0.2 / 5.1.2)
 IMG_DIR="images/${JETPACK_VERSION}"
 DEST_DIR="${LOCAL_DIR}/kernel_mod/${JETPACK_VERSION}"
 
-if [ "${JETPACK_VERSION}" = "5.0.2" ]; then
-    echo "Copying kernel files to ${DEST_DIR} (5.0.2 only)..."
+if [ "${JETPACK_VERSION}" = "5.0.2" ] || [ "${JETPACK_VERSION}" = "5.1.2" ]; then
+    echo "Copying kernel files to ${DEST_DIR} (5.0.2/5.1.2)..."
     if [ ! -f "${IMG_DIR}/drivers/media/i2c/d4xx.ko" ]; then
         echo "Error: D4xx deployment requires d4xx.ko"
         echo "Run ./build_all.sh --clean ${JETPACK_VERSION} before deploying."

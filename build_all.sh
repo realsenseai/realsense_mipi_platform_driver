@@ -74,8 +74,6 @@ else
         CROSS_COMPILE=$DEVDIR/l4t-gcc/$JETPACK_VERSION/bin/aarch64-buildroot-linux-gnu-
     elif [[ "$JETPACK_VERSION" == "5.x" ]]; then
         CROSS_COMPILE=$DEVDIR/l4t-gcc/$JETPACK_VERSION/bin/aarch64-buildroot-linux-gnu-
-    elif [[ "$JETPACK_VERSION" == "4.x" ]]; then
-        CROSS_COMPILE=$DEVDIR/l4t-gcc/$JETPACK_VERSION/bin/aarch64-linux-gnu-
     fi
     export CROSS_COMPILE
 fi
@@ -116,11 +114,9 @@ if [[ $CLEAN == 1 ]]; then
     echo "Cleaning build artifacts for ${JP_INPUT_VERSION}..."
     rm -rf $TEGRA_KERNEL_OUT
     rm -rf $BUILD_SRCS/out
-    # Remove outputs from the former split/composite implementation. They are
-    # no longer referenced by Kbuild, so a normal incremental make cannot
-    # discover and delete them.
-    rm -f "$BUILD_SRCS"/nvidia-oot/drivers/media/i2c/{d5xx,realsense-core,realsense-dfu,realsense-v4l2,d4xx-family,d5xx-family}.{o,ko,mod,mod.c}
-    rm -f "$BUILD_SRCS"/nvidia-oot/drivers/media/i2c/.{d5xx,realsense-core,realsense-dfu,realsense-v4l2,d4xx-family,d5xx-family}.o.cmd
+    # Remove outputs from the superseded standalone D5xx module.
+    rm -f "$BUILD_SRCS"/nvidia-oot/drivers/media/i2c/d5xx.{o,ko,mod,mod.c}
+    rm -f "$BUILD_SRCS"/nvidia-oot/drivers/media/i2c/.d5xx.o.cmd
 fi
 
 mkdir -p $TEGRA_KERNEL_OUT
@@ -133,7 +129,7 @@ export KERNEL_MODULES_OUT=$TEGRA_KERNEL_OUT/modules
 # following: 
 # https://docs.nvidia.com/jetson/archives/r36.2/DeveloperGuide/SD/Kernel/KernelCustomization.html#building-the-jetson-linux-kernel
 if version_lt "$JETPACK_VERSION" "6.0"; then
-    #JP4/5
+    #JP5
     cd $BUILD_SRCS/$KERNEL_DIR
     make O=$TEGRA_KERNEL_OUT tegra_defconfig
     if [[ "$DEVDBG" == "1" ]]; then

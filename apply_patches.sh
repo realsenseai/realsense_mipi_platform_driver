@@ -41,24 +41,10 @@ case "$SOURCE_OVERLAY_MODE" in
         exit 2
         ;;
 esac
-
-# set JP4 devicetree
-if [[ "$JETPACK_VERSION" == "4.x" ]]; then
-    JP5_D4XX_DTSI="tegra194-camera-d4xx.dtsi"
-fi
 if version_lt "$JETPACK_VERSION" "6.0"; then
     D4XX_SRC_DST=kernel/nvidia
 else
     D4XX_SRC_DST=nvidia-oot
-fi
-
-# NVIDIA SDK Manager's JetPack 4.6.1 source_sync.sh doesn't set the right folder name, it mismatches with the direct tar
-# package source code. Correct the folder name.
-if [[ "$ACTION" == apply && -d "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen-industrial-dts" ]]; then
-    mv ${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen-industrial-dts ${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen-industrial
-fi
-if [[ "$ACTION" == reset && -d "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen-industrial" ]]; then
-    rm -rfv "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen-industrial" > /dev/null
 fi
 
 # Create nvethernetrm symlink for JP 6.x (moved from source_sync_6.x.sh)
@@ -77,14 +63,6 @@ cleanup_reset_artifacts() {
     local -a reset_artifacts=(
         "drivers/media/i2c/d4xx.c"
         "drivers/media/i2c/d5xx.c"
-        "drivers/media/i2c/d4xx-family.c"
-        "drivers/media/i2c/d5xx-family.c"
-        "drivers/media/i2c/realsense-core.c"
-        "drivers/media/i2c/realsense-dfu.c"
-        "drivers/media/i2c/realsense-dfu.h"
-        "drivers/media/i2c/realsense-platform.h"
-        "drivers/media/i2c/realsense-v4l2.c"
-        "drivers/media/i2c/realsense-v4l2.h"
         "drivers/media/i2c/max96717.c"
         "drivers/media/i2c/max96724.c"
         "include/media/max96712.h"
@@ -195,15 +173,18 @@ if [[ "$ACTION" = "apply" ]]; then
         # device tree
         cp "hardware/realsense/${JP5_D4XX_DTSI}" "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen/kernel-dts/common/tegra194-camera-d4xx.dtsi"
         # max96712 header
-        cp kernel/nvidia/max96712.h "${BUILD_SRCS}/kernel/nvidia/include/media/"
+        ln -f -s $(pwd)/kernel/nvidia/max96712.h "${BUILD_SRCS}/kernel/nvidia/include/media/"
+        # max96717 header and source
+        ln -f -s $(pwd)/kernel/nvidia/max96717.h "${BUILD_SRCS}/kernel/nvidia/include/media/"
+        ln -f -s $(pwd)/kernel/nvidia/max96717.c "${BUILD_SRCS}/kernel/nvidia/drivers/media/i2c/"
     else
         copy_source_overlay "$(pwd)/nvidia-oot/files/${JP_INPUT_VERSION}" "${BUILD_SRCS}/nvidia-oot"
         # max96712 header
-        ln -f nvidia-oot/max96712.h "${BUILD_SRCS}/nvidia-oot/include/media/"
+        ln -f -s $(pwd)/nvidia-oot/max96712.h "${BUILD_SRCS}/nvidia-oot/include/media/"
         if version_lt "$JETPACK_VERSION" "7.0"; then
             # jp6 overlay
-            ln -f hardware/realsense/tegra234-camera-d4xx-overlay*.dts "${BUILD_SRCS}/hardware/nvidia/t23x/nv-public/overlay/"
-            ln -f hardware/realsense/tegra234-camera-d5xx-overlay*.dts "${BUILD_SRCS}/hardware/nvidia/t23x/nv-public/overlay/"
+            ln -f -s $(pwd)/hardware/realsense/tegra234-camera-d4xx-overlay*.dts "${BUILD_SRCS}/hardware/nvidia/t23x/nv-public/overlay/"
+            ln -f -s $(pwd)/hardware/realsense/tegra234-camera-d5xx-overlay*.dts "${BUILD_SRCS}/hardware/nvidia/t23x/nv-public/overlay/"
             JP6_OVERLAY_MAKEFILE="${BUILD_SRCS}/hardware/nvidia/t23x/nv-public/overlay/Makefile"
             if [[ -f "$JP6_OVERLAY_MAKEFILE" ]] && ! grep -q '^dtbo-y += tegra234-camera-d5xx-overlay.dtbo$' "$JP6_OVERLAY_MAKEFILE"; then
                 sed -i '/^dtbo-y += tegra234-camera-d4xx-overlay.dtbo$/a dtbo-y += tegra234-camera-d5xx-overlay.dtbo' "$JP6_OVERLAY_MAKEFILE"
@@ -221,7 +202,9 @@ if [[ "$ACTION" = "apply" ]]; then
                 ln -f "${BUILD_SRCS}/$KERNEL_DIR/3rdparty/canonical/linux-noble/include/dt-bindings/gpio/tegra264-gpio.h" \
                     "${BUILD_SRCS}/$KERNEL_DIR/include/dt-bindings/gpio/" 2>/dev/null || true
             fi
-            ln -f hardware/realsense/tegra264-camera-d4xx-overlay*.dtso "${BUILD_SRCS}/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/"
+            # JP7.x supports overlays with .dtso extension (234 for Orin and 264 for Thor)
+            ln -f -s $(pwd)/hardware/realsense/tegra234-camera-d4xx-overlay*.dtso "${BUILD_SRCS}/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/"
+            ln -f -s $(pwd)/hardware/realsense/tegra264-camera-d4xx-overlay*.dtso "${BUILD_SRCS}/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/"
         fi
     fi
 
@@ -284,10 +267,5 @@ if [[ "$ACTION" = "apply" ]]; then
     fi
     if [[ -d "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen/kernel-dts" ]]; then
         git -C "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen/kernel-dts" commit -m "RS patched" || true
-    fi
-elif [[ "$ACTION" = "reset" ]]; then
-    if version_lt "$JP_INPUT_VERSION" "5.0"; then
-        rm "${BUILD_SRCS}/${D4XX_SRC_DST}/drivers/media/i2c/d4xx.c" || true
-        rm "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen/kernel-dts/common/tegra194-camera-d4xx.dtsi" || true
     fi
 fi

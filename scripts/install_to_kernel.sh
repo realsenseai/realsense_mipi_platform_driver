@@ -37,9 +37,9 @@ if [ "${JETPACK_VERSION}" = "5.0.2" ] || [ "${JETPACK_VERSION}" = "5.1.2" ]; the
     fi
 fi
 
-# JetPack 5.x installs only selected modules into the running module tree. A
-# mismatched Image can therefore boot without its matching modules. Preserve
-# the origin/dev guard and require an explicit override for exceptional use.
+# JetPack 5.x installs only a few .ko into /lib/modules/$(uname -r), so the new
+# Image must match the running kernel; a mismatched-JetPack Image boots without
+# modules and can latch the bootloader into recovery. Override: SKIP_KERNEL_CHECK=1.
 if [ "${JETPACK_VERSION}" = "5.0.2" ] || [ "${JETPACK_VERSION}" = "5.1.2" ]; then
     NEW_IMAGE=$(ls boot/Image Image 2>/dev/null | head -n1)
     if [ -n "${NEW_IMAGE}" ] && [ "${SKIP_KERNEL_CHECK:-0}" != "1" ]; then
@@ -52,7 +52,7 @@ if [ "${JETPACK_VERSION}" = "5.0.2" ] || [ "${JETPACK_VERSION}" = "5.1.2" ]; the
 fi
 
 echo "Copying kernel files for JetPack ${JETPACK_VERSION}..."
-if [ "${JETPACK_VERSION}" = "5.0.2" ]; then
+if [ "${JETPACK_VERSION}" = "5.0.2" ] || [ "${JETPACK_VERSION}" = "5.1.2" ]; then
     if [ ! -f d4xx.ko ]; then
         echo "Error: D4xx installation requires d4xx.ko"
         exit 1
@@ -75,6 +75,8 @@ if [ "${JETPACK_VERSION}" = "5.0.2" ]; then
           sudo cp videobuf-vmalloc.ko /lib/modules/$(uname -r)/updates/
 elif [ "${JETPACK_VERSION}" = "6.0" ] || [ "${JETPACK_VERSION}" = "6.1" ] || [ "${JETPACK_VERSION}" = "6.2" ] || [ "${JETPACK_VERSION}" = "6.2.1" ] || [ "${JETPACK_VERSION}" = "7.0" ] || [ "${JETPACK_VERSION}" = "7.1" ] || [ "${JETPACK_VERSION}" = "7.2" ]; then
     MODULES_DIR="lib/modules/$(uname -r)"
+    # Accept any compression (rootfs.tar.gz, rootfs.tar.bz2, rootfs.tar.xz, ...);
+    # tar autodetects the format from the file contents.
     ROOTFS_TARBALL=$(ls rootfs.tar.* 2>/dev/null | head -n1)
     echo "Extracting ${ROOTFS_TARBALL:-rootfs.tar.*}..."
     if [ -z "${ROOTFS_TARBALL}" ] || ! tar xf "${ROOTFS_TARBALL}"; then
@@ -107,13 +109,10 @@ elif [ "${JETPACK_VERSION}" = "6.0" ] || [ "${JETPACK_VERSION}" = "6.1" ] || [ "
         echo "Error: Failed to copy modules to '/lib/modules/', DON'T REBOOT"
         exit 1
     fi
-    # The unified d4xx.ko supersedes the former D5xx and DFU helper
-    # modules. Remove stale copies after the new module tree is in place so
-    # depmod cannot select duplicate D5 aliases.
-    echo "Removing superseded d5xx.ko and realsense-dfu.ko, if present"
-    if ! sudo find "/lib/modules/$(uname -r)" -type f \
-        \( -name d5xx.ko -o -name realsense-dfu.ko \) -delete; then
-        echo "Error: Failed to remove superseded camera modules, DON'T REBOOT"
+    # The unified d4xx.ko supersedes the standalone D5xx module.
+    echo "Removing superseded d5xx.ko, if present"
+    if ! sudo find "/lib/modules/$(uname -r)" -type f -name d5xx.ko -delete; then
+        echo "Error: Failed to remove superseded d5xx.ko, DON'T REBOOT"
         exit 1
     fi
     if [ "${JETPACK_VERSION}" = "7.0" ] || [ "${JETPACK_VERSION}" = "7.1" ] || [ "${JETPACK_VERSION}" = "7.2" ]; then
