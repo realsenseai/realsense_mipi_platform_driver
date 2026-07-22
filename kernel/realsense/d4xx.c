@@ -4435,6 +4435,10 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 		 * if the chip is still booting after XCLR deassert the write fails.
 		 */
 		msleep(600);
+		if (state->ser_ops == &max96717_interface) {
+			/* Longer boot time for max96717 based products */
+			msleep(600);
+		}
 
 		dev_dbg(dev, "Setup SERDES addressing and control pipeline\n");
 		/* setup serdes addressing and control pipeline */
