@@ -4435,6 +4435,10 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 		 * if the chip is still booting after XCLR deassert the write fails.
 		 */
 		msleep(600);
+		if (state->ser_ops == &max96717_interface) {
+			/* Longer boot time for max96717 based products */
+			msleep(600);
+		}
 
 		dev_dbg(dev, "Setup SERDES addressing and control pipeline\n");
 		/* setup serdes addressing and control pipeline */
@@ -5722,7 +5726,6 @@ static int ds5_hw_init(struct i2c_client *c, struct ds5 *state)
 		/* Tell HKR FW the deserializer runs in PIXEL mode so it
 		 * strictly serializes CSI frame grants across VCs. Non-fatal:
 		 * FW without this register rejects the write. */
-		msleep(5);
 		if (ds5_write(state, DS5_MIPI_SERDES_PIXEL_MODE, 1))
 			dev_warn(sd->dev, "FW has no serdes_pixel_mode support (reg 0x0404)\n");
 	}
