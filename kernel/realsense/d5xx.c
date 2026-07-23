@@ -1313,13 +1313,21 @@ static const struct d5x_format d5x_y_formats_d58x[] = {
 	},
 };
 
-static const struct d5x_format d5x_d58x_rgb_format = {
-	.data_type = GMSL_CSI_DT_YUV422_8,	/* UYVY */
-	.mbus_code = MEDIA_BUS_FMT_YUYV8_1X16,
-	.n_resolutions = ARRAY_SIZE(d58x_rgb_sizes),
-	.resolutions = d58x_rgb_sizes,
+static const struct d5x_format d5x_rgb_formats_d58x[] = {
+	{
+		/* CSI2_DT 0x1E uses MC-FCVT UYVY bytes; V4L2 exposes YUYV. */
+		.data_type = GMSL_CSI_DT_YUV422_8,
+		.mbus_code = MEDIA_BUS_FMT_YUYV8_1X16,
+		.n_resolutions = ARRAY_SIZE(d58x_rgb_sizes),
+		.resolutions = d58x_rgb_sizes,
+	}, {
+		/* Flat NV12 surface carried as width x (height * 3 / 2) RAW8. */
+		.data_type = GMSL_CSI_DT_RAW_8,
+		.mbus_code = MEDIA_BUS_FMT_UYYVYY8_0_5X24,
+		.n_resolutions = ARRAY_SIZE(d58x_rgb_sizes),
+		.resolutions = d58x_rgb_sizes,
+	},
 };
-#define D5X_D58X_RGB_N_FORMATS 1
 
 static const struct d5x_variant d5x_variants[] = {
 	[D5X_DS5U] = {
@@ -1613,6 +1621,69 @@ static const struct d5x_format *d5x_sensor_find_format(
 /* 1-8 */
 #define MIPI_CSI2_TYPE_USER_DEF(i)	(0x30 + (i) - 1)
 
+#ifdef CONFIG_TEGRA_CAMERA_PLATFORM
+static void d5x_tegra_update_mipi_clock(struct sensor_signal_properties *signal,
+					u32 bit_depth)
+{
+	u64 rate;
+
+	if (!signal || !signal->num_lanes)
+		return;
+
+	rate = signal->serdes_pixel_clock.val ?
+		signal->serdes_pixel_clock.val : signal->pixel_clock.val;
+	rate = div_u64(rate * bit_depth, signal->num_lanes);
+
+	if (signal->phy_mode == CSI_PHY_MODE_DPHY)
+		signal->mipi_clock.val = div_u64(rate, 2);
+	else if (signal->phy_mode == CSI_PHY_MODE_CPHY)
+		signal->mipi_clock.val = div_u64(rate * 7, 16);
+	else
+		signal->mipi_clock.val = rate;
+}
+
+static void d5x_tegra_update_rgb_mode(struct d5x *state,
+				      const struct d5x_sensor *sensor)
+{
+	struct sensor_mode_properties *mode;
+	struct sensor_image_properties *image;
+	u32 pixel_format;
+	u32 bit_depth;
+
+	if (!state->mux.sd.sensor_props.sensor_modes ||
+	    !sensor->config.format || !sensor->config.resolution)
+		return;
+
+	switch (sensor->config.format->mbus_code) {
+	case MEDIA_BUS_FMT_UYYVYY8_0_5X24:
+		pixel_format = V4L2_PIX_FMT_NV12;
+		bit_depth = 12;
+		break;
+	case MEDIA_BUS_FMT_YUYV8_1X16:
+		pixel_format = V4L2_PIX_FMT_YUYV;
+		bit_depth = 16;
+		break;
+	default:
+		return;
+	}
+
+	mode = &state->mux.sd.sensor_props.sensor_modes[0];
+	image = &mode->image_properties;
+	image->width = sensor->format.width;
+	image->height = sensor->format.height;
+	image->line_length = sensor->format.width;
+	image->pixel_format = pixel_format;
+	image->embedded_metadata_height = state->metadata_enabled ? 1 : 0;
+
+	d5x_tegra_update_mipi_clock(&mode->signal_properties, bit_depth);
+
+	state->mux.sd.mode_prop_idx = 0;
+	state->mux.sd.mode = state->mux.sd.def_mode;
+	state->mux.sd.fmt_width = image->width;
+	state->mux.sd.fmt_height = image->height;
+}
+#endif
+
 static int __d5x_sensor_set_fmt(struct d5x *state, struct d5x_sensor *sensor,
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
 		struct v4l2_subdev_pad_config *cfg,
@@ -1660,12 +1731,9 @@ static int __d5x_sensor_set_fmt(struct d5x *state, struct d5x_sensor *sensor,
 	else {
 		sensor->format = *mf;
 #ifdef CONFIG_TEGRA_CAMERA_PLATFORM
-		/* Update mode_prop_idx so the Tegra framework uses the correct
-		 * DT mode (pixel_t) for NVCSI/VI pixel parser configuration.
-		 * Only the IR sensor has multiple DT modes (mode0=grey_y8, mode1=grey_y16).
-		 * Other sensors (depth/rgb/imu) have a single mode0 and must stay at 0.
-		 */
-		if (state->is_y8) {
+		if (state->is_rgb) {
+			d5x_tegra_update_rgb_mode(state, sensor);
+		} else if (state->is_y8) {
 			if (sensor->config.format->mbus_code == MEDIA_BUS_FMT_Y8_1X8)
 				state->mux.sd.mode_prop_idx = 0;
 			else
@@ -5983,8 +6051,8 @@ static int d5x_fixed_configuration(struct i2c_client *client, struct d5x *state)
 	switch (dev_type) {
 	case D5X_DEVICE_TYPE_D58X:
 	default:
-		sensor->formats = &d5x_d58x_rgb_format;
-		sensor->n_formats = D5X_D58X_RGB_N_FORMATS;
+		sensor->formats = d5x_rgb_formats_d58x;
+		sensor->n_formats = ARRAY_SIZE(d5x_rgb_formats_d58x);
 	}
 	sensor->mux_pad = D5X_MUX_PAD_RGB;
 
