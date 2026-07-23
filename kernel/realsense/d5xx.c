@@ -1315,7 +1315,7 @@ static const struct d5x_format d5x_y_formats_d58x[] = {
 
 static const struct d5x_format d5x_rgb_formats_d58x[] = {
 	{
-		/* MC-FCVT uses UYVY bytes on DT 0x1E; V4L2 exposes YUYV. */
+		/* CSI2_DT 0x1E uses MC-FCVT UYVY bytes; V4L2 exposes YUYV. */
 		.data_type = GMSL_CSI_DT_YUV422_8,
 		.mbus_code = MEDIA_BUS_FMT_YUYV8_1X16,
 		.n_resolutions = ARRAY_SIZE(d58x_rgb_sizes),
