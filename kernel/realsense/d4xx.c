@@ -132,6 +132,10 @@ struct ser_interface {
 #define DS5_DEVICE_TYPE_D43X		5
 #define DS5_DEVICE_TYPE_UNKNOWN		0
 
+/* GVD response payload size per product line */
+#define DS5_GVD_LEN_D4XX		276
+#define DS5_GVD_LEN_D5XX		606
+
 #define DS5_MIPI_LANE_NUMS		0x0400
 #define DS5_MIPI_LANE_DATARATE		0x0402
 #define DS5_MIPI_SERDES_PIXEL_MODE	0x0404
@@ -3308,6 +3312,18 @@ static int ds5_get_calibration_data(struct ds5 *state, enum table_id id,
 	// get table length from fw
 	ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN,
 			&table_length, sizeof(table_length)); /* Read response length */
+	if (ret) {
+		devm_kfree(&state->client->dev, cmd);
+		return ret;
+	}
+
+	if (table_length > length + 4) {
+		dev_err(&state->client->dev,
+			"%s(): calibration table %d response length %u exceeds buffer size %u\n",
+			__func__, id, table_length, length + 4);
+		devm_kfree(&state->client->dev, cmd);
+		return -ENOBUFS;
+	}
 
 	// read table
 	ds5_raw_read_with_check(state, DS5_HWMC_DATA, cmd->Data, table_length); /* Read table data */
@@ -3318,7 +3334,7 @@ static int ds5_get_calibration_data(struct ds5 *state, enum table_id id,
 	return 0;
 }
 
-static int ds5_gvd(struct ds5 *state, unsigned char *data)
+static int ds5_gvd(struct ds5 *state, unsigned char *data, u32 buf_len)
 {
 	struct hwm_cmd cmd;
 	int ret;
@@ -3338,9 +3354,22 @@ static int ds5_gvd(struct ds5 *state, unsigned char *data)
 	}
 
 	ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN, &length, sizeof(length)); /* Read response length */
+	if (ret)
+		return ret;
+
+	if (!length)
+		return -ENODATA;
+
+	if (length > buf_len) {
+		dev_err(&state->client->dev,
+			"%s(): GVD response length %u exceeds buffer size %u\n",
+			__func__, length, buf_len);
+		return -ENOBUFS;
+	}
+
 	ds5_raw_read_with_check(state, DS5_HWMC_DATA, data, length); /* Read response data */
 
-	return ret;
+	return 0;
 }
 
 static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
@@ -3493,7 +3522,8 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		*ctrl->p_new.p_u32 |= state->fw_build;
 		break;
 	case DS5_CAMERA_CID_GVD:
-		ret = ds5_gvd(state, ctrl->p_new.p_u8);
+		ret = ds5_gvd(state, ctrl->p_new.p_u8,
+				ctrl->elems * ctrl->elem_size);
 		break;
 	case DS5_CAMERA_CID_AE_ROI_GET:
 		if (ctrl->p_new.p_u16) {
@@ -3664,7 +3694,7 @@ static const struct v4l2_ctrl_config ds5_ctrl_gvd = {
 	.id = DS5_CAMERA_CID_GVD,
 	.name = "GVD",
 	.type = V4L2_CTRL_TYPE_U8,
-	.dims = {239},
+	.dims = {DS5_GVD_LEN_D4XX},
 	.elem_size = sizeof(u8),
 	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_READ_ONLY,
 	.step = 1,
@@ -4741,9 +4771,15 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 
 	// Add these after v4l2_ctrl_handler_setup so they won't be set up
 	if (sid >= DEPTH_SID && sid < IMU_SID) {
+		/* GVD payload size differs per product line. */
+		struct v4l2_ctrl_config gvd_cfg = ds5_ctrl_gvd;
+
+		if (state->ds5_dev->cached_device_type == DS5_DEVICE_TYPE_D58X)
+			gvd_cfg.dims[0] = DS5_GVD_LEN_D5XX;
+
 		ctrls->log = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_log, sensor);
 		ctrls->fw_version = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_fw_version, sensor);
-		ctrls->gvd = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_gvd, sensor);
+		ctrls->gvd = v4l2_ctrl_new_custom(hdl, &gvd_cfg, sensor);
 		ctrls->get_depth_calib =
 				v4l2_ctrl_new_custom(hdl, &ds5_ctrl_get_depth_calib, sensor);
 		ctrls->set_depth_calib =
