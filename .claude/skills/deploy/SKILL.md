@@ -47,6 +47,27 @@ v4l2-ctl -d0 --stream-mmap      # Verify streaming works
 
 If `dmesg` shows no d4xx messages or `/dev/video*` devices are missing, the driver did not load — check for patch/build version mismatch or missing DTB overlay.
 
+### Alternate deploy — carriers that boot via extlinux OVERLAYS (overlay-only)
+
+Some GMSL carriers boot a **custom base FDT + boot-time device-tree overlays** chosen in `/boot/extlinux/extlinux.conf`, not the standard NVIDIA kernel/DTB layout. `deploy_kernel.sh` does not model this. For an overlay-only change on such a rig:
+
+1. Copy the built `.dtbo` to the Jetson `/boot` (two hops if build host and Jetson aren't directly reachable):
+   ```bash
+   scp <build-host>:.../generic-dts/dtbs/<overlay>.dtbo <local>
+   scp <local> <user>@<jetson>:/tmp/
+   ssh <user>@<jetson> "sudo cp /tmp/<overlay>.dtbo /boot/"
+   ```
+2. Point a boot label at the overlay in `/boot/extlinux/extlinux.conf` (back it up first). Each `LABEL` block has `LINUX/INITRD/APPEND/FDT` + an `OVERLAYS /boot/<overlay>.dtbo` line; mirror an existing camera label, change only `OVERLAYS` and the menu text, then set `DEFAULT <label>`.
+3. Reboot — GMSL is boot-probe only, no hotplug:
+   ```bash
+   ssh <user>@<jetson> "sudo reboot"
+   ```
+4. After reboot verify (per verify-deploy) and confirm the links: i2c groups `2-00N[abcd]` (link N), `/dev/video-rs-*` symlinks, and **no `-121`** (serdes no-response) in `dmesg` for links that should be empty.
+
+Notes:
+- Non-interactive sudo with a payload file: `echo $PW | sudo -S bash -c 'cmd < /tmp/file'`. Do NOT pipe file content into `sudo -S tee` — sudo eats the first line as the password.
+- The base FDT name and camera-count labels are rig-specific — keep them in the rig's own notes, not in this skill.
+
 ## Deploy Details
 
 ### What gets deployed
