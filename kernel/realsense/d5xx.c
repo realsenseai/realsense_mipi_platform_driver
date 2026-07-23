@@ -176,6 +176,7 @@ struct dser_interface {
 #define D5X_EXPOSURE_ROI_LEFT		0x0014
 #define D5X_EXPOSURE_ROI_BOTTOM		0x0018
 #define D5X_EXPOSURE_ROI_RIGHT		0x001C
+#define D5X_VISUAL_PRESET			0x0020
 #define D5X_MANUAL_LASER_POWER		0x0024
 
 #define D5X_DEPTH_CONFIG_STATUS		0x4800
@@ -423,6 +424,7 @@ struct d5x_ctrls {
 		struct v4l2_ctrl *query_sub_stream;
 		struct v4l2_ctrl *set_sub_stream;
 		struct v4l2_ctrl *sync_mode;
+		struct v4l2_ctrl *visual_preset;
 	};
 };
 
@@ -2185,6 +2187,7 @@ static int d5x_hw_set_exposure(struct d5x *state, u32 base, s32 val)
 #define D5X_CAMERA_CID_EWB			(D5X_CAMERA_CID_BASE+14)
 #define D5X_CAMERA_CID_HWMC			(D5X_CAMERA_CID_BASE+15)
 #define D5X_CAMERA_CID_SYNC_MODE		(D5X_CAMERA_CID_BASE+16)
+#define D5X_CAMERA_CID_VISUAL_PRESET		(D5X_CAMERA_CID_BASE+17)
 
 /*
  * D5xx HWM sync-mode values. Value 1 was the former RGB-master mode and is
@@ -3260,6 +3263,11 @@ static int d5x_s_ctrl(struct v4l2_ctrl *ctrl)
 			}
 		}
 		break;
+	case D5X_CAMERA_CID_VISUAL_PRESET:
+		if (state->is_depth)
+			ret = d5x_write(state, base | D5X_VISUAL_PRESET,
+					ctrl->val);
+		break;
 	}
 
 	mutex_unlock(&state->lock);
@@ -3553,6 +3561,13 @@ static int d5x_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			}
 		}
 		break;
+	case D5X_CAMERA_CID_VISUAL_PRESET:
+		if (state->is_depth && ctrl->p_new.p_s32) {
+			ret = d5x_read(state, base | D5X_VISUAL_PRESET, &reg);
+			if (!ret)
+				*ctrl->p_new.p_s32 = reg;
+		}
+		break;
 	}
 	return ret;
 }
@@ -3810,6 +3825,27 @@ static struct v4l2_ctrl_config d5x_ctrl_sync_mode = {
 	.def = D5X_SYNC_MODE_DISABLED,
 	.qmenu = sync_mode_menu,
 	.menu_skip_mask = BIT(D5X_SYNC_MODE_RGB_MASTER_UNSUPPORTED),
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
+static const char * const visual_preset_menu[] = {
+	[0] = "Custom",
+	[1] = "Default",
+	[2] = "Hand",
+	[3] = "High Accuracy",
+	[4] = "High Density",
+	[5] = "Medium Density",
+};
+
+static const struct v4l2_ctrl_config d5x_ctrl_visual_preset = {
+	.ops = &d5x_ctrl_ops,
+	.id = D5X_CAMERA_CID_VISUAL_PRESET,
+	.name = "Visual Preset",
+	.type = V4L2_CTRL_TYPE_MENU,
+	.min = 0,
+	.max = 5,
+	.def = 1,
+	.qmenu = visual_preset_menu,
 	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 };
 static int d5x_mux_open(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
@@ -4636,6 +4672,8 @@ static int d5x_ctrl_init(struct d5x *state, int sid)
 	/* DEPTH custom */
 	if (sid == DEPTH_SID) {
 		ctrls->sync_mode = v4l2_ctrl_new_custom(hdl, &d5x_ctrl_sync_mode, sensor);
+		ctrls->visual_preset =
+			v4l2_ctrl_new_custom(hdl, &d5x_ctrl_visual_preset, sensor);
 	}
 	/* IMU custom */
 	if (sid == IMU_SID)
