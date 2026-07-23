@@ -134,6 +134,7 @@ struct ser_interface {
 
 #define DS5_MIPI_LANE_NUMS		0x0400
 #define DS5_MIPI_LANE_DATARATE		0x0402
+#define DS5_MIPI_SERDES_PIXEL_MODE	0x0404
 #define DS5_MIPI_CONF_STATUS		0x0500
 
 #define DS5_START_STOP_STREAM		0x1000
@@ -565,6 +566,9 @@ struct ds5 {
 	int reset_ref_ds5;
 	u16 fw_version;
 	u16 fw_build;
+	/* D58x camera behind a PIXEL-mode deserializer - requires strict
+	 * Scheduling and data sizes in HKR side */
+	bool d58x_pixel_mode;
 	u16 control_base;
 	u16 control_status_reg;
 #ifdef CONFIG_VIDEO_D4XX_SERDES
@@ -1316,6 +1320,18 @@ static const struct ds5_resolution ds5_size_imu_extended[] = {
 	},
 };
 
+/* D58x behind a PIXEL-mode serdes (d58x_pixel_mode): the 38-byte extended
+ * IMU record is zero-padded to a wider wire slot (256) to meet GMSL2
+ * pixel-mode minimum sync spacing when sharing the serdes pipe with video. */
+static const struct ds5_resolution ds5_size_imu_extended_d58x_pixel_mode[] = {
+	{
+	.width = 256,
+	.height = 1,
+	.framerates = ds5_imu_framerates,
+	.n_framerates = ARRAY_SIZE(ds5_imu_framerates),
+	},
+};
+
 static const struct ds5_format ds5_depth_formats_d40x[] = {
 	{
 		// TODO: 0x31 is replaced with 0x1e since it caused low FPS in Jetson.
@@ -1595,6 +1611,16 @@ static const struct ds5_format ds5_imu_formats_extended[] = {
 		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
 		.n_resolutions = ARRAY_SIZE(ds5_size_imu_extended),
 		.resolutions = ds5_size_imu_extended,
+	},
+};
+
+static const struct ds5_format ds5_imu_formats_extended_d58x_pixel_mode[] = {
+	{
+		/* First format: default */
+		.data_type = GMSL_CSI_DT_RAW_8,	/* IMU DT */
+		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
+		.n_resolutions = ARRAY_SIZE(ds5_size_imu_extended_d58x_pixel_mode),
+		.resolutions = ds5_size_imu_extended_d58x_pixel_mode,
 	},
 };
 
@@ -4409,6 +4435,10 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 		 * if the chip is still booting after XCLR deassert the write fails.
 		 */
 		msleep(600);
+		if (state->ser_ops == &max96717_interface) {
+			/* Longer boot time for max96717 based products */
+			msleep(600);
+		}
 
 		dev_dbg(dev, "Setup SERDES addressing and control pipeline\n");
 		/* setup serdes addressing and control pipeline */
@@ -5692,6 +5722,14 @@ static int ds5_hw_init(struct i2c_client *c, struct ds5 *state)
 	if (!ret)
 		ret = ds5_write(state, DS5_MIPI_LANE_DATARATE, MIPI_LANE_RATE);
 
+	if (!ret && state->d58x_pixel_mode) {
+		/* Tell HKR FW the deserializer runs in PIXEL mode so it
+		 * strictly serializes CSI frame grants across VCs. Non-fatal:
+		 * FW without this register rejects the write. */
+		if (ds5_write(state, DS5_MIPI_SERDES_PIXEL_MODE, 1))
+			dev_warn(sd->dev, "FW has no serdes_pixel_mode support (reg 0x0404)\n");
+	}
+
 	if (!ret)
 		ret = ds5_read(state, DS5_MIPI_CONF_STATUS, &mipi_status);
 
@@ -5934,10 +5972,25 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 
 	sensor = &state->imu.sensor;
 
+	state->d58x_pixel_mode = false;
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	/* D58x on a MAX96712 deserializer runs the serdes link in PIXEL mode. */
+	state->d58x_pixel_mode = (dev_type == DS5_DEVICE_TYPE_D58X) &&
+				 (state->dser_ops == &max96712_interface);
+#endif
+
 	/* For fimware version starting from: 5.16,
 	   IMU will have 32bit axis values.
  	   5.16.x.y = firmware version: 0x0510 */
-	if (state->fw_version >= 0x510)
+	if (dev_type == DS5_DEVICE_TYPE_D58X) {
+		/* D58x always carries the 38-byte extended IMU record; in serdes
+		 * pixel mode the line is zero-padded (256) to meet GMSL2 pixel-mode
+		 * minimum sync spacing when sharing the pipe with video. */
+		if (state->d58x_pixel_mode)
+			sensor->formats = ds5_imu_formats_extended_d58x_pixel_mode;
+		else
+			sensor->formats = ds5_imu_formats_extended;
+	} else if (state->fw_version >= 0x510)
 		sensor->formats = ds5_imu_formats_extended;
 	else
 		sensor->formats = ds5_imu_formats;
