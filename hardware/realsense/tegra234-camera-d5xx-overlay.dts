@@ -23,7 +23,7 @@
  *   TCA9548  mux:    0x72  (same as D4xx deser board)
  *   MAX96724 deser:  0x27  (user-confirmed)
  *   MAX96717 ser:    0x40  (default), 0x60 (aliased, user-confirmed)
- *   HKR camera SoC:  0x42  (def-addr, user-confirmed)
+ *   HKR camera SoC:  0x10  (def-addr)
  *   Sensor aliases:   0x1a (Depth), 0x1b (RGB), 0x1c (IR), 0x1d (IMU)
  *
  * The four logical streams follow the D5xx driver stream model:
@@ -300,12 +300,12 @@
 							 * [HAS] Section 4.1: "HKR assigns output streams to
 							 *        MIPI VC: Depth→VC0"
 							 *
-							 * def-addr: 0x42 = HKR SoC I2C base (user-confirmed)
+							 * def-addr: 0x10 = HKR SoC I2C base
 							 * reg: 0x1a = primary aliased address (user-confirmed)
 							 */
 							d5xx_depth: d5xx@1a {
 								status = "okay";
-								def-addr = <0x42>;
+								def-addr = <0x10>;
 								reg = <0x1a>;
 								compatible = "realsense,d5xx";
 								use_sensor_mode_id = "true";
@@ -377,13 +377,13 @@
 							 * D585 RGB stream — VC1
 							 * RGB follows the D5xx stream model as stream 1 / VC1.
 							 *
-							 * def-addr: 0x42 = HKR SoC I2C base
+							 * def-addr: 0x10 = HKR SoC I2C base
 							 * reg: 0x1b = aliased address
 							 * override_reg: 0x1a = redirect to primary node
 							 */
 							d5xx_rgb: d5xx@1b {
 								status = "okay";
-								def-addr = <0x42>;
+								def-addr = <0x10>;
 								reg = <0x1b>;
 								override_reg = <0x1a>;
 								compatible = "realsense,d5xx";
@@ -443,13 +443,13 @@
 							 * Y8, Y8I, and Y12I are mutually exclusive formats on
 							 * one logical IR stream, not separate left/right nodes.
 							 *
-							 * def-addr: 0x42 = HKR SoC I2C base
+							 * def-addr: 0x10 = HKR SoC I2C base
 							 * reg: 0x1c = aliased address
 							 * override_reg: 0x1a = redirect to primary node
 							 */
 							d5xx_ir: d5xx@1c {
 								status = "okay";
-								def-addr = <0x42>;
+								def-addr = <0x10>;
 								reg = <0x1c>;
 								override_reg = <0x1a>;
 								compatible = "realsense,d5xx";
@@ -508,13 +508,13 @@
 							 * D585 IMU stream — VC3
 							 * IMU follows the D5xx stream model as stream 3 / VC3.
 							 *
-							 * def-addr: 0x42 = HKR SoC I2C base
+							 * def-addr: 0x10 = HKR SoC I2C base
 							 * reg: 0x1d = aliased address
 							 * override_reg: 0x1a = redirect to primary node
 							 */
 							d5xx_imu: d5xx@1d {
 								status = "okay";
-								def-addr = <0x42>;
+								def-addr = <0x10>;
 								reg = <0x1d>;
 								override_reg = <0x1a>;
 								compatible = "realsense,d5xx";
