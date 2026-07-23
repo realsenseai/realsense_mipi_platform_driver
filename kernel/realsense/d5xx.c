@@ -86,6 +86,27 @@ struct dser_interface {
 #define GMSL_CSI_DT_EMBED           0x12
 #endif
 
+#ifndef GMSL_CSI_DT_RAW_10
+#define GMSL_CSI_DT_RAW_10          0x2B
+#endif
+
+#ifndef GMSL_CSI_DT_USER_1
+#define GMSL_CSI_DT_USER_1          0x30
+#endif
+
+/*
+ * D5x RGB ISYS stores GRBG10P as 50 little-endian 10-bit pixels per
+ * 64-byte cache line. This is neither standard CSI RAW10, V4L2 IPU3
+ * SGRBG10, nor 10-bit-in-16 BA10.
+ */
+#ifndef MEDIA_BUS_FMT_RS_SGRBG10P_1X10
+#define MEDIA_BUS_FMT_RS_SGRBG10P_1X10 0x5002
+#endif
+
+#ifndef V4L2_PIX_FMT_RS_SGRBG10P
+#define V4L2_PIX_FMT_RS_SGRBG10P v4l2_fourcc('G', 'R', '0', 'P')
+#endif
+
 /*
  * D5X_BYPASS_CAMERA_I2C: Bypass all I2C communication to the D5XX camera
  * sensor while keeping GMSL SERDES (MAX96717/MAX96724) fully operational.
@@ -1198,8 +1219,8 @@ static const u16 d5x_framerate_to_60[] = {5, 15, 30, 60};
 static const u16 d5x_framerate_to_90[] = {5, 15, 30, 60, 90};
 static const u16 d5x_framerate_15_30[] = {15, 30};
 static const u16 d5x_framerate_15_25[] = {15, 25};
+static const u16 d5x_framerate_25[] = {25};
 static const u16 d5x_framerate_90[] = {90};
-static const u16 d5x_framerate_9_30[] = {9, 30};
 static const u16 d5x_imu_framerates[] = {100, 200, 400};
 
 /* Helper macro to define resolution entries concisely. */
@@ -1248,9 +1269,9 @@ static const struct d5x_resolution d58x_rgb_sizes[] = {
 	D5X_RES(424, 240, d5x_framerate_to_90)
 };
 
-/* D58x COLOR_RAW resolutions: RAW16 */
+/* D58x packed Bayer RGB profile carried as an opaque CSI-2 UD30 byte stream. */
 static const struct d5x_resolution d58x_rgb_raw_sizes[] = {
-	D5X_RES(1600, 1300, d5x_framerate_9_30)
+	D5X_RES(1600, 1300, d5x_framerate_25)
 };
 
 static const struct d5x_resolution d5x_size_imu[] = {
@@ -1326,6 +1347,16 @@ static const struct d5x_format d5x_rgb_formats_d58x[] = {
 		.mbus_code = MEDIA_BUS_FMT_UYYVYY8_0_5X24,
 		.n_resolutions = ARRAY_SIZE(d58x_rgb_sizes),
 		.resolutions = d58x_rgb_sizes,
+	}, {
+		/*
+		 * HKR FMT_SGRBG10P bytes are carried unchanged as CSI DT 0x30.
+		 * The private mbus code prevents this surface from being exposed
+		 * as standard BA10 or V4L2 IPU3 SGRBG10.
+		 */
+		.data_type = GMSL_CSI_DT_USER_1,
+		.mbus_code = MEDIA_BUS_FMT_RS_SGRBG10P_1X10,
+		.n_resolutions = ARRAY_SIZE(d58x_rgb_raw_sizes),
+		.resolutions = d58x_rgb_raw_sizes,
 	},
 };
 
@@ -1662,6 +1693,10 @@ static void d5x_tegra_update_rgb_mode(struct d5x *state,
 	case MEDIA_BUS_FMT_YUYV8_1X16:
 		pixel_format = V4L2_PIX_FMT_YUYV;
 		bit_depth = 16;
+		break;
+	case MEDIA_BUS_FMT_RS_SGRBG10P_1X10:
+		pixel_format = V4L2_PIX_FMT_RS_SGRBG10P;
+		bit_depth = 10;
 		break;
 	default:
 		return;

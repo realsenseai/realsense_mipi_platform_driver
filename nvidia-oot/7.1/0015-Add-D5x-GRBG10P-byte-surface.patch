@@ -1,0 +1,102 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: zhou <shengyong.zhou@realsenseai.com>
+Date: Fri, 24 Jul 2026 19:30:00 +0800
+Subject: [PATCH] media: tegra: receive D5x GRBG10P over UD30
+
+D5x RGB ISYS stores FMT_SGRBG10P as 50 little-endian 10-bit pixels
+in each 64-byte cache line. HIF MIPI preserves the complete aligned
+row in a CSI User Defined 1 packet so the receiver treats the payload
+as an opaque byte stream.
+
+Add a private mbus/fourcc tuple for this product surface. VI matches
+wire DT 0x30, maps the User Defined byte stream to RAW8/T_R8, and writes
+the payload unchanged. The visible V4L2 geometry remains 1600x1300 while
+bytesperline and capture frame_x use the 2048-byte HKR stride.
+
+Signed-off-by: zhou <shengyong.zhou@realsenseai.com>
+---
+diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+index 079b5865..fa0acd21 100644
+--- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
++++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+@@ -394,6 +394,8 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+ 	u32 bpl = chan->format.bytesperline;
+ 	u32 data_type = chan->fmtinfo->img_dt;
+ 	bool flat_nv12 = chan->fmtinfo->fourcc == V4L2_PIX_FMT_NV12;
++	bool d5x_sgrbg10p =
++		chan->fmtinfo->fourcc == V4L2_PIX_FMT_RS_SGRBG10P;
+ 	u32 nvcsi_stream = chan->port[vi_port];
+ 	struct capture_descriptor_memoryinfo *desc_memoryinfo =
+ 		&chan->tegra_vi_channel[vi_port]->
+@@ -409,6 +411,9 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+ 	/* D5xx carries flat NV12 bytes as W x (H * 3 / 2) RAW8 rows. */
+ 	if (flat_nv12)
+ 		height = height * 3 / 2;
++	else if (d5x_sgrbg10p)
++		/* RAW8 parser width is the byte-identical HKR DDR stride. */
++		width = bpl;
+ 
+ 	memcpy(desc, &capture_template, sizeof(capture_template));
+ 	memset(desc_memoryinfo, 0, sizeof(*desc_memoryinfo));
+@@ -421,6 +426,14 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+ 	desc->ch_cfg.frame.frame_y = height;
+ 	desc->ch_cfg.match.datatype = data_type;
+ 	desc->ch_cfg.match.datatype_mask = 0x3f;
++	if (d5x_sgrbg10p) {
++		/*
++		 * UD30 is an opaque byte stream. Map it to RAW8 only inside VI
++		 * so each packet payload byte reaches the V4L2 surface unchanged.
++		 */
++		desc->ch_cfg.dt_enable = 1;
++		desc->ch_cfg.dt_override = TEGRA_IMAGE_DT_RAW8;
++	}
+ 	desc->ch_cfg.pixfmt_enable = 1;
+ 	desc->ch_cfg.pixfmt.format = format;
+ 
+diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
+index 6dc16c9f..58f80bd4 100644
+--- a/drivers/media/platform/tegra/camera/vi/channel.c
++++ b/drivers/media/platform/tegra/camera/vi/channel.c
+@@ -1156,6 +1156,9 @@ tegra_channel_enum_format(struct file *file, void *fh, struct v4l2_fmtdesc *f)
+ 	index -= 1;
+ 	f->pixelformat = tegra_core_get_fourcc_by_idx(chan, index);
+ 
++	if (f->pixelformat == v4l2_fourcc('G', 'R', '0', 'P'))
++		strscpy(f->description, "RealSense GRBG10P CL64", sizeof(f->description));
++
+ 	return 0;
+ }
+ 
+diff --git a/drivers/media/platform/tegra/camera/vi/vi5_formats.h b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
+index fb07cfd2..1cb54ba8 100644
+--- a/drivers/media/platform/tegra/camera/vi/vi5_formats.h
++++ b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
+@@ -76,6 +76,14 @@ enum tegra_image_format {
+ 	TEGRA_IMAGE_FORMAT_T_DPCM_RAW20,
+ };
+ 
++#ifndef MEDIA_BUS_FMT_RS_SGRBG10P_1X10
++#define MEDIA_BUS_FMT_RS_SGRBG10P_1X10 0x5002
++#endif
++
++#ifndef V4L2_PIX_FMT_RS_SGRBG10P
++#define V4L2_PIX_FMT_RS_SGRBG10P v4l2_fourcc('G', 'R', '0', 'P')
++#endif
++
+ static const struct tegra_video_format vi5_video_formats[] = {
+ 	/* RAW 6: TODO */
+ 
+@@ -170,6 +178,13 @@ static const struct tegra_video_format vi5_video_formats[] = {
+ 	TEGRA_VIDEO_FORMAT(RAW8, 8, UYYVYY8_0_5X24, 1, 1, T_R8,
+ 				RAW8, NV12, "YUV 4:2:0 NV12"),
+ 
++	/*
++	 * D5x FMT_SGRBG10P: 50 little-endian 10-bit pixels per 64-byte
++	 * cache line. Receive CSI UD30 and preserve every byte in T_R8.
++	 */
++	TEGRA_VIDEO_FORMAT(RAW10, 10, RS_SGRBG10P_1X10, 32, 25, T_R8,
++				USER_1, RS_SGRBG10P, "RealSense GRBG10P CL64"),
++
+ };
+ 
+ #endif
