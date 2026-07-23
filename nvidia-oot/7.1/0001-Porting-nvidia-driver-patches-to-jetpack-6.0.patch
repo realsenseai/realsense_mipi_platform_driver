@@ -1023,7 +1023,7 @@ index 7b16dcaf..487ae44b 100644
 +	memcpy(frm_buffer, chan->emb_buf_addr, 255);
 +	evbuf = to_vb2_v4l2_buffer(evb);
 +	evbuf->sequence = vbuf->sequence;
-+	vb2_set_plane_payload(evb, 0, 68);
++	vb2_set_plane_payload(evb, 0, 255);
 +	evb->timestamp = vbuf->vb2_buf.timestamp;
 +	vb2_buffer_done(evb, VB2_BUF_STATE_DONE);
 +}
