@@ -826,7 +826,7 @@ index 0408ba67..e5a25062 100644
 + * Kept together so the buffer size and payload length can't drift apart.
 + */
 +#define D4XX_META_BUFSIZE	255
-+#define D4XX_META_PAYLOAD	68
++#define D4XX_META_PAYLOAD	255
 +
  int tegra_channel_init_video(struct tegra_channel *chan);
 +int tegra_channel_init_video_embedded(struct tegra_channel *chan);
