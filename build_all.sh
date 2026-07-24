@@ -175,6 +175,7 @@ else
             cp $BUILD_SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-camera-d5xx-overlay-fg24-4ch.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/ 2>/dev/null || true
         fi
         if [[ "$FG24" == "1" ]]; then
+            cp $BUILD_SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-p3768-0000+p3767-0000-nv.dtb $TEGRA_KERNEL_OUT/rootfs/boot/dtb/kernel_tegra234-p3768-0000+p3767-0000-nv.dtb
             cp $BUILD_SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-p3768-0000+p3767-0005-nv-super.dtb $TEGRA_KERNEL_OUT/rootfs/boot/dtb/kernel_tegra234-p3768-0000+p3767-0005-nv-super.dtb
         else
             cp $BUILD_SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-p3737-0000+p3701-0000-nv.dtb $TEGRA_KERNEL_OUT/rootfs/boot/dtb/
