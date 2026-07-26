@@ -28,6 +28,7 @@
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
 #include <linux/string.h>
+#include <linux/swab.h>
 #include <linux/videodev2.h>
 #include <linux/version.h>
 #include <linux/mutex.h>
@@ -90,8 +91,16 @@ struct dser_interface {
 #define GMSL_CSI_DT_RAW_10          0x2B
 #endif
 
+#ifndef GMSL_CSI_DT_RAW_16
+#define GMSL_CSI_DT_RAW_16          0x2E
+#endif
+
 #ifndef GMSL_CSI_DT_USER_1
 #define GMSL_CSI_DT_USER_1          0x30
+#endif
+
+#ifndef MEDIA_BUS_FMT_RS_SGRBG10_1X16
+#define MEDIA_BUS_FMT_RS_SGRBG10_1X16 0x5003
 #endif
 
 /*
@@ -545,6 +554,11 @@ struct d5x {
 	u16 fw_build;
 	u16 control_base;
 	u16 control_status_reg;
+#ifdef CONFIG_TEGRA_CAMERA_PLATFORM
+	struct mutex frame_postprocess_lock;
+	void *frame_postprocess_scratch;
+	size_t frame_postprocess_scratch_size;
+#endif
 #ifdef CONFIG_VIDEO_D5XX_SERDES
 	struct gmsl_link_ctx g_ctx;
 	struct device *ser_dev;
@@ -558,6 +572,70 @@ struct d5x {
 #endif
 	struct d5x_dev *d5x_dev; /* D5xx device state */
 };
+
+#ifdef CONFIG_TEGRA_CAMERA_PLATFORM
+static void d5x_postprocess_csi_frame(struct camera_common_data *s_data,
+				     void *data, size_t bytesused,
+				     u32 mbus_code)
+{
+	struct d5x *state = container_of(s_data, struct d5x, mux.sd);
+	u64 *quadwords;
+	size_t quadword_count;
+	size_t remainder;
+	u8 *tail;
+
+	if (mbus_code != MEDIA_BUS_FMT_RS_SGRBG10_1X16)
+		return;
+	if (WARN_ON_ONCE(bytesused & 1U))
+		return;
+
+	mutex_lock(&state->frame_postprocess_lock);
+	if (state->frame_postprocess_scratch_size < bytesused) {
+		void *scratch = kvmalloc(bytesused, GFP_KERNEL);
+
+		if (!scratch) {
+			dev_err_ratelimited(&state->client->dev,
+					    "failed to allocate BA10 postprocess buffer\n");
+			goto unlock;
+		}
+
+		kvfree(state->frame_postprocess_scratch);
+		state->frame_postprocess_scratch = scratch;
+		state->frame_postprocess_scratch_size = bytesused;
+	}
+
+	memcpy(state->frame_postprocess_scratch, data, bytesused);
+	quadwords = state->frame_postprocess_scratch;
+	quadword_count = bytesused / sizeof(*quadwords);
+	while (quadword_count--) {
+		u64 value = *quadwords;
+
+		*quadwords++ = ((value & 0x00ff00ff00ff00ffULL) << 8) |
+			       ((value & 0xff00ff00ff00ff00ULL) >> 8);
+	}
+
+	remainder = bytesused & (sizeof(*quadwords) - 1U);
+	tail = (u8 *)quadwords;
+	if (remainder >= sizeof(u32)) {
+		u32 *word = (u32 *)tail;
+
+		*word = swahb32(*word);
+		tail += sizeof(*word);
+		remainder -= sizeof(*word);
+	}
+	if (remainder)
+		swab16s((u16 *)tail);
+
+	memcpy(data, state->frame_postprocess_scratch, bytesused);
+
+unlock:
+	mutex_unlock(&state->frame_postprocess_lock);
+}
+
+static const struct tegra_frame_postprocess_ops d5x_frame_postprocess_ops = {
+	.process = d5x_postprocess_csi_frame,
+};
+#endif
 
 struct d5x_dev {
 	struct mutex lock;
@@ -1349,6 +1427,15 @@ static const struct d5x_format d5x_rgb_formats_d58x[] = {
 		.resolutions = d58x_rgb_sizes,
 	}, {
 		/*
+		 * HKR emits one 10-bit GRBG sample in each 16-bit container.
+		 * RAW16 preserves those containers on wire; V4L2 exposes BA10.
+		 */
+		.data_type = GMSL_CSI_DT_RAW_16,
+		.mbus_code = MEDIA_BUS_FMT_RS_SGRBG10_1X16,
+		.n_resolutions = ARRAY_SIZE(d58x_rgb_raw_sizes),
+		.resolutions = d58x_rgb_raw_sizes,
+	}, {
+		/*
 		 * HKR FMT_SGRBG10P bytes are carried unchanged as CSI DT 0x30.
 		 * The private mbus code prevents this surface from being exposed
 		 * as standard BA10 or V4L2 IPU3 SGRBG10.
@@ -1692,6 +1779,11 @@ static void d5x_tegra_update_rgb_mode(struct d5x *state,
 		break;
 	case MEDIA_BUS_FMT_YUYV8_1X16:
 		pixel_format = V4L2_PIX_FMT_YUYV;
+		bit_depth = 16;
+		break;
+	case MEDIA_BUS_FMT_RS_SGRBG10_1X16:
+		pixel_format = V4L2_PIX_FMT_SGRBG10;
+		/* The CSI carrier transmits the complete 16-bit container. */
 		bit_depth = 16;
 		break;
 	case MEDIA_BUS_FMT_RS_SGRBG10P_1X10:
@@ -4916,6 +5008,27 @@ static int d5x_mux_enum_mbus_code(struct v4l2_subdev *sd,
 		remote_sd = &state->imu.sensor.sd;
 		break;
 	case D5X_MUX_PAD_EXTERNAL:
+		/*
+		 * A stream-specific mux enumerates that stream's complete format
+		 * table. Only the shared legacy mux combines IR and depth indices.
+		 */
+		if (state->is_rgb) {
+			remote_sd = &state->rgb.sensor.sd;
+			break;
+		}
+		if (state->is_depth) {
+			remote_sd = &state->depth.sensor.sd;
+			break;
+		}
+		if (state->is_y8) {
+			remote_sd = &state->ir.sensor.sd;
+			break;
+		}
+		if (state->is_imu) {
+			remote_sd = &state->imu.sensor.sd;
+			break;
+		}
+
 		if (mce->index >= state->ir.sensor.n_formats +
 				state->depth.sensor.n_formats)
 			return -EINVAL;
@@ -5989,6 +6102,9 @@ static int d5x_mux_init(struct i2c_client *c, struct d5x *state)
 #if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && defined(CONFIG_TEGRA_EMBEDDED_METADATA_OPS)
 	state->mux.sd.embedded_metadata_ops = &d5x_csi_metadata_ops;
 #endif
+#ifdef CONFIG_TEGRA_CAMERA_PLATFORM
+	state->mux.sd.frame_postprocess_ops = &d5x_frame_postprocess_ops;
+#endif
 	ret = camera_common_initialize(&state->mux.sd, "d5xx");
 	if (ret) {
 		dev_err(&c->dev, "Failed to initialize d5xx.\n");
@@ -6884,6 +7000,9 @@ static int d5x_probe(struct i2c_client *c
 		return -ENOMEM;
 
 	mutex_init(&state->lock);
+#ifdef CONFIG_TEGRA_CAMERA_PLATFORM
+	mutex_init(&state->frame_postprocess_lock);
+#endif
 
 	state->client = c;
 
@@ -7131,6 +7250,10 @@ static void d5x_remove(struct i2c_client *c)
 	if (state->is_depth && state->dfu_dev.d5x_class) {
 		d5x_chrdev_remove(state);
 	}
+
+#ifdef CONFIG_TEGRA_CAMERA_PLATFORM
+	kvfree(state->frame_postprocess_scratch);
+#endif
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 12)
 	return 0;
