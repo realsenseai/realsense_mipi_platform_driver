@@ -260,7 +260,7 @@
 
 					ds5_3: ds5@1d {
 						status = "okay";
-						def-addr = <0x42>;
+						def-addr = <0x10>;
 						reg = <0x1d>;
 						override_reg = <0x1a>;
 						compatible = "intel,d4xx";
@@ -308,7 +308,7 @@
 
 					ds5_2: ds5@1c {
 						status = "okay";
-						def-addr = <0x42>;
+						def-addr = <0x10>;
 						reg = <0x1c>;
 						override_reg = <0x1a>;
 						compatible = "intel,d4xx";
@@ -357,7 +357,7 @@
 
 					ds5_1: ds5@1b {
 						status = "okay";
-						def-addr = <0x42>;
+						def-addr = <0x10>;
 						reg = <0x1b>;
 						override_reg = <0x1a>;
 						compatible = "intel,d4xx";
@@ -405,7 +405,7 @@
 
 					ds5_0: ds5@1a {
 						status = "okay";
-						def-addr = <0x42>;
+						def-addr = <0x10>;
 						reg = <0x1a>;
 						compatible = "intel,d4xx";
 						use_sensor_mode_id = "true";
