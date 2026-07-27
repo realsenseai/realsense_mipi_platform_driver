@@ -90,7 +90,6 @@ int max96717_init_settings(struct device *dev);
 int max96717_setup_streaming(struct device *dev);
 void max96717_retrigger_tx(struct device *dev);
 
-int max96717_setup_gpio_tunneling(struct device *dev);
 int max96717_enable_gpio_tunneling(struct device *dev);
 int max96717_disable_gpio_tunneling(struct device *dev);
 
