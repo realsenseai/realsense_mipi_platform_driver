@@ -562,11 +562,6 @@ struct d5x {
 	u16 fw_build;
 	u16 control_base;
 	u16 control_status_reg;
-#ifdef CONFIG_TEGRA_CAMERA_PLATFORM
-	struct mutex frame_postprocess_lock;
-	void *frame_postprocess_scratch;
-	size_t frame_postprocess_scratch_size;
-#endif
 #ifdef CONFIG_VIDEO_D5XX_SERDES
 	struct gmsl_link_ctx g_ctx;
 	struct device *ser_dev;
@@ -582,58 +577,52 @@ struct d5x {
 };
 
 #ifdef CONFIG_TEGRA_CAMERA_PLATFORM
-static void d5x_copy_raw16_to_ba10(void *dst, const void *src,
-				   size_t bytesused)
+static void d5x_swap_raw16_to_ba10(void *data, size_t bytesused)
 {
-	const u64 *src_quadwords = src;
-	u64 *dst_quadwords = dst;
-	size_t quadword_count = bytesused / sizeof(*src_quadwords);
-	size_t remainder;
-	const u8 *src_tail;
-	u8 *dst_tail;
+	u8 *cursor = data;
 
-	while (quadword_count--) {
-		u64 value = *src_quadwords++;
+	while (bytesused >= sizeof(u64)) {
+		u64 value = get_unaligned_le64(cursor);
 
-		*dst_quadwords++ =
-			((value & 0x00ff00ff00ff00ffULL) << 8) |
+		value = ((value & 0x00ff00ff00ff00ffULL) << 8) |
 			((value & 0xff00ff00ff00ff00ULL) >> 8);
+		put_unaligned_le64(value, cursor);
+		cursor += sizeof(value);
+		bytesused -= sizeof(value);
 	}
+	if (bytesused >= sizeof(u32)) {
+		u32 value = get_unaligned_le32(cursor);
 
-	remainder = bytesused & (sizeof(*src_quadwords) - 1U);
-	src_tail = (const u8 *)src_quadwords;
-	dst_tail = (u8 *)dst_quadwords;
-	if (remainder >= sizeof(u32)) {
-		u32 value = *(const u32 *)src_tail;
-
-		*(u32 *)dst_tail = swahb32(value);
-		src_tail += sizeof(value);
-		dst_tail += sizeof(value);
-		remainder -= sizeof(value);
+		put_unaligned_le32(swahb32(value), cursor);
+		cursor += sizeof(value);
+		bytesused -= sizeof(value);
 	}
-	if (remainder)
-		*(u16 *)dst_tail = swab16(*(const u16 *)src_tail);
+	if (bytesused)
+		put_unaligned_le16(swab16(get_unaligned_le16(cursor)), cursor);
 }
 
-static void d5x_pack_raw16_to_sgrbg10p(void *dst_data, const void *src_data,
-				       size_t bytesused,
-				       u32 width, u32 height,
-				       u32 bytesperline)
+static int d5x_pack_raw16_to_sgrbg10p(void *data, size_t bytesused,
+				      u32 width, u32 height,
+				      u32 bytesperline)
 {
-	const u8 *src_frame = src_data;
-	u8 *dst_frame = dst_data;
+	u8 *frame = data;
 	u32 y;
 
 	if (WARN_ON_ONCE(width & 3U) ||
 	    WARN_ON_ONCE(bytesperline < width * sizeof(u16)) ||
 	    WARN_ON_ONCE(bytesused < (size_t)bytesperline * height))
-		return;
+		return -EINVAL;
 
 	for (y = 0; y < height; y++) {
-		const u8 *src = src_frame + (size_t)y * bytesperline;
-		u8 *dst = dst_frame + (size_t)y * bytesperline;
+		const u8 *src = frame + (size_t)y * bytesperline;
+		u8 *dst = frame + (size_t)y * bytesperline;
 		u32 x;
 
+		/*
+		 * Each 8-byte source group is loaded before its 5-byte output is
+		 * stored. The destination cursor never advances beyond the source
+		 * cursor, so the forward transform cannot overwrite unread input.
+		 */
 		for (x = 0; x < width; x += 4) {
 			u64 raw = get_unaligned_le64(src);
 			u64 lanes =
@@ -654,65 +643,35 @@ static void d5x_pack_raw16_to_sgrbg10p(void *dst_data, const void *src_data,
 			dst += 5;
 		}
 	}
+
+	return 0;
 }
 
-static bool d5x_prepare_frame_postprocess_scratch(struct d5x *state,
-						   size_t bytesused)
-{
-	void *scratch;
-
-	if (state->frame_postprocess_scratch_size >= bytesused)
-		return true;
-
-	scratch = kvmalloc(bytesused, GFP_KERNEL);
-	if (!scratch) {
-		dev_err_ratelimited(&state->client->dev,
-				    "failed to allocate frame postprocess buffer\n");
-		return false;
-	}
-
-	kvfree(state->frame_postprocess_scratch);
-	state->frame_postprocess_scratch = scratch;
-	state->frame_postprocess_scratch_size = bytesused;
-	return true;
-}
-
-static void d5x_postprocess_csi_frame(struct camera_common_data *s_data,
-				     void *data, size_t bytesused,
-				     u32 mbus_code)
+static int d5x_postprocess_csi_frame(struct camera_common_data *s_data,
+				    void *data, size_t bytesused,
+				    u32 mbus_code)
 {
 	struct d5x *state = container_of(s_data, struct d5x, mux.sd);
 
 	if (mbus_code != MEDIA_BUS_FMT_RS_SGRBG10_1X16 &&
 	    mbus_code != MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16)
-		return;
-	if (WARN_ON_ONCE(bytesused & 1U))
-		return;
-
-	mutex_lock(&state->frame_postprocess_lock);
-	if (!d5x_prepare_frame_postprocess_scratch(state, bytesused))
-		goto unlock;
-
-	memcpy(state->frame_postprocess_scratch, data, bytesused);
+		return 0;
+	if (!data || !bytesused || WARN_ON_ONCE(bytesused & 1U))
+		return -EFAULT;
 
 	switch (mbus_code) {
 	case MEDIA_BUS_FMT_RS_SGRBG10_1X16:
-		d5x_copy_raw16_to_ba10(
-			data, state->frame_postprocess_scratch, bytesused);
-		break;
+		d5x_swap_raw16_to_ba10(data, bytesused);
+		return 0;
 	case MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16:
-		d5x_pack_raw16_to_sgrbg10p(
-			data, state->frame_postprocess_scratch, bytesused,
+		return d5x_pack_raw16_to_sgrbg10p(
+			data, bytesused,
 			state->rgb.sensor.format.width,
 			state->rgb.sensor.format.height,
 			state->rgb.sensor.format.width * sizeof(u16));
-		break;
 	default:
-		break;
+		return 0;
 	}
-
-unlock:
-	mutex_unlock(&state->frame_postprocess_lock);
 }
 
 static const struct tegra_frame_postprocess_ops d5x_frame_postprocess_ops = {
@@ -7097,9 +7056,6 @@ static int d5x_probe(struct i2c_client *c
 		return -ENOMEM;
 
 	mutex_init(&state->lock);
-#ifdef CONFIG_TEGRA_CAMERA_PLATFORM
-	mutex_init(&state->frame_postprocess_lock);
-#endif
 	state->client = c;
 
 	dev_warn(&c->dev, "Probing driver for D5xx\n");
@@ -7346,10 +7302,6 @@ static void d5x_remove(struct i2c_client *c)
 	if (state->is_depth && state->dfu_dev.d5x_class) {
 		d5x_chrdev_remove(state);
 	}
-
-#ifdef CONFIG_TEGRA_CAMERA_PLATFORM
-	kvfree(state->frame_postprocess_scratch);
-#endif
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 12)
 	return 0;

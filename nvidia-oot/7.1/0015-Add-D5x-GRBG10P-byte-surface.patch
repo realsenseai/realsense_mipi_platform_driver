@@ -202,8 +202,8 @@ diff --git a/include/media/camera_common.h b/include/media/camera_common.h
  struct camera_common_data;
  
 +struct tegra_frame_postprocess_ops {
-+	void (*process)(struct camera_common_data *s_data, void *data,
-+			size_t bytesused, u32 mbus_code);
++	int (*process)(struct camera_common_data *s_data, void *data,
++		       size_t bytesused, u32 mbus_code);
 +};
 +
  struct camera_common_sensor_ops {
@@ -220,7 +220,7 @@ diff --git a/include/media/camera_common.h b/include/media/camera_common.h
 diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
 --- a/drivers/media/platform/tegra/camera/vi/channel.c
 +++ b/drivers/media/platform/tegra/camera/vi/channel.c
-@@ -1068,10 +1068,35 @@ static void tegra_channel_stop_streaming(struct vb2_queue *vq)
+@@ -1068,10 +1068,33 @@ static void tegra_channel_stop_streaming(struct vb2_queue *vq)
  	queue_init_ts = 0;
  }
  
@@ -239,13 +239,11 @@ diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/pl
 +	    !s_data->frame_postprocess_ops->process)
 +		return;
 +
-+	data = vb2_plane_vaddr(vb, 0);
 +	bytesused = vb2_get_plane_payload(vb, 0);
-+	if (!data || !bytesused)
-+		return;
-+
-+	s_data->frame_postprocess_ops->process(s_data, data, bytesused,
-+					      chan->fmtinfo->code);
++	data = vb2_plane_vaddr(vb, 0);
++	if (s_data->frame_postprocess_ops->process(s_data, data, bytesused,
++						  chan->fmtinfo->code))
++		to_vb2_v4l2_buffer(vb)->flags |= V4L2_BUF_FLAG_ERROR;
 +}
 +
  static const struct vb2_ops tegra_channel_queue_qops = {
