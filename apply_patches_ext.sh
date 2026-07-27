@@ -57,6 +57,10 @@ if [[ "$JETPACK_VERSION" == "6.x" ]]; then
     # max96717 header and source
     cp nvidia-oot/max96717.h "$TARGET/nvidia-oot/include/media/"
     cp nvidia-oot/max96717.c "$TARGET/nvidia-oot/drivers/media/i2c/"
+    # max96724 tunnel-mode deserializer header and source
+    cp nvidia-oot/max96724.h "$TARGET/nvidia-oot/include/media/"
+    cp nvidia-oot/max96724.c "$TARGET/nvidia-oot/drivers/media/i2c/"
+    cp hardware/realsense/tegra234-camera-d5xx-overlay*.dts "$TARGET/hardware/nvidia/t23x/nv-public/overlay/"
 elif [[ "$JETPACK_VERSION" == "5.x" ]]; then
     cp "hardware/realsense/${JP5_D4XX_DTSI}" "$TARGET/hardware/nvidia/platform/t19x/galen/kernel-dts/common/tegra194-camera-d4xx.dtsi"
     # max96712 header
