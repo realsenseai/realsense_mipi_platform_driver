@@ -2,14 +2,16 @@ diff --git a/drivers/media/i2c/Makefile b/drivers/media/i2c/Makefile
 index fdf09df6..b1042aa3 100644
 --- a/drivers/media/i2c/Makefile
 +++ b/drivers/media/i2c/Makefile
-@@ -17,6 +17,10 @@ subdir-ccflags-y += -Werror
+@@ -17,6 +17,12 @@ subdir-ccflags-y += -Werror
  ifneq ($(NV_BUILD_SYSTEM_TYPE),embedded-linux)
  obj-m += max9295.o
  obj-m += max9296.o
 +subdir-ccflags-y += -DCONFIG_VIDEO_D4XX_SERDES
 +subdir-ccflags-y += -DCONFIG_TEGRA_CAMERA_PLATFORM
++CFLAGS_d4xx.o += -DHAS_MAX96724
 +obj-m += d4xx.o
 +obj-m += max96717.o
++obj-m += max96724.o
  ifndef CONFIG_TEGRA_SYSTEM_TYPE_ACK
  obj-m += max96712.o
 

@@ -8,18 +8,25 @@
 
 #include <media/camera_common.h>
 #include <linux/module.h>
+#include <linux/of.h>
 #include <media/max96717.h>
 
 /* register specifics */
+#define MAX96717_DEV_ADDR 0x0
+#define MAX96717_REG1_ADDR 0x1
 #define MAX96717_REG2_ADDR 0x2
 #define MAX96717_CTRL0_ADDR 0x10
 #define MAX96717_TX1_ADDR 0x29
+#define MAX96717_RLMSCE_ADDR 0x14CE
+#define MAX96717_ENMINUS_FORCE_ON (BIT(4) | BIT(3))
 #define MAX96717_EXT11_ADDR 0x383
 #define MAX96717_FRONTTOP_10_ADDR 0x312
 #define MAX96717_VIDEO_TX0_ADDR 0x110
 #define MAX96717_VIDEO_TX1_ADDR 0x111
 #define MAX96717_MIPI_RX0_ADDR 0x330
 #define MAX96717_MIPI_RX1_ADDR 0x331
+#define MAX96717_MIPI_RX2_ADDR 0x332
+#define MAX96717_MIPI_RX3_ADDR 0x333
 #define MAX96717_MIPI_RX8_ADDR 0x338
 
 /* MIPI_RX0 (0x330): bit3 = mipi_rx_reset (not self-clearing), bit6 = non-cont-clk.
@@ -52,6 +59,9 @@
 #define MAX96717_GPIO7_B_ADDR		0x02D4
 #define MAX96717_GPIO8_A_ADDR		0x02D6	/* MFP8 / pass-through SCL1 */
 #define MAX96717_GPIO8_B_ADDR		0x02D7
+#define MAX96717_GPIO6_A_ADDR		0x02D0
+#define MAX96717_GPIO6_B_ADDR		0x02D1
+#define MAX96717_GPIO6_C_ADDR		0x02D2
 /* GPIO_A: GPIO_OUT_DIS=1 (high-Z), GPIO_TX_EN=0, GPIO_RX_EN=0 */
 #define MAX96717_GPIO_A_HIGH_Z		0x01
 /* GPIO_B: PULL_UPDN_SEL=None, TX_ID=0 */
@@ -67,10 +77,15 @@ struct max96717 {
 	struct regmap *regmap;
 	struct max96717_client_ctx g_client;
 	struct mutex lock;
+	bool pixel_mode;
 	/* bit[ser_vc_id] set while that pipe is streaming (set in set_pipe,
 	 * cleared in stream_stop). When it drops to 0 the MIPI RX is re-armed. */
 	u8 active_vc_mask;
+	u32 def_addr;
+	u32 pst2_ref;
 };
+
+static struct max96717 *prim_priv;
 
 static int max96717_write_reg(struct device *dev, u16 addr, u8 val)
 {
@@ -104,6 +119,42 @@ int max96717_setup_control(struct device *dev)
 
 	g_ctx = priv->g_client.g_ctx;
 
+	if (!priv->pixel_mode) {
+		unsigned int val;
+		int retry;
+
+		if (prim_priv && priv != prim_priv &&
+		    regmap_read(priv->regmap, MAX96717_DEV_ADDR, &val)) {
+			err = max96717_write_reg(&prim_priv->i2c_client->dev,
+						 MAX96717_DEV_ADDR,
+						 g_ctx->ser_reg << 1);
+			if (err)
+				goto error;
+
+			for (retry = 0; retry < 10; retry++) {
+				msleep(20);
+				if (!regmap_read(priv->regmap, MAX96717_DEV_ADDR,
+						 &val))
+					break;
+			}
+			if (retry == 10) {
+				err = -ENODEV;
+				goto error;
+			}
+		}
+
+		err = max96717_write_reg(dev, MAX96717_REG1_ADDR, 0x08);
+		err |= regmap_update_bits(priv->regmap, MAX96717_RLMSCE_ADDR,
+					 MAX96717_ENMINUS_FORCE_ON,
+					 MAX96717_ENMINUS_FORCE_ON);
+		err |= max96717_write_reg(dev, MAX96717_CTRL0_ADDR,
+			g_ctx->serdes_csi_link == GMSL_SERDES_CSI_LINK_A ?
+			0x21 : 0x22);
+		if (err)
+			goto error;
+		msleep(100);
+	}
+
 	err = max96717_write_reg(dev, MAX96717_I2C4_ADDR, (g_ctx->sdev_reg << 1));
 	err |= max96717_write_reg(dev, MAX96717_I2C5_ADDR, (g_ctx->sdev_def << 1));
 	if (err) {
@@ -111,6 +162,8 @@ int max96717_setup_control(struct device *dev)
 	}
 
 	g_ctx->serdev_found = true;
+	if (!priv->pixel_mode && prim_priv && priv != prim_priv)
+		prim_priv->pst2_ref++;
 
 error:
 	mutex_unlock(&priv->lock);
@@ -147,6 +200,11 @@ int max96717_enable_gpio_tunneling(struct device *dev)
 	max96717_write_acc(dev, priv->regmap, MAX96717_2C1_ADDR, MAX96717_2C1_ESYNC, &err);
 	max96717_write_acc(dev, priv->regmap, MAX96717_2C2_ADDR, MAX96717_2C2_ESYNC, &err);
 	max96717_write_acc(dev, priv->regmap, MAX96717_2C3_ADDR, MAX96717_2C3_ESYNC, &err);
+	if (!priv->pixel_mode) {
+		max96717_write_acc(dev, priv->regmap, MAX96717_GPIO6_A_ADDR, 0x27, &err);
+		max96717_write_acc(dev, priv->regmap, MAX96717_GPIO6_B_ADDR, 0x1F, &err);
+		max96717_write_acc(dev, priv->regmap, MAX96717_GPIO6_C_ADDR, 0x00, &err);
+	}
 
 	mutex_unlock(&priv->lock);
 
@@ -168,6 +226,11 @@ int max96717_disable_gpio_tunneling(struct device *dev)
 	max96717_write_acc(dev, priv->regmap, MAX96717_2C1_ADDR, 0x00, &err);
 	max96717_write_acc(dev, priv->regmap, MAX96717_2C2_ADDR, 0x00, &err);
 	max96717_write_acc(dev, priv->regmap, MAX96717_2C3_ADDR, 0x00, &err);
+	if (!priv->pixel_mode) {
+		max96717_write_acc(dev, priv->regmap, MAX96717_GPIO6_A_ADDR, 0x99, &err);
+		max96717_write_acc(dev, priv->regmap, MAX96717_GPIO6_B_ADDR, 0xA6, &err);
+		max96717_write_acc(dev, priv->regmap, MAX96717_GPIO6_C_ADDR, 0x46, &err);
+	}
 
 	mutex_unlock(&priv->lock);
 
@@ -188,6 +251,15 @@ int max96717_reset_control(struct device *dev)
 	}
 
 	priv->g_client.st_done = false;
+	if (!priv->pixel_mode && prim_priv && priv != prim_priv) {
+		if (prim_priv->pst2_ref)
+			prim_priv->pst2_ref--;
+		err = max96717_write_reg(dev, MAX96717_DEV_ADDR,
+					 prim_priv->def_addr << 1);
+		if (!err && !prim_priv->pst2_ref)
+			err = max96717_write_reg(&prim_priv->i2c_client->dev,
+						 MAX96717_CTRL0_ADDR, 0x80);
+	}
 
 error:
 	mutex_unlock(&priv->lock);
@@ -287,13 +359,16 @@ static int max96717_set_registers(struct device *dev, struct reg_pair *map,
 
 static int max96717_mipi_rx_reset_pulse(struct device *dev)
 {
+	struct max96717 *priv = dev_get_drvdata(dev);
+	u8 reset = priv->pixel_mode ? MAX96717_MIPI_RX0_RESET : 0x08;
+	u8 normal = priv->pixel_mode ? MAX96717_MIPI_RX0_NORMAL : 0x00;
 	int err;
 
 	err  = max96717_write_reg(dev, MAX96717_MIPI_RX0_ADDR,
-				  MAX96717_MIPI_RX0_RESET);
+				  reset);
 	usleep_range(2000, 2100);
 	err |= max96717_write_reg(dev, MAX96717_MIPI_RX0_ADDR,
-				  MAX96717_MIPI_RX0_NORMAL);
+				  normal);
 
 	return err;
 }
@@ -327,6 +402,15 @@ int max96717_init_settings(struct device *dev)
 		{MAX96717_MIPI_RX8_ADDR, 0x22}, /* 0x338 - MIPI_RX8 settle=0x22 (t_hs[5:4]/t_clk[1:0]) */
 		{MAX96717_REG2_ADDR, 0x43}, /* 0x2 - REG2: VID_TX_EN */
 	};
+	struct reg_pair tunnel_cfg[] = {
+		{MAX96717_REG2_ADDR, 0x03},
+		{MAX96717_EXT11_ADDR, 0x80},
+		{MAX96717_MIPI_RX1_ADDR, 0x70},
+		{MAX96717_MIPI_RX2_ADDR, 0xE0},
+		{MAX96717_MIPI_RX3_ADDR, 0x04},
+		{MAX96717_VIDEO_TX0_ADDR, 0xE9},
+		{MAX96717_VIDEO_TX1_ADDR, 0x10},
+	};
 
 	/*
 	 * Release MFP7/MFP8 before any other config so the serializer
@@ -350,14 +434,21 @@ int max96717_init_settings(struct device *dev)
 	err |= max96717_set_registers(dev, gpio_release,
 				     ARRAY_SIZE(gpio_release));
 
-	err |= max96717_set_registers(dev, ser_cfg_pre,
-				     ARRAY_SIZE(ser_cfg_pre));
-	msleep(100);
-	err |= max96717_set_registers(dev, ser_cfg_mid,
-				     ARRAY_SIZE(ser_cfg_mid));
-	err |= max96717_mipi_rx_reset_pulse(dev);
-	err |= max96717_set_registers(dev, ser_cfg_post,
-				     ARRAY_SIZE(ser_cfg_post));
+	if (priv->pixel_mode) {
+		err |= max96717_set_registers(dev, ser_cfg_pre,
+					     ARRAY_SIZE(ser_cfg_pre));
+		msleep(100);
+		err |= max96717_set_registers(dev, ser_cfg_mid,
+					     ARRAY_SIZE(ser_cfg_mid));
+		err |= max96717_mipi_rx_reset_pulse(dev);
+		err |= max96717_set_registers(dev, ser_cfg_post,
+					     ARRAY_SIZE(ser_cfg_post));
+	} else {
+		err |= max96717_set_registers(dev, tunnel_cfg,
+					     ARRAY_SIZE(tunnel_cfg));
+		err |= max96717_mipi_rx_reset_pulse(dev);
+		err |= max96717_write_reg(dev, MAX96717_REG2_ADDR, 0x43);
+	}
 
 	mutex_unlock(&priv->lock);
 
@@ -376,13 +467,14 @@ int max96717_set_pipe(struct device *dev, int pipe_id,
 		return -EINVAL;
 
 	mutex_lock(&priv->lock);
-	
-	if (data_type1 == GMSL_CSI_DT_RGB_888) {
-		bpp = 24;
-	} else {
-		bpp = 16;
+
+	if (priv->pixel_mode) {
+		if (data_type1 == GMSL_CSI_DT_RGB_888)
+			bpp = 24;
+		else
+			bpp = 16;
+		err = max96717_write_reg(dev, MAX96717_VIDEO_TX1_ADDR, bpp);
 	}
-	err = max96717_write_reg(dev, MAX96717_VIDEO_TX1_ADDR, bpp);
 	priv->active_vc_mask |= (u8)BIT(vc_id);
 	mutex_unlock(&priv->lock);
 
@@ -401,7 +493,7 @@ int max96717_stream_stop(struct device *dev, u32 vc_id)
 	mutex_lock(&priv->lock);
 	priv->active_vc_mask &= (u8)~BIT(vc_id);
 
-	if (priv->active_vc_mask == 0) {
+	if (priv->pixel_mode && priv->active_vc_mask == 0) {
 		/*
 		 * Last stream stopped -> the shared MAX96717 video pipe is going
 		 * idle. Pulse the MIPI RX reset to re-arm the MIPI RX PHY while
@@ -417,6 +509,20 @@ int max96717_stream_stop(struct device *dev, u32 vc_id)
 }
 EXPORT_SYMBOL(max96717_stream_stop);
 
+void max96717_retrigger_tx(struct device *dev)
+{
+	struct max96717 *priv = dev_get_drvdata(dev);
+
+	mutex_lock(&priv->lock);
+	if (!priv->pixel_mode) {
+		max96717_write_reg(dev, MAX96717_REG2_ADDR, 0x03);
+		msleep(30);
+		max96717_write_reg(dev, MAX96717_REG2_ADDR, 0x43);
+	}
+	mutex_unlock(&priv->lock);
+}
+EXPORT_SYMBOL(max96717_retrigger_tx);
+
 #if defined(NV_I2C_DRIVER_STRUCT_PROBE_WITHOUT_I2C_DEVICE_ID_ARG) /* Linux 6.3 */
 static int max96717_probe(struct i2c_client *client)
 #else
@@ -426,6 +532,7 @@ static int max96717_probe(struct i2c_client *client,
 {
 	struct max96717 *priv;
 	int err = 0;
+	struct device_node *node = client->dev.of_node;
 
 	dev_info(&client->dev, "[MAX96717]: probing GMSL Serializer\n");
 
@@ -445,10 +552,24 @@ static int max96717_probe(struct i2c_client *client,
 
 	mutex_init(&priv->lock);
 
+	priv->pixel_mode = !of_property_read_bool(node, "adi,tunnel-mode");
+	if (of_property_read_bool(node, "adi,pixel-mode"))
+		priv->pixel_mode = true;
+
+	if (of_property_read_bool(node, "is-prim-ser")) {
+		if (prim_priv)
+			return -EEXIST;
+		err = of_property_read_u32(node, "reg", &priv->def_addr);
+		if (err)
+			return err;
+		prim_priv = priv;
+	}
+
 	dev_set_drvdata(&client->dev, priv);
 
 	/* dev communication gets validated when GMSL link setup is done */
-	dev_info(&client->dev, "%s: success\n", __func__);
+	dev_info(&client->dev, "%s: success (%s mode)\n", __func__,
+		 priv->pixel_mode ? "pixel" : "tunnel");
 
 	return err;
 }
@@ -463,9 +584,9 @@ static void max96717_remove(struct i2c_client *client)
 
 	if (client != NULL) {
 		priv = dev_get_drvdata(&client->dev);
+		if (priv == prim_priv)
+			prim_priv = NULL;
 		mutex_destroy(&priv->lock);
-		i2c_unregister_device(client);
-		client = NULL;
 	}
 #if defined(NV_I2C_DRIVER_STRUCT_REMOVE_RETURN_TYPE_INT) /* Linux 6.1 */
 	return 0;
@@ -478,6 +599,7 @@ static const struct i2c_device_id max96717_id[] = {
 };
 
 static const struct of_device_id max96717_of_match[] = {
+	{ .compatible = "adi,max96717", },
 	{ .compatible = "maxim,max96717", },
 	{ },
 };
