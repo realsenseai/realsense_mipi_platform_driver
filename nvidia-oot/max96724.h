@@ -41,15 +41,11 @@
  */
 
 int max96724_get_available_pipe_id(struct device *dev, int vc_id);
-int max96724_get_ser_pipe_id(struct device *dev, int dser_pipe_id, int vc_id);
 int max96724_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
 		      u8 data_type2, u32 vc_id);
 int max96724_release_pipe(struct device *dev, int pipe_id);
 void max96724_reset_oneshot(struct device *dev);
 void max96724_retrigger_datapath(struct device *dev);
-void max96724_log_control_status(struct device *dev);
-int max96724_active_pipe_count(struct device *dev);
-int max96724_link_locked(struct device *dev);
 int max96724_prepare_stream(struct device *dev, struct device *ser_dev);
 
 /**
@@ -116,29 +112,8 @@ int max96724_sdev_unregister(struct device *dev, struct device *s_dev);
  *
  * @return  0 for success, or negative error code.
  */
-int max96724_setup_streaming(struct device *dev, struct device *s_dev);
 int max96724_finish_setup(struct device *dev, struct device *ser_dev,
 			  struct device *s_dev);
-
-/**
- * @brief  Enables streaming for a source sensor.
- *
- * @param  [in]  dev          The deserializer device handle.
- * @param  [in]  s_dev        The sensor device handle.
- *
- * @return  0 for success, or negative error code.
- */
-int max96724_start_streaming(struct device *dev, struct device *s_dev);
-
-/**
- * @brief  Disables streaming for a source sensor.
- *
- * @param  [in]  dev          The deserializer device handle.
- * @param  [in]  s_dev        The sensor device handle.
- *
- * @return  0 for success, or negative error code.
- */
-int max96724_stop_streaming(struct device *dev, struct device *s_dev);
 
 /**
  * @brief  Powers on the MAX96724 deserializer module.
