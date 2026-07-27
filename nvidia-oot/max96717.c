@@ -373,33 +373,6 @@ static int max96717_mipi_rx_reset_pulse(struct device *dev)
 	return err;
 }
 
-int max96717_setup_streaming(struct device *dev)
-{
-	struct max96717 *priv = dev_get_drvdata(dev);
-	struct reg_pair tunnel[] = {
-		{MAX96717_EXT11_ADDR, 0x80},
-		{MAX96717_MIPI_RX1_ADDR, 0x70},
-		{MAX96717_MIPI_RX2_ADDR, 0xE0},
-		{MAX96717_MIPI_RX3_ADDR, 0x04},
-		{MAX96717_VIDEO_TX0_ADDR, 0xE9},
-		{MAX96717_VIDEO_TX1_ADDR, 0x10},
-	};
-	int err = 0;
-
-	mutex_lock(&priv->lock);
-	if (!priv->pixel_mode && !priv->g_client.st_done) {
-		err = max96717_set_registers(dev, tunnel, ARRAY_SIZE(tunnel));
-		err |= max96717_mipi_rx_reset_pulse(dev);
-		err |= max96717_write_reg(dev, MAX96717_REG2_ADDR, 0x43);
-		if (!err)
-			priv->g_client.st_done = true;
-	}
-	mutex_unlock(&priv->lock);
-
-	return err;
-}
-EXPORT_SYMBOL(max96717_setup_streaming);
-
 int max96717_init_settings(struct device *dev)
 {
 	int err = 0;
@@ -432,7 +405,11 @@ int max96717_init_settings(struct device *dev)
 	struct reg_pair tunnel_cfg[] = {
 		{MAX96717_REG2_ADDR, 0x03},
 		{MAX96717_EXT11_ADDR, 0x80},
-		{MAX96717_REG2_ADDR, 0x43},
+		{MAX96717_MIPI_RX1_ADDR, 0x70},
+		{MAX96717_MIPI_RX2_ADDR, 0xE0},
+		{MAX96717_MIPI_RX3_ADDR, 0x04},
+		{MAX96717_VIDEO_TX0_ADDR, 0xE9},
+		{MAX96717_VIDEO_TX1_ADDR, 0x10},
 	};
 
 	/*
@@ -469,6 +446,8 @@ int max96717_init_settings(struct device *dev)
 	} else {
 		err |= max96717_set_registers(dev, tunnel_cfg,
 					     ARRAY_SIZE(tunnel_cfg));
+		err |= max96717_mipi_rx_reset_pulse(dev);
+		err |= max96717_write_reg(dev, MAX96717_REG2_ADDR, 0x43);
 	}
 
 	mutex_unlock(&priv->lock);

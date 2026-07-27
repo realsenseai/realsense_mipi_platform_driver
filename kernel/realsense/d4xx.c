@@ -4602,7 +4602,7 @@ static int ds5_serdes_setup(struct ds5 *state)
 
 #ifdef CONFIG_VIDEO_D5XX_SERDES
 	if (state->dser_ops == &max96724_interface) {
-		ret = max96724_finish_setup(state->dser_dev, state->ser_dev,
+		ret = max96724_finish_setup(state->dser_dev,
 					    state->g_ctx.s_dev);
 		if (ret)
 			goto serdes_setup_end;

@@ -908,24 +908,18 @@ ret:
 	return err;
 }
 
-int max96724_finish_setup(struct device *dev, struct device *ser_dev,
-			  struct device *s_dev)
+int max96724_finish_setup(struct device *dev, struct device *s_dev)
 {
 	int err;
 
-	if (!dev || !ser_dev || !s_dev)
+	if (!dev || !s_dev)
 		return -EINVAL;
 
 	err = max96724_setup_streaming(dev, s_dev);
 	if (err)
 		return err;
 
-	msleep(1000);
-	err = max96717_setup_streaming(ser_dev);
-	if (err)
-		return err;
-
-	msleep(500);
+	msleep(1500);
 	max96724_reset_oneshot(dev);
 
 	return 0;

@@ -112,8 +112,7 @@ int max96724_sdev_unregister(struct device *dev, struct device *s_dev);
  *
  * @return  0 for success, or negative error code.
  */
-int max96724_finish_setup(struct device *dev, struct device *ser_dev,
-			  struct device *s_dev);
+int max96724_finish_setup(struct device *dev, struct device *s_dev);
 
 /**
  * @brief  Powers on the MAX96724 deserializer module.
