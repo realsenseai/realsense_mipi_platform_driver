@@ -13,8 +13,10 @@ container and sends those containers unchanged using CSI RAW16.
 
 Add separate internal mbus tuples for both transports. The packed path
 keeps its private GR0P ABI. The unpacked RAW16 path uses T_R16 and exposes
-the standard V4L2 SGRBG10/BA10 surface. Prefer formats advertised by the
-active subdevice when two transport tuples share a standard FourCC.
+the standard V4L2 SGRBG10/BA10 surface or, through a D5x frame-finish
+callback, the associated standard packed SGRBG10P/pgAA surface. Prefer
+formats advertised by the active subdevice when transport tuples share
+a standard FourCC.
 
 Signed-off-by: zhou <shengyong.zhou@realsenseai.com>
 ---
@@ -137,12 +139,16 @@ diff --git a/drivers/media/platform/tegra/camera/vi/vi5_formats.h b/drivers/medi
 index fb07cfd2..1cb54ba8 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi5_formats.h
 +++ b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
-@@ -76,6 +76,18 @@ enum tegra_image_format {
+@@ -76,6 +76,26 @@ enum tegra_image_format {
  	TEGRA_IMAGE_FORMAT_T_DPCM_RAW20,
  };
  
 +#ifndef MEDIA_BUS_FMT_RS_SGRBG10_1X16
 +#define MEDIA_BUS_FMT_RS_SGRBG10_1X16 0x5003
++#endif
++
++#ifndef MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16
++#define MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16 0x5004
 +#endif
 +
 +#ifndef MEDIA_BUS_FMT_RS_SGRBG10P_1X10
@@ -153,10 +159,14 @@ index fb07cfd2..1cb54ba8 100644
 +#define V4L2_PIX_FMT_RS_SGRBG10P v4l2_fourcc('G', 'R', '0', 'P')
 +#endif
 +
++#ifndef V4L2_PIX_FMT_SGRBG10P
++#define V4L2_PIX_FMT_SGRBG10P v4l2_fourcc('p', 'g', 'A', 'A')
++#endif
++
  static const struct tegra_video_format vi5_video_formats[] = {
  	/* RAW 6: TODO */
  
-@@ -170,6 +182,20 @@ static const struct tegra_video_format vi5_video_formats[] = {
+@@ -170,6 +190,27 @@ static const struct tegra_video_format vi5_video_formats[] = {
  	TEGRA_VIDEO_FORMAT(RAW8, 8, UYYVYY8_0_5X24, 1, 1, T_R8,
  				RAW8, NV12, "YUV 4:2:0 NV12"),
  
@@ -166,6 +176,13 @@ index fb07cfd2..1cb54ba8 100644
 +	 */
 +	TEGRA_VIDEO_FORMAT(RAW10, 10, RS_SGRBG10_1X16, 2, 1, T_R16,
 +				RAW16, SGRBG10, "GRBG10 in 16-bit containers"),
++
++	/*
++	 * Associated Host-output option for the same D5x RAW16/T_R16
++	 * transport. The D5x frame-finish callback packs each row to pgAA.
++	 */
++	TEGRA_VIDEO_FORMAT(RAW10, 10, RS_SGRBG10P_RAW16_1X16, 2, 1, T_R16,
++				RAW16, SGRBG10P, "Packed GRBG10 from RAW16"),
 +
 +	/*
 +	 * D5x FMT_SGRBG10P: 50 little-endian 10-bit pixels per 64-byte

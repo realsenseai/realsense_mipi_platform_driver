@@ -103,6 +103,10 @@ struct dser_interface {
 #define MEDIA_BUS_FMT_RS_SGRBG10_1X16 0x5003
 #endif
 
+#ifndef MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16
+#define MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16 0x5004
+#endif
+
 /*
  * D5x RGB ISYS stores GRBG10P as 50 little-endian 10-bit pixels per
  * 64-byte cache line. This is neither standard CSI RAW10, V4L2 IPU3
@@ -114,6 +118,10 @@ struct dser_interface {
 
 #ifndef V4L2_PIX_FMT_RS_SGRBG10P
 #define V4L2_PIX_FMT_RS_SGRBG10P v4l2_fourcc('G', 'R', '0', 'P')
+#endif
+
+#ifndef V4L2_PIX_FMT_SGRBG10P
+#define V4L2_PIX_FMT_SGRBG10P v4l2_fourcc('p', 'g', 'A', 'A')
 #endif
 
 /*
@@ -574,59 +582,134 @@ struct d5x {
 };
 
 #ifdef CONFIG_TEGRA_CAMERA_PLATFORM
+static void d5x_copy_raw16_to_ba10(void *dst, const void *src,
+				   size_t bytesused)
+{
+	const u64 *src_quadwords = src;
+	u64 *dst_quadwords = dst;
+	size_t quadword_count = bytesused / sizeof(*src_quadwords);
+	size_t remainder;
+	const u8 *src_tail;
+	u8 *dst_tail;
+
+	while (quadword_count--) {
+		u64 value = *src_quadwords++;
+
+		*dst_quadwords++ =
+			((value & 0x00ff00ff00ff00ffULL) << 8) |
+			((value & 0xff00ff00ff00ff00ULL) >> 8);
+	}
+
+	remainder = bytesused & (sizeof(*src_quadwords) - 1U);
+	src_tail = (const u8 *)src_quadwords;
+	dst_tail = (u8 *)dst_quadwords;
+	if (remainder >= sizeof(u32)) {
+		u32 value = *(const u32 *)src_tail;
+
+		*(u32 *)dst_tail = swahb32(value);
+		src_tail += sizeof(value);
+		dst_tail += sizeof(value);
+		remainder -= sizeof(value);
+	}
+	if (remainder)
+		*(u16 *)dst_tail = swab16(*(const u16 *)src_tail);
+}
+
+static void d5x_pack_raw16_to_sgrbg10p(void *dst_data, const void *src_data,
+				       size_t bytesused,
+				       u32 width, u32 height,
+				       u32 bytesperline)
+{
+	const u8 *src_frame = src_data;
+	u8 *dst_frame = dst_data;
+	u32 y;
+
+	if (WARN_ON_ONCE(width & 3U) ||
+	    WARN_ON_ONCE(bytesperline < width * sizeof(u16)) ||
+	    WARN_ON_ONCE(bytesused < (size_t)bytesperline * height))
+		return;
+
+	for (y = 0; y < height; y++) {
+		const u8 *src = src_frame + (size_t)y * bytesperline;
+		u8 *dst = dst_frame + (size_t)y * bytesperline;
+		u32 x;
+
+		for (x = 0; x < width; x += 4) {
+			u64 raw = get_unaligned_le64(src);
+			u64 lanes =
+				((raw & 0x00ff00ff00ff00ffULL) << 8) |
+				((raw & 0xff00ff00ff00ff00ULL) >> 8);
+			u32 high =
+				((lanes >> 2) & 0x000000ff) |
+				((lanes >> 10) & 0x0000ff00) |
+				((lanes >> 18) & 0x00ff0000) |
+				((lanes >> 26) & 0xff000000);
+
+			put_unaligned_le32(high, dst);
+			dst[4] = (lanes & 0x03) |
+				 ((lanes >> 14) & 0x0c) |
+				 ((lanes >> 28) & 0x30) |
+				 ((lanes >> 42) & 0xc0);
+			src += 4 * sizeof(u16);
+			dst += 5;
+		}
+	}
+}
+
+static bool d5x_prepare_frame_postprocess_scratch(struct d5x *state,
+						   size_t bytesused)
+{
+	void *scratch;
+
+	if (state->frame_postprocess_scratch_size >= bytesused)
+		return true;
+
+	scratch = kvmalloc(bytesused, GFP_KERNEL);
+	if (!scratch) {
+		dev_err_ratelimited(&state->client->dev,
+				    "failed to allocate frame postprocess buffer\n");
+		return false;
+	}
+
+	kvfree(state->frame_postprocess_scratch);
+	state->frame_postprocess_scratch = scratch;
+	state->frame_postprocess_scratch_size = bytesused;
+	return true;
+}
+
 static void d5x_postprocess_csi_frame(struct camera_common_data *s_data,
 				     void *data, size_t bytesused,
 				     u32 mbus_code)
 {
 	struct d5x *state = container_of(s_data, struct d5x, mux.sd);
-	u64 *quadwords;
-	size_t quadword_count;
-	size_t remainder;
-	u8 *tail;
 
-	if (mbus_code != MEDIA_BUS_FMT_RS_SGRBG10_1X16)
+	if (mbus_code != MEDIA_BUS_FMT_RS_SGRBG10_1X16 &&
+	    mbus_code != MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16)
 		return;
 	if (WARN_ON_ONCE(bytesused & 1U))
 		return;
 
 	mutex_lock(&state->frame_postprocess_lock);
-	if (state->frame_postprocess_scratch_size < bytesused) {
-		void *scratch = kvmalloc(bytesused, GFP_KERNEL);
-
-		if (!scratch) {
-			dev_err_ratelimited(&state->client->dev,
-					    "failed to allocate BA10 postprocess buffer\n");
-			goto unlock;
-		}
-
-		kvfree(state->frame_postprocess_scratch);
-		state->frame_postprocess_scratch = scratch;
-		state->frame_postprocess_scratch_size = bytesused;
-	}
+	if (!d5x_prepare_frame_postprocess_scratch(state, bytesused))
+		goto unlock;
 
 	memcpy(state->frame_postprocess_scratch, data, bytesused);
-	quadwords = state->frame_postprocess_scratch;
-	quadword_count = bytesused / sizeof(*quadwords);
-	while (quadword_count--) {
-		u64 value = *quadwords;
 
-		*quadwords++ = ((value & 0x00ff00ff00ff00ffULL) << 8) |
-			       ((value & 0xff00ff00ff00ff00ULL) >> 8);
+	switch (mbus_code) {
+	case MEDIA_BUS_FMT_RS_SGRBG10_1X16:
+		d5x_copy_raw16_to_ba10(
+			data, state->frame_postprocess_scratch, bytesused);
+		break;
+	case MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16:
+		d5x_pack_raw16_to_sgrbg10p(
+			data, state->frame_postprocess_scratch, bytesused,
+			state->rgb.sensor.format.width,
+			state->rgb.sensor.format.height,
+			state->rgb.sensor.format.width * sizeof(u16));
+		break;
+	default:
+		break;
 	}
-
-	remainder = bytesused & (sizeof(*quadwords) - 1U);
-	tail = (u8 *)quadwords;
-	if (remainder >= sizeof(u32)) {
-		u32 *word = (u32 *)tail;
-
-		*word = swahb32(*word);
-		tail += sizeof(*word);
-		remainder -= sizeof(*word);
-	}
-	if (remainder)
-		swab16s((u16 *)tail);
-
-	memcpy(data, state->frame_postprocess_scratch, bytesused);
 
 unlock:
 	mutex_unlock(&state->frame_postprocess_lock);
@@ -1436,6 +1519,15 @@ static const struct d5x_format d5x_rgb_formats_d58x[] = {
 		.resolutions = d58x_rgb_raw_sizes,
 	}, {
 		/*
+		 * This Host-output option reuses the same RAW16 transport as
+		 * BA10, then packs each completed T_R16 row into standard pgAA.
+		 */
+		.data_type = GMSL_CSI_DT_RAW_16,
+		.mbus_code = MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16,
+		.n_resolutions = ARRAY_SIZE(d58x_rgb_raw_sizes),
+		.resolutions = d58x_rgb_raw_sizes,
+	}, {
+		/*
 		 * HKR FMT_SGRBG10P bytes are carried unchanged as CSI DT 0x30.
 		 * The private mbus code prevents this surface from being exposed
 		 * as standard BA10 or V4L2 IPU3 SGRBG10.
@@ -1784,6 +1876,11 @@ static void d5x_tegra_update_rgb_mode(struct d5x *state,
 	case MEDIA_BUS_FMT_RS_SGRBG10_1X16:
 		pixel_format = V4L2_PIX_FMT_SGRBG10;
 		/* The CSI carrier transmits the complete 16-bit container. */
+		bit_depth = 16;
+		break;
+	case MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16:
+		pixel_format = V4L2_PIX_FMT_SGRBG10P;
+		/* pgAA is packed after VI; the CSI carrier remains RAW16. */
 		bit_depth = 16;
 		break;
 	case MEDIA_BUS_FMT_RS_SGRBG10P_1X10:
@@ -7003,7 +7100,6 @@ static int d5x_probe(struct i2c_client *c
 #ifdef CONFIG_TEGRA_CAMERA_PLATFORM
 	mutex_init(&state->frame_postprocess_lock);
 #endif
-
 	state->client = c;
 
 	dev_warn(&c->dev, "Probing driver for D5xx\n");
