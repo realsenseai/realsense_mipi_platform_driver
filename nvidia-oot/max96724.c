@@ -25,6 +25,7 @@
 #include <linux/of_gpio.h>
 #include <linux/version.h>
 #include <media/camera_common.h>
+#include <media/max96717.h>
 #include <media/max96724.h>
 
 /* ================================================================
@@ -1190,8 +1191,10 @@ int max96724_setup_control(struct device *dev, struct device *s_dev)
 	 */
 	max96724_write_reg(dev, MAX96724_SRAM_LCRC_ERR_ADDR, 0x00);
 
-	max96724_write_reg(dev, MAX96724_ONESHOT_ADDR,
-			   MAX96724_ONESHOT_ALL);
+	/*
+	 * Defer ONESHOT until setup_streaming(), after the serializer has
+	 * completed its generic init_settings() callback.
+	 */
 
 maybe_reset_splitter:
 
@@ -1548,6 +1551,30 @@ ret:
 }
 EXPORT_SYMBOL(max96724_setup_streaming);
 
+int max96724_finish_setup(struct device *dev, struct device *ser_dev,
+			  struct device *s_dev)
+{
+	int err;
+
+	if (!dev || !ser_dev || !s_dev)
+		return -EINVAL;
+
+	err = max96724_setup_streaming(dev, s_dev);
+	if (err)
+		return err;
+
+	msleep(1000);
+	err = max96717_setup_streaming(ser_dev);
+	if (err)
+		return err;
+
+	msleep(500);
+	max96724_reset_oneshot(dev);
+
+	return 0;
+}
+EXPORT_SYMBOL(max96724_finish_setup);
+
 /* ================================================================
  * Start / Stop Streaming
  * ================================================================ */
@@ -1702,6 +1729,27 @@ int max96724_link_locked(struct device *dev)
 	return (lock & MAX96724_LINK_LOCKED) ? 1 : 0;
 }
 EXPORT_SYMBOL(max96724_link_locked);
+
+int max96724_prepare_stream(struct device *dev, struct device *ser_dev)
+{
+	if (!dev || !ser_dev)
+		return -EINVAL;
+
+	/*
+	 * Reuse the sensor framework's normal set_pipe path. Only recover the
+	 * physical link for the first pipe when it is actually unlocked.
+	 */
+	if (max96724_active_pipe_count(dev) > 1 ||
+	    max96724_link_locked(dev) > 0)
+		return 0;
+
+	max96724_reset_oneshot(dev);
+	max96717_retrigger_tx(ser_dev);
+	msleep(200);
+
+	return 0;
+}
+EXPORT_SYMBOL(max96724_prepare_stream);
 
 int max96724_get_ser_pipe_id(struct device *dev, int dser_pipe_id, int vc_id)
 {

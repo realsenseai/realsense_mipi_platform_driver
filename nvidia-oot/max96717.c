@@ -953,6 +953,13 @@ int max96717_set_pipe(struct device *dev, int pipe_id,
 	struct max96717 *priv = dev_get_drvdata(dev);
 	int err = 0;
 
+	/*
+	 * The unified sensor framework passes the legacy pixel-mode pipe ID
+	 * for MAX96717. Tunnel mode carries four VCs, so map them 1:1 here.
+	 */
+	if (!priv->pixel_mode)
+		pipe_id = vc_id;
+
 	if (pipe_id > (MAX96717_MAX_PIPES - 1) || vc_id >= 8) {
 		dev_info(dev, "%s: input pipe_id: %d exceeds max96717 max pipes\n",
 			 __func__, pipe_id);

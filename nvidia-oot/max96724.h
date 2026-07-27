@@ -50,6 +50,7 @@ void max96724_retrigger_datapath(struct device *dev);
 void max96724_log_control_status(struct device *dev);
 int max96724_active_pipe_count(struct device *dev);
 int max96724_link_locked(struct device *dev);
+int max96724_prepare_stream(struct device *dev, struct device *ser_dev);
 
 /**
  * @brief  Puts the deserializer in single exclusive link mode.
@@ -116,6 +117,8 @@ int max96724_sdev_unregister(struct device *dev, struct device *s_dev);
  * @return  0 for success, or negative error code.
  */
 int max96724_setup_streaming(struct device *dev, struct device *s_dev);
+int max96724_finish_setup(struct device *dev, struct device *ser_dev,
+			  struct device *s_dev);
 
 /**
  * @brief  Enables streaming for a source sensor.
