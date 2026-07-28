@@ -86,7 +86,9 @@
 
 /*
  *   VIDEO_TX0/TX1: Video TX path config
- *   0x0110=0xE9, 0x0111=0x10 for tunnel mode data path
+ *   VIDEO_TX0[2] bypasses PCLK detection.  Tunnel mode carries CSI-2
+ *   packets directly and must not gate sparse 5/15 FPS traffic on the
+ *   recovered pixel-clock detector.
  */
 #define MAX96717_VIDEO_TX0_ADDR		0x110
 #define MAX96717_VIDEO_TX1_ADDR		0x111
@@ -145,8 +147,9 @@
 #define MAX96717_TUN_MODE_EN		0x80
 #define MAX96717_TUN_MODE_DIS		0x00
 
-/* VIDEO_TX0 tunnel mode data path enable */
-#define MAX96717_VIDEO_TX0_TUN		0xE9
+/* VIDEO_TX0 tunnel mode data path enable + CLKDET_BYP (bit 2). */
+#define MAX96717_VIDEO_TX0_CLKDET_BYP	BIT(2)
+#define MAX96717_VIDEO_TX0_TUN		(0xE9 | MAX96717_VIDEO_TX0_CLKDET_BYP)
 /* VIDEO_TX1 tunnel mode config */
 #define MAX96717_VIDEO_TX1_TUN		0x10
 #define MAX96717_VIDEO_TX0_BPP_MANUAL	0x60
