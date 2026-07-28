@@ -56,8 +56,9 @@ struct dser_interface {
 	int (*set_pipe)(struct device *dev, int pipe_id, u8 data_type1, u8 data_type2, u32 vc_id);
 	int (*release_pipe)(struct device *dev, int pipe_id);
 	void (*reset_oneshot)(struct device *dev);
-	/* RSDEV-12608: flush one link's line buffer after a camera HW reset;
-	 * NULL if the deser leaves no stale buffer (max9296). */
+	/* Flush one link's pixel line buffer, after a camera HW reset and on
+	 * link cold bring-up; NULL if the deser leaves no stale buffer
+	 * (max9296). Must not be called while the link has live streams. */
 	void (*reset_oneshot_link)(struct device *dev, u32 vc_id);
 
 	/* Setup and control */
@@ -620,6 +621,11 @@ struct ds5_dev {
 #ifdef CONFIG_VIDEO_D4XX_SERDES
  	/* Pointer to the deserializer dev */
 	struct dser_control *dser_control;
+
+	/* Cold-bring-up flush request for this camera's GMSL link: the first
+	 * stream on a link the deser already served for another camera wedges
+	 * (VI discards every frame) until a one-shot. Guarded by lock. */
+	bool link_flush_pending;
 #endif
 
 	/* Pointer to the primary DS5 struct */
@@ -5352,6 +5358,28 @@ static int ds5_mux_s_frame_interval(struct v4l2_subdev *sd,
 	return 0;
 }
 
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+/* RSDSO-21786: fire the link flush at most once per cold bring-up. The flag is
+ * consumed under ds5_dev->lock, but the op itself (CTRL1 write plus a 100 ms
+ * settle) must run unlocked so it cannot stall a sibling's start. */
+static void ds5_flush_idle_link(struct ds5 *state)
+{
+	bool flush;
+
+	if (!state->dser_ops->reset_oneshot_link)
+		return;
+
+	mutex_lock(&state->ds5_dev->lock);
+	flush = state->ds5_dev->link_flush_pending;
+	state->ds5_dev->link_flush_pending = false;
+	mutex_unlock(&state->ds5_dev->lock);
+
+	if (flush)
+		state->dser_ops->reset_oneshot_link(state->dser_dev,
+						    state->g_ctx.dst_vc);
+}
+#endif
+
 static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 {
 	struct ds5 *state = container_of(sd, struct ds5, mux.sd.subdev);
@@ -5476,6 +5504,12 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 				"stream %d in %d state already (status: 0x%04x) %dms, treating as no-op\n",
 				stream_id, on, status, jiffies_to_msecs(jiffies - ts));
 			mutex_lock(&state->ds5_dev->lock);
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+			/* FW reports this stream live without passing the consume
+			 * point; drop the arm so it cannot flush a live link. */
+			if (on)
+				state->ds5_dev->link_flush_pending = false;
+#endif
 			*streaming_flag = on;
 			mutex_unlock(&state->ds5_dev->lock);
 			sensor->streaming = on;
@@ -5485,6 +5519,15 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 
 	restore_val = sensor->streaming;
 	mutex_lock(&state->ds5_dev->lock);
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	/* Test before setting our own flag: all four down means the link is idle,
+	 * so the flush cannot truncate a sibling's in-flight frames. */
+	if (on && !(state->ds5_dev->depth_streaming ||
+		    state->ds5_dev->rgb_streaming ||
+		    state->ds5_dev->ir_streaming ||
+		    state->ds5_dev->imu_streaming))
+		state->ds5_dev->link_flush_pending = true;
+#endif
 	*streaming_flag = on;
 	mutex_unlock(&state->ds5_dev->lock);
 	sensor->streaming = on;
@@ -5510,6 +5553,9 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 				continue;
 			}
 			ds5_config_done = true;
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+			ds5_flush_idle_link(state);
+#endif
 		}
 
 		if (streaming != expected_streaming_state) {
