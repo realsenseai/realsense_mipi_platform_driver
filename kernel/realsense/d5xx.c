@@ -107,6 +107,10 @@ struct dser_interface {
 #define MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16 0x5004
 #endif
 
+#ifndef MEDIA_BUS_FMT_RS_Y12I_RAW16_2X16
+#define MEDIA_BUS_FMT_RS_Y12I_RAW16_2X16 0x5005
+#endif
+
 /*
  * D5x RGB ISYS stores GRBG10P as 50 little-endian 10-bit pixels per
  * 64-byte cache line. This is neither standard CSI RAW10, V4L2 IPU3
@@ -122,6 +126,10 @@ struct dser_interface {
 
 #ifndef V4L2_PIX_FMT_SGRBG10P
 #define V4L2_PIX_FMT_SGRBG10P v4l2_fourcc('p', 'g', 'A', 'A')
+#endif
+
+#ifndef V4L2_PIX_FMT_Y16I
+#define V4L2_PIX_FMT_Y16I v4l2_fourcc('Y', '1', '6', 'I')
 #endif
 
 /*
@@ -1459,6 +1467,11 @@ static const struct d5x_resolution d58x_calibration_sizes[] = {
 	D5X_RES(256, 144, d5x_framerate_90)
 };
 
+/* Native Y12I calibration: one 16-bit L and R container per logical pixel. */
+static const struct d5x_resolution d58x_y12i_sizes[] = {
+	D5X_RES(1600, 1300, d5x_framerate_15_25)
+};
+
 /* D58x RGB resolutions: COLOR (YUY2) */
 static const struct d5x_resolution d58x_rgb_sizes[] = {
 	D5X_RES(640, 360, d5x_framerate_to_90)	/* default */
@@ -1533,6 +1546,16 @@ static const struct d5x_format d5x_y_formats_d58x[] = {
 		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,
 		.n_resolutions = ARRAY_SIZE(d58x_calibration_sizes),
 		.resolutions = d58x_calibration_sizes,
+	}, {
+		/*
+		 * HKR FMT_Y12I stores L/R as little-endian 16-bit slots with only
+		 * 12 valid bits per sample. RAW16 carries each slot unchanged;
+		 * VI exposes the same slots through the Y16I container ABI.
+		 */
+		.data_type = GMSL_CSI_DT_RAW_16,
+		.mbus_code = MEDIA_BUS_FMT_RS_Y12I_RAW16_2X16,
+		.n_resolutions = ARRAY_SIZE(d58x_y12i_sizes),
+		.resolutions = d58x_y12i_sizes,
 	},
 };
 
@@ -1947,6 +1970,40 @@ static void d5x_tegra_update_rgb_mode(struct d5x *state,
 	state->mux.sd.fmt_width = image->width;
 	state->mux.sd.fmt_height = image->height;
 }
+
+static void d5x_tegra_update_y12i_mode(struct d5x *state,
+				       const struct d5x_sensor *sensor)
+{
+	struct sensor_mode_properties *mode;
+	struct sensor_image_properties *image;
+
+	if (!state->mux.sd.sensor_props.sensor_modes ||
+	    !sensor->config.format || !sensor->config.resolution ||
+	    sensor->config.format->mbus_code !=
+		    MEDIA_BUS_FMT_RS_Y12I_RAW16_2X16)
+		return;
+
+	/* Keep Y16I logical geometry while VI byte-DMAs the complete
+	 * width * 4-byte row without interpreting the 12-bit samples. */
+	mode = &state->mux.sd.sensor_props.sensor_modes[1];
+	image = &mode->image_properties;
+	image->width = sensor->format.width;
+	image->height = sensor->format.height;
+	image->line_length = sensor->format.width;
+	image->pixel_format = V4L2_PIX_FMT_Y16I;
+	image->embedded_metadata_height = state->metadata_enabled ? 1 : 0;
+
+	/*
+	 * Keep the platform CSI link clock unchanged. The four-byte logical
+	 * pixel size describes the Y12I DDR/V4L2 container. RAW16 is the
+	 * transport carrier and does not change the 12-bit sample semantics.
+	 */
+
+	state->mux.sd.mode_prop_idx = 1;
+	state->mux.sd.mode = state->mux.sd.def_mode;
+	state->mux.sd.fmt_width = image->width;
+	state->mux.sd.fmt_height = image->height;
+}
 #endif
 
 static int __d5x_sensor_set_fmt(struct d5x *state, struct d5x_sensor *sensor,
@@ -1999,7 +2056,11 @@ static int __d5x_sensor_set_fmt(struct d5x *state, struct d5x_sensor *sensor,
 		if (state->is_rgb) {
 			d5x_tegra_update_rgb_mode(state, sensor);
 		} else if (state->is_y8) {
-			if (sensor->config.format->mbus_code == MEDIA_BUS_FMT_Y8_1X8)
+			if (sensor->config.format->mbus_code ==
+			    MEDIA_BUS_FMT_RS_Y12I_RAW16_2X16)
+				d5x_tegra_update_y12i_mode(state, sensor);
+			else if (sensor->config.format->mbus_code ==
+				 MEDIA_BUS_FMT_Y8_1X8)
 				state->mux.sd.mode_prop_idx = 0;
 			else
 				state->mux.sd.mode_prop_idx = 1;
