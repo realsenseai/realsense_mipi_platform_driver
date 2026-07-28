@@ -46,6 +46,7 @@ Each camera registers four sensor subdevices: Depth, RGB, IR (Y8/Y8I/Y12I), and 
 
 A deserializer abstraction layer (`struct dser_interface`) provides function pointer tables for MAX9296 vs MAX96712 variants.
 
+- **D5xx frame postprocessing errors**: A `tegra_frame_postprocess_ops` callback returns `0` only after a required buffer transform succeeds. Return a negative error when the VB2 plane has no CPU mapping or the frame geometry is invalid; the VI `buf_finish` adapter reports that buffer with `V4L2_BUF_FLAG_ERROR` instead of exposing unconverted bytes under the advertised FourCC.
 - **SerDes pipe configuration**: the **driver** configures all four SerDes pipes (Depth, RGB, IR, IMU) at stream start via `ds5_configure()`. The D457 firmware does **not** configure any pipes. Do not add probe-time pipe setup or special-case individual pipes (e.g. IMU) in `ds5_probe()`.
 - **Device tree assumptions**: all supported device trees include all four sensor instances (Depth, RGB, IR, IMU). Do not add DT-scanning logic to check for the presence of individual sensor types.
 
