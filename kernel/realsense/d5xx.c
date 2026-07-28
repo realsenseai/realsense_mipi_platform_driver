@@ -176,7 +176,15 @@ struct dser_interface {
 #define D5X_EXPOSURE_ROI_LEFT		0x0014
 #define D5X_EXPOSURE_ROI_BOTTOM		0x0018
 #define D5X_EXPOSURE_ROI_RIGHT		0x001C
+#define D5X_VISUAL_PRESET			0x0020
 #define D5X_MANUAL_LASER_POWER		0x0024
+#define D5X_RGB_BRIGHTNESS			0x0024
+#define D5X_RGB_CONTRAST			0x0028
+#define D5X_RGB_GAMMA				0x002C
+#define D5X_SOC_PVT_TEMPERATURE		0x0030
+#define D5X_OHM_TEMPERATURE			0x0034
+#define D5X_PROJECTOR_TEMPERATURE		0x0038
+#define D5X_ERROR_CODE				0x003C
 
 #define D5X_DEPTH_CONFIG_STATUS		0x4800
 #define D5X_RGB_CONFIG_STATUS		0x4802
@@ -423,6 +431,14 @@ struct d5x_ctrls {
 		struct v4l2_ctrl *query_sub_stream;
 		struct v4l2_ctrl *set_sub_stream;
 		struct v4l2_ctrl *sync_mode;
+		struct v4l2_ctrl *visual_preset;
+		struct v4l2_ctrl *brightness;
+		struct v4l2_ctrl *contrast;
+		struct v4l2_ctrl *gamma;
+		struct v4l2_ctrl *soc_pvt_temperature;
+		struct v4l2_ctrl *ohm_temperature;
+		struct v4l2_ctrl *projector_temperature;
+		struct v4l2_ctrl *error_code;
 	};
 };
 
@@ -1154,6 +1170,29 @@ static int d5x_read(struct d5x *state, u16 reg, u16 *val)
 			__func__, reg, *val);
 
 	return ret;
+}
+
+static int d5x_write_verify(struct d5x *state, u16 reg, u16 val)
+{
+	u16 readback;
+	int ret;
+
+	ret = d5x_write(state, reg, val);
+	if (ret)
+		return ret;
+
+	ret = d5x_read(state, reg, &readback);
+	if (ret)
+		return ret;
+
+	if (readback != val) {
+		dev_warn(&state->client->dev,
+			 "%s(): control write rejected, reg 0x%04x requested 0x%x canonical 0x%x\n",
+			 __func__, reg, val, readback);
+		return -EOPNOTSUPP;
+	}
+
+	return 0;
 }
 
 static int d5x_read_poll(struct d5x *state, u16 reg, u16 *val)
@@ -2253,6 +2292,11 @@ static int d5x_hw_set_exposure(struct d5x *state, u32 base, s32 val)
 #define D5X_CAMERA_CID_EWB			(D5X_CAMERA_CID_BASE+14)
 #define D5X_CAMERA_CID_HWMC			(D5X_CAMERA_CID_BASE+15)
 #define D5X_CAMERA_CID_SYNC_MODE		(D5X_CAMERA_CID_BASE+16)
+#define D5X_CAMERA_CID_VISUAL_PRESET		(D5X_CAMERA_CID_BASE+21)
+#define D5X_CAMERA_CID_SOC_PVT_TEMPERATURE	(D5X_CAMERA_CID_BASE+24)
+#define D5X_CAMERA_CID_PROJECTOR_TEMPERATURE	(D5X_CAMERA_CID_BASE+25)
+#define D5X_CAMERA_CID_OHM_TEMPERATURE		(D5X_CAMERA_CID_BASE+26)
+#define D5X_CAMERA_CID_ERROR_CODE		(D5X_CAMERA_CID_BASE+27)
 
 /*
  * D5xx HWM sync-mode values. Value 1 was the former RGB-master mode and is
@@ -3028,6 +3072,19 @@ static int d5x_s_ctrl(struct v4l2_ctrl *ctrl)
 	case V4L2_CID_EXPOSURE_ABSOLUTE:
 		ret = d5x_hw_set_exposure(state, base, ctrl->val);
 		break;
+	case V4L2_CID_BRIGHTNESS:
+		if (state->is_rgb)
+			ret = d5x_write(state, base | D5X_RGB_BRIGHTNESS,
+					(u16)(s16)ctrl->val);
+		break;
+	case V4L2_CID_CONTRAST:
+		if (state->is_rgb)
+			ret = d5x_write(state, base | D5X_RGB_CONTRAST, ctrl->val);
+		break;
+	case V4L2_CID_GAMMA:
+		if (state->is_rgb)
+			ret = d5x_write(state, base | D5X_RGB_GAMMA, ctrl->val);
+		break;
 	case D5X_CAMERA_CID_LASER_POWER:
 		if (!state->is_rgb)
 			ret = d5x_write(state, base | D5X_LASER_POWER,
@@ -3328,6 +3385,11 @@ static int d5x_s_ctrl(struct v4l2_ctrl *ctrl)
 			}
 		}
 		break;
+	case D5X_CAMERA_CID_VISUAL_PRESET:
+		if (state->is_depth)
+			ret = d5x_write_verify(state, base | D5X_VISUAL_PRESET,
+					       ctrl->val);
+		break;
 	}
 
 	mutex_unlock(&state->lock);
@@ -3477,6 +3539,55 @@ static int d5x_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		*ctrl->p_new.p_u32 = data;
 		break;
 
+	case V4L2_CID_BRIGHTNESS:
+		if (!state->is_rgb)
+			return -EINVAL;
+		ret = d5x_read(state, base | D5X_RGB_BRIGHTNESS, &reg);
+		if (!ret)
+			*ctrl->p_new.p_s32 = (s16)reg;
+		break;
+	case V4L2_CID_CONTRAST:
+		if (!state->is_rgb)
+			return -EINVAL;
+		ret = d5x_read(state, base | D5X_RGB_CONTRAST, &reg);
+		if (!ret)
+			*ctrl->p_new.p_s32 = reg;
+		break;
+	case V4L2_CID_GAMMA:
+		if (!state->is_rgb)
+			return -EINVAL;
+		ret = d5x_read(state, base | D5X_RGB_GAMMA, &reg);
+		if (!ret)
+			*ctrl->p_new.p_s32 = reg;
+		break;
+	case D5X_CAMERA_CID_SOC_PVT_TEMPERATURE:
+		if (state->is_rgb)
+			return -EINVAL;
+		ret = d5x_read(state, base | D5X_SOC_PVT_TEMPERATURE, &reg);
+		if (!ret)
+			*ctrl->p_new.p_s32 = (s16)reg;
+		break;
+	case D5X_CAMERA_CID_OHM_TEMPERATURE:
+		if (state->is_rgb)
+			return -EINVAL;
+		ret = d5x_read(state, base | D5X_OHM_TEMPERATURE, &reg);
+		if (!ret)
+			*ctrl->p_new.p_s32 = (s16)reg;
+		break;
+	case D5X_CAMERA_CID_PROJECTOR_TEMPERATURE:
+		if (state->is_rgb)
+			return -EINVAL;
+		ret = d5x_read(state, base | D5X_PROJECTOR_TEMPERATURE, &reg);
+		if (!ret)
+			*ctrl->p_new.p_s32 = (s16)reg;
+		break;
+	case D5X_CAMERA_CID_ERROR_CODE:
+		if (state->is_rgb)
+			return -EINVAL;
+		ret = d5x_read(state, base | D5X_ERROR_CODE, &reg);
+		if (!ret)
+			*ctrl->p_new.p_s32 = reg & 0xff;
+		break;
 	case D5X_CAMERA_CID_LASER_POWER:
 		if (!state->is_rgb)
 			d5x_read(state, base | D5X_LASER_POWER, ctrl->p_new.p_u16);
@@ -3619,6 +3730,13 @@ static int d5x_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 				if (state->d5x_dev)
 					WRITE_ONCE(state->d5x_dev->sync_mode, sync_mode);
 			}
+		}
+		break;
+	case D5X_CAMERA_CID_VISUAL_PRESET:
+		if (state->is_depth && ctrl->p_new.p_s32) {
+			ret = d5x_read(state, base | D5X_VISUAL_PRESET, &reg);
+			if (!ret)
+				*ctrl->p_new.p_s32 = reg;
 		}
 		break;
 	}
@@ -3879,6 +3997,78 @@ static struct v4l2_ctrl_config d5x_ctrl_sync_mode = {
 	.qmenu = sync_mode_menu,
 	.menu_skip_mask = BIT(D5X_SYNC_MODE_RGB_MASTER_UNSUPPORTED),
 	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
+static const char * const visual_preset_menu[] = {
+	[0] = "Custom",
+	[1] = "Default",
+	[2] = "Hand",
+	[3] = "High Accuracy",
+	[4] = "High Density",
+	[5] = "Medium Density",
+};
+
+static const struct v4l2_ctrl_config d5x_ctrl_visual_preset = {
+	.ops = &d5x_ctrl_ops,
+	.id = D5X_CAMERA_CID_VISUAL_PRESET,
+	.name = "Visual Preset",
+	.type = V4L2_CTRL_TYPE_MENU,
+	.min = 0,
+	.max = 5,
+	.def = 1,
+	.qmenu = visual_preset_menu,
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
+#define D5X_READ_ONLY_TELEMETRY_FLAGS \
+	(V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_READ_ONLY)
+
+static const struct v4l2_ctrl_config d5x_ctrl_soc_pvt_temperature = {
+	.ops = &d5x_ctrl_ops,
+	.id = D5X_CAMERA_CID_SOC_PVT_TEMPERATURE,
+	.name = "SoC PVT Temperature",
+	.type = V4L2_CTRL_TYPE_INTEGER,
+	.min = -1289,
+	.max = 1289,
+	.step = 1,
+	.def = 0,
+	.flags = D5X_READ_ONLY_TELEMETRY_FLAGS,
+};
+
+static const struct v4l2_ctrl_config d5x_ctrl_ohm_temperature = {
+	.ops = &d5x_ctrl_ops,
+	.id = D5X_CAMERA_CID_OHM_TEMPERATURE,
+	.name = "OHM Temperature",
+	.type = V4L2_CTRL_TYPE_INTEGER,
+	.min = -1289,
+	.max = 1289,
+	.step = 1,
+	.def = 0,
+	.flags = D5X_READ_ONLY_TELEMETRY_FLAGS,
+};
+
+static const struct v4l2_ctrl_config d5x_ctrl_projector_temperature = {
+	.ops = &d5x_ctrl_ops,
+	.id = D5X_CAMERA_CID_PROJECTOR_TEMPERATURE,
+	.name = "Projector Temperature",
+	.type = V4L2_CTRL_TYPE_INTEGER,
+	.min = -1289,
+	.max = 1289,
+	.step = 1,
+	.def = 0,
+	.flags = D5X_READ_ONLY_TELEMETRY_FLAGS,
+};
+
+static const struct v4l2_ctrl_config d5x_ctrl_error_code = {
+	.ops = &d5x_ctrl_ops,
+	.id = D5X_CAMERA_CID_ERROR_CODE,
+	.name = "Error Code",
+	.type = V4L2_CTRL_TYPE_INTEGER,
+	.min = 0,
+	.max = 255,
+	.step = 1,
+	.def = 0,
+	.flags = D5X_READ_ONLY_TELEMETRY_FLAGS,
 };
 static int d5x_mux_open(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
 {
@@ -4656,6 +4846,31 @@ static int d5x_ctrl_init(struct d5x *state, int sid)
 		/* override default int type to u32 to match SKU & UVC */
 		ctrls->exposure->type = V4L2_CTRL_TYPE_U32;
 	}
+
+	if (sid == RGB_SID) {
+		ctrls->brightness = v4l2_ctrl_new_std(hdl, ops,
+				V4L2_CID_BRIGHTNESS, -64, 64, 1, 0);
+		ctrls->contrast = v4l2_ctrl_new_std(hdl, ops,
+				V4L2_CID_CONTRAST, 0, 100, 1, 50);
+		ctrls->gamma = v4l2_ctrl_new_std(hdl, ops,
+				V4L2_CID_GAMMA, 40, 260, 1, 100);
+
+		if (ctrls->brightness) {
+			ctrls->brightness->priv = sensor;
+			ctrls->brightness->flags |= V4L2_CTRL_FLAG_VOLATILE |
+					V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
+		}
+		if (ctrls->contrast) {
+			ctrls->contrast->priv = sensor;
+			ctrls->contrast->flags |= V4L2_CTRL_FLAG_VOLATILE |
+					V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
+		}
+		if (ctrls->gamma) {
+			ctrls->gamma->priv = sensor;
+			ctrls->gamma->flags |= V4L2_CTRL_FLAG_VOLATILE |
+					V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
+		}
+	}
 	if (hdl->error) {
 		v4l2_err(sd, "error creating controls (%d)\n", hdl->error);
 		ret = hdl->error;
@@ -4704,6 +4919,16 @@ static int d5x_ctrl_init(struct d5x *state, int sid)
 	/* DEPTH custom */
 	if (sid == DEPTH_SID) {
 		ctrls->sync_mode = v4l2_ctrl_new_custom(hdl, &d5x_ctrl_sync_mode, sensor);
+		ctrls->visual_preset =
+			v4l2_ctrl_new_custom(hdl, &d5x_ctrl_visual_preset, sensor);
+		ctrls->soc_pvt_temperature = v4l2_ctrl_new_custom(
+			hdl, &d5x_ctrl_soc_pvt_temperature, sensor);
+		ctrls->ohm_temperature = v4l2_ctrl_new_custom(
+			hdl, &d5x_ctrl_ohm_temperature, sensor);
+		ctrls->projector_temperature = v4l2_ctrl_new_custom(
+			hdl, &d5x_ctrl_projector_temperature, sensor);
+		ctrls->error_code = v4l2_ctrl_new_custom(
+			hdl, &d5x_ctrl_error_code, sensor);
 	}
 	/* IMU custom */
 	if (sid == IMU_SID)
