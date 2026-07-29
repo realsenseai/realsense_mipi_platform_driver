@@ -131,6 +131,26 @@ The build system cross-compiles for ARM64. Toolchains vary by JetPack:
 - A control that librealsense reaches through a **USB depth XU selector** must be a **single read/write V4L2 control**, not a split get/set pair. The MIPI backend's `xu_to_cid()` maps one selector to one CID, and both `get_xu()` and `set_xu()` use that same CID — so a read-only "get" CID plus a separate "set" CID cannot be reached by a single selector. Expose one control with flags `V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE` (do **not** set `READ_ONLY`): `VOLATILE` routes each read to `ds5_g_volatile_ctrl`, `EXECUTE_ON_WRITE` routes each write to `ds5_s_ctrl`. `DS5_CAMERA_CID_AE_MODE` (depth AE regular/accelerated, HWMC SETAETYPE 0x87 / GETAETYPE 0x88, XU selector 0x11) is the reference example.
 - Split get/set CID pairs (e.g. `ae_roi_get/set`, `ae_setpoint_get/set`) are only appropriate for controls librealsense drives via the HWMC blob passthrough (`RS_HWMONITOR → RS_CAMERA_CID_HWMC`), never via a direct XU selector. Adding a matching `case` in librealsense's `xu_to_cid()` is still required for the selector to resolve.
 
+## MIPI lane configuration (hybrid 2-lane camera / 4-lane deserializer)
+
+Each MIPI segment's lane count comes from a **different** DT property, so the camera→serializer and deserializer→Jetson widths are set independently:
+
+| Segment | DT property | Consumer |
+|---|---|---|
+| DS5 camera TX lanes | ds5 node's own endpoint `bus-width` | `camera_common_parse_ports()` → `ds5_hw_init()` writes `DS5_MIPI_LANE_NUMS` |
+| Serializer RX from DS5 | `gmsl-link/csi-mode` (`"1x4"` → 4-lane RX cfg) | `max9295_setup_streaming()` |
+| Deserializer TX → Jetson | `lane_cnt` on the max96712 node (default 2) | `max96712_init_settings()`: `MIPI_TX10` lane count + `BACKTOP25` rate (4 lanes → 1100 Mbps, 2 lanes → 2500 Mbps) |
+| NVCSI brick/CIL lanes | nvcsi channel endpoint `bus-width` | `csi5_stream_set_config()` `cil_config.num_lanes` |
+| VI channel lanes | `tegra-capture-vi` endpoint `bus-width` | `tegra_vi_get_port_info()` |
+| VI clock/bandwidth calc | `modeN/num_lanes` | `tegra_channel_get_num_lanes()` |
+
+**All max96712 D4xx overlays use the hybrid config** (HW-validated on fg12-16ch, `…-cams-0-1-d5xx-d4xx.dts`): camera→serializer stays **2-lane**, deserializer→Jetson runs **4-lane**. Concretely: ds5 endpoint `bus-width = <2>` and `gmsl-link/num-lanes = <2>` stay as-is; `lane_cnt = <4>` on the max96712; `bus-width = <4>` on every VI and nvcsi endpoint; `num_lanes = "4"` in every `modeN`. No d4xx.c change is involved. Any **new** max96712 D4xx overlay must be authored this way. Pure-D5xx overlays (`…-d5xx.dts`, max96717 serializer) are 4-lane end to end; max9296 and max96724 overlays are out of scope (no `lane_cnt` property).
+
+- **`serdes_pix_clk_hz` is required in every `modeN`** whenever the deser link rate differs from what `pix_clk_hz` implies. `sensor_common.c` computes per-lane rate = `(serdes_pix_clk_hz ?: pix_clk_hz) * bit_depth / num_lanes` → mode `mipi_clock` → `cil_config.mipi_clock_rate`. Omitting it at 4-lane/1100 Mbps under-clocks NVCSI ~4x and yields per-frame `DATA_LANE_ERR*_RXFIFO_FULL`, `PD_CRC_ERR`, `CHANSEL_FAULT`, and VI request timeouts. Value for 4 × 1100 Mbps at 16 bpp: `275000000`.
+- `gmsl-link/num-lanes` (`g_ctx.num_csi_lanes`) is consumed **only** by max9296 — it is dead on the max96712 path and kept documentary.
+- The 4-lane deser output occupies a whole NVCSI brick (`1x4`, port A/C/E/G). Multi-deserializer overlays must therefore keep nvcsi `port-index` on even brick boundaries (0/2/4/6) with matching `tegra_sinterface` (`serial_a/c/e/g`). Do not change `port-index` as part of a lane-width edit.
+- 4-lane also requires the carrier to actually route 4 CSI lanes from the deserializer to the Jetson connector; the DT change alone cannot create them.
+
 ## Kernel ABI / module compatibility notes
 
 - Never add a member to a public kernel struct referenced by exported symbols (e.g. `struct i2c_adapter` in `include/linux/i2c.h`). genksyms recomputes the CRC of every exported symbol referencing that struct, so prebuilt out-of-tree modules built against the unpatched headers — notably the BSP NVIDIA display stack (`nvidia.ko`/`nvidia-modeset.ko`/`nvidia-drm.ko`) — fail to load with "disagrees about version of symbol". Add only new exported functions; keep private state out of public headers. After any kernel-header patch, diff the rebuilt `vmlinux.symvers`/`Module.symvers` against what the BSP modules require (`modprobe --dump-modversions <module>.ko`).
