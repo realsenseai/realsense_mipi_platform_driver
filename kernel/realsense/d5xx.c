@@ -253,9 +253,14 @@ MODULE_PARM_DESC(y12i_raw16_carrier,
 #define D5X_STATUS_UNAVAILABLE		0xffff
 
 #define MIPI_LANE_RATE				1300
-#define D5X_CSI_METADATA_MAGIC		0x484B524D
-#define D5X_CSI_METADATA_HEADER_SIZE	20
-#define D5X_CSI_METADATA_PAYLOAD_OFFSET	8
+#define D5X_CSI_METADATA_UVC_HEADER_SIZE	12
+#define D5X_CSI_METADATA_UVC_INFO_BASE	0x8e
+#define D5X_CSI_METADATA_UVC_FID_MASK	0x01
+#define D5X_CSI_METADATA_BLOCK_HEADER_SIZE	8
+#define D5X_CSI_METADATA_CAPTURE_TIMING_ID	0x80000001
+#define D5X_CSI_METADATA_LEGACY_MAGIC	0x484B524D
+#define D5X_CSI_METADATA_LEGACY_HEADER_SIZE	20
+#define D5X_CSI_METADATA_LEGACY_PAYLOAD_OFFSET	8
 #define D5X_CSI_METADATA_MAX_WC		4096
 
 #define MAX_DEPTH_EXP				200000
@@ -3305,32 +3310,62 @@ static int d5x_mux_s_stream(struct v4l2_subdev *sd, int on);
 
 #if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && defined(CONFIG_TEGRA_EMBEDDED_METADATA_OPS)
 /*
- * D5xx CSI metadata carries an HKRM transport header. The kernel only
- * validates the framing needed to publish the actual sidecar bytesused;
- * semantic metadata parsing stays in userspace.
+ * New D5xx firmware sends the same UVC header and metadata payload over CSI
+ * as it sends over USB. Keep the legacy HKRM transport parser so a new host
+ * driver can still stream with older firmware.
  */
 static size_t d5x_csi_metadata_bytesused(const u8 *data, size_t captured_size)
 {
+	u32 first_block_size;
 	u16 payload_size;
 	size_t bytesused;
 
-	if (!data || captured_size < D5X_CSI_METADATA_HEADER_SIZE)
+	if (!data)
 		return 0;
 
-	if (get_unaligned_le32(data) != D5X_CSI_METADATA_MAGIC)
+	if (captured_size >= D5X_CSI_METADATA_LEGACY_HEADER_SIZE &&
+	    get_unaligned_le32(data) == D5X_CSI_METADATA_LEGACY_MAGIC) {
+		payload_size = get_unaligned_le16(
+			data + D5X_CSI_METADATA_LEGACY_PAYLOAD_OFFSET);
+		bytesused = D5X_CSI_METADATA_LEGACY_HEADER_SIZE + payload_size;
+		if (!payload_size || bytesused > captured_size)
+			return 0;
+
+		return bytesused;
+	}
+
+	if (captured_size <
+	    D5X_CSI_METADATA_UVC_HEADER_SIZE +
+	    D5X_CSI_METADATA_BLOCK_HEADER_SIZE)
 		return 0;
 
-	payload_size = get_unaligned_le16(data + D5X_CSI_METADATA_PAYLOAD_OFFSET);
-	bytesused = D5X_CSI_METADATA_HEADER_SIZE + payload_size;
-	if (!payload_size || bytesused > captured_size)
+	bytesused = data[0];
+	if (bytesused <
+	    D5X_CSI_METADATA_UVC_HEADER_SIZE +
+	    D5X_CSI_METADATA_BLOCK_HEADER_SIZE ||
+	    bytesused > captured_size)
+		return 0;
+
+	if ((data[1] & ~D5X_CSI_METADATA_UVC_FID_MASK) !=
+	    D5X_CSI_METADATA_UVC_INFO_BASE)
+		return 0;
+
+	if (get_unaligned_le32(data + D5X_CSI_METADATA_UVC_HEADER_SIZE) !=
+	    D5X_CSI_METADATA_CAPTURE_TIMING_ID)
+		return 0;
+
+	first_block_size = get_unaligned_le32(
+		data + D5X_CSI_METADATA_UVC_HEADER_SIZE + sizeof(u32));
+	if (first_block_size < D5X_CSI_METADATA_BLOCK_HEADER_SIZE ||
+	    D5X_CSI_METADATA_UVC_HEADER_SIZE + first_block_size > bytesused)
 		return 0;
 
 	return bytesused;
 }
 
 static const struct tegra_embedded_metadata_ops d5x_csi_metadata_ops = {
-	.dataformat = V4L2_META_FMT_RSMD,
-	.compat_dataformat = V4L2_META_FMT_D4XX,
+	.dataformat = V4L2_META_FMT_D4XX,
+	.compat_dataformat = V4L2_META_FMT_RSMD,
 	.max_buffer_size = D5X_CSI_METADATA_MAX_WC,
 	.get_bytesused = d5x_csi_metadata_bytesused,
 };
