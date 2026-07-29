@@ -82,7 +82,6 @@ struct dser_interface {
 #else
 #include <media/gmsl-link.h>
 #define GMSL_CSI_DT_YUV422_8        0x1E
-#define GMSL_CSI_DT_RGB_888         0x24
 #define GMSL_CSI_DT_RAW_8           0x2A
 #define GMSL_CSI_DT_EMBED           0x12
 #endif
@@ -107,9 +106,18 @@ struct dser_interface {
 #define MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16 0x5004
 #endif
 
-#ifndef MEDIA_BUS_FMT_RS_Y12I_RAW16_2X16
-#define MEDIA_BUS_FMT_RS_Y12I_RAW16_2X16 0x5005
+#ifndef MEDIA_BUS_FMT_RS_Y12I_UD30_4X8
+#define MEDIA_BUS_FMT_RS_Y12I_UD30_4X8 0x5005
 #endif
+
+#ifndef MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8
+#define MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8 0x5006
+#endif
+
+static bool y12i_raw16_carrier;
+module_param(y12i_raw16_carrier, bool, 0444);
+MODULE_PARM_DESC(y12i_raw16_carrier,
+		 "Use CSI RAW16 instead of the default UD30 byte carrier for D5x Y12I");
 
 /*
  * D5x RGB ISYS stores GRBG10P as 50 little-endian 10-bit pixels per
@@ -606,8 +614,8 @@ struct d5x {
 };
 
 #ifdef CONFIG_TEGRA_CAMERA_PLATFORM
-static void d5x_copy_raw16_to_ba10(void *dst_data, const void *src_data,
-				   size_t bytesused)
+static void d5x_swab16_frame(void *dst_data, const void *src_data,
+			     size_t bytesused)
 {
 	const u8 *src = src_data;
 	u8 *dst = dst_data;
@@ -706,7 +714,8 @@ static int d5x_postprocess_csi_frame(struct camera_common_data *s_data,
 	int ret;
 
 	if (mbus_code != MEDIA_BUS_FMT_RS_SGRBG10_1X16 &&
-	    mbus_code != MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16)
+	    mbus_code != MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16 &&
+	    mbus_code != MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8)
 		return 0;
 	if (!data || !bytesused || WARN_ON_ONCE(bytesused & 1U))
 		return -EFAULT;
@@ -720,7 +729,8 @@ static int d5x_postprocess_csi_frame(struct camera_common_data *s_data,
 
 	switch (mbus_code) {
 	case MEDIA_BUS_FMT_RS_SGRBG10_1X16:
-		d5x_copy_raw16_to_ba10(
+	case MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8:
+		d5x_swab16_frame(
 			data, state->frame_postprocess_scratch, bytesused);
 		ret = 0;
 		break;
@@ -1461,12 +1471,6 @@ static const struct d5x_resolution d58x_y8_sizes[] = {
 	D5X_RES(424, 240, d5x_framerate_to_90)
 };
 
-/* D58x calibration resolutions: IR_RAW Y12I (24-bit) + Self-Calibration/Tare */
-static const struct d5x_resolution d58x_calibration_sizes[] = {
-	D5X_RES(1600, 1300, d5x_framerate_15_25)
-	D5X_RES(256, 144, d5x_framerate_90)
-};
-
 /* Native Y12I calibration: one 16-bit L and R container per logical pixel. */
 static const struct d5x_resolution d58x_y12i_sizes[] = {
 	D5X_RES(1600, 1300, d5x_framerate_15_25)
@@ -1519,11 +1523,6 @@ static const struct d5x_format d5x_depth_formats_d58x[] = {
 		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
 		.n_resolutions = ARRAY_SIZE(d58x_depth_sizes),
 		.resolutions = d58x_depth_sizes,
-	}, {
-		.data_type = GMSL_CSI_DT_RGB_888,	/* 24-bit Calibration */
-		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,
-		.n_resolutions = ARRAY_SIZE(d58x_calibration_sizes),
-		.resolutions = d58x_calibration_sizes,
 	},
 };
 
@@ -1542,18 +1541,37 @@ static const struct d5x_format d5x_y_formats_d58x[] = {
 		.n_resolutions = ARRAY_SIZE(d58x_y8_sizes),
 		.resolutions = d58x_y8_sizes,
 	}, {
-		.data_type = GMSL_CSI_DT_RGB_888,	/* Y12I, 24-bit Calibration */
-		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,
-		.n_resolutions = ARRAY_SIZE(d58x_calibration_sizes),
-		.resolutions = d58x_calibration_sizes,
-	}, {
 		/*
 		 * HKR FMT_Y12I stores L/R as little-endian 16-bit slots with only
-		 * 12 valid bits per sample. RAW16 carries each slot unchanged;
-		 * VI exposes the same slots through the Y16I container ABI.
+		 * 12 valid bits per sample. UD30 carries the slot bytes opaquely;
+		 * VI exposes the same byte order through the Y16I container ABI.
+		 */
+		.data_type = GMSL_CSI_DT_USER_1,
+		.mbus_code = MEDIA_BUS_FMT_RS_Y12I_UD30_4X8,
+		.n_resolutions = ARRAY_SIZE(d58x_y12i_sizes),
+		.resolutions = d58x_y12i_sizes,
+	},
+};
+
+static const struct d5x_format d5x_y_formats_d58x_raw16[] = {
+	{
+		/* First format: default */
+		.data_type = GMSL_CSI_DT_RAW_8,	/* Y8 */
+		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
+		.n_resolutions = ARRAY_SIZE(d58x_y8_sizes),
+		.resolutions = d58x_y8_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_YUV422_8,	/* Y8I */
+		.mbus_code = MEDIA_BUS_FMT_VYUY8_1X16,
+		.n_resolutions = ARRAY_SIZE(d58x_y8_sizes),
+		.resolutions = d58x_y8_sizes,
+	}, {
+		/*
+		 * RAW16/T_R16 reverses each 16-bit slot relative to the HKR DDR
+		 * bytes. The D5x frame callback restores the Y16I byte order.
 		 */
 		.data_type = GMSL_CSI_DT_RAW_16,
-		.mbus_code = MEDIA_BUS_FMT_RS_Y12I_RAW16_2X16,
+		.mbus_code = MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8,
 		.n_resolutions = ARRAY_SIZE(d58x_y12i_sizes),
 		.resolutions = d58x_y12i_sizes,
 	},
@@ -1976,11 +1994,14 @@ static void d5x_tegra_update_y12i_mode(struct d5x *state,
 {
 	struct sensor_mode_properties *mode;
 	struct sensor_image_properties *image;
+	bool raw16_carrier;
 
 	if (!state->mux.sd.sensor_props.sensor_modes ||
 	    !sensor->config.format || !sensor->config.resolution ||
-	    sensor->config.format->mbus_code !=
-		    MEDIA_BUS_FMT_RS_Y12I_RAW16_2X16)
+	    (sensor->config.format->mbus_code !=
+		    MEDIA_BUS_FMT_RS_Y12I_UD30_4X8 &&
+	     sensor->config.format->mbus_code !=
+		    MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8))
 		return;
 
 	/* Keep Y16I logical geometry while VI byte-DMAs the complete
@@ -1991,12 +2012,15 @@ static void d5x_tegra_update_y12i_mode(struct d5x *state,
 	image->height = sensor->format.height;
 	image->line_length = sensor->format.width;
 	image->pixel_format = V4L2_PIX_FMT_Y16I;
-	image->embedded_metadata_height = state->metadata_enabled ? 1 : 0;
+	raw16_carrier = sensor->config.format->mbus_code ==
+		MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8;
+	image->embedded_metadata_height =
+		(!raw16_carrier && state->metadata_enabled) ? 1 : 0;
 
 	/*
 	 * Keep the platform CSI link clock unchanged. The four-byte logical
-	 * pixel size describes the Y12I DDR/V4L2 container. RAW16 is the
-	 * transport carrier and does not change the 12-bit sample semantics.
+	 * pixel size describes the Y12I DDR/V4L2 container. The selected CSI
+	 * carrier does not change the 12-bit sample semantics.
 	 */
 
 	state->mux.sd.mode_prop_idx = 1;
@@ -2057,7 +2081,9 @@ static int __d5x_sensor_set_fmt(struct d5x *state, struct d5x_sensor *sensor,
 			d5x_tegra_update_rgb_mode(state, sensor);
 		} else if (state->is_y8) {
 			if (sensor->config.format->mbus_code ==
-			    MEDIA_BUS_FMT_RS_Y12I_RAW16_2X16)
+			    MEDIA_BUS_FMT_RS_Y12I_UD30_4X8 ||
+			    sensor->config.format->mbus_code ==
+			    MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8)
 				d5x_tegra_update_y12i_mode(state, sensor);
 			else if (sensor->config.format->mbus_code ==
 				 MEDIA_BUS_FMT_Y8_1X8)
@@ -2195,7 +2221,6 @@ static int d5x_configure(struct d5x *state)
 	u16 md_fmt, vc_id;
 #ifdef CONFIG_VIDEO_D5XX_SERDES
 	u16 data_type1, data_type2;
-	bool is_calib = 0;
 	unsigned int pipe_reapply_gen;
 #endif
 #if !D5X_BYPASS_CAMERA_I2C
@@ -2256,8 +2281,10 @@ static int d5x_configure(struct d5x *state)
 
 #ifdef CONFIG_VIDEO_D5XX_SERDES
 	data_type1 = sensor->config.format->data_type;
+	if (y12i_raw16_carrier && state->is_y8 &&
+	    data_type1 == GMSL_CSI_DT_RAW_16)
+		md_fmt = 0x00;
 	data_type2 = md_fmt;
-	is_calib = (state->is_y8 && (data_type1 == GMSL_CSI_DT_RGB_888));
 
 	vc_id = state->g_ctx.dst_vc;
 	dev_info(&state->client->dev,
@@ -2296,9 +2323,6 @@ static int d5x_configure(struct d5x *state)
 		mutex_lock(&serdes_lock__);
 		ret = d5x_setup_pipeline(state, data_type1, data_type2,
 					 sensor->pipe_id, vc_id);
-		/* reset data path when switching to Y12I */
-		if (is_calib)
-			state->dser_ops->reset_oneshot(state->dser_dev);
 		mutex_unlock(&serdes_lock__);
 		if (ret < 0) {
 			dev_err(&state->client->dev,
@@ -6197,11 +6221,6 @@ static int d5x_mux_s_stream(struct v4l2_subdev *sd, int on)
 			sensor->pipe_id = PIPE_NOT_CONFIGURED;
 			sensor->pipe_reapply_gen = 0;
 		}
-		if (state->is_y8
-			&& (state->ir.sensor.config.format->data_type == GMSL_CSI_DT_RGB_888))
-		{
-			state->dser_ops->reset_oneshot(state->dser_dev);
-		}
 		mutex_unlock(&serdes_lock__);
 		msleep_range(100);
 
@@ -6574,8 +6593,14 @@ static int d5x_fixed_configuration(struct i2c_client *client, struct d5x *state)
 	sensor = &state->ir.sensor;
 	switch (dev_type) {
 	case D5X_DEVICE_TYPE_D58X:
-		sensor->formats = d5x_y_formats_d58x;
-		sensor->n_formats = ARRAY_SIZE(d5x_y_formats_d58x);
+		if (y12i_raw16_carrier) {
+			sensor->formats = d5x_y_formats_d58x_raw16;
+			sensor->n_formats =
+				ARRAY_SIZE(d5x_y_formats_d58x_raw16);
+		} else {
+			sensor->formats = d5x_y_formats_d58x;
+			sensor->n_formats = ARRAY_SIZE(d5x_y_formats_d58x);
+		}
 		break;
 	default:
 		sensor->formats = state->variant->formats;
