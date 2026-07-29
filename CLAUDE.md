@@ -170,6 +170,17 @@ MAX96712 keys the sticky pipe by link (`link = vc_id / MAX9295_MAX_STREAMS`): `l
 - The multi-VC register table is validated on **link 0** only; link>0 extended-VC-msb (`MIPI_TX_EXT0..3 = link_id << 2`) is generalized to match the dynamic path but unproven — validate on hardware.
 - `max96712.c` has **no repo copy** — it is carried entirely by `nvidia-oot/6.0/0003-…patch` (JP6.1/6.2 symlink to 6.0; JP7's `7.0/0006-…patch` and `7.1/0006-…patch` are themselves symlinks back to `6.0/0003`, verified on disk). Edit the `sources_<v>/nvidia-oot/.../max96712.c` working copy, then regenerate 0003 via `git diff HEAD^ -- drivers/media/i2c/max96712.c` (0003 touches only this file). Regenerating 0003 auto-ships JP7 too — there is no separate JP7 copy to port.
 
+## Subagent and workflow economics
+
+Every subagent runs its own requests, so a fan-out multiplies cost. Be deliberate.
+
+- **Set `model` per stage; never leave it unset across a whole workflow.** An unset `model` inherits the session model (usually Opus) for *every* agent. Mechanical stages — refuting a stated claim against code, running a staged script, collecting logs, prose edits — are Sonnet work. Reserve Opus for the stages that actually need judgement: the final judge, a synthesis, a root-cause hunt. One review workflow here ran 13 Opus agents where 1 Opus judge plus Sonnet refuters would have done.
+- **Batch per-item fan-out.** One verifier per *dimension* handling all that dimension's findings beats one verifier per finding. Gate verification by severity — do not spend a high-effort agent disproving a `low` nit.
+- **Don't re-send context you could point at.** A long facts preamble repeated to N agents is paid N times, and the agents usually re-read the same files anyway. Name the file paths and the specific functions instead.
+- **Right-size to the diff.** A small single-file change does not need a large adversarial fan-out; a few reviewers find the same defects. Scale the fleet to the blast radius, not to the ambition.
+- **Never delegate waiting.** An agent told to run a long rig job and wait burns tokens and may return nothing. Use a backgrounded Bash watcher, or the [`soak-watch`](.claude/skills/soak-watch/SKILL.md) skill, which monitored a 5.5 h soak for zero subagents and zero conversation turns.
+- The repo's own agents in `.claude/agents/` are already Sonnet except `debug-agent` (Opus, justified for root-cause work). Keep new agents Sonnet unless there is a stated reason.
+
 ## Model/effort recommendation (MANDATORY)
 
 **Every advised action must carry a model + reasoning-effort recommendation.** This applies to anything you propose as a next step: "want me to X?", a plan step, a validation leg, a build/deploy run, a follow-up ticket task, a suggested cleanup. No advised action ships without it.
