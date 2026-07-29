@@ -206,6 +206,7 @@ struct ser_interface {
 #define DS5_EXPOSURE_ROI_LEFT		0x0014
 #define DS5_EXPOSURE_ROI_BOTTOM		0x0018
 #define DS5_EXPOSURE_ROI_RIGHT		0x001C
+#define DS5_VISUAL_PRESET		0x0020
 #define DS5_MANUAL_LASER_POWER		0x0024
 #define DS5_PWM_FREQUENCY		0x0028
 #define DS5_CAMERA_SYNC_MODE		0x002C
@@ -222,6 +223,18 @@ struct ser_interface {
 #define DS5_RGB_WHITE_BALANCE_TEMP	0x0018
 #define DS5_RGB_AUTO_WHITE_BALANCE	0x001C
 #define DS5_RGB_POWER_LINE_FREQ		0x0020
+#define DS5_RGB_BRIGHTNESS		0x0024
+#define DS5_RGB_CONTRAST		0x0028
+#define DS5_RGB_GAMMA			0x002C
+
+/* D58x-only telemetry offsets relative to DS5_DEPTH_CONTROL_BASE.
+ * DS5_SOC_PVT_TEMPERATURE overlaps the D4xx readout-shaping offset, so
+ * ds5_ctrl_init() registers exactly one interpretation per detected SKU.
+ */
+#define DS5_SOC_PVT_TEMPERATURE		0x0030
+#define DS5_OHM_TEMPERATURE		0x0034
+#define DS5_PROJECTOR_TEMPERATURE	0x0038
+#define DS5_ERROR_CODE			0x003C
 
 #define DS5_DEPTH_CONFIG_STATUS		0x4800
 #define DS5_RGB_CONFIG_STATUS		0x4802
@@ -473,8 +486,8 @@ struct ds5_ctrls {
 		struct v4l2_ctrl *sync_mode;
 		/* RGB-only ISP controls. Only ae_priority needs a stored
 		 * pointer because it must be disabled per-SKU after probe
-		 * (D40X/D401 does not support it). The other five are owned
-		 * by the V4L2 handler and looked up by CID at dispatch.
+		 * (D40X/D401 does not support it). The remaining controls
+		 * are owned by the V4L2 handler and looked up by CID at dispatch.
 		 */
 		struct v4l2_ctrl *ae_priority;
 	};
@@ -2431,6 +2444,7 @@ static int ds5_hw_set_exposure(struct ds5 *state, u32 base, s32 val)
 #define DS5_CAMERA_CID_EWB			(DS5_CAMERA_CID_BASE+14)
 #define DS5_CAMERA_CID_HWMC			(DS5_CAMERA_CID_BASE+15)
 #define DS5_CAMERA_CID_SYNC_MODE		(DS5_CAMERA_CID_BASE+16)
+#define DS5_CAMERA_CID_VISUAL_PRESET		(DS5_CAMERA_CID_BASE+21)
 
 /* Sync mode public values (RSDEV-6449).  FW maps EXTERNAL → Slave or SlaveFull
  * per platform; the driver passes the public value through unchanged. */
@@ -2441,6 +2455,10 @@ enum ds5_sync_mode {
 };
 
 #define DS5_CAMERA_CID_PWM			(DS5_CAMERA_CID_BASE+22)
+#define DS5_CAMERA_CID_SOC_PVT_TEMPERATURE	(DS5_CAMERA_CID_BASE+24)
+#define DS5_CAMERA_CID_PROJECTOR_TEMPERATURE	(DS5_CAMERA_CID_BASE+25)
+#define DS5_CAMERA_CID_OHM_TEMPERATURE		(DS5_CAMERA_CID_BASE+26)
+#define DS5_CAMERA_CID_ERROR_CODE		(DS5_CAMERA_CID_BASE+27)
 
 /* the HWMC will remain for legacy tools compatibility,
  * HWMC_RW used for UVC compatibility
@@ -2992,6 +3010,21 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 	case V4L2_CID_EXPOSURE_ABSOLUTE:
 		ret = ds5_hw_set_exposure(state, base, ctrl->val);
 		break;
+	case V4L2_CID_BRIGHTNESS:
+		if (state->is_rgb)
+			ret = ds5_write(state, base | DS5_RGB_BRIGHTNESS,
+					(u16)(s16)ctrl->val);
+		break;
+	case V4L2_CID_CONTRAST:
+		if (state->is_rgb)
+			ret = ds5_write(state, base | DS5_RGB_CONTRAST,
+					ctrl->val);
+		break;
+	case V4L2_CID_GAMMA:
+		if (state->is_rgb)
+			ret = ds5_write(state, base | DS5_RGB_GAMMA,
+					ctrl->val);
+		break;
 	case V4L2_CID_SATURATION:
 		if (state->is_rgb)
 			ret = ds5_write(state, base | DS5_RGB_SATURATION,
@@ -3282,6 +3315,11 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			__func__);
 		ret = ds5_hw_reset_with_recovery(state);
 		break;
+	case DS5_CAMERA_CID_VISUAL_PRESET:
+		if (state->is_depth)
+			ret = ds5_write(state, base | DS5_VISUAL_PRESET,
+					ctrl->val);
+		break;
 	case DS5_CAMERA_CID_SYNC_MODE:
 		dev_info(&state->client->dev, "%s(): XU SYNC_MODE control received, value: %d\n",
 			__func__, ctrl->val);
@@ -3484,6 +3522,27 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		*ctrl->p_new.p_u32 = data;
 		break;
 
+	case V4L2_CID_BRIGHTNESS:
+		if (!state->is_rgb)
+			return -EINVAL;
+		ret = ds5_read(state, base | DS5_RGB_BRIGHTNESS, &reg);
+		if (!ret)
+			*ctrl->p_new.p_s32 = (s16)reg;
+		break;
+	case V4L2_CID_CONTRAST:
+		if (!state->is_rgb)
+			return -EINVAL;
+		ret = ds5_read(state, base | DS5_RGB_CONTRAST, &reg);
+		if (!ret)
+			*ctrl->p_new.p_s32 = reg;
+		break;
+	case V4L2_CID_GAMMA:
+		if (!state->is_rgb)
+			return -EINVAL;
+		ret = ds5_read(state, base | DS5_RGB_GAMMA, &reg);
+		if (!ret)
+			*ctrl->p_new.p_s32 = reg;
+		break;
 	case V4L2_CID_SATURATION:
 		if (state->is_rgb)
 			ret = ds5_read(state, base | DS5_RGB_SATURATION,
@@ -3662,6 +3721,41 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			data[bufLen - 2] = 0;
 			data[bufLen - 1] = 0;
 		}
+		break;
+	case DS5_CAMERA_CID_VISUAL_PRESET:
+		if (state->is_depth && ctrl->p_new.p_s32) {
+			ret = ds5_read(state, base | DS5_VISUAL_PRESET, &reg);
+			if (!ret)
+				*ctrl->p_new.p_s32 = reg;
+		}
+		break;
+	case DS5_CAMERA_CID_SOC_PVT_TEMPERATURE:
+		if (!state->is_depth)
+			return -EINVAL;
+		ret = ds5_read(state, base | DS5_SOC_PVT_TEMPERATURE, &reg);
+		if (!ret)
+			*ctrl->p_new.p_s32 = (s16)reg;
+		break;
+	case DS5_CAMERA_CID_OHM_TEMPERATURE:
+		if (!state->is_depth)
+			return -EINVAL;
+		ret = ds5_read(state, base | DS5_OHM_TEMPERATURE, &reg);
+		if (!ret)
+			*ctrl->p_new.p_s32 = (s16)reg;
+		break;
+	case DS5_CAMERA_CID_PROJECTOR_TEMPERATURE:
+		if (!state->is_depth)
+			return -EINVAL;
+		ret = ds5_read(state, base | DS5_PROJECTOR_TEMPERATURE, &reg);
+		if (!ret)
+			*ctrl->p_new.p_s32 = (s16)reg;
+		break;
+	case DS5_CAMERA_CID_ERROR_CODE:
+		if (!state->is_depth)
+			return -EINVAL;
+		ret = ds5_read(state, base | DS5_ERROR_CODE, &reg);
+		if (!ret)
+			*ctrl->p_new.p_s32 = reg & 0xff;
 		break;
 	case DS5_CAMERA_CID_SYNC_MODE:
 		if (state->is_depth)
@@ -3933,6 +4027,78 @@ static struct v4l2_ctrl_config ds5_ctrl_sync_mode = {
 	.def = 0,
 	.qmenu = sync_mode_menu,
 	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
+static const char * const visual_preset_menu[] = {
+	[0] = "Custom",
+	[1] = "Default",
+	[2] = "Hand",
+	[3] = "High Accuracy",
+	[4] = "High Density",
+	[5] = "Medium Density",
+};
+
+static const struct v4l2_ctrl_config ds5_ctrl_visual_preset = {
+	.ops = &ds5_ctrl_ops,
+	.id = DS5_CAMERA_CID_VISUAL_PRESET,
+	.name = "Visual Preset",
+	.type = V4L2_CTRL_TYPE_MENU,
+	.min = 0,
+	.max = 5,
+	.def = 1,
+	.qmenu = visual_preset_menu,
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
+#define DS5_READ_ONLY_TELEMETRY_FLAGS \
+	(V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_READ_ONLY)
+
+static const struct v4l2_ctrl_config ds5_ctrl_soc_pvt_temperature = {
+	.ops = &ds5_ctrl_ops,
+	.id = DS5_CAMERA_CID_SOC_PVT_TEMPERATURE,
+	.name = "SoC PVT Temperature",
+	.type = V4L2_CTRL_TYPE_INTEGER,
+	.min = -1289,
+	.max = 1289,
+	.step = 1,
+	.def = 0,
+	.flags = DS5_READ_ONLY_TELEMETRY_FLAGS,
+};
+
+static const struct v4l2_ctrl_config ds5_ctrl_ohm_temperature = {
+	.ops = &ds5_ctrl_ops,
+	.id = DS5_CAMERA_CID_OHM_TEMPERATURE,
+	.name = "OHM Temperature",
+	.type = V4L2_CTRL_TYPE_INTEGER,
+	.min = -1289,
+	.max = 1289,
+	.step = 1,
+	.def = 0,
+	.flags = DS5_READ_ONLY_TELEMETRY_FLAGS,
+};
+
+static const struct v4l2_ctrl_config ds5_ctrl_projector_temperature = {
+	.ops = &ds5_ctrl_ops,
+	.id = DS5_CAMERA_CID_PROJECTOR_TEMPERATURE,
+	.name = "Projector Temperature",
+	.type = V4L2_CTRL_TYPE_INTEGER,
+	.min = -1289,
+	.max = 1289,
+	.step = 1,
+	.def = 0,
+	.flags = DS5_READ_ONLY_TELEMETRY_FLAGS,
+};
+
+static const struct v4l2_ctrl_config ds5_ctrl_error_code = {
+	.ops = &ds5_ctrl_ops,
+	.id = DS5_CAMERA_CID_ERROR_CODE,
+	.name = "Error Code",
+	.type = V4L2_CTRL_TYPE_INTEGER,
+	.min = 0,
+	.max = 255,
+	.step = 1,
+	.def = 0,
+	.flags = DS5_READ_ONLY_TELEMETRY_FLAGS,
 };
 
 static const struct v4l2_ctrl_config ds5_ctrl_pwm = {
@@ -4650,6 +4816,10 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 	struct v4l2_subdev *sd = &state->mux.sd.subdev;
 	int ret = -1;
 	struct ds5_sensor *sensor = NULL;
+	bool is_d58x;
+
+	is_d58x = READ_ONCE(state->ds5_dev->cached_device_type) ==
+			DS5_DEVICE_TYPE_D58X;
 
 	switch (sid) {
 	case DEPTH_SID:
@@ -4750,6 +4920,32 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 	if (sid == RGB_SID) {
 		struct v4l2_ctrl *ctrl;
 
+		if (is_d58x) {
+			ctrl = v4l2_ctrl_new_std(hdl, ops,
+					V4L2_CID_BRIGHTNESS, -64, 64, 1, 0);
+			if (ctrl) {
+				ctrl->priv = sensor;
+				ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE |
+						V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
+			}
+
+			ctrl = v4l2_ctrl_new_std(hdl, ops,
+					V4L2_CID_CONTRAST, 0, 100, 1, 50);
+			if (ctrl) {
+				ctrl->priv = sensor;
+				ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE |
+						V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
+			}
+
+			ctrl = v4l2_ctrl_new_std(hdl, ops,
+					V4L2_CID_GAMMA, 40, 260, 1, 100);
+			if (ctrl) {
+				ctrl->priv = sensor;
+				ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE |
+						V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
+			}
+		}
+
 		ctrl = v4l2_ctrl_new_std(hdl, ops,
 				V4L2_CID_SATURATION, 0, 100, 1, 64);
 		if (ctrl) {
@@ -4849,8 +5045,20 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 	// DEPTH custom
 	if (sid == DEPTH_SID) {
 		ctrls->sync_mode = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_sync_mode, sensor);
+		if (is_d58x) {
+			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_visual_preset, sensor);
+			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_soc_pvt_temperature,
+					     sensor);
+			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_ohm_temperature,
+					     sensor);
+			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_projector_temperature,
+					     sensor);
+			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_error_code, sensor);
+		} else {
+			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_readout_shaping,
+					     sensor);
+		}
 		v4l2_ctrl_new_custom(hdl, &ds5_ctrl_pwm, sensor);
-		v4l2_ctrl_new_custom(hdl, &ds5_ctrl_readout_shaping, sensor);
 	}
 	// IMU custom
 	if (sid == IMU_SID)
