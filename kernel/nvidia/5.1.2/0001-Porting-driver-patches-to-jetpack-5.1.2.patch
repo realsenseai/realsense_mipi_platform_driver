@@ -6,7 +6,7 @@ Subject: [PATCH] Porting driver patches to jetpack 5.1.2
 Signed-off-by: Dmitry Perchanov <dmitry.perchanov@intel.com>
 ---
  drivers/media/i2c/Kconfig                     |  29 +
- drivers/media/i2c/Makefile                    |   2 +
+ drivers/media/i2c/Makefile                    |   3 +
  drivers/media/i2c/max9295.c                   | 145 ++++++-
  drivers/media/i2c/max9296.c                   | 189 ++++++++
  .../platform/tegra/camera/sensor_common.c     |   4 +
@@ -22,7 +22,7 @@ Signed-off-by: Dmitry Perchanov <dmitry.perchanov@intel.com>
  include/media/max9296.h                       |   8 +
  include/media/mc_common.h                     |  23 +
  include/media/tegra_camera_core.h             |   8 +
- 17 files changed, 1073 insertions(+), 29 deletions(-)
+ 17 files changed, 1074 insertions(+), 29 deletions(-)
 
 diff --git a/drivers/media/i2c/Kconfig b/drivers/media/i2c/Kconfig
 index 5ec3c683c..7f288faf7 100644
@@ -68,12 +68,13 @@ diff --git a/drivers/media/i2c/Makefile b/drivers/media/i2c/Makefile
 index c4708d8c7..e11e8ad39 100644
 --- a/drivers/media/i2c/Makefile
 +++ b/drivers/media/i2c/Makefile
-@@ -27,3 +27,5 @@ obj-$(CONFIG_NV_VIDEO_HAWK_OWL) += nv_hawk_owl.o
+@@ -27,3 +27,6 @@ obj-$(CONFIG_NV_VIDEO_HAWK_OWL) += nv_hawk_owl.o
  obj-$(CONFIG_NV_DESER_MAX96712) += max96712.o
  obj-$(CONFIG_VIDEO_ECAM) += ar1335.o
  ar1335-objs :=  ar1335_common.o
-+obj-$(CONFIG_NV_SER_MAX96717) += max96717.o
++obj-$(CONFIG_VIDEO_D4XX) += max96717.o
 +obj-$(CONFIG_VIDEO_D4XX) += d4xx.o
++obj-$(CONFIG_VIDEO_D4XX) += max96724.o
 diff --git a/drivers/media/i2c/max9295.c b/drivers/media/i2c/max9295.c
 index 110f861c3..6311d97d7 100644
 --- a/drivers/media/i2c/max9295.c
@@ -1575,4 +1576,3 @@ index 788cf77dc..421c22491 100644
  /* Supported CSI to VI Data Formats */
 -- 
 2.34.1
-

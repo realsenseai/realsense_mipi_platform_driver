@@ -87,7 +87,6 @@ int max96717_sdev_pair(struct device *dev, struct gmsl_link_ctx *g_ctx);
 int max96717_sdev_unpair(struct device *dev, struct device *s_dev);
 
 int max96717_init_settings(struct device *dev);
-void max96717_retrigger_tx(struct device *dev);
 
 int max96717_enable_gpio_tunneling(struct device *dev);
 int max96717_disable_gpio_tunneling(struct device *dev);

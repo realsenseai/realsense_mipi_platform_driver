@@ -33,7 +33,7 @@
  *   GPIO mux:     AON_GPIO(CC, 3)
  *   MAX96724 deser:  0x27
  *   MAX96717 ser:    0x40 (default), 0x60 (aliased)
- *   HKR camera SoC:  0x42 (def-addr, D585 3C)
+ *   HKR camera SoC:  0x10 (def-addr)
  *   Sensor aliases:   0x1a (Depth), 0x1b (RGB), 0x1c (IR), 0x1d (IMU)
  */
 
@@ -335,30 +335,19 @@
 							compatible = "adi,max96724";
 							csi-mode = "2x4";
 							max-src = <1>;
+							link-mask = <0x1>;
 							gmsl-link-speed = <6>;
 						};
 
 						/*
-						 * MAX96717 primary serializer at power-on address.
-						 * Used by max96717_setup_control() to move the
-						 * serializer from 0x40 to aliased 0x60.
+						 * MAX96717 serializer address is assigned by MAX96724
+						 * as 0x40 + link index (link A is 0x40).
+						 * Single 4-lane CSI-2 D-PHY input.
 						 */
-						ser_prim: max96717_prim@40 {
+						ser_a: max96717_a@40 {
 							status = "okay";
 							compatible = "adi,max96717";
 							reg = <0x40>;
-							adi,tunnel-mode;
-							is-prim-ser;
-						};
-
-						/*
-						 * MAX96717 Serializer alias after address reassignment.
-						 * Single 4-lane CSI-2 D-PHY input.
-						 */
-						ser_a: max96717_a@60 {
-							status = "okay";
-							compatible = "adi,max96717";
-							reg = <0x60>;
 							adi,tunnel-mode;
 							maxim,gmsl-dser-device = <&dser>;
 						};
@@ -369,7 +358,7 @@
 						 */
 						d5xx_depth: d5xx@1a {
 							status = "okay";
-							def-addr = <0x42>;
+							def-addr = <0x10>;
 							reg = <0x1a>;
 							compatible = "realsense,d5xx";
 							use_sensor_mode_id = "true";
@@ -448,7 +437,7 @@
 						 */
 						d5xx_rgb: d5xx@1b {
 							status = "okay";
-							def-addr = <0x42>;
+							def-addr = <0x10>;
 							reg = <0x1b>;
 							override_reg = <0x1a>;
 							compatible = "realsense,d5xx";
@@ -508,7 +497,7 @@
 						 */
 						d5xx_ir: d5xx@1c {
 							status = "okay";
-							def-addr = <0x42>;
+							def-addr = <0x10>;
 							reg = <0x1c>;
 							override_reg = <0x1a>;
 							compatible = "realsense,d5xx";
@@ -589,7 +578,7 @@
 						 */
 						d5xx_imu: d5xx@1d {
 							status = "okay";
-							def-addr = <0x42>;
+							def-addr = <0x10>;
 							reg = <0x1d>;
 							override_reg = <0x1a>;
 							compatible = "realsense,d5xx";

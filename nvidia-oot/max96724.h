@@ -46,10 +46,9 @@ int max96724_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
 int max96724_release_pipe(struct device *dev, int pipe_id);
 void max96724_reset_oneshot(struct device *dev);
 void max96724_retrigger_datapath(struct device *dev);
-int max96724_prepare_stream(struct device *dev, struct device *ser_dev);
 
 /**
- * @brief  Puts the deserializer in single exclusive link mode.
+ * @brief  Assigns serializer addresses on all configured GMSL links.
  *
  * @param  [in]  dev          The deserializer device handle.
  * @param  [in]  s_dev        The sensor device handle.
@@ -61,8 +60,8 @@ int max96724_setup_link(struct device *dev, struct device *s_dev);
 /**
  * @brief  Sets up the deserializer link's control pipeline.
  *
- * Configures I2C pass-through, splitter mode if needed, and
- * enables the tunnel mode pipe routing for the source.
+ * Configures I2C pass-through and enables tunnel-mode pipe routing
+ * for the source.
  *
  * @param  [in]  dev          The deserializer device handle.
  * @param  [in]  s_dev        The sensor device handle.
@@ -100,19 +99,6 @@ int max96724_sdev_register(struct device *dev, struct gmsl_link_ctx *g_ctx);
  * @return  0 for success, or negative error code.
  */
 int max96724_sdev_unregister(struct device *dev, struct device *s_dev);
-
-/**
- * @brief  Configures the internal streaming pipeline.
- *
- * Sets up tunnel mode pipe routing, CSI-2 output lane configuration,
- * and MIPI PHY settings.
- *
- * @param  [in]  dev          The deserializer device handle.
- * @param  [in]  s_dev        The sensor device handle.
- *
- * @return  0 for success, or negative error code.
- */
-int max96724_finish_setup(struct device *dev, struct device *s_dev);
 
 /**
  * @brief  Powers on the MAX96724 deserializer module.

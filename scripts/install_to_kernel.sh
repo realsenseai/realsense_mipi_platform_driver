@@ -110,8 +110,6 @@ elif [ "${JETPACK_VERSION}" = "6.0" ] || [ "${JETPACK_VERSION}" = "6.1" ] || [ "
     else
         echo "sudo cp boot/tegra234-camera-d4xx-overlay*.dtbo /boot/."
               sudo cp boot/tegra234-camera-d4xx-overlay*.dtbo /boot/.
-        echo "sudo cp boot/tegra234-camera-d5xx-overlay*.dtbo /boot/."
-              sudo cp boot/tegra234-camera-d5xx-overlay*.dtbo /boot/.
         echo "sudo cp boot/dtb/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/dtb/."
               sudo cp boot/dtb/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/dtb/.
     fi

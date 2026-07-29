@@ -42,9 +42,7 @@
 #include <media/max9296.h>
 #include <media/max96712.h>
 #include <media/max96717.h>
-#ifdef CONFIG_VIDEO_D5XX_SERDES
 #include <media/max96724.h>
-#endif
 
 /* Deserializer interface structure for abstraction */
 struct dser_interface {
@@ -62,11 +60,14 @@ struct dser_interface {
 	/* RSDEV-12608: flush one link's line buffer after a camera HW reset;
 	 * NULL if the deser leaves no stale buffer (max9296). */
 	void (*reset_oneshot_link)(struct device *dev, u32 vc_id);
+	void (*retrigger_datapath)(struct device *dev);
 
 	/* Setup and control */
 	int (*setup_link)(struct device *dev, struct device *s_dev);
 	int (*setup_control)(struct device *dev, struct device *s_dev);
 	int (*reset_control)(struct device *dev, struct device *s_dev);
+	int (*setup_fsync)(struct device *dev, u32 fps);
+	int (*disable_fsync)(struct device *dev);
 	
 	/* Device registration */
 	int (*sdev_register)(struct device *dev, struct gmsl_link_ctx *g_ctx);
@@ -705,16 +706,18 @@ static const struct dser_interface max96712_interface = {
 	.name = "max96712",
 };
 
-#ifdef CONFIG_VIDEO_D5XX_SERDES
 static const struct dser_interface max96724_interface = {
 	.get_available_pipe_id = max96724_get_available_pipe_id,
 	.bind_ser_to_dser_pipe = max96724_bind_ser_to_dser_pipe,
 	.set_pipe = max96724_set_pipe,
 	.release_pipe = max96724_release_pipe,
 	.reset_oneshot = max96724_reset_oneshot,
+	.retrigger_datapath = max96724_retrigger_datapath,
 	.setup_link = max96724_setup_link,
 	.setup_control = max96724_setup_control,
 	.reset_control = max96724_reset_control,
+	.setup_fsync = max96724_setup_fsync,
+	.disable_fsync = max96724_disable_fsync,
 	.sdev_register = max96724_sdev_register,
 	.sdev_unregister = max96724_sdev_unregister,
 	.power_on = max96724_power_on,
@@ -722,7 +725,6 @@ static const struct dser_interface max96724_interface = {
 	.init_settings = max96724_init_settings,
 	.name = "max96724",
 };
-#endif
 
 /* MAX9295 serializer interface implementation */
 static const struct ser_interface max9295_interface = {
@@ -2035,10 +2037,6 @@ static int ds5_setup_pipeline(struct ds5 *state, u8 data_type1, u8 data_type2,
 				data_type1, data_type2, ser_vc_id);
 	ret |= state->dser_ops->set_pipe(state->dser_dev, pipe_id,
 				data_type1, data_type2, vc_id);
-#ifdef CONFIG_VIDEO_D5XX_SERDES
-	if (!ret && state->dser_ops == &max96724_interface)
-		ret = max96724_prepare_stream(state->dser_dev, state->ser_dev);
-#endif
 	if (ret)
 		dev_warn(&state->client->dev,
 			 "failed to set pipe %d, data_type1: 0x%x, data_type2: 0x%x, vc_id: %u\n",
@@ -2665,16 +2663,12 @@ static int ds5_set_ser_esync_tunneling(struct ds5 *state, bool enable)
 {
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	int ret;
-#ifdef CONFIG_VIDEO_D5XX_SERDES
 	u32 fps = 0;
-#endif
 
 	if (!state || !state->ser_dev)
 		return -EINVAL;
 	if (state->dser_ops != &max96712_interface
-#ifdef CONFIG_VIDEO_D5XX_SERDES
 	    && state->dser_ops != &max96724_interface
-#endif
 	   )
 		return 0;
 
@@ -2687,14 +2681,13 @@ static int ds5_set_ser_esync_tunneling(struct ds5 *state, bool enable)
 	else
 		ret = state->ser_ops->disable_gpio_tunneling(state->ser_dev);
 
-#ifdef CONFIG_VIDEO_D5XX_SERDES
-	if (!ret && state->dser_ops == &max96724_interface) {
+	if (!ret && state->dser_ops->setup_fsync) {
 		if (state->mux.last_set)
 			fps = state->mux.last_set->config.framerate;
-		ret = enable ? max96724_setup_fsync(state->dser_dev, fps) :
-			       max96724_disable_fsync(state->dser_dev);
+		ret = enable ?
+			state->dser_ops->setup_fsync(state->dser_dev, fps) :
+			state->dser_ops->disable_fsync(state->dser_dev);
 	}
-#endif
 
 	if (ret)
 		dev_warn(&state->client->dev,
@@ -4217,11 +4210,9 @@ static int ds5_board_setup(struct ds5 *state)
 		state->dser_ops = &max9296_interface;
 	} else if (!strncmp(dser_node->name, "max96712", strlen("max96712"))) {
 		state->dser_ops = &max96712_interface;
-#ifdef CONFIG_VIDEO_D5XX_SERDES
 	} else if (!strncmp(dser_node->name, "max96724",
 			    strlen("max96724"))) {
 		state->dser_ops = &max96724_interface;
-#endif
 	} else {
 		dev_err(dev, "%s: Unsupported deserializer = %s\n", __func__, dser_node->name);
 		/* Should not be used, this is just to make sure we don't have NULL pointers */
@@ -4474,13 +4465,6 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 	mutex_lock(&serdes_lock__);
 
 	if (state->dser_primary) {
-#ifdef CONFIG_VIDEO_D5XX_SERDES
-		if (state->dser_ops == &max96724_interface) {
-			/* MAX96724 is already responsive; keep its shared I2C rail up. */
-			msleep(100);
-		} else
-#endif
-		{
 		state->dser_ops->power_off(state->dser_dev);
 		/* For now no separate power on required for serializer device */
 		state->dser_ops->power_on(state->dser_dev);
@@ -4493,7 +4477,6 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 			/* Longer boot time for max96717 based products */
 			msleep(600);
 		}
-		}
 
 		dev_dbg(dev, "Setup SERDES addressing and control pipeline\n");
 		/* setup serdes addressing and control pipeline */
@@ -4502,12 +4485,7 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 			dev_err(dev, "gmsl deserializer link config failed\n");
 			goto error;
 		}
-#ifdef CONFIG_VIDEO_D5XX_SERDES
-		if (state->dser_ops == &max96724_interface)
-			msleep(1000);
-		else
-#endif
-			msleep(100);
+		msleep(100);
 	}
 
 	attempts = (DS5_SERDES_STARTUP_TIMEOUT_MS +
@@ -4599,15 +4577,6 @@ static int ds5_serdes_setup(struct ds5 *state)
 			goto serdes_setup_end;
 		}
 	}
-
-#ifdef CONFIG_VIDEO_D5XX_SERDES
-	if (state->dser_ops == &max96724_interface) {
-		ret = max96724_finish_setup(state->dser_dev,
-					    state->g_ctx.s_dev);
-		if (ret)
-			goto serdes_setup_end;
-	}
-#endif
 
 serdes_setup_end:
 	/* Set/clear serdes_setup_complete from the same exit gate: error branch
@@ -5512,9 +5481,9 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			*streaming_flag = on;
 			mutex_unlock(&state->ds5_dev->lock);
 			sensor->streaming = on;
-#ifdef CONFIG_VIDEO_D5XX_SERDES
-			if (on && state->dser_ops == &max96724_interface)
-				max96724_retrigger_datapath(state->dser_dev);
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+			if (on && state->dser_ops->retrigger_datapath)
+				state->dser_ops->retrigger_datapath(state->dser_dev);
 #endif
 			return 0;
 		}
@@ -5659,9 +5628,9 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		msleep_range(100);
 #endif
 	}
-#ifdef CONFIG_VIDEO_D5XX_SERDES
-	if (on && ret >= 0 && state->dser_ops == &max96724_interface)
-		max96724_retrigger_datapath(state->dser_dev);
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	if (on && ret >= 0 && state->dser_ops->retrigger_datapath)
+		state->dser_ops->retrigger_datapath(state->dser_dev);
 #endif
 	return ret;
 }
@@ -6892,7 +6861,7 @@ static int ds5_probe(struct i2c_client *c
 		c->addr = override_addr;
 	}
 #endif
-	state->variant = ds5_variants + id->driver_data;
+	state->variant = ds5_variants + (id ? id->driver_data : DS5_DS5U);
 #ifdef CONFIG_OF
 	state->vcc = devm_regulator_get(&c->dev, "vcc");
 	if (IS_ERR(state->vcc)) {

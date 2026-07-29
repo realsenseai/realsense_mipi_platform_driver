@@ -12,8 +12,7 @@
 #include <linux/of_device.h>
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
-#include <nvidia/conftest.h>
-#include <media/max96717.h>
+#include <linux/version.h>
 #include <media/max96724.h>
 
 /* Link and control registers. */
@@ -21,7 +20,9 @@
 #define MAX96724_LINK_RATE_AB_ADDR	0x0010
 #define MAX96724_LINK_RATE_CD_ADDR	0x0011
 #define MAX96724_LINK_A_LOCK_ADDR	0x001A
-#define MAX96724_LINK_B_LOCK_ADDR	0x001B
+#define MAX96724_LINK_B_LOCK_ADDR	0x000A
+#define MAX96724_LINK_C_LOCK_ADDR	0x000B
+#define MAX96724_LINK_D_LOCK_ADDR	0x000C
 #define MAX96724_ONESHOT_ADDR		0x0018
 #define MAX96724_REG13_ADDR		0x000D
 #define MAX96724_ERRCH_A_ADDR		0x1449
@@ -74,8 +75,6 @@
 
 /* Register values. */
 #define MAX96724_SOFT_RESET		0x40
-#define MAX96724_LINK_EN_SIOA		0xF1
-#define MAX96724_LINK_EN_ALL		0xFF
 #define MAX96724_LINK_LOCKED		0x08
 #define MAX96724_LINK_LOCK_POLL_MS	100
 #define MAX96724_LINK_LOCK_TIMEOUT_MS	5000
@@ -96,9 +95,14 @@
 #define MAX96724_PIPE_EN_4		0x0F
 #define MAX96724_ALL_MAP_CTRL1		0x55
 #define MAX96724_MAP3_CTRL1		0x15
+#define MAX96724_LINK_EN_BASE		0xF0
+
+#define MAX96717_DEFAULT_ADDR		0x40
+#define MAX96717_DEV_ADDR		0x0000
 
 #define MAX96724_MAX_SOURCES		4
 #define MAX96724_MAX_PIPES		4
+#define MAX96724_MAX_LINKS		4
 
 #define MAX96724_PIPE_X			0
 #define MAX96724_PIPE_Y			1
@@ -114,7 +118,6 @@ struct max96724_source_ctx {
 	u32 num_csi_lanes;
 	bool control_setup;
 	bool serdev_found;
-	bool st_enabled;
 };
 
 struct pipe_ctx {
@@ -132,8 +135,6 @@ struct max96724 {
 	u32 num_src;
 	u32 max_src;
 	u32 num_src_found;
-	u32 src_link;
-	bool splitter_enabled;
 	struct max96724_source_ctx sources[MAX96724_MAX_SOURCES];
 	/* Protects state and multi-register programming sequences. */
 	struct mutex lock;
@@ -146,6 +147,7 @@ struct max96724 {
 	int pw_ref;
 	struct regulator *vdd_cam_1v2;
 	u8 link_speed;  /* DT-configurable: 3 or 6 Gbps */
+	u8 link_mask;
 	bool poc_enabled; /* FG24-4CH board POC/IO enable applied once */
 	bool datapath_retriggered;
 	u8 retriggered_pipe_mask;
@@ -161,7 +163,12 @@ static int max96724_write_reg(struct device *dev, u16 addr, u8 val)
 	struct max96724 *priv;
 	int err;
 
+	if (!dev)
+		return -EINVAL;
+
 	priv = dev_get_drvdata(dev);
+	if (!priv || !priv->regmap)
+		return -ENODEV;
 
 	err = regmap_write(priv->regmap, addr, val);
 	if (err)
@@ -192,10 +199,14 @@ static int max96724_set_registers(struct device *dev, struct reg_pair *map,
 static u16 max96724_link_lock_addr(u32 link)
 {
 	switch (link) {
-	case GMSL_SERDES_CSI_LINK_A:
+	case 0:
 		return MAX96724_LINK_A_LOCK_ADDR;
-	case GMSL_SERDES_CSI_LINK_B:
+	case 1:
 		return MAX96724_LINK_B_LOCK_ADDR;
+	case 2:
+		return MAX96724_LINK_C_LOCK_ADDR;
+	case 3:
+		return MAX96724_LINK_D_LOCK_ADDR;
 	default:
 		return 0;
 	}
@@ -203,11 +214,18 @@ static u16 max96724_link_lock_addr(u32 link)
 
 static int max96724_wait_link_lock(struct device *dev, u32 link)
 {
-	struct max96724 *priv = dev_get_drvdata(dev);
+	struct max96724 *priv;
 	u16 lock_addr = max96724_link_lock_addr(link);
 	unsigned int lock = 0;
 	int elapsed;
 	int err;
+
+	if (!dev)
+		return -EINVAL;
+
+	priv = dev_get_drvdata(dev);
+	if (!priv || !priv->regmap)
+		return -ENODEV;
 
 	if (!lock_addr)
 		return -EINVAL;
@@ -221,8 +239,7 @@ static int max96724_wait_link_lock(struct device *dev, u32 link)
 
 		if (lock & MAX96724_LINK_LOCKED) {
 			dev_dbg(dev, "GMSL link %c locked after %d ms\n",
-				link == GMSL_SERDES_CSI_LINK_A ? 'A' : 'B',
-				elapsed);
+				'A' + link, elapsed);
 			return 0;
 		}
 
@@ -231,8 +248,7 @@ static int max96724_wait_link_lock(struct device *dev, u32 link)
 	}
 
 	dev_err(dev, "GMSL link %c lock timeout (reg 0x%04x=0x%02x)\n",
-		link == GMSL_SERDES_CSI_LINK_A ? 'A' : 'B',
-		lock_addr, lock);
+		'A' + link, lock_addr, lock);
 
 	return -ETIMEDOUT;
 }
@@ -280,13 +296,10 @@ static void max96724_reset_ctx(struct max96724 *priv)
 
 	priv->link_setup = false;
 	priv->num_src_found = 0;
-	priv->src_link = 0;
-	priv->splitter_enabled = false;
 	max96724_pipes_reset(priv);
 	for (i = 0; i < priv->num_src; i++) {
 		priv->sources[i].control_setup = false;
 		priv->sources[i].serdev_found = false;
-		priv->sources[i].st_enabled = false;
 	}
 }
 
@@ -536,55 +549,145 @@ out:
 }
 EXPORT_SYMBOL(max96724_power_off);
 
-static int max96724_write_link(struct device *dev, u32 link)
+/*
+ * Access a serializer through the deserializer's I2C pass-through. The caller
+ * holds priv->lock, so temporarily changing the client address is serialized
+ * with every other MAX96724 transaction.
+ */
+static int max96724_read_slave_reg(struct max96724 *priv, u8 slave_addr,
+				   u16 addr, unsigned int *val)
 {
-	struct max96724 *priv = dev_get_drvdata(dev);
-	bool link_b = link == GMSL_SERDES_CSI_LINK_B;
-	u8 link_rate_ab;
-	u8 link_rate_cd;
-	u8 link_en;
+	struct i2c_client *client = priv->i2c_client;
+	u16 saved_addr = client->addr;
 	int err;
 
-	if (link != GMSL_SERDES_CSI_LINK_A && !link_b) {
-		dev_err(dev, "%s: invalid gmsl link\n", __func__);
-		return -EINVAL;
-	}
+	client->addr = slave_addr;
+	err = regmap_read(priv->regmap, addr, val);
+	client->addr = saved_addr;
+	usleep_range(100, 110);
 
-	link_rate_ab = priv->link_speed == 6 ?
-		(link_b ? 0x21 : 0x22) : (link_b ? 0x09 : 0x12);
-	link_rate_cd = priv->link_speed == 6 ? 0x22 : 0x11;
-	link_en = link_b ? 0xF2 : MAX96724_LINK_EN_SIOA;
+	return err;
+}
 
-	err = max96724_write_reg(dev, MAX96724_BACKTOP_EN_ADDR, 0x00);
-	err |= max96724_write_reg(dev, MAX96724_LINK_RATE_AB_ADDR,
-				  link_rate_ab);
-	err |= max96724_write_reg(dev, MAX96724_LINK_RATE_CD_ADDR,
-				  link_rate_cd);
+static int max96724_write_slave_reg(struct max96724 *priv, u8 slave_addr,
+				    u16 addr, u8 val)
+{
+	struct i2c_client *client = priv->i2c_client;
+	u16 saved_addr = client->addr;
+	int err;
+
+	client->addr = slave_addr;
+	err = regmap_write(priv->regmap, addr, val);
+	client->addr = saved_addr;
 	if (err)
+		dev_err(&client->dev,
+			"%s: I2C write failed, slave 0x%02x reg 0x%04x\n",
+			__func__, slave_addr, addr);
+	usleep_range(100, 110);
+
+	return err;
+}
+
+static int max96724_enable_links(struct device *dev, u8 link_mask,
+				 bool reset_oneshot)
+{
+	struct max96724 *priv = dev_get_drvdata(dev);
+	u8 link_rate = priv->link_speed == 6 ? 0x22 : 0x11;
+	int err;
+
+	err = max96724_write_reg(dev, MAX96724_LINK_RATE_AB_ADDR, link_rate);
+	err |= max96724_write_reg(dev, MAX96724_LINK_RATE_CD_ADDR, link_rate);
+	err |= max96724_enable_error_channels(dev, link_mask);
+	err |= max96724_write_reg(dev, MAX96724_LINK_EN_ADDR,
+				  MAX96724_LINK_EN_BASE | link_mask);
+	if (err || !reset_oneshot)
 		return err;
 
-	err = max96724_enable_error_channels(dev,
-					     link_b ? BIT(1) : BIT(0));
-	if (err)
-		return err;
-
+	/*
+	 * Match the MAX96712 link bring-up sequence: let the selected link
+	 * settle before retraining it, then allow the one-shot reset to finish
+	 * before polling lock or accessing the serializer.
+	 */
+	msleep(20);
 	err = max96724_write_reg(dev, MAX96724_ONESHOT_ADDR,
 				 MAX96724_ONESHOT_ALL);
-	err |= max96724_write_reg(dev, MAX96724_LINK_EN_ADDR, link_en);
+	if (!err)
+		msleep(100);
+
+	return err;
+}
+
+static int max96724_assign_serializer_addresses(struct device *dev)
+{
+	struct max96724 *priv = dev_get_drvdata(dev);
+	unsigned int reg_val;
+	unsigned int link;
+	int restore_err;
+	int err = 0;
+
+	err = max96724_write_reg(dev, MAX96724_BACKTOP_EN_ADDR, 0x00);
 	if (err)
 		return err;
 
-	return max96724_wait_link_lock(dev, link);
+	for (link = 0; link < MAX96724_MAX_LINKS; link++) {
+		u8 target_addr;
+
+		if (!(priv->link_mask & BIT(link)))
+			continue;
+
+		target_addr = MAX96717_DEFAULT_ADDR + link;
+		err = max96724_enable_links(dev, BIT(link), true);
+		if (err)
+			break;
+
+		err = max96724_wait_link_lock(dev, link);
+		if (err)
+			break;
+
+		err = max96724_read_slave_reg(priv, target_addr,
+					     MAX96717_DEV_ADDR, &reg_val);
+		if (!err && reg_val == target_addr << 1) {
+			dev_dbg(dev, "serializer on link %c already at 0x%02x\n",
+				'A' + link, target_addr);
+			continue;
+		}
+
+		err = max96724_write_slave_reg(priv, MAX96717_DEFAULT_ADDR,
+					      MAX96717_DEV_ADDR,
+					      target_addr << 1);
+		if (err)
+			break;
+
+		msleep(20);
+		err = max96724_read_slave_reg(priv, target_addr,
+					     MAX96717_DEV_ADDR, &reg_val);
+		if (err || reg_val != target_addr << 1) {
+			dev_err(dev,
+				"failed to assign serializer on link %c address 0x%02x\n",
+				'A' + link, target_addr);
+			if (!err)
+				err = -ENODEV;
+			break;
+		}
+
+		dev_info(dev, "serializer on link %c assigned address 0x%02x\n",
+			 'A' + link, target_addr);
+	}
+
+	restore_err = max96724_enable_links(dev, priv->link_mask, true);
+	if (!err)
+		err = restore_err;
+
+	return err;
 }
 
 int max96724_setup_link(struct device *dev, struct device *s_dev)
 {
 	struct max96724 *priv = dev_get_drvdata(dev);
-	unsigned int i;
 	int err;
 
 	mutex_lock(&priv->lock);
-	err = max96724_get_sdev_idx_locked(priv, s_dev, &i);
+	err = max96724_get_sdev_idx_locked(priv, s_dev, NULL);
 	if (err) {
 		dev_err(dev, "%s: no sdev found\n", __func__);
 		goto ret;
@@ -597,9 +700,8 @@ int max96724_setup_link(struct device *dev, struct device *s_dev)
 		priv->poc_enabled = true;
 	}
 
-	if (!priv->splitter_enabled) {
-		err = max96724_write_link(dev,
-					  priv->sources[i].serdes_csi_link);
+	if (!priv->link_setup) {
+		err = max96724_assign_serializer_addresses(dev);
 		if (err)
 			goto ret;
 
@@ -616,10 +718,6 @@ int max96724_setup_control(struct device *dev, struct device *s_dev)
 {
 	struct max96724 *priv = dev_get_drvdata(dev);
 	struct max96724_source_ctx *source;
-	u32 next_num_src_found;
-	u32 next_sdev_ref;
-	u32 next_src_link;
-	bool next_splitter_enabled;
 	bool source_found;
 	int err = 0;
 	unsigned int i;
@@ -649,35 +747,6 @@ int max96724_setup_control(struct device *dev, struct device *s_dev)
 	}
 
 	source_found = source->g_ctx->serdev_found;
-	next_num_src_found = priv->num_src_found + source_found;
-	next_sdev_ref = priv->sdev_ref + 1;
-	next_src_link = source_found ? source->serdes_csi_link :
-			priv->src_link;
-	next_splitter_enabled = priv->splitter_enabled;
-
-	/* Enable splitter mode for multi-camera configurations */
-	if (priv->max_src > 1U && next_num_src_found > 0U &&
-	    !next_splitter_enabled) {
-		/*
-		 * [UG Table 3] Multi-camera: set link rates and enable all links
-		 */
-		u8 link_rate = (priv->link_speed == 6) ? 0x22 : 0x11;
-
-		max96724_write_reg(dev, MAX96724_LINK_RATE_AB_ADDR,
-				   link_rate);
-		max96724_write_reg(dev, MAX96724_LINK_RATE_CD_ADDR,
-				   link_rate);
-		max96724_write_reg(dev, MAX96724_LINK_EN_ADDR,
-				   MAX96724_LINK_EN_ALL);
-
-		err = max96724_enable_error_channels(dev, GENMASK(3, 0));
-		if (err)
-			goto error;
-
-		next_splitter_enabled = true;
-
-		msleep(100);
-	}
 
 	for (i = 0; i < MAX96724_MAX_PIPES; i++) {
 		err = max96724_write_reg(dev,
@@ -694,30 +763,10 @@ int max96724_setup_control(struct device *dev, struct device *s_dev)
 	if (err)
 		goto error;
 
-	/* Reset splitter mode if not all devices found */
-	if (next_sdev_ref == priv->max_src && next_splitter_enabled &&
-	    next_num_src_found > 0U &&
-	    next_num_src_found < priv->max_src) {
-		err = max96724_write_link(dev, next_src_link);
-		if (err) {
-			if (!priv->sdev_ref) {
-				max96724_reset_ctx(priv);
-				max96724_write_reg(dev, MAX96724_REG13_ADDR,
-						   MAX96724_SOFT_RESET);
-				msleep(100);
-			}
-			goto error;
-		}
-
-		next_splitter_enabled = false;
-	}
-
 	source->control_setup = true;
 	source->serdev_found = source_found;
-	priv->num_src_found = next_num_src_found;
-	priv->sdev_ref = next_sdev_ref;
-	priv->src_link = next_src_link;
-	priv->splitter_enabled = next_splitter_enabled;
+	priv->num_src_found += source_found;
+	priv->sdev_ref++;
 
 error:
 	mutex_unlock(&priv->lock);
@@ -883,49 +932,6 @@ done:
 }
 EXPORT_SYMBOL(max96724_sdev_unregister);
 
-static int max96724_setup_streaming(struct device *dev, struct device *s_dev)
-{
-	struct max96724 *priv = dev_get_drvdata(dev);
-	int err = 0;
-	unsigned int i;
-
-	mutex_lock(&priv->lock);
-	err = max96724_get_sdev_idx_locked(priv, s_dev, &i);
-	if (err) {
-		dev_err(dev, "%s: no sdev found\n", __func__);
-		goto ret;
-	}
-
-	if (priv->sources[i].st_enabled)
-		goto ret;
-
-	err = max96724_configure_datapath(dev, true, true);
-	if (!err)
-		priv->sources[i].st_enabled = true;
-
-ret:
-	mutex_unlock(&priv->lock);
-	return err;
-}
-
-int max96724_finish_setup(struct device *dev, struct device *s_dev)
-{
-	int err;
-
-	if (!dev || !s_dev)
-		return -EINVAL;
-
-	err = max96724_setup_streaming(dev, s_dev);
-	if (err)
-		return err;
-
-	msleep(1500);
-	max96724_reset_oneshot(dev);
-
-	return 0;
-}
-EXPORT_SYMBOL(max96724_finish_setup);
-
 int max96724_get_available_pipe_id(struct device *dev, int vc_id)
 {
 	int i;
@@ -974,85 +980,21 @@ int max96724_release_pipe(struct device *dev, int pipe_id)
 }
 EXPORT_SYMBOL(max96724_release_pipe);
 
-/* Count allocated pipes without disturbing an active tunnel. */
-static int max96724_active_pipe_count(struct device *dev)
-{
-	struct max96724 *priv = dev_get_drvdata(dev);
-	int i;
-	int cnt = 0;
-
-	mutex_lock(&priv->lock);
-	for (i = 0; i < MAX96724_MAX_PIPES; i++) {
-		if (priv->pipe[i].st_count)
-			cnt++;
-	}
-	mutex_unlock(&priv->lock);
-
-	return cnt;
-}
-
-static bool max96724_link_locked(struct device *dev)
-{
-	struct max96724 *priv = dev_get_drvdata(dev);
-	unsigned int lock = 0;
-
-	regmap_read(priv->regmap, MAX96724_LINK_A_LOCK_ADDR, &lock);
-	return lock & MAX96724_LINK_LOCKED;
-}
-
-int max96724_prepare_stream(struct device *dev, struct device *ser_dev)
-{
-	if (!dev || !ser_dev)
-		return -EINVAL;
-
-	/*
-	 * Reuse the sensor framework's normal set_pipe path. Only recover the
-	 * physical link for the first pipe when it is actually unlocked.
-	 */
-	if (max96724_active_pipe_count(dev) > 1 ||
-	    max96724_link_locked(dev))
-		return 0;
-
-	max96724_reset_oneshot(dev);
-	max96717_retrigger_tx(ser_dev);
-	msleep(200);
-
-	return 0;
-}
-EXPORT_SYMBOL(max96724_prepare_stream);
-
 void max96724_reset_oneshot(struct device *dev)
 {
 	struct max96724 *priv = dev_get_drvdata(dev);
-	u8 link_mask;
 	int err = 0;
 
 	mutex_lock(&priv->lock);
 	priv->datapath_retriggered = false;
 	priv->retriggered_pipe_mask = 0;
-	if (priv->splitter_enabled) {
-		u8 link_rate = (priv->link_speed == 6) ? 0x22 : 0x11;
-
-		err = max96724_write_reg(dev, MAX96724_LINK_RATE_AB_ADDR,
-					 link_rate);
-		err |= max96724_write_reg(dev, MAX96724_LINK_RATE_CD_ADDR,
-					  link_rate);
-		err |= max96724_write_reg(dev, MAX96724_LINK_EN_ADDR,
-					  MAX96724_LINK_EN_ALL);
-		link_mask = GENMASK(3, 0);
-	} else {
-		err = max96724_write_reg(dev, MAX96724_ONESHOT_ADDR,
-					 MAX96724_ONESHOT_ALL);
-		link_mask = priv->src_link == GMSL_SERDES_CSI_LINK_B ?
-			BIT(1) : BIT(0);
-	}
-	msleep(100);
+	err = max96724_enable_links(dev, priv->link_mask, true);
 
 	if (!err)
 		err = max96724_configure_datapath(dev, false, true);
 	msleep(200);
 	if (!err)
-		err = max96724_enable_error_channels(dev, link_mask);
+		err = max96724_enable_error_channels(dev, priv->link_mask);
 	if (err)
 		dev_warn(dev, "failed to restore datapath: %d\n", err);
 	else
@@ -1126,8 +1068,10 @@ static int __max96724_set_pipe(struct device *dev, int pipe_id,
 void max96724_retrigger_datapath(struct device *dev)
 {
 	struct max96724 *priv = dev_get_drvdata(dev);
+	unsigned int pipe_en = MAX96724_PIPE_EN_4;
 	u8 active_mask = 0;
 	u8 retrigger_mask;
+	bool full_retrigger;
 	unsigned int i;
 	int err = 0;
 
@@ -1141,30 +1085,73 @@ void max96724_retrigger_datapath(struct device *dev)
 		goto out;
 	}
 
+	/*
+	 * reset_oneshot() restores the static datapath registers, but with no
+	 * active pipe it cannot arm the tunnel detector against real CSI data.
+	 * The first camera stream therefore still needs a full retrigger.
+	 */
+	full_retrigger = !priv->datapath_retriggered ||
+			 !priv->retriggered_pipe_mask;
 	retrigger_mask = active_mask & ~priv->retriggered_pipe_mask;
-	if (priv->datapath_retriggered) {
+	if (!full_retrigger && !retrigger_mask)
+		goto out;
+
+	if (!full_retrigger && priv->retriggered_pipe_mask) {
+		/*
+		 * All logical pipes share one tunnel detector. Once the first
+		 * stream has armed it, set_pipe() is enough for streams joining
+		 * an already-live tunnel; toggling PIPE_EN would disrupt them.
+		 */
 		priv->retriggered_pipe_mask |= retrigger_mask;
 		goto out;
 	}
 
-	err = max96724_configure_datapath(dev, false, false);
+	/*
+	 * The camera's START status becomes visible before its first CSI packet
+	 * reaches the deserializer. Give the tunnel detector time to see that
+	 * input before cycling the affected pipe.
+	 */
+	msleep(20);
+
+	if (full_retrigger) {
+		retrigger_mask = active_mask;
+		err = max96724_write_reg(dev, MAX96724_PIPE_EN_ADDR, 0x00);
+		msleep(20);
+		if (!err)
+			err = max96724_configure_datapath(dev, false, false);
+	} else {
+		if (regmap_read(priv->regmap, MAX96724_PIPE_EN_ADDR, &pipe_en))
+			pipe_en = MAX96724_PIPE_EN_4;
+		err = max96724_write_reg(dev, MAX96724_PIPE_EN_ADDR,
+					 pipe_en & ~retrigger_mask);
+		msleep(20);
+	}
+
 	for (i = 0; i < MAX96724_MAX_PIPES; i++) {
 		struct pipe_ctx *pipe = &priv->pipe[i];
 
-		if (!(active_mask & BIT(i)) || !pipe->st_count ||
+		if (!(retrigger_mask & BIT(i)) || !pipe->st_count ||
 		    !pipe->map_configured)
 			continue;
 		err |= __max96724_set_pipe(dev, i, pipe->dt_type,
 					   pipe->dt_type2, pipe->vc_id);
 	}
-	if (!err)
-		err |= max96724_write_reg(dev, MAX96724_PIPE_EN_ADDR,
-					  MAX96724_PIPE_EN_4);
+
+	if (!err) {
+		if (full_retrigger)
+			err = max96724_write_reg(dev, MAX96724_PIPE_EN_ADDR,
+						 MAX96724_PIPE_EN_4);
+		else
+			err = max96724_write_reg(dev, MAX96724_PIPE_EN_ADDR,
+						 pipe_en | retrigger_mask);
+	}
+
 	if (err) {
 		dev_warn(dev, "failed to retrigger CSI datapath: %d\n", err);
 	} else {
-		priv->datapath_retriggered = true;
-		priv->retriggered_pipe_mask = active_mask;
+		if (full_retrigger)
+			priv->datapath_retriggered = true;
+		priv->retriggered_pipe_mask |= retrigger_mask;
 	}
 
 out:
@@ -1183,8 +1170,16 @@ int max96724_init_settings(struct device *dev)
 	for (i = 0; i < MAX96724_MAX_PIPES; i++)
 		err |= __max96724_set_pipe(dev, i, GMSL_CSI_DT_YUV422_8,
 					   GMSL_CSI_DT_EMBED, i);
+	if (!err)
+		err = max96724_configure_datapath(dev, true, true);
 
 	mutex_unlock(&priv->lock);
+
+	if (err)
+		return err;
+
+	msleep(1500);
+	max96724_reset_oneshot(dev);
 
 	return err;
 }
@@ -1365,6 +1360,17 @@ static int max96724_parse_dt(struct max96724 *priv,
 		return -EINVAL;
 	}
 
+	err = of_property_read_u32(node, "link-mask", &value);
+	if (err < 0) {
+		value = BIT(0);
+		dev_warn(&client->dev,
+			 "link-mask not specified, defaulting to 0x1\n");
+	} else if (!value || value > GENMASK(MAX96724_MAX_LINKS - 1, 0)) {
+		dev_err(&client->dev, "invalid link-mask 0x%x\n", value);
+		return -EINVAL;
+	}
+	priv->link_mask = value;
+
 	priv->reset_gpio = devm_gpiod_get_optional(&client->dev, "reset",
 						   GPIOD_OUT_LOW);
 	if (IS_ERR(priv->reset_gpio))
@@ -1407,7 +1413,7 @@ static struct regmap_config max96724_regmap_config = {
 	.cache_type = REGCACHE_NONE,
 };
 
-#if defined(NV_I2C_DRIVER_STRUCT_PROBE_WITHOUT_I2C_DEVICE_ID_ARG)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
 static int max96724_probe(struct i2c_client *client)
 #else
 static int max96724_probe(struct i2c_client *client,
@@ -1445,13 +1451,14 @@ static int max96724_probe(struct i2c_client *client,
 
 	dev_set_drvdata(&client->dev, priv);
 
-	dev_info(&client->dev, "%s: success (link_speed=%d Gbps, max_src=%d)\n",
-		 __func__, priv->link_speed, priv->max_src);
+	dev_info(&client->dev,
+		 "%s: success (link_speed=%d Gbps, max_src=%d, link_mask=0x%x)\n",
+		 __func__, priv->link_speed, priv->max_src, priv->link_mask);
 
 	return err;
 }
 
-#if defined(NV_I2C_DRIVER_STRUCT_REMOVE_RETURN_TYPE_INT)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 12)
 static int max96724_remove(struct i2c_client *client)
 #else
 static void max96724_remove(struct i2c_client *client)
@@ -1461,7 +1468,7 @@ static void max96724_remove(struct i2c_client *client)
 
 	mutex_destroy(&priv->lock);
 
-#if defined(NV_I2C_DRIVER_STRUCT_REMOVE_RETURN_TYPE_INT)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 12)
 	return 0;
 #endif
 }
