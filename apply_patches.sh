@@ -95,15 +95,20 @@ if [[ "$ACTION" = "apply" ]]; then
         cp "hardware/realsense/${JP5_D4XX_DTSI}" "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen/kernel-dts/common/tegra194-camera-d4xx.dtsi"
         # max96712 header
         ln -f -s $(pwd)/kernel/nvidia/max96712.h "${BUILD_SRCS}/kernel/nvidia/include/media/"
-        # max96717 header and source
-        ln -f -s $(pwd)/kernel/nvidia/max96717.h "${BUILD_SRCS}/kernel/nvidia/include/media/"
-        ln -f -s $(pwd)/kernel/nvidia/max96717.c "${BUILD_SRCS}/kernel/nvidia/drivers/media/i2c/"
+        # MAX96717/MAX96724 use the same implementation on JP5 and JP6.
+        ln -f -s $(pwd)/nvidia-oot/max96717.h "${BUILD_SRCS}/kernel/nvidia/include/media/"
+        ln -f -s $(pwd)/nvidia-oot/max96717.c "${BUILD_SRCS}/kernel/nvidia/drivers/media/i2c/"
+        ln -f -s $(pwd)/nvidia-oot/max96724.h "${BUILD_SRCS}/kernel/nvidia/include/media/"
+        ln -f -s $(pwd)/nvidia-oot/max96724.c "${BUILD_SRCS}/kernel/nvidia/drivers/media/i2c/"
     else
         # max96712 header
         ln -f -s $(pwd)/nvidia-oot/max96712.h "${BUILD_SRCS}/nvidia-oot/include/media/"
         # max96717 header and source
         ln -f -s $(pwd)/nvidia-oot/max96717.h "${BUILD_SRCS}/nvidia-oot/include/media/"
         ln -f -s $(pwd)/nvidia-oot/max96717.c "${BUILD_SRCS}/nvidia-oot/drivers/media/i2c/"
+        # max96724 tunnel-mode deserializer header and source
+        ln -f -s $(pwd)/nvidia-oot/max96724.h "${BUILD_SRCS}/nvidia-oot/include/media/"
+        ln -f -s $(pwd)/nvidia-oot/max96724.c "${BUILD_SRCS}/nvidia-oot/drivers/media/i2c/"
         if version_lt "$JETPACK_VERSION" "7.0"; then
             # jp6 overlay
             ln -f -s $(pwd)/hardware/realsense/tegra234-camera-d4xx-overlay*.dts "${BUILD_SRCS}/hardware/nvidia/t23x/nv-public/overlay/"

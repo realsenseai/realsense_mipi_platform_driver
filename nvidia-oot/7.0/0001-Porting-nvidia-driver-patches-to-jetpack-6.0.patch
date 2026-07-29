@@ -5,7 +5,7 @@ Subject: [PATCH] Porting nvidia driver patches to jetpack 6.0
 
 Signed-off-by: Dmitry Perchanov <dmitry.perchanov@intel.com>
 ---
- drivers/media/i2c/Makefile                    |   4 +
+ drivers/media/i2c/Makefile                    |   6 +
  drivers/media/i2c/max9295.c                   | 139 ++++++
  drivers/media/i2c/max9296.c                   | 190 +++++++++
  .../platform/tegra/camera/sensor_common.c     |   4 +
@@ -19,13 +19,13 @@ Signed-off-by: Dmitry Perchanov <dmitry.perchanov@intel.com>
  include/media/max9296.h                       |   8 +
  include/media/mc_common.h                     |  22 +
  include/media/tegra_camera_core.h             |   8 +
- 14 files changed, 902 insertions(+), 11 deletions(-)
+ 14 files changed, 903 insertions(+), 11 deletions(-)
 
 diff --git a/drivers/media/i2c/Makefile b/drivers/media/i2c/Makefile
 index 7c5913c6..396b9bc3 100644
 --- a/drivers/media/i2c/Makefile
 +++ b/drivers/media/i2c/Makefile
-@@ -5,6 +5,10 @@ subdir-ccflags-y += -Werror
+@@ -5,6 +5,11 @@ subdir-ccflags-y += -Werror
  ifneq ($(NV_BUILD_SYSTEM_TYPE),embedded-linux)
  obj-m += max9295.o
  obj-m += max9296.o
@@ -33,6 +33,7 @@ index 7c5913c6..396b9bc3 100644
 +subdir-ccflags-y += -DCONFIG_TEGRA_CAMERA_PLATFORM
 +obj-m += d4xx.o
 +obj-m += max96717.o
++obj-m += max96724.o
  ifndef CONFIG_TEGRA_SYSTEM_TYPE_ACK
  obj-m += max96712.o
  
@@ -1265,4 +1266,3 @@ index e6d9a2b1..38634b77 100644
  /* Supported CSI to VI Data Formats */
 -- 
 2.34.1
-

@@ -12,7 +12,7 @@ vb2; real S_FMT/TRY_FMT; proper init error ladder) and review follow-ups:
  - shared tegra_metadata_fill_format() helper for G/S/TRY_FMT
  - drop stray double semicolon
 ---
- drivers/media/i2c/Makefile                    |   4 +
+ drivers/media/i2c/Makefile                    |   6 +
  .../platform/tegra/camera/sensor_common.c     |   4 +
  .../media/platform/tegra/camera/vi/channel.c  | 437 +++++++++++++++++-
  .../media/platform/tegra/camera/vi/graph.c    |  46 +-
@@ -21,13 +21,13 @@ vb2; real S_FMT/TRY_FMT; proper init error ladder) and review follow-ups:
  .../platform/tegra/camera/vi/vi5_formats.h    |  30 +-
  include/media/mc_common.h                     |  30 ++
  include/media/tegra_camera_core.h             |  10 +-
- 9 files changed, 604 insertions(+), 19 deletions(-)
+ 9 files changed, 605 insertions(+), 19 deletions(-)
 
 diff --git a/drivers/media/i2c/Makefile b/drivers/media/i2c/Makefile
 index a85d6e88..b2849382 100644
 --- a/drivers/media/i2c/Makefile
 +++ b/drivers/media/i2c/Makefile
-@@ -5,6 +5,10 @@ subdir-ccflags-y += -Werror
+@@ -5,6 +5,11 @@ subdir-ccflags-y += -Werror
  
  obj-m += max9295.o
  obj-m += max9296.o
@@ -35,6 +35,7 @@ index a85d6e88..b2849382 100644
 +subdir-ccflags-y += -DCONFIG_TEGRA_CAMERA_PLATFORM
 +obj-m += d4xx.o
 +obj-m += max96717.o
++obj-m += max96724.o
  ifeq ($(findstring ack_src,$(NV_BUILD_KERNEL_OPTIONS)),)
  obj-m += max96712.o
  

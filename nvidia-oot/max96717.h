@@ -45,8 +45,7 @@ int max96717_stream_stop(struct device *dev, u32 vc_id);
  * The I2C overrides include setting proxy I2C slave addresses for the devices.
  *
  * Before the client calls this function it must ensure that
- * the deserializer device is in link_ex exclusive link mode
- * by calling the deserializer driver's max9296_setup_link() function.
+ * the deserializer device is in exclusive link mode.
  *
  * @param  [in]  dev            The serializer device handle.
  *
