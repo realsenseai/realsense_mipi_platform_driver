@@ -212,7 +212,7 @@ struct ser_interface {
 #define DS5_CAMERA_SYNC_MODE		0x002C
 #define DS5_READOUT_SHAPING		0x0030  /* depth-only; FW value is % of HTS-extended readout shaping (0-100) */
 
-/* RGB-only control offsets relative to DS5_RGB_CONTROL_BASE (0x4200).
+/* D4xx RGB-only control offsets relative to DS5_RGB_CONTROL_BASE (0x4200).
  * These overlap numerically with depth-block offsets (laser power, AE ROI),
  * but the is_rgb / is_depth guards in ds5_s_ctrl()/ds5_g_volatile_ctrl()
  * keep the per-sensor interpretations disjoint.
@@ -235,6 +235,17 @@ struct ser_interface {
 #define DS5_OHM_TEMPERATURE		0x0034
 #define DS5_PROJECTOR_TEMPERATURE	0x0038
 #define DS5_ERROR_CODE			0x003C
+
+/* D58x RGB controls use a separate extension window. The same offsets in the
+ * depth block carry temperature and error telemetry.
+ */
+#define D58X_RGB_SATURATION		0x0030
+#define D58X_RGB_SHARPNESS		0x0032
+#define D58X_RGB_WHITE_BALANCE_TEMP	0x0034
+#define D58X_RGB_HUE			0x0036
+#define D58X_RGB_AUTO_WHITE_BALANCE	0x0038
+#define D58X_RGB_POWER_LINE_FREQ		0x003A
+#define D58X_RGB_AE_PRIORITY		0x003C
 
 #define DS5_DEPTH_CONFIG_STATUS		0x4800
 #define DS5_RGB_CONFIG_STATUS		0x4802
@@ -812,6 +823,19 @@ static inline u16 ds5_dev_type(struct ds5 *state, u16 dev_type)
 		dev_type = state->ds5_dev->cached_device_type;
 	}
 	return dev_type;
+}
+
+static inline bool ds5_is_d58x(struct ds5 *state)
+{
+	return state->ds5_dev &&
+		READ_ONCE(state->ds5_dev->cached_device_type) ==
+			DS5_DEVICE_TYPE_D58X;
+}
+
+static inline u16 ds5_rgb_ctrl_offset(struct ds5 *state, u16 d4xx_offset,
+				      u16 d58x_offset)
+{
+	return ds5_is_d58x(state) ? d58x_offset : d4xx_offset;
 }
 
 static bool ds5_is_valid_device_type(u16 dev_type)
@@ -3027,35 +3051,55 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 	case V4L2_CID_SATURATION:
 		if (state->is_rgb)
-			ret = ds5_write(state, base | DS5_RGB_SATURATION,
+			ret = ds5_write(state, base |
+				ds5_rgb_ctrl_offset(state,
+						    DS5_RGB_SATURATION,
+						    D58X_RGB_SATURATION),
 					ctrl->val);
 		break;
 	case V4L2_CID_SHARPNESS:
 		if (state->is_rgb)
-			ret = ds5_write(state, base | DS5_RGB_SHARPNESS,
+			ret = ds5_write(state, base |
+				ds5_rgb_ctrl_offset(state,
+						    DS5_RGB_SHARPNESS,
+						    D58X_RGB_SHARPNESS),
 					ctrl->val);
 		break;
 	case V4L2_CID_WHITE_BALANCE_TEMPERATURE:
 		if (state->is_rgb)
-			ret = ds5_write(state,
-					base | DS5_RGB_WHITE_BALANCE_TEMP,
+			ret = ds5_write(state, base |
+				ds5_rgb_ctrl_offset(state,
+						    DS5_RGB_WHITE_BALANCE_TEMP,
+						    D58X_RGB_WHITE_BALANCE_TEMP),
 					ctrl->val);
+		break;
+	case V4L2_CID_HUE:
+		if (state->is_rgb && ds5_is_d58x(state))
+			ret = ds5_write(state, base | D58X_RGB_HUE,
+					(u16)(s16)ctrl->val);
 		break;
 	case V4L2_CID_AUTO_WHITE_BALANCE:
 		if (state->is_rgb)
-			ret = ds5_write(state,
-					base | DS5_RGB_AUTO_WHITE_BALANCE,
+			ret = ds5_write(state, base |
+				ds5_rgb_ctrl_offset(state,
+						    DS5_RGB_AUTO_WHITE_BALANCE,
+						    D58X_RGB_AUTO_WHITE_BALANCE),
 					ctrl->val);
 		break;
 	case V4L2_CID_POWER_LINE_FREQUENCY:
 		if (state->is_rgb)
-			ret = ds5_write(state,
-					base | DS5_RGB_POWER_LINE_FREQ,
+			ret = ds5_write(state, base |
+				ds5_rgb_ctrl_offset(state,
+						    DS5_RGB_POWER_LINE_FREQ,
+						    D58X_RGB_POWER_LINE_FREQ),
 					ctrl->val);
 		break;
 	case V4L2_CID_EXPOSURE_AUTO_PRIORITY:
 		if (state->is_rgb)
-			ret = ds5_write(state, base | DS5_RGB_AE_PRIORITY,
+			ret = ds5_write(state, base |
+				ds5_rgb_ctrl_offset(state,
+						    DS5_RGB_AE_PRIORITY,
+						    D58X_RGB_AE_PRIORITY),
 					ctrl->val);
 		break;
 	case DS5_CAMERA_CID_LASER_POWER:
@@ -3545,35 +3589,57 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 	case V4L2_CID_SATURATION:
 		if (state->is_rgb)
-			ret = ds5_read(state, base | DS5_RGB_SATURATION,
+			ret = ds5_read(state, base |
+				ds5_rgb_ctrl_offset(state,
+						    DS5_RGB_SATURATION,
+						    D58X_RGB_SATURATION),
 					ctrl->p_new.p_u16);
 		break;
 	case V4L2_CID_SHARPNESS:
 		if (state->is_rgb)
-			ret = ds5_read(state, base | DS5_RGB_SHARPNESS,
+			ret = ds5_read(state, base |
+				ds5_rgb_ctrl_offset(state,
+						    DS5_RGB_SHARPNESS,
+						    D58X_RGB_SHARPNESS),
 					ctrl->p_new.p_u16);
 		break;
 	case V4L2_CID_WHITE_BALANCE_TEMPERATURE:
 		if (state->is_rgb)
-			ret = ds5_read(state,
-					base | DS5_RGB_WHITE_BALANCE_TEMP,
+			ret = ds5_read(state, base |
+				ds5_rgb_ctrl_offset(state,
+						    DS5_RGB_WHITE_BALANCE_TEMP,
+						    D58X_RGB_WHITE_BALANCE_TEMP),
 					ctrl->p_new.p_u16);
+		break;
+	case V4L2_CID_HUE:
+		if (state->is_rgb && ds5_is_d58x(state)) {
+			ret = ds5_read(state, base | D58X_RGB_HUE, &reg);
+			if (!ret)
+				*ctrl->p_new.p_s32 = (s16)reg;
+		}
 		break;
 	case V4L2_CID_AUTO_WHITE_BALANCE:
 		if (state->is_rgb)
-			ret = ds5_read(state,
-					base | DS5_RGB_AUTO_WHITE_BALANCE,
+			ret = ds5_read(state, base |
+				ds5_rgb_ctrl_offset(state,
+						    DS5_RGB_AUTO_WHITE_BALANCE,
+						    D58X_RGB_AUTO_WHITE_BALANCE),
 					ctrl->p_new.p_u16);
 		break;
 	case V4L2_CID_POWER_LINE_FREQUENCY:
 		if (state->is_rgb)
-			ret = ds5_read(state,
-					base | DS5_RGB_POWER_LINE_FREQ,
+			ret = ds5_read(state, base |
+				ds5_rgb_ctrl_offset(state,
+						    DS5_RGB_POWER_LINE_FREQ,
+						    D58X_RGB_POWER_LINE_FREQ),
 					ctrl->p_new.p_u16);
 		break;
 	case V4L2_CID_EXPOSURE_AUTO_PRIORITY:
 		if (state->is_rgb)
-			ret = ds5_read(state, base | DS5_RGB_AE_PRIORITY,
+			ret = ds5_read(state, base |
+				ds5_rgb_ctrl_offset(state,
+						    DS5_RGB_AE_PRIORITY,
+						    D58X_RGB_AE_PRIORITY),
 					ctrl->p_new.p_u16);
 		break;
 
@@ -4971,6 +5037,18 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 					V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
 		}
 
+		/* Hue is implemented by the D58x RGB extension window only. */
+		if (ds5_is_d58x(state)) {
+			ctrl = v4l2_ctrl_new_std(hdl, ops,
+						 V4L2_CID_HUE,
+						 -180, 180, 1, 0);
+			if (ctrl) {
+				ctrl->priv = sensor;
+				ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE |
+						V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
+			}
+		}
+
 		ctrl = v4l2_ctrl_new_std(hdl, ops,
 				V4L2_CID_AUTO_WHITE_BALANCE, 0, 1, 1, 1);
 		if (ctrl) {
@@ -4979,11 +5057,16 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 					V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
 		}
 
-		ctrl = v4l2_ctrl_new_std_menu(hdl, ops,
-				V4L2_CID_POWER_LINE_FREQUENCY,
-				V4L2_CID_POWER_LINE_FREQUENCY_AUTO,
-				0,
-				V4L2_CID_POWER_LINE_FREQUENCY_AUTO);
+		if (ds5_is_d58x(state))
+			ctrl = v4l2_ctrl_new_std_menu(hdl, ops,
+						      V4L2_CID_POWER_LINE_FREQUENCY,
+						      V4L2_CID_POWER_LINE_FREQUENCY_60HZ,
+						      0, V4L2_CID_POWER_LINE_FREQUENCY_60HZ);
+		else
+			ctrl = v4l2_ctrl_new_std_menu(hdl, ops,
+						      V4L2_CID_POWER_LINE_FREQUENCY,
+						      V4L2_CID_POWER_LINE_FREQUENCY_AUTO,
+						      0, V4L2_CID_POWER_LINE_FREQUENCY_AUTO);
 		if (ctrl) {
 			ctrl->priv = sensor;
 			ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE |
