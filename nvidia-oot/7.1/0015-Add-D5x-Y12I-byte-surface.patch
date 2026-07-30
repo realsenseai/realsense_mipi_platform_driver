@@ -1,0 +1,171 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: zhou <shengyong.zhou@realsenseai.com>
+Date: Thu, 30 Jul 2026 18:00:00 +0800
+Subject: [PATCH] media: tegra: receive D5x Y12I byte carriers
+
+D5x stores calibration IR as little-endian L/R 16-bit containers and
+transmits both containers unchanged. UD30 is the default opaque carrier;
+RAW16 is an explicit secondary transport.
+
+Add private mbus tuples that match either packet DT. UD30 uses opaque
+T_R8 byte DMA; RAW16 uses native T_R16 sample DMA before the D5x frame
+callback restores slot byte order. Prefer formats advertised by the
+active subdevice when multiple transport tuples use Y16I.
+
+JetPack 7.1 already defines TEGRA_IMAGE_DT_RAW16 in the NVIDIA baseline,
+so this carrier intentionally omits the enum addition required by JP6
+and JP7.0.
+
+Signed-off-by: zhou <shengyong.zhou@realsenseai.com>
+---
+diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
+--- a/drivers/media/platform/tegra/camera/vi/channel.c
++++ b/drivers/media/platform/tegra/camera/vi/channel.c
+@@ -1027,2 +1027,24 @@ static void tegra_channel_stop_streaming(struct vb2_queue *vq)
+ 
++static void tegra_channel_buffer_finish(struct vb2_buffer *vb)
++{
++	struct tegra_channel *chan = vb2_get_drv_priv(vb->vb2_queue);
++	struct camera_common_data *s_data;
++	void *data;
++	size_t bytesused;
++
++	if (!chan->subdev_on_csi)
++		return;
++
++	s_data = to_camera_common_data(chan->subdev_on_csi->dev);
++	if (!s_data || !s_data->frame_postprocess_ops ||
++	    !s_data->frame_postprocess_ops->process)
++		return;
++
++	bytesused = vb2_get_plane_payload(vb, 0);
++	data = vb2_plane_vaddr(vb, 0);
++	if (s_data->frame_postprocess_ops->process(s_data, data, bytesused,
++						  chan->fmtinfo->code))
++		to_vb2_v4l2_buffer(vb)->flags |= V4L2_BUF_FLAG_ERROR;
++}
++
+ static const struct vb2_ops tegra_channel_queue_qops = {
+@@ -1031,2 +1053,3 @@ static const struct vb2_ops tegra_channel_queue_qops = {
+ 	.buf_queue = tegra_channel_buffer_queue,
++	.buf_finish = tegra_channel_buffer_finish,
+ 	.wait_prepare = vb2_ops_wait_prepare,
+diff --git a/drivers/media/platform/tegra/camera/vi/core.c b/drivers/media/platform/tegra/camera/vi/core.c
+--- a/drivers/media/platform/tegra/camera/vi/core.c
++++ b/drivers/media/platform/tegra/camera/vi/core.c
+@@ -96,5 +96,11 @@ int tegra_core_get_code_by_fourcc(struct tegra_channel *chan,
+ 	unsigned int i;
++	int fallback = -1;
+ 
+ 	for (i = offset; i < chan->num_video_formats; ++i) {
+-		if (chan->video_formats[i]->fourcc == fourcc)
++		if (chan->video_formats[i]->fourcc != fourcc)
++			continue;
++
++		if (fallback < 0)
++			fallback = chan->video_formats[i]->code;
++		if (test_bit(i, chan->fmts_bitmap))
+ 			return chan->video_formats[i]->code;
+@@ -103,3 +109,3 @@ int tegra_core_get_code_by_fourcc(struct tegra_channel *chan,
+ 
+-	return -1;
++	return fallback;
+ }
+@@ -156,5 +162,11 @@ tegra_core_get_format_by_fourcc(struct tegra_channel *chan, u32 fourcc)
+ 	unsigned int i;
++	const struct tegra_video_format *fallback = NULL;
+ 
+ 	for (i = 0; i < chan->num_video_formats; ++i) {
+-		if (chan->video_formats[i]->fourcc == fourcc)
++		if (chan->video_formats[i]->fourcc != fourcc)
++			continue;
++
++		if (!fallback)
++			fallback = chan->video_formats[i];
++		if (test_bit(i, chan->fmts_bitmap))
+ 			return chan->video_formats[i];
+@@ -163,3 +175,3 @@ tegra_core_get_format_by_fourcc(struct tegra_channel *chan, u32 fourcc)
+ 
+-	return NULL;
++	return fallback;
+ }
+diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+--- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
++++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+@@ -396,2 +396,6 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+ 	bool flat_nv12 = chan->fmtinfo->fourcc == V4L2_PIX_FMT_NV12;
++	bool d5x_y12i_ud30_surface =
++		chan->fmtinfo->code == MEDIA_BUS_FMT_RS_Y12I_UD30_4X8;
++	bool d5x_y12i_raw16_surface =
++		chan->fmtinfo->code == MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8;
+ 	u32 nvcsi_stream = chan->port[vi_port];
+@@ -411,2 +415,8 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+ 		height = height * 3 / 2;
++	else if (d5x_y12i_ud30_surface)
++		/* T_R8 frame_x is the complete byte-identical row. */
++		width = bpl;
++	else if (d5x_y12i_raw16_surface)
++		/* RAW16 packet WC is bpl; T_R16 frame_x counts 16-bit samples. */
++		width = bpl / 2U;
+ 
+@@ -422,2 +432,10 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+ 	desc->ch_cfg.match.datatype_mask = 0x3f;
++	if (d5x_y12i_ud30_surface) {
++		/*
++		 * Map the opaque UD30 byte carrier to RAW8 only inside VI so
++		 * every packet payload byte reaches the V4L2 surface unchanged.
++		 */
++		desc->ch_cfg.dt_enable = 1;
++		desc->ch_cfg.dt_override = TEGRA_IMAGE_DT_RAW8;
++	}
+ 	desc->ch_cfg.pixfmt_enable = 1;
+diff --git a/drivers/media/platform/tegra/camera/vi/vi5_formats.h b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
+--- a/drivers/media/platform/tegra/camera/vi/vi5_formats.h
++++ b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
+@@ -84,2 +84,14 @@ enum tegra_image_format {
+ 
++#ifndef MEDIA_BUS_FMT_RS_Y12I_UD30_4X8
++#define MEDIA_BUS_FMT_RS_Y12I_UD30_4X8 0x5005
++#endif
++
++#ifndef MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8
++#define MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8 0x5006
++#endif
++
++#ifndef V4L2_PIX_FMT_Y16I
++#define V4L2_PIX_FMT_Y16I v4l2_fourcc('Y', '1', '6', 'I')
++#endif
++
+ static const struct tegra_video_format vi5_video_formats[] = {
+@@ -172,2 +184,16 @@ static const struct tegra_video_format vi5_video_formats[] = {
+ 
++	/*
++	 * D5x native Y12I: opaque CSI UD30 preserves little-endian L/R
++	 * 16-bit slot bytes. T_R8 writes the complete standard Y16I row.
++	 */
++	TEGRA_VIDEO_FORMAT(RAW12, 12, RS_Y12I_UD30_4X8, 4, 1, T_R8,
++				USER_1, Y16I, "Y12I in 16-bit L/R containers"),
++
++	/*
++	 * Secondary RAW16 carrier for the same Y12I L/R slot surface. Match
++	 * and DMA it as native RAW16; the D5x callback restores byte order.
++	 */
++	TEGRA_VIDEO_FORMAT(RAW12, 12, RS_Y12I_RAW16_4X8, 4, 1, T_R16,
++				RAW16, Y16I, "Y12I RAW16 byte carrier"),
++
+ };
+diff --git a/include/media/camera_common.h b/include/media/camera_common.h
+--- a/include/media/camera_common.h
++++ b/include/media/camera_common.h
+@@ -166,2 +166,7 @@ struct camera_common_data;
+ 
++struct tegra_frame_postprocess_ops {
++	int (*process)(struct camera_common_data *s_data, void *data,
++		       size_t bytesused, u32 mbus_code);
++};
++
+ struct camera_common_sensor_ops {
+@@ -260,2 +265,3 @@ struct camera_common_data {
+ 	const struct tegra_embedded_metadata_ops *embedded_metadata_ops;
++	const struct tegra_frame_postprocess_ops *frame_postprocess_ops;
+ 	u32	version;

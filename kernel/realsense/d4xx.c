@@ -28,6 +28,7 @@
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
 #include <linux/string.h>
+#include <linux/swab.h>
 #include <linux/videodev2.h>
 #include <linux/version.h>
 #include <linux/mutex.h>
@@ -115,6 +116,36 @@ struct ser_interface {
 #define GMSL_CSI_DT_RGB_888 0x24
 #define GMSL_CSI_DT_RAW_8 0x2A
 #define GMSL_CSI_DT_EMBED 0x12
+#endif
+
+#ifndef GMSL_CSI_DT_RAW_16
+#define GMSL_CSI_DT_RAW_16 0x2E
+#endif
+
+#ifndef GMSL_CSI_DT_USER_1
+#define GMSL_CSI_DT_USER_1 0x30
+#endif
+
+#ifndef MEDIA_BUS_FMT_RS_Y12I_UD30_4X8
+#define MEDIA_BUS_FMT_RS_Y12I_UD30_4X8 0x5005
+#endif
+
+#ifndef MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8
+#define MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8 0x5006
+#endif
+
+#ifndef V4L2_PIX_FMT_Y16I
+#define V4L2_PIX_FMT_Y16I v4l2_fourcc('Y', '1', '6', 'I')
+#endif
+
+static bool y12i_raw16_carrier;
+module_param(y12i_raw16_carrier, bool, 0444);
+MODULE_PARM_DESC(y12i_raw16_carrier,
+		 "Use CSI RAW16 instead of the default UD30 byte carrier for D5x Y12I");
+
+#if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && \
+	LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
+#define DS5_TEGRA_FRAME_POSTPROCESS
 #endif
 
 //#define DS5_DRIVER_NAME "DS5 RealSense camera driver"
@@ -614,6 +645,11 @@ struct ds5 {
 	bool d58x_pixel_mode;
 	u16 control_base;
 	u16 control_status_reg;
+#ifdef DS5_TEGRA_FRAME_POSTPROCESS
+	struct mutex frame_postprocess_lock;
+	void *frame_postprocess_scratch;
+	size_t frame_postprocess_scratch_size;
+#endif
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	struct gmsl_link_ctx g_ctx;
 	struct device *ser_dev;
@@ -627,6 +663,87 @@ struct ds5 {
 #endif
 	struct ds5_dev *ds5_dev; /* pointer to DS5 device struct */
 };
+
+#ifdef DS5_TEGRA_FRAME_POSTPROCESS
+static void ds5_swab16_frame(void *dst_data, const void *src_data,
+			     size_t bytesused)
+{
+	const u8 *src = src_data;
+	u8 *dst = dst_data;
+
+	while (bytesused >= sizeof(u64)) {
+		u64 value = get_unaligned_le64(src);
+
+		value = ((value & 0x00ff00ff00ff00ffULL) << 8) |
+			((value & 0xff00ff00ff00ff00ULL) >> 8);
+		put_unaligned_le64(value, dst);
+		src += sizeof(value);
+		dst += sizeof(value);
+		bytesused -= sizeof(value);
+	}
+	if (bytesused >= sizeof(u32)) {
+		u32 value = get_unaligned_le32(src);
+
+		put_unaligned_le32(swahb32(value), dst);
+		src += sizeof(value);
+		dst += sizeof(value);
+		bytesused -= sizeof(value);
+	}
+	if (bytesused)
+		put_unaligned_le16(swab16(get_unaligned_le16(src)), dst);
+}
+
+static int ds5_prepare_frame_postprocess_scratch(struct ds5 *state,
+						  size_t bytesused)
+{
+	void *scratch;
+
+	if (state->frame_postprocess_scratch_size >= bytesused)
+		return 0;
+
+	scratch = kvmalloc(bytesused, GFP_KERNEL);
+	if (!scratch) {
+		dev_err_ratelimited(&state->client->dev,
+				    "failed to allocate frame postprocess buffer\n");
+		return -ENOMEM;
+	}
+
+	kvfree(state->frame_postprocess_scratch);
+	state->frame_postprocess_scratch = scratch;
+	state->frame_postprocess_scratch_size = bytesused;
+	return 0;
+}
+
+static int ds5_postprocess_csi_frame(struct camera_common_data *s_data,
+				    void *data, size_t bytesused,
+				    u32 mbus_code)
+{
+	struct ds5 *state = container_of(s_data, struct ds5, mux.sd);
+	int ret;
+
+	if (mbus_code != MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8)
+		return 0;
+	if (!data || !bytesused || WARN_ON_ONCE(bytesused & 1U))
+		return -EFAULT;
+
+	mutex_lock(&state->frame_postprocess_lock);
+	ret = ds5_prepare_frame_postprocess_scratch(state, bytesused);
+	if (ret)
+		goto unlock;
+
+	memcpy(state->frame_postprocess_scratch, data, bytesused);
+	ds5_swab16_frame(data, state->frame_postprocess_scratch, bytesused);
+	ret = 0;
+
+unlock:
+	mutex_unlock(&state->frame_postprocess_lock);
+	return ret;
+}
+
+static const struct tegra_frame_postprocess_ops ds5_frame_postprocess_ops = {
+	.process = ds5_postprocess_csi_frame,
+};
+#endif
 
 struct ds5_dev {
 	struct mutex lock;
@@ -1605,9 +1722,9 @@ static const struct ds5_resolution d58x_y8_sizes[] = {
 	DS5_RES(424, 240, ds5_framerate_to_90)
 };
 
-static const struct ds5_resolution d58x_calibration_sizes[] = {
+/* Native Y12I calibration: one 16-bit L and R container per logical pixel. */
+static const struct ds5_resolution d58x_y12i_sizes[] = {
 	DS5_RES(1600, 1300, ds5_framerate_15_25)
-	DS5_RES(256, 144, ds5_framerate_90)
 };
 
 static const struct ds5_resolution d58x_rgb_sizes[] = {
@@ -1632,11 +1749,6 @@ static const struct ds5_format ds5_depth_formats_d58x[] = {
 		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
 		.n_resolutions = ARRAY_SIZE(d58x_depth_sizes),
 		.resolutions = d58x_depth_sizes,
-	}, {
-		.data_type = GMSL_CSI_DT_RGB_888,	/* 24-bit Calibration */
-		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,
-		.n_resolutions = ARRAY_SIZE(d58x_calibration_sizes),
-		.resolutions = d58x_calibration_sizes,
 	},
 };
 
@@ -1653,10 +1765,39 @@ static const struct ds5_format ds5_y_formats_d58x[] = {
 		.n_resolutions = ARRAY_SIZE(d58x_y8_sizes),
 		.resolutions = d58x_y8_sizes,
 	}, {
-		.data_type = GMSL_CSI_DT_RGB_888,	/* Y12I, 24-bit Calibration */
-		.mbus_code = MEDIA_BUS_FMT_RGB888_1X24,
-		.n_resolutions = ARRAY_SIZE(d58x_calibration_sizes),
-		.resolutions = d58x_calibration_sizes,
+		/*
+		 * HKR FMT_Y12I stores L/R as little-endian 16-bit slots with only
+		 * 12 valid bits per sample. UD30 carries the slot bytes opaquely;
+		 * VI exposes the same byte order through the Y16I container ABI.
+		 */
+		.data_type = GMSL_CSI_DT_USER_1,
+		.mbus_code = MEDIA_BUS_FMT_RS_Y12I_UD30_4X8,
+		.n_resolutions = ARRAY_SIZE(d58x_y12i_sizes),
+		.resolutions = d58x_y12i_sizes,
+	},
+};
+
+static const struct ds5_format ds5_y_formats_d58x_raw16[] = {
+	{
+		/* First format: default */
+		.data_type = GMSL_CSI_DT_RAW_8,		/* Y8 */
+		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
+		.n_resolutions = ARRAY_SIZE(d58x_y8_sizes),
+		.resolutions = d58x_y8_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_YUV422_8,	/* Y8I */
+		.mbus_code = MEDIA_BUS_FMT_VYUY8_1X16,
+		.n_resolutions = ARRAY_SIZE(d58x_y8_sizes),
+		.resolutions = d58x_y8_sizes,
+	}, {
+		/*
+		 * RAW16/T_R16 reverses each 16-bit slot relative to the HKR DDR
+		 * bytes. The D5x frame callback restores the Y16I byte order.
+		 */
+		.data_type = GMSL_CSI_DT_RAW_16,
+		.mbus_code = MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8,
+		.n_resolutions = ARRAY_SIZE(d58x_y12i_sizes),
+		.resolutions = d58x_y12i_sizes,
 	},
 };
 
@@ -2043,6 +2184,47 @@ static void ds5_tegra_update_rgb_mode(struct ds5 *state,
 	state->mux.sd.fmt_width = image->width;
 	state->mux.sd.fmt_height = image->height;
 }
+
+static void ds5_tegra_update_y12i_mode(struct ds5 *state,
+				       const struct ds5_sensor *sensor)
+{
+	struct sensor_mode_properties *mode;
+	struct sensor_image_properties *image;
+	bool raw16_carrier;
+
+	if (!state->mux.sd.sensor_props.sensor_modes ||
+	    !sensor->config.format || !sensor->config.resolution ||
+	    (sensor->config.format->mbus_code !=
+		    MEDIA_BUS_FMT_RS_Y12I_UD30_4X8 &&
+	     sensor->config.format->mbus_code !=
+		    MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8))
+		return;
+
+	/*
+	 * Keep Y16I logical geometry while VI byte-DMAs the complete
+	 * width * 4-byte row without interpreting the 12-bit samples.
+	 */
+	mode = &state->mux.sd.sensor_props.sensor_modes[1];
+	image = &mode->image_properties;
+	image->width = sensor->format.width;
+	image->height = sensor->format.height;
+	image->line_length = sensor->format.width;
+	image->pixel_format = V4L2_PIX_FMT_Y16I;
+	raw16_carrier = sensor->config.format->mbus_code ==
+		MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8;
+	image->embedded_metadata_height =
+		(!raw16_carrier && state->metadata_enabled) ? 1 : 0;
+
+	/*
+	 * Keep the platform CSI link clock unchanged. The four-byte logical
+	 * pixel size describes the Y12I DDR/V4L2 container. The selected CSI
+	 * carrier does not change the 12-bit sample semantics.
+	 */
+	state->mux.sd.mode_prop_idx = 1;
+	state->mux.sd.mode = state->mux.sd.def_mode;
+	state->mux.sd.fmt_width = image->width;
+	state->mux.sd.fmt_height = image->height;
+}
 #endif
 
 static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
@@ -2099,6 +2281,12 @@ static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 #ifdef CONFIG_TEGRA_CAMERA_PLATFORM
 		if (state->is_rgb && ds5_is_d58x(state))
 			ds5_tegra_update_rgb_mode(state, sensor);
+		else if (state->is_y8 && ds5_is_d58x(state) &&
+			 (sensor->config.format->mbus_code ==
+			    MEDIA_BUS_FMT_RS_Y12I_UD30_4X8 ||
+			  sensor->config.format->mbus_code ==
+			    MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8))
+			ds5_tegra_update_y12i_mode(state, sensor);
 #endif
 	}
 
@@ -2209,7 +2397,6 @@ static int ds5_configure(struct ds5 *state)
 	u16 md_fmt, vc_id;
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	u16 data_type1, data_type2;
-	bool is_calib = 0;
 #endif
 	u16 dt_addr, md_addr, override_addr, fps_addr, width_addr, height_addr;
 	u16 dt_value = 0;
@@ -2259,8 +2446,10 @@ static int ds5_configure(struct ds5 *state)
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	data_type1 = sensor->config.format->data_type;
+	if (y12i_raw16_carrier && state->is_y8 &&
+	    data_type1 == GMSL_CSI_DT_RAW_16)
+		md_fmt = 0x00;
 	data_type2 = md_fmt;
-	is_calib = (state->is_y8 && (data_type1 == GMSL_CSI_DT_RGB_888));
 
 	vc_id = state->g_ctx.dst_vc;
     if (PIPE_NOT_CONFIGURED == sensor->pipe_id ||
@@ -2304,9 +2493,6 @@ static int ds5_configure(struct ds5 *state)
 		mutex_lock(&serdes_lock__);
 		ret = ds5_setup_pipeline(state, data_type1, data_type2,
 					 sensor->pipe_id, vc_id);
-		// reset data path when switching to Y12I
-		if (is_calib)
-			state->dser_ops->reset_oneshot(state->dser_dev);
 		mutex_unlock(&serdes_lock__);
 		if (ret < 0)
 			return ret;
@@ -6134,11 +6320,6 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			dev_warn(&state->client->dev, "release pipe failed\n");
 		else
 			sensor->pipe_id = PIPE_NOT_CONFIGURED;
-		if (state->is_y8
-			&& (state->ir.sensor.config.format->data_type == GMSL_CSI_DT_RGB_888))
-		{
-			state->dser_ops->reset_oneshot(state->dser_dev);
-		}
 		mutex_unlock(&serdes_lock__);
 		/* Tell the serializer this stream stopped. On the last stream it
 		 * re-arms the MIPI RX PHY (idle) so the next stream re-locks
@@ -6409,6 +6590,10 @@ static int ds5_mux_init(struct i2c_client *c, struct ds5 *state)
 	if (ds5_is_d58x(state))
 		state->mux.sd.embedded_metadata_ops = &ds5_csi_metadata_ops;
 #endif
+#ifdef DS5_TEGRA_FRAME_POSTPROCESS
+	if (ds5_is_d58x(state))
+		state->mux.sd.frame_postprocess_ops = &ds5_frame_postprocess_ops;
+#endif
 	ret = camera_common_initialize(&state->mux.sd, "d4xx");
 	if (ret) {
 		dev_err(&c->dev, "Failed to initialize d4xx.\n");
@@ -6505,8 +6690,14 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_45x);
 		break;
 	case DS5_DEVICE_TYPE_D58X:
-		sensor->formats = ds5_y_formats_d58x;
-		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_d58x);
+		if (y12i_raw16_carrier) {
+			sensor->formats = ds5_y_formats_d58x_raw16;
+			sensor->n_formats =
+				ARRAY_SIZE(ds5_y_formats_d58x_raw16);
+		} else {
+			sensor->formats = ds5_y_formats_d58x;
+			sensor->n_formats = ARRAY_SIZE(ds5_y_formats_d58x);
+		}
 		break;
 	default:
 		sensor->formats = state->variant->formats;
@@ -7375,6 +7566,9 @@ static int ds5_probe(struct i2c_client *c
 		return -ENOMEM;
 
 	mutex_init(&state->lock);
+#ifdef DS5_TEGRA_FRAME_POSTPROCESS
+	mutex_init(&state->frame_postprocess_lock);
+#endif
 
 	state->client = c;
 
@@ -7630,6 +7824,10 @@ static void ds5_remove(struct i2c_client *c)
 	if (state->is_depth && state->dfu_dev.ds5_class) {
 		ds5_chrdev_remove(state);
 	}
+
+#ifdef DS5_TEGRA_FRAME_POSTPROCESS
+	kvfree(state->frame_postprocess_scratch);
+#endif
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 12)
 	return 0;
