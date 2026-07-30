@@ -814,6 +814,13 @@ static inline u16 ds5_dev_type(struct ds5 *state, u16 dev_type)
 	return dev_type;
 }
 
+static bool ds5_is_d58x(const struct ds5 *state)
+{
+	return state->ds5_dev &&
+		READ_ONCE(state->ds5_dev->cached_device_type) ==
+			DS5_DEVICE_TYPE_D58X;
+}
+
 static bool ds5_is_valid_device_type(u16 dev_type)
 {
 	switch (dev_type) {
@@ -1988,9 +1995,23 @@ static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 #endif
 #endif
 
-	else
+	else {
 // FIXME: use this format in .s_stream()
 		sensor->format = *mf;
+#ifdef CONFIG_TEGRA_CAMERA_PLATFORM
+		/*
+		 * D58x IR uses mode0 for Y8 and mode1 for interleaved formats.
+		 * Keep every D4xx product on its existing mode-selection path.
+		 */
+		if (state->is_y8 && ds5_is_d58x(state)) {
+			if (sensor->config.format->mbus_code ==
+			    MEDIA_BUS_FMT_Y8_1X8)
+				state->mux.sd.mode_prop_idx = 0;
+			else
+				state->mux.sd.mode_prop_idx = 1;
+		}
+#endif
+	}
 
 	state->mux.last_set = sensor;
 
