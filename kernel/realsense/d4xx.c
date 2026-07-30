@@ -126,6 +126,18 @@ struct ser_interface {
 #define GMSL_CSI_DT_USER_1 0x30
 #endif
 
+#ifndef MEDIA_BUS_FMT_RS_SGRBG10P_1X10
+#define MEDIA_BUS_FMT_RS_SGRBG10P_1X10 0x5002
+#endif
+
+#ifndef MEDIA_BUS_FMT_RS_SGRBG10_1X16
+#define MEDIA_BUS_FMT_RS_SGRBG10_1X16 0x5003
+#endif
+
+#ifndef MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16
+#define MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16 0x5004
+#endif
+
 #ifndef MEDIA_BUS_FMT_RS_Y12I_UD30_4X8
 #define MEDIA_BUS_FMT_RS_Y12I_UD30_4X8 0x5005
 #endif
@@ -136,6 +148,14 @@ struct ser_interface {
 
 #ifndef V4L2_PIX_FMT_Y16I
 #define V4L2_PIX_FMT_Y16I v4l2_fourcc('Y', '1', '6', 'I')
+#endif
+
+#ifndef V4L2_PIX_FMT_RS_SGRBG10P
+#define V4L2_PIX_FMT_RS_SGRBG10P v4l2_fourcc('G', 'R', '0', 'P')
+#endif
+
+#ifndef V4L2_PIX_FMT_SGRBG10P
+#define V4L2_PIX_FMT_SGRBG10P v4l2_fourcc('p', 'g', 'A', 'A')
 #endif
 
 static bool y12i_raw16_carrier;
@@ -693,6 +713,48 @@ static void ds5_swab16_frame(void *dst_data, const void *src_data,
 		put_unaligned_le16(swab16(get_unaligned_le16(src)), dst);
 }
 
+static int ds5_pack_raw16_to_sgrbg10p(void *dst_data, const void *src_data,
+				      size_t bytesused, u32 width,
+				      u32 height, u32 bytesperline)
+{
+	const u8 *src_frame = src_data;
+	u8 *dst_frame = dst_data;
+	u32 y;
+
+	if (WARN_ON_ONCE(width & 3U) ||
+	    WARN_ON_ONCE(bytesperline < width * sizeof(u16)) ||
+	    WARN_ON_ONCE(bytesused < (size_t)bytesperline * height))
+		return -EINVAL;
+
+	for (y = 0; y < height; y++) {
+		const u8 *src = src_frame + (size_t)y * bytesperline;
+		u8 *dst = dst_frame + (size_t)y * bytesperline;
+		u32 x;
+
+		for (x = 0; x < width; x += 4) {
+			u64 raw = get_unaligned_le64(src);
+			u64 lanes =
+				((raw & 0x00ff00ff00ff00ffULL) << 8) |
+				((raw & 0xff00ff00ff00ff00ULL) >> 8);
+			u32 high =
+				((lanes >> 2) & 0x000000ff) |
+				((lanes >> 10) & 0x0000ff00) |
+				((lanes >> 18) & 0x00ff0000) |
+				((lanes >> 26) & 0xff000000);
+
+			put_unaligned_le32(high, dst);
+			dst[4] = (lanes & 0x03) |
+				 ((lanes >> 14) & 0x0c) |
+				 ((lanes >> 28) & 0x30) |
+				 ((lanes >> 42) & 0xc0);
+			src += 4 * sizeof(u16);
+			dst += 5;
+		}
+	}
+
+	return 0;
+}
+
 static int ds5_prepare_frame_postprocess_scratch(struct ds5 *state,
 						  size_t bytesused)
 {
@@ -721,7 +783,9 @@ static int ds5_postprocess_csi_frame(struct camera_common_data *s_data,
 	struct ds5 *state = container_of(s_data, struct ds5, mux.sd);
 	int ret;
 
-	if (mbus_code != MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8)
+	if (mbus_code != MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8 &&
+	    mbus_code != MEDIA_BUS_FMT_RS_SGRBG10_1X16 &&
+	    mbus_code != MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16)
 		return 0;
 	if (!data || !bytesused || WARN_ON_ONCE(bytesused & 1U))
 		return -EFAULT;
@@ -732,8 +796,25 @@ static int ds5_postprocess_csi_frame(struct camera_common_data *s_data,
 		goto unlock;
 
 	memcpy(state->frame_postprocess_scratch, data, bytesused);
-	ds5_swab16_frame(data, state->frame_postprocess_scratch, bytesused);
-	ret = 0;
+
+	switch (mbus_code) {
+	case MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8:
+	case MEDIA_BUS_FMT_RS_SGRBG10_1X16:
+		ds5_swab16_frame(data, state->frame_postprocess_scratch,
+				 bytesused);
+		ret = 0;
+		break;
+	case MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16:
+		ret = ds5_pack_raw16_to_sgrbg10p(
+			data, state->frame_postprocess_scratch, bytesused,
+			state->rgb.sensor.format.width,
+			state->rgb.sensor.format.height,
+			state->rgb.sensor.format.width * sizeof(u16));
+		break;
+	default:
+		ret = 0;
+		break;
+	}
 
 unlock:
 	mutex_unlock(&state->frame_postprocess_lock);
@@ -1130,7 +1211,7 @@ static const u16 ds5_framerates[] = {5, 30};
 #define DS5_FRAMERATE_DEFAULT_IDX 1
 
 static const u16 ds5_framerate_30 = 30;
-static const u16 ds5_framerate_25 = 25;
+static const u16 ds5_framerate_25[] = {25};
 static const u16 ds5_depth_framerate_to_30[] = {5, 15, 30};
 static const u16 ds5_framerate_to_30[] = {5, 10, 15, 30};
 static const u16 ds5_framerate_to_60[] = {5, 15, 30, 60};
@@ -1738,6 +1819,11 @@ static const struct ds5_resolution d58x_rgb_sizes[] = {
 	DS5_RES(424, 240, ds5_framerate_to_90)
 };
 
+/* D58x RGB calibration profile transported as Bayer10. */
+static const struct ds5_resolution d58x_rgb_raw_sizes[] = {
+	DS5_RES(1600, 1300, ds5_framerate_25)
+};
+
 static const struct ds5_format ds5_depth_formats_d58x[] = {
 	{
 		.data_type = GMSL_CSI_DT_YUV422_8,	/* Z16 */
@@ -1814,6 +1900,33 @@ static const struct ds5_format ds5_rgb_formats_d58x[] = {
 		.mbus_code = MEDIA_BUS_FMT_UYYVYY8_0_5X24,
 		.n_resolutions = ARRAY_SIZE(d58x_rgb_sizes),
 		.resolutions = d58x_rgb_sizes,
+	}, {
+		/*
+		 * HKR emits one 10-bit GRBG sample in each 16-bit container.
+		 * RAW16 preserves those containers; V4L2 exposes standard BA10.
+		 */
+		.data_type = GMSL_CSI_DT_RAW_16,
+		.mbus_code = MEDIA_BUS_FMT_RS_SGRBG10_1X16,
+		.n_resolutions = ARRAY_SIZE(d58x_rgb_raw_sizes),
+		.resolutions = d58x_rgb_raw_sizes,
+	}, {
+		/*
+		 * Reuse the RAW16 transport and pack each completed T_R16 row
+		 * into the standard V4L2 pgAA surface in the D58x callback.
+		 */
+		.data_type = GMSL_CSI_DT_RAW_16,
+		.mbus_code = MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16,
+		.n_resolutions = ARRAY_SIZE(d58x_rgb_raw_sizes),
+		.resolutions = d58x_rgb_raw_sizes,
+	}, {
+		/*
+		 * HKR FMT_SGRBG10P stores 50 little-endian 10-bit pixels in each
+		 * 64-byte cache line. UD30 preserves the private GR0P byte ABI.
+		 */
+		.data_type = GMSL_CSI_DT_USER_1,
+		.mbus_code = MEDIA_BUS_FMT_RS_SGRBG10P_1X10,
+		.n_resolutions = ARRAY_SIZE(d58x_rgb_raw_sizes),
+		.resolutions = d58x_rgb_raw_sizes,
 	},
 };
 
@@ -2164,6 +2277,20 @@ static void ds5_tegra_update_rgb_mode(struct ds5 *state,
 	case MEDIA_BUS_FMT_YUYV8_1X16:
 		pixel_format = V4L2_PIX_FMT_YUYV;
 		bit_depth = 16;
+		break;
+	case MEDIA_BUS_FMT_RS_SGRBG10_1X16:
+		pixel_format = V4L2_PIX_FMT_SGRBG10;
+		/* The CSI carrier transmits the complete 16-bit container. */
+		bit_depth = 16;
+		break;
+	case MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16:
+		pixel_format = V4L2_PIX_FMT_SGRBG10P;
+		/* pgAA is packed after VI; the CSI carrier remains RAW16. */
+		bit_depth = 16;
+		break;
+	case MEDIA_BUS_FMT_RS_SGRBG10P_1X10:
+		pixel_format = V4L2_PIX_FMT_RS_SGRBG10P;
+		bit_depth = 10;
 		break;
 	default:
 		return;
@@ -5653,6 +5780,27 @@ static int ds5_mux_enum_mbus_code(struct v4l2_subdev *sd,
 		remote_sd = &state->imu.sensor.sd;
 		break;
 	case DS5_MUX_PAD_EXTERNAL:
+		/*
+		 * Stream-specific muxes expose that stream's complete format
+		 * table. Only the shared legacy mux combines IR and depth.
+		 */
+		if (state->is_rgb) {
+			remote_sd = &state->rgb.sensor.sd;
+			break;
+		}
+		if (state->is_depth) {
+			remote_sd = &state->depth.sensor.sd;
+			break;
+		}
+		if (state->is_y8) {
+			remote_sd = &state->ir.sensor.sd;
+			break;
+		}
+		if (state->is_imu) {
+			remote_sd = &state->imu.sensor.sd;
+			break;
+		}
+
 		if (mce->index >= state->ir.sensor.n_formats +
 				state->depth.sensor.n_formats)
 			return -EINVAL;
