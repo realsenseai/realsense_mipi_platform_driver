@@ -1660,13 +1660,21 @@ static const struct ds5_format ds5_y_formats_d58x[] = {
 	},
 };
 
-static const struct ds5_format ds5_d58x_rgb_format = {
-	.data_type = GMSL_CSI_DT_YUV422_8,	/* UYVY */
-	.mbus_code = MEDIA_BUS_FMT_YUYV8_1X16,
-	.n_resolutions = ARRAY_SIZE(d58x_rgb_sizes),
-	.resolutions = d58x_rgb_sizes,
+static const struct ds5_format ds5_rgb_formats_d58x[] = {
+	{
+		/* MC-FCVT uses UYVY bytes on DT 0x1E; V4L2 exposes YUYV. */
+		.data_type = GMSL_CSI_DT_YUV422_8,
+		.mbus_code = MEDIA_BUS_FMT_YUYV8_1X16,
+		.n_resolutions = ARRAY_SIZE(d58x_rgb_sizes),
+		.resolutions = d58x_rgb_sizes,
+	}, {
+		/* Flat NV12 is carried as width x (height * 3 / 2) RAW8. */
+		.data_type = GMSL_CSI_DT_RAW_8,
+		.mbus_code = MEDIA_BUS_FMT_UYYVYY8_0_5X24,
+		.n_resolutions = ARRAY_SIZE(d58x_rgb_sizes),
+		.resolutions = d58x_rgb_sizes,
+	},
 };
-#define DS5_D58X_RGB_N_FORMATS 1
 
 static const struct ds5_variant ds5_variants[] = {
 	[DS5_DS5U] = {
@@ -1974,6 +1982,69 @@ static const struct ds5_format *ds5_sensor_find_format(
 /* 1-8 */
 #define MIPI_CSI2_TYPE_USER_DEF(i)	(0x30 + (i) - 1)
 
+#ifdef CONFIG_TEGRA_CAMERA_PLATFORM
+static void ds5_tegra_update_mipi_clock(struct sensor_signal_properties *signal,
+					u32 bit_depth)
+{
+	u64 rate;
+
+	if (!signal || !signal->num_lanes)
+		return;
+
+	rate = signal->serdes_pixel_clock.val ?
+		signal->serdes_pixel_clock.val : signal->pixel_clock.val;
+	rate = div_u64(rate * bit_depth, signal->num_lanes);
+
+	if (signal->phy_mode == CSI_PHY_MODE_DPHY)
+		signal->mipi_clock.val = div_u64(rate, 2);
+	else if (signal->phy_mode == CSI_PHY_MODE_CPHY)
+		signal->mipi_clock.val = div_u64(rate * 7, 16);
+	else
+		signal->mipi_clock.val = rate;
+}
+
+static void ds5_tegra_update_rgb_mode(struct ds5 *state,
+				      const struct ds5_sensor *sensor)
+{
+	struct sensor_mode_properties *mode;
+	struct sensor_image_properties *image;
+	u32 pixel_format;
+	u32 bit_depth;
+
+	if (!state->mux.sd.sensor_props.sensor_modes ||
+	    !sensor->config.format || !sensor->config.resolution)
+		return;
+
+	switch (sensor->config.format->mbus_code) {
+	case MEDIA_BUS_FMT_UYYVYY8_0_5X24:
+		pixel_format = V4L2_PIX_FMT_NV12;
+		bit_depth = 12;
+		break;
+	case MEDIA_BUS_FMT_YUYV8_1X16:
+		pixel_format = V4L2_PIX_FMT_YUYV;
+		bit_depth = 16;
+		break;
+	default:
+		return;
+	}
+
+	mode = &state->mux.sd.sensor_props.sensor_modes[0];
+	image = &mode->image_properties;
+	image->width = sensor->format.width;
+	image->height = sensor->format.height;
+	image->line_length = sensor->format.width;
+	image->pixel_format = pixel_format;
+	image->embedded_metadata_height = state->metadata_enabled ? 1 : 0;
+
+	ds5_tegra_update_mipi_clock(&mode->signal_properties, bit_depth);
+
+	state->mux.sd.mode_prop_idx = 0;
+	state->mux.sd.mode = state->mux.sd.def_mode;
+	state->mux.sd.fmt_width = image->width;
+	state->mux.sd.fmt_height = image->height;
+}
+#endif
+
 static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
 		struct v4l2_subdev_pad_config *cfg,
@@ -2022,9 +2093,14 @@ static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 #endif
 #endif
 
-	else
+	else {
 // FIXME: use this format in .s_stream()
 		sensor->format = *mf;
+#ifdef CONFIG_TEGRA_CAMERA_PLATFORM
+		if (state->is_rgb && ds5_is_d58x(state))
+			ds5_tegra_update_rgb_mode(state, sensor);
+#endif
+	}
 
 	state->mux.last_set = sensor;
 
@@ -6457,8 +6533,8 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
 		break;
 	case DS5_DEVICE_TYPE_D58X:
-		sensor->formats = &ds5_d58x_rgb_format;
-		sensor->n_formats = DS5_D58X_RGB_N_FORMATS;
+		sensor->formats = ds5_rgb_formats_d58x;
+		sensor->n_formats = ARRAY_SIZE(ds5_rgb_formats_d58x);
 		break;
 	default:
 		sensor->formats = &ds5_onsemi_rgb_format;
