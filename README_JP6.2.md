@@ -189,6 +189,7 @@ sudo ln -s /boot/initrd.img-5.15.148-tegra /boot/initrd
     | `tegra234-camera-d4xx-overlay-seeed.dtbo` | Seeed reComputer board with one camera connected to top right link |
     | `tegra234-camera-d4xx-overlay-seeed-d5xx.dtbo` | Seeed reComputer board with one D5xx camera (max96717 serializer, 4-lane) connected to top right link |
     | `tegra234-camera-d4xx-overlay-seeed-cams-0-1.dtbo` | Seeed reComputer board with two cameras connected to top two links |
+    | `tegra234-camera-d4xx-overlay-seeed-cams-0-1-2.dtbo` | Seeed reComputer board with three cameras connected to slots 0,1,2 — top-right, top-left, bottom-left (slot 3 / bottom-right empty) |
     | `tegra234-camera-d4xx-overlay-seeed-cams-0-1-2-3.dtbo` | Seeed reComputer board with four cameras connected |
 
 6. Modify bootloader configuration:
