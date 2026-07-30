@@ -31,6 +31,7 @@
 #include <linux/videodev2.h>
 #include <linux/version.h>
 #include <linux/mutex.h>
+#include <asm/unaligned.h>
 #include <media/media-entity.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
@@ -258,6 +259,15 @@ struct ser_interface {
 #define DS5_STATUS_INVALID_FPS		0x8
 
 #define MIPI_LANE_RATE			1000
+#define DS5_CSI_METADATA_UVC_HEADER_SIZE	12
+#define DS5_CSI_METADATA_UVC_INFO_BASE	0x8e
+#define DS5_CSI_METADATA_UVC_FID_MASK	0x01
+#define DS5_CSI_METADATA_BLOCK_HEADER_SIZE	8
+#define DS5_CSI_METADATA_CAPTURE_TIMING_ID	0x80000001
+#define DS5_CSI_METADATA_LEGACY_MAGIC	0x484B524D
+#define DS5_CSI_METADATA_LEGACY_HEADER_SIZE	20
+#define DS5_CSI_METADATA_LEGACY_PAYLOAD_OFFSET	8
+#define DS5_CSI_METADATA_MAX_WC		4096
 
 #define MAX_DEPTH_EXP			200000
 #define MAX_RGB_EXP			10000
@@ -825,7 +835,7 @@ static inline u16 ds5_dev_type(struct ds5 *state, u16 dev_type)
 	return dev_type;
 }
 
-static inline bool ds5_is_d58x(struct ds5 *state)
+static inline bool ds5_is_d58x(const struct ds5 *state)
 {
 	return state->ds5_dev &&
 		READ_ONCE(state->ds5_dev->cached_device_type) ==
@@ -2986,6 +2996,69 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 }
 
 static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on);
+
+#if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && defined(CONFIG_TEGRA_EMBEDDED_METADATA_OPS)
+/*
+ * New D58x firmware sends its UVC header and metadata payload over CSI.
+ * Keep the legacy HKRM parser so the unified host also supports older
+ * D58x firmware. D4xx products retain the default Tegra metadata policy.
+ */
+static size_t ds5_csi_metadata_bytesused(const u8 *data, size_t captured_size)
+{
+	u32 first_block_size;
+	u16 payload_size;
+	size_t bytesused;
+
+	if (!data)
+		return 0;
+
+	if (captured_size >= DS5_CSI_METADATA_LEGACY_HEADER_SIZE &&
+	    get_unaligned_le32(data) == DS5_CSI_METADATA_LEGACY_MAGIC) {
+		payload_size = get_unaligned_le16(
+			data + DS5_CSI_METADATA_LEGACY_PAYLOAD_OFFSET);
+		bytesused = DS5_CSI_METADATA_LEGACY_HEADER_SIZE + payload_size;
+		if (!payload_size || bytesused > captured_size)
+			return 0;
+
+		return bytesused;
+	}
+
+	if (captured_size <
+	    DS5_CSI_METADATA_UVC_HEADER_SIZE +
+	    DS5_CSI_METADATA_BLOCK_HEADER_SIZE)
+		return 0;
+
+	bytesused = data[0];
+	if (bytesused <
+	    DS5_CSI_METADATA_UVC_HEADER_SIZE +
+	    DS5_CSI_METADATA_BLOCK_HEADER_SIZE ||
+	    bytesused > captured_size)
+		return 0;
+
+	if ((data[1] & ~DS5_CSI_METADATA_UVC_FID_MASK) !=
+	    DS5_CSI_METADATA_UVC_INFO_BASE)
+		return 0;
+
+	if (get_unaligned_le32(data + DS5_CSI_METADATA_UVC_HEADER_SIZE) !=
+	    DS5_CSI_METADATA_CAPTURE_TIMING_ID)
+		return 0;
+
+	first_block_size = get_unaligned_le32(
+		data + DS5_CSI_METADATA_UVC_HEADER_SIZE + sizeof(u32));
+	if (first_block_size < DS5_CSI_METADATA_BLOCK_HEADER_SIZE ||
+	    DS5_CSI_METADATA_UVC_HEADER_SIZE + first_block_size > bytesused)
+		return 0;
+
+	return bytesused;
+}
+
+static const struct tegra_embedded_metadata_ops ds5_csi_metadata_ops = {
+	.dataformat = V4L2_META_FMT_D4XX,
+	.compat_dataformat = V4L2_META_FMT_RSMD,
+	.max_buffer_size = DS5_CSI_METADATA_MAX_WC,
+	.get_bytesused = ds5_csi_metadata_bytesused,
+};
+#endif
 
 static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 {
@@ -6256,6 +6329,10 @@ static int ds5_mux_init(struct i2c_client *c, struct ds5 *state)
 		state->mux.last_set = &state->imu.sensor;
 
 	state->mux.sd.dev = &c->dev;
+#if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && defined(CONFIG_TEGRA_EMBEDDED_METADATA_OPS)
+	if (ds5_is_d58x(state))
+		state->mux.sd.embedded_metadata_ops = &ds5_csi_metadata_ops;
+#endif
 	ret = camera_common_initialize(&state->mux.sd, "d4xx");
 	if (ret) {
 		dev_err(&c->dev, "Failed to initialize d4xx.\n");
