@@ -235,6 +235,18 @@ MODULE_PARM_DESC(y12i_raw16_carrier,
 #define D5X_RGB_BRIGHTNESS			0x0024
 #define D5X_RGB_CONTRAST			0x0028
 #define D5X_RGB_GAMMA				0x002C
+/*
+ * D5 RGB scalar extensions (Tier A). Offsets are on the RGB control base
+ * (0x4200); the identical 0x30..0x3C numeric values on the depth base carry
+ * temperature/error telemetry instead.
+ */
+#define D5X_RGB_SATURATION			0x0030
+#define D5X_RGB_SHARPNESS			0x0032
+#define D5X_RGB_WHITE_BALANCE		0x0034
+#define D5X_RGB_HUE					0x0036
+#define D5X_RGB_AUTO_WB				0x0038
+#define D5X_RGB_POWER_LINE_FREQ		0x003A
+#define D5X_RGB_AE_PRIORITY			0x003C
 #define D5X_SOC_PVT_TEMPERATURE		0x0030
 #define D5X_OHM_TEMPERATURE			0x0034
 #define D5X_PROJECTOR_TEMPERATURE		0x0038
@@ -489,6 +501,13 @@ struct d5x_ctrls {
 		struct v4l2_ctrl *brightness;
 		struct v4l2_ctrl *contrast;
 		struct v4l2_ctrl *gamma;
+		struct v4l2_ctrl *saturation;
+		struct v4l2_ctrl *sharpness;
+		struct v4l2_ctrl *white_balance;
+		struct v4l2_ctrl *hue;
+		struct v4l2_ctrl *auto_white_balance;
+		struct v4l2_ctrl *power_line_frequency;
+		struct v4l2_ctrl *ae_priority;
 		struct v4l2_ctrl *soc_pvt_temperature;
 		struct v4l2_ctrl *ohm_temperature;
 		struct v4l2_ctrl *projector_temperature;
@@ -3396,6 +3415,36 @@ static int d5x_s_ctrl(struct v4l2_ctrl *ctrl)
 		if (state->is_rgb)
 			ret = d5x_write(state, base | D5X_RGB_GAMMA, ctrl->val);
 		break;
+	case V4L2_CID_SATURATION:
+		if (state->is_rgb)
+			ret = d5x_write(state, base | D5X_RGB_SATURATION, ctrl->val);
+		break;
+	case V4L2_CID_SHARPNESS:
+		if (state->is_rgb)
+			ret = d5x_write(state, base | D5X_RGB_SHARPNESS, ctrl->val);
+		break;
+	case V4L2_CID_WHITE_BALANCE_TEMPERATURE:
+		if (state->is_rgb)
+			ret = d5x_write(state, base | D5X_RGB_WHITE_BALANCE, ctrl->val);
+		break;
+	case V4L2_CID_HUE:
+		if (state->is_rgb)
+			ret = d5x_write(state, base | D5X_RGB_HUE,
+					(u16)(s16)ctrl->val);
+		break;
+	case V4L2_CID_AUTO_WHITE_BALANCE:
+		if (state->is_rgb)
+			ret = d5x_write(state, base | D5X_RGB_AUTO_WB, ctrl->val);
+		break;
+	case V4L2_CID_POWER_LINE_FREQUENCY:
+		if (state->is_rgb)
+			ret = d5x_write(state, base | D5X_RGB_POWER_LINE_FREQ,
+					ctrl->val);
+		break;
+	case V4L2_CID_EXPOSURE_AUTO_PRIORITY:
+		if (state->is_rgb)
+			ret = d5x_write(state, base | D5X_RGB_AE_PRIORITY, ctrl->val);
+		break;
 	case D5X_CAMERA_CID_LASER_POWER:
 		if (!state->is_rgb)
 			ret = d5x_write(state, base | D5X_LASER_POWER,
@@ -3868,6 +3917,55 @@ static int d5x_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		if (!state->is_rgb)
 			return -EINVAL;
 		ret = d5x_read(state, base | D5X_RGB_GAMMA, &reg);
+		if (!ret)
+			*ctrl->p_new.p_s32 = reg;
+		break;
+	case V4L2_CID_SATURATION:
+		if (!state->is_rgb)
+			return -EINVAL;
+		ret = d5x_read(state, base | D5X_RGB_SATURATION, &reg);
+		if (!ret)
+			*ctrl->p_new.p_s32 = reg;
+		break;
+	case V4L2_CID_SHARPNESS:
+		if (!state->is_rgb)
+			return -EINVAL;
+		ret = d5x_read(state, base | D5X_RGB_SHARPNESS, &reg);
+		if (!ret)
+			*ctrl->p_new.p_s32 = reg;
+		break;
+	case V4L2_CID_WHITE_BALANCE_TEMPERATURE:
+		if (!state->is_rgb)
+			return -EINVAL;
+		ret = d5x_read(state, base | D5X_RGB_WHITE_BALANCE, &reg);
+		if (!ret)
+			*ctrl->p_new.p_s32 = reg;
+		break;
+	case V4L2_CID_HUE:
+		if (!state->is_rgb)
+			return -EINVAL;
+		ret = d5x_read(state, base | D5X_RGB_HUE, &reg);
+		if (!ret)
+			*ctrl->p_new.p_s32 = (s16)reg;
+		break;
+	case V4L2_CID_AUTO_WHITE_BALANCE:
+		if (!state->is_rgb)
+			return -EINVAL;
+		ret = d5x_read(state, base | D5X_RGB_AUTO_WB, &reg);
+		if (!ret)
+			*ctrl->p_new.p_s32 = reg;
+		break;
+	case V4L2_CID_POWER_LINE_FREQUENCY:
+		if (!state->is_rgb)
+			return -EINVAL;
+		ret = d5x_read(state, base | D5X_RGB_POWER_LINE_FREQ, &reg);
+		if (!ret)
+			*ctrl->p_new.p_s32 = reg;
+		break;
+	case V4L2_CID_EXPOSURE_AUTO_PRIORITY:
+		if (!state->is_rgb)
+			return -EINVAL;
+		ret = d5x_read(state, base | D5X_RGB_AE_PRIORITY, &reg);
 		if (!ret)
 			*ctrl->p_new.p_s32 = reg;
 		break;
@@ -5166,6 +5264,24 @@ static int d5x_ctrl_init(struct d5x *state, int sid)
 		ctrls->gamma = v4l2_ctrl_new_std(hdl, ops,
 				V4L2_CID_GAMMA, 40, 260, 1, 100);
 
+		ctrls->saturation = v4l2_ctrl_new_std(hdl, ops,
+				V4L2_CID_SATURATION, 0, 100, 1, 64);
+		ctrls->sharpness = v4l2_ctrl_new_std(hdl, ops,
+				V4L2_CID_SHARPNESS, 0, 100, 1, 50);
+		ctrls->white_balance = v4l2_ctrl_new_std(hdl, ops,
+				V4L2_CID_WHITE_BALANCE_TEMPERATURE,
+				2800, 6500, 10, 4600);
+		ctrls->hue = v4l2_ctrl_new_std(hdl, ops,
+				V4L2_CID_HUE, -180, 180, 1, 0);
+		ctrls->auto_white_balance = v4l2_ctrl_new_std(hdl, ops,
+				V4L2_CID_AUTO_WHITE_BALANCE, 0, 1, 1, 1);
+		ctrls->power_line_frequency = v4l2_ctrl_new_std_menu(hdl, ops,
+				V4L2_CID_POWER_LINE_FREQUENCY,
+				V4L2_CID_POWER_LINE_FREQUENCY_60HZ, 0,
+				V4L2_CID_POWER_LINE_FREQUENCY_60HZ);
+		ctrls->ae_priority = v4l2_ctrl_new_std(hdl, ops,
+				V4L2_CID_EXPOSURE_AUTO_PRIORITY, 0, 1, 1, 0);
+
 		if (ctrls->brightness) {
 			ctrls->brightness->priv = sensor;
 			ctrls->brightness->flags |= V4L2_CTRL_FLAG_VOLATILE |
@@ -5179,6 +5295,41 @@ static int d5x_ctrl_init(struct d5x *state, int sid)
 		if (ctrls->gamma) {
 			ctrls->gamma->priv = sensor;
 			ctrls->gamma->flags |= V4L2_CTRL_FLAG_VOLATILE |
+					V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
+		}
+		if (ctrls->saturation) {
+			ctrls->saturation->priv = sensor;
+			ctrls->saturation->flags |= V4L2_CTRL_FLAG_VOLATILE |
+					V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
+		}
+		if (ctrls->sharpness) {
+			ctrls->sharpness->priv = sensor;
+			ctrls->sharpness->flags |= V4L2_CTRL_FLAG_VOLATILE |
+					V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
+		}
+		if (ctrls->white_balance) {
+			ctrls->white_balance->priv = sensor;
+			ctrls->white_balance->flags |= V4L2_CTRL_FLAG_VOLATILE |
+					V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
+		}
+		if (ctrls->hue) {
+			ctrls->hue->priv = sensor;
+			ctrls->hue->flags |= V4L2_CTRL_FLAG_VOLATILE |
+					V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
+		}
+		if (ctrls->auto_white_balance) {
+			ctrls->auto_white_balance->priv = sensor;
+			ctrls->auto_white_balance->flags |= V4L2_CTRL_FLAG_VOLATILE |
+					V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
+		}
+		if (ctrls->power_line_frequency) {
+			ctrls->power_line_frequency->priv = sensor;
+			ctrls->power_line_frequency->flags |= V4L2_CTRL_FLAG_VOLATILE |
+					V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
+		}
+		if (ctrls->ae_priority) {
+			ctrls->ae_priority->priv = sensor;
+			ctrls->ae_priority->flags |= V4L2_CTRL_FLAG_VOLATILE |
 					V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
 		}
 	}
