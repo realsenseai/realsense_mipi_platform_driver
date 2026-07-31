@@ -1,0 +1,72 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: zhou <shengyong.zhou@realsenseai.com>
+Date: Fri, 31 Jul 2026 15:00:00 +0800
+Subject: [PATCH] media: tegra: expose D5x UD30 Bayer10 as RW16
+
+D5x RGB calibration sends one little-endian 10-bit sample in each
+16-bit DDR slot. The HIF MIPI path carries all 3200 row bytes in an
+opaque CSI UD30 packet.
+
+Match the D5x unpacked Bayer tuples on UD30 and use T_R8 DMA so VI
+preserves the container bytes. Keep the logical 1600x1300 geometry
+while programming frame_x from the 3200-byte stride. Expose the
+byte-identical surface as RW16. The Host does not repack frames to pgAA.
+
+Signed-off-by: zhou <shengyong.zhou@realsenseai.com>
+---
+ drivers/media/platform/tegra/camera/vi/vi5_fops.c    |  7 ++++++-
+ drivers/media/platform/tegra/camera/vi/vi5_formats.h | 19 ++++++++-----------
+ 2 files changed, 14 insertions(+), 12 deletions(-)
+
+diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+index d4441ad8..cca95fd3 100644
+--- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
++++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+@@ -402,2 +402,4 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+ 		chan->fmtinfo->code == MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8;
++	bool d5x_sgrbg10_rw16_surface =
++		chan->fmtinfo->code == MEDIA_BUS_FMT_RS_SGRBG10_1X16;
+ 	u32 nvcsi_stream = chan->port[vi_port];
+@@ -426,2 +428,5 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+ 		width = bpl / 2U;
++	else if (d5x_sgrbg10_rw16_surface)
++		/* UD30/T_R8 frame_x is the byte-identical RW16 row. */
++		width = bpl;
+ 
+@@ -437,3 +442,3 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+ 	desc->ch_cfg.match.datatype_mask = 0x3f;
+-	if (d5x_sgrbg10p) {
++	if (d5x_sgrbg10p || d5x_sgrbg10_rw16_surface) {
+ 		/*
+diff --git a/drivers/media/platform/tegra/camera/vi/vi5_formats.h b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
+index c29109b4..69db9b75 100644
+--- a/drivers/media/platform/tegra/camera/vi/vi5_formats.h
++++ b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
+@@ -116,2 +116,6 @@ enum tegra_image_format {
+ 
++#ifndef V4L2_PIX_FMT_RW16
++#define V4L2_PIX_FMT_RW16 v4l2_fourcc('R', 'W', '1', '6')
++#endif
++
+ static const struct tegra_video_format vi5_video_formats[] = {
+@@ -205,14 +209,7 @@ static const struct tegra_video_format vi5_video_formats[] = {
+ 	/*
+-	 * D5x unpacked GRBG10: CSI RAW16 carries one complete 16-bit
+-	 * container per sample. Expose the standard V4L2 BA10 surface.
+-	 */
+-	TEGRA_VIDEO_FORMAT(RAW10, 10, RS_SGRBG10_1X16, 2, 1, T_R16,
+-				RAW16, SGRBG10, "GRBG10 in 16-bit containers"),
+-
+-	/*
+-	 * Host-packed option for the same RAW16/T_R16 transport. The D5x
+-	 * frame-finish callback packs each completed row into pgAA.
++	 * D5x unpacked GRBG10: CSI UD30 and T_R8 preserve every byte in
++	 * each little-endian 16-bit container. Expose the surface as RW16.
+ 	 */
+-	TEGRA_VIDEO_FORMAT(RAW10, 10, RS_SGRBG10P_RAW16_1X16, 2, 1, T_R16,
+-				RAW16, SGRBG10P, "Packed GRBG10 from RAW16"),
++	TEGRA_VIDEO_FORMAT(RAW10, 10, RS_SGRBG10_1X16, 2, 1, T_R8,
++				USER_1, RW16, "GRBG10 in RW16 containers"),
+ 
+-- 
+2.34.1

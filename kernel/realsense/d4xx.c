@@ -134,10 +134,6 @@ struct ser_interface {
 #define MEDIA_BUS_FMT_RS_SGRBG10_1X16 0x5003
 #endif
 
-#ifndef MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16
-#define MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16 0x5004
-#endif
-
 #ifndef MEDIA_BUS_FMT_RS_Y12I_UD30_4X8
 #define MEDIA_BUS_FMT_RS_Y12I_UD30_4X8 0x5005
 #endif
@@ -154,8 +150,8 @@ struct ser_interface {
 #define V4L2_PIX_FMT_RS_SGRBG10P v4l2_fourcc('G', 'R', '0', 'P')
 #endif
 
-#ifndef V4L2_PIX_FMT_SGRBG10P
-#define V4L2_PIX_FMT_SGRBG10P v4l2_fourcc('p', 'g', 'A', 'A')
+#ifndef V4L2_PIX_FMT_RW16
+#define V4L2_PIX_FMT_RW16 v4l2_fourcc('R', 'W', '1', '6')
 #endif
 
 static bool y12i_raw16_carrier;
@@ -226,6 +222,7 @@ MODULE_PARM_DESC(y12i_raw16_carrier,
 #define DS5_RGB_RES_WIDTH		0x4024
 #define DS5_RGB_RES_HEIGHT		0x4028
 #define DS5_RGB_FPS				0x402C
+#define DS5_RGB_OVERRIDE			0x403C
 #define DS5_RGB_CONTROL_STATUS 	0x402E
 
 /* SerDes startup I2C readiness polling (defer probe if not responsive) */
@@ -576,7 +573,8 @@ struct ds5_format {
 	unsigned int n_resolutions;
 	const struct ds5_resolution *resolutions;
 	u32 mbus_code;
-	u8 data_type;
+	u8 data_type;		/* HKR DDR source selector */
+	u8 override_dt;		/* Final packet DT; zero uses data_type */
 };
 
 struct ds5_sensor {
@@ -713,48 +711,6 @@ static void ds5_swab16_frame(void *dst_data, const void *src_data,
 		put_unaligned_le16(swab16(get_unaligned_le16(src)), dst);
 }
 
-static int ds5_pack_raw16_to_sgrbg10p(void *dst_data, const void *src_data,
-				      size_t bytesused, u32 width,
-				      u32 height, u32 bytesperline)
-{
-	const u8 *src_frame = src_data;
-	u8 *dst_frame = dst_data;
-	u32 y;
-
-	if (WARN_ON_ONCE(width & 3U) ||
-	    WARN_ON_ONCE(bytesperline < width * sizeof(u16)) ||
-	    WARN_ON_ONCE(bytesused < (size_t)bytesperline * height))
-		return -EINVAL;
-
-	for (y = 0; y < height; y++) {
-		const u8 *src = src_frame + (size_t)y * bytesperline;
-		u8 *dst = dst_frame + (size_t)y * bytesperline;
-		u32 x;
-
-		for (x = 0; x < width; x += 4) {
-			u64 raw = get_unaligned_le64(src);
-			u64 lanes =
-				((raw & 0x00ff00ff00ff00ffULL) << 8) |
-				((raw & 0xff00ff00ff00ff00ULL) >> 8);
-			u32 high =
-				((lanes >> 2) & 0x000000ff) |
-				((lanes >> 10) & 0x0000ff00) |
-				((lanes >> 18) & 0x00ff0000) |
-				((lanes >> 26) & 0xff000000);
-
-			put_unaligned_le32(high, dst);
-			dst[4] = (lanes & 0x03) |
-				 ((lanes >> 14) & 0x0c) |
-				 ((lanes >> 28) & 0x30) |
-				 ((lanes >> 42) & 0xc0);
-			src += 4 * sizeof(u16);
-			dst += 5;
-		}
-	}
-
-	return 0;
-}
-
 static int ds5_prepare_frame_postprocess_scratch(struct ds5 *state,
 						  size_t bytesused)
 {
@@ -783,9 +739,7 @@ static int ds5_postprocess_csi_frame(struct camera_common_data *s_data,
 	struct ds5 *state = container_of(s_data, struct ds5, mux.sd);
 	int ret;
 
-	if (mbus_code != MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8 &&
-	    mbus_code != MEDIA_BUS_FMT_RS_SGRBG10_1X16 &&
-	    mbus_code != MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16)
+	if (mbus_code != MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8)
 		return 0;
 	if (!data || !bytesused || WARN_ON_ONCE(bytesused & 1U))
 		return -EFAULT;
@@ -799,17 +753,9 @@ static int ds5_postprocess_csi_frame(struct camera_common_data *s_data,
 
 	switch (mbus_code) {
 	case MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8:
-	case MEDIA_BUS_FMT_RS_SGRBG10_1X16:
 		ds5_swab16_frame(data, state->frame_postprocess_scratch,
 				 bytesused);
 		ret = 0;
-		break;
-	case MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16:
-		ret = ds5_pack_raw16_to_sgrbg10p(
-			data, state->frame_postprocess_scratch, bytesused,
-			state->rgb.sensor.format.width,
-			state->rgb.sensor.format.height,
-			state->rgb.sensor.format.width * sizeof(u16));
 		break;
 	default:
 		ret = 0;
@@ -1903,19 +1849,13 @@ static const struct ds5_format ds5_rgb_formats_d58x[] = {
 	}, {
 		/*
 		 * HKR emits one 10-bit GRBG sample in each 16-bit container.
-		 * RAW16 preserves those containers; V4L2 exposes standard BA10.
+		 * RAW16 selects that HKR source surface and the explicit UD30
+		 * override selects its byte carrier. Tegra T_R8 preserves the
+		 * little-endian containers exposed through RW16.
 		 */
 		.data_type = GMSL_CSI_DT_RAW_16,
+		.override_dt = GMSL_CSI_DT_USER_1,
 		.mbus_code = MEDIA_BUS_FMT_RS_SGRBG10_1X16,
-		.n_resolutions = ARRAY_SIZE(d58x_rgb_raw_sizes),
-		.resolutions = d58x_rgb_raw_sizes,
-	}, {
-		/*
-		 * Reuse the RAW16 transport and pack each completed T_R16 row
-		 * into the standard V4L2 pgAA surface in the D58x callback.
-		 */
-		.data_type = GMSL_CSI_DT_RAW_16,
-		.mbus_code = MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16,
 		.n_resolutions = ARRAY_SIZE(d58x_rgb_raw_sizes),
 		.resolutions = d58x_rgb_raw_sizes,
 	}, {
@@ -1924,6 +1864,7 @@ static const struct ds5_format ds5_rgb_formats_d58x[] = {
 		 * 64-byte cache line. UD30 preserves the private GR0P byte ABI.
 		 */
 		.data_type = GMSL_CSI_DT_USER_1,
+		.override_dt = GMSL_CSI_DT_USER_1,
 		.mbus_code = MEDIA_BUS_FMT_RS_SGRBG10P_1X10,
 		.n_resolutions = ARRAY_SIZE(d58x_rgb_raw_sizes),
 		.resolutions = d58x_rgb_raw_sizes,
@@ -2279,13 +2220,8 @@ static void ds5_tegra_update_rgb_mode(struct ds5 *state,
 		bit_depth = 16;
 		break;
 	case MEDIA_BUS_FMT_RS_SGRBG10_1X16:
-		pixel_format = V4L2_PIX_FMT_SGRBG10;
+		pixel_format = V4L2_PIX_FMT_RW16;
 		/* The CSI carrier transmits the complete 16-bit container. */
-		bit_depth = 16;
-		break;
-	case MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16:
-		pixel_format = V4L2_PIX_FMT_SGRBG10P;
-		/* pgAA is packed after VI; the CSI carrier remains RAW16. */
 		bit_depth = 16;
 		break;
 	case MEDIA_BUS_FMT_RS_SGRBG10P_1X10:
@@ -2521,13 +2457,14 @@ static void ds5_invalidate_sensor(struct ds5 *state, struct ds5_sensor *sensor)
 static int ds5_configure(struct ds5 *state)
 {
 	struct ds5_sensor *sensor;
-	u16 md_fmt, vc_id;
+	u16 md_fmt, packet_dt, vc_id;
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	u16 data_type1, data_type2;
 #endif
 	u16 dt_addr, md_addr, override_addr, fps_addr, width_addr, height_addr;
 	u16 dt_value = 0;
 	u16 md_value = 0;
+	u16 override_value = 0;
 	u16 fps_value = 0;
 	u16 width_value = 0;
 	u16 height_value = 0;
@@ -2545,7 +2482,7 @@ static int ds5_configure(struct ds5 *state)
 		sensor = &state->rgb.sensor;
 		dt_addr = DS5_RGB_STREAM_DT;
 		md_addr = DS5_RGB_STREAM_MD;
-		override_addr = 0;
+		override_addr = ds5_is_d58x(state) ? DS5_RGB_OVERRIDE : 0;
 		fps_addr = DS5_RGB_FPS;
 		width_addr = DS5_RGB_RES_WIDTH;
 		height_addr = DS5_RGB_RES_HEIGHT;
@@ -2570,9 +2507,12 @@ static int ds5_configure(struct ds5 *state)
 	}
 
 	md_fmt = (state->metadata_enabled) ? GMSL_CSI_DT_EMBED : 0x00;
+	packet_dt = sensor->config.format->override_dt != 0U ?
+		sensor->config.format->override_dt :
+		sensor->config.format->data_type;
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
-	data_type1 = sensor->config.format->data_type;
+	data_type1 = packet_dt;
 	if (y12i_raw16_carrier && state->is_y8 &&
 	    data_type1 == GMSL_CSI_DT_RAW_16)
 		md_fmt = 0x00;
@@ -2668,12 +2608,13 @@ static int ds5_configure(struct ds5 *state)
 	}
 
 	if (override_addr != 0) {
-		dt_value = sensor->config.format->data_type;
-		if (sensor->cached_override_value != dt_value) {
-			ret = ds5_write(state, override_addr, dt_value);
+		override_value = state->is_rgb ?
+			sensor->config.format->override_dt : packet_dt;
+		if (sensor->cached_override_value != override_value) {
+			ret = ds5_write(state, override_addr, override_value);
 			if (ret < 0)
 				return ret;
-			sensor->cached_override_value = dt_value;
+			sensor->cached_override_value = override_value;
 		}
 	}
 
