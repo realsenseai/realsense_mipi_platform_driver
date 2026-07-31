@@ -296,6 +296,7 @@ enum ds5_mux_pad {
 /* I2C retry configuration */
 #define DS5_I2C_RETRY_COUNT	5
 #define DS5_I2C_RETRY_DELAY_US	5000
+#define DS5_EXPOSURE_READ_RETRY_COUNT	3
 
 /* DFU definition section */
 #define DFU_MAGIC_NUMBER "/0x01/0x02/0x03/0x04"
@@ -3502,6 +3503,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			
 	u32 data;
 	int ret = 0;
+	int retry;
 	struct ds5_sensor *sensor = (struct ds5_sensor *)ctrl->priv;
 	u16 base;
 	u16 reg;
@@ -3559,11 +3561,28 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		if (state->is_imu)
 			return -EINVAL;
 		/* see ds5_hw_set_exposure */
-		ds5_read(state, base | DS5_MANUAL_EXPOSURE_MSB, &reg);
-		data = ((u32)reg << 16) & 0xffff0000;
-		ds5_read(state, base | DS5_MANUAL_EXPOSURE_LSB, &reg);
-		data |= reg;
-		*ctrl->p_new.p_u32 = data;
+		for (retry = 0; retry < DS5_EXPOSURE_READ_RETRY_COUNT; retry++) {
+			ret = ds5_read(state,
+				       base | DS5_MANUAL_EXPOSURE_MSB, &reg);
+			if (!ret) {
+				data = ((u32)reg << 16) & 0xffff0000;
+				ret = ds5_read(state,
+					       base | DS5_MANUAL_EXPOSURE_LSB,
+					       &reg);
+			}
+			if (!ret) {
+				data |= reg;
+				if (data >= ctrl->minimum &&
+				    data <= ctrl->maximum) {
+					*ctrl->p_new.p_u32 = data;
+					break;
+				}
+				ret = -ERANGE;
+			}
+			if (retry < DS5_EXPOSURE_READ_RETRY_COUNT - 1)
+				usleep_range(DS5_I2C_RETRY_DELAY_US,
+					     DS5_I2C_RETRY_DELAY_US + 500);
+		}
 		break;
 
 	case V4L2_CID_BRIGHTNESS:
