@@ -296,7 +296,7 @@ enum ds5_mux_pad {
 /* I2C retry configuration */
 #define DS5_I2C_RETRY_COUNT	5
 #define DS5_I2C_RETRY_DELAY_US	5000
-#define DS5_EXPOSURE_READ_RETRY_COUNT	3
+#define DS5_EXPOSURE_READ_MAX_TIME_MS	1000
 
 /* DFU definition section */
 #define DFU_MAGIC_NUMBER "/0x01/0x02/0x03/0x04"
@@ -962,6 +962,65 @@ static int ds5_read(struct ds5 *state, u16 reg, u16 *val)
 static int ds5_read_poll(struct ds5 *state, u16 reg, u16 *val)
 {
 	return regmap_raw_read(state->regmap, reg, val, 2);
+}
+
+static int ds5_read_exposure(struct ds5 *state, u16 base,
+			     u32 minimum, u32 maximum, u32 *value)
+{
+	unsigned long start = jiffies;
+	unsigned long timeout =
+		start + msecs_to_jiffies(DS5_EXPOSURE_READ_MAX_TIME_MS);
+	u16 msw;
+	u16 lsw;
+	u32 data;
+	unsigned int attempts = 0;
+	int ret;
+
+	if (!value)
+		return -EINVAL;
+
+	do {
+		attempts++;
+
+		/*
+		 * Read MSW first so every retry starts a fresh FW snapshot. Use
+		 * one-shot reads here because this function owns the total retry
+		 * deadline; ds5_read() has an independent five-attempt budget.
+		 */
+		ret = ds5_read_poll(state,
+				    base | DS5_MANUAL_EXPOSURE_MSB, &msw);
+		if (!ret) {
+			if (!time_before(jiffies, timeout)) {
+				ret = -ETIMEDOUT;
+				break;
+			}
+
+			ret = ds5_read_poll(state,
+					    base | DS5_MANUAL_EXPOSURE_LSB, &lsw);
+		}
+
+		if (!ret) {
+			data = ((u32)msw << 16) | lsw;
+			if (data >= minimum && data <= maximum) {
+				*value = data;
+				return 0;
+			}
+			ret = -ERANGE;
+		}
+
+		if (!time_before(jiffies, timeout))
+			break;
+
+		usleep_range(DS5_I2C_RETRY_DELAY_US,
+			     DS5_I2C_RETRY_DELAY_US + 500);
+	} while (time_before(jiffies, timeout));
+
+	dev_err(&state->client->dev,
+		"%s(): failed after %u attempts in %u ms, err %d\n",
+		__func__, attempts,
+		jiffies_to_msecs(jiffies - start), ret);
+
+	return ret;
 }
 
 static int ds5_raw_read(struct ds5 *state, u16 reg, void *val, size_t val_len)
@@ -3507,7 +3566,6 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			
 	u32 data;
 	int ret = 0;
-	int retry;
 	struct ds5_sensor *sensor = (struct ds5_sensor *)ctrl->priv;
 	u16 base;
 	u16 reg;
@@ -3564,29 +3622,13 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 	case V4L2_CID_EXPOSURE_ABSOLUTE:
 		if (state->is_imu)
 			return -EINVAL;
-		/* see ds5_hw_set_exposure */
-		for (retry = 0; retry < DS5_EXPOSURE_READ_RETRY_COUNT; retry++) {
-			ret = ds5_read(state,
-				       base | DS5_MANUAL_EXPOSURE_MSB, &reg);
-			if (!ret) {
-				data = ((u32)reg << 16) & 0xffff0000;
-				ret = ds5_read(state,
-					       base | DS5_MANUAL_EXPOSURE_LSB,
-					       &reg);
-			}
-			if (!ret) {
-				data |= reg;
-				if (data >= ctrl->minimum &&
-				    data <= ctrl->maximum) {
-					*ctrl->p_new.p_u32 = data;
-					break;
-				}
-				ret = -ERANGE;
-			}
-			if (retry < DS5_EXPOSURE_READ_RETRY_COUNT - 1)
-				usleep_range(DS5_I2C_RETRY_DELAY_US,
-					     DS5_I2C_RETRY_DELAY_US + 500);
-		}
+		mutex_lock(&state->lock);
+		ret = ds5_read_exposure(state, base,
+					(u32)ctrl->minimum,
+					(u32)ctrl->maximum, &data);
+		mutex_unlock(&state->lock);
+		if (!ret)
+			*ctrl->p_new.p_u32 = data;
 		break;
 
 	case V4L2_CID_BRIGHTNESS:
