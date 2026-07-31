@@ -296,7 +296,7 @@ enum ds5_mux_pad {
 /* I2C retry configuration */
 #define DS5_I2C_RETRY_COUNT	5
 #define DS5_I2C_RETRY_DELAY_US	5000
-#define DS5_EXPOSURE_READ_MAX_TIME_MS	1000
+#define DS5_EXPOSURE_READ_RETRY_COUNT	15
 
 /* DFU definition section */
 #define DFU_MAGIC_NUMBER "/0x01/0x02/0x03/0x04"
@@ -967,58 +967,53 @@ static int ds5_read_poll(struct ds5 *state, u16 reg, u16 *val)
 static int ds5_read_exposure(struct ds5 *state, u16 base,
 			     u32 minimum, u32 maximum, u32 *value)
 {
-	unsigned long start = jiffies;
-	unsigned long timeout =
-		start + msecs_to_jiffies(DS5_EXPOSURE_READ_MAX_TIME_MS);
 	u16 msw;
 	u16 lsw;
 	u32 data;
-	unsigned int attempts = 0;
+	unsigned int attempt;
 	int ret;
 
 	if (!value)
 		return -EINVAL;
 
-	do {
-		attempts++;
-
+	for (attempt = 0; attempt < DS5_EXPOSURE_READ_RETRY_COUNT; attempt++) {
 		/*
-		 * Read MSW first so every retry starts a fresh FW snapshot. Use
-		 * one-shot reads here because this function owns the total retry
-		 * deadline; ds5_read() has an independent five-attempt budget.
+		 * Reading MSW starts the FW snapshot. On a transport failure or
+		 * invalid pair, always restart the complete pair from MSW.
 		 */
 		ret = ds5_read_poll(state,
 				    base | DS5_MANUAL_EXPOSURE_MSB, &msw);
-		if (!ret) {
-			if (!time_before(jiffies, timeout)) {
-				ret = -ETIMEDOUT;
-				break;
-			}
-
+		if (!ret)
 			ret = ds5_read_poll(state,
 					    base | DS5_MANUAL_EXPOSURE_LSB, &lsw);
-		}
 
 		if (!ret) {
 			data = ((u32)msw << 16) | lsw;
-			if (data >= minimum && data <= maximum) {
+			if (data < minimum || data > maximum) {
+				ret = -ERANGE;
+				if (attempt < DS5_EXPOSURE_READ_RETRY_COUNT - 1)
+					dev_dbg(&state->client->dev,
+						"%s(): complete-pair retry %u, value %u outside range %u..%u\n",
+						__func__, attempt + 1, data,
+						minimum, maximum);
+			} else {
 				*value = data;
 				return 0;
 			}
-			ret = -ERANGE;
+		} else if (attempt < DS5_EXPOSURE_READ_RETRY_COUNT - 1) {
+			dev_dbg(&state->client->dev,
+				"%s(): complete-pair retry %u, err %d\n",
+				__func__, attempt + 1, ret);
 		}
 
-		if (!time_before(jiffies, timeout))
-			break;
-
-		usleep_range(DS5_I2C_RETRY_DELAY_US,
-			     DS5_I2C_RETRY_DELAY_US + 500);
-	} while (time_before(jiffies, timeout));
+		if (attempt < DS5_EXPOSURE_READ_RETRY_COUNT - 1)
+			usleep_range(DS5_I2C_RETRY_DELAY_US,
+				     DS5_I2C_RETRY_DELAY_US + 500);
+	}
 
 	dev_err(&state->client->dev,
-		"%s(): failed after %u attempts in %u ms, err %d\n",
-		__func__, attempts,
-		jiffies_to_msecs(jiffies - start), ret);
+		"%s(): failed after %u attempts, err %d\n",
+		__func__, DS5_EXPOSURE_READ_RETRY_COUNT, ret);
 
 	return ret;
 }
