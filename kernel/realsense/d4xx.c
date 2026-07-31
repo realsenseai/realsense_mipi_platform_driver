@@ -3033,7 +3033,11 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 
 	case V4L2_CID_EXPOSURE_ABSOLUTE:
-		ret = ds5_hw_set_exposure(state, base, ctrl->val);
+		if (!ctrl->p_new.p_u32)
+			ret = -EINVAL;
+		else
+			ret = ds5_hw_set_exposure(state, base,
+						  *ctrl->p_new.p_u32);
 		break;
 	case V4L2_CID_BRIGHTNESS:
 		if (state->is_rgb)
@@ -3861,6 +3865,36 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 static const struct v4l2_ctrl_ops ds5_ctrl_ops = {
 	.s_ctrl	= ds5_s_ctrl,
 	.g_volatile_ctrl = ds5_g_volatile_ctrl,
+};
+
+static const struct v4l2_ctrl_config ds5_ctrl_depth_exposure = {
+	.ops = &ds5_ctrl_ops,
+	.id = V4L2_CID_EXPOSURE_ABSOLUTE,
+	.name = "Exposure Time, Absolute",
+	.type = V4L2_CTRL_TYPE_U32,
+	.min = 1,
+	.max = MAX_DEPTH_EXP,
+	.step = 1,
+	.def = DEF_DEPTH_EXP,
+	.dims = {1},
+	.elem_size = sizeof(u32),
+	.flags = V4L2_CTRL_FLAG_VOLATILE |
+		 V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
+static const struct v4l2_ctrl_config ds5_ctrl_rgb_exposure = {
+	.ops = &ds5_ctrl_ops,
+	.id = V4L2_CID_EXPOSURE_ABSOLUTE,
+	.name = "Exposure Time, Absolute",
+	.type = V4L2_CTRL_TYPE_U32,
+	.min = 1,
+	.max = MAX_RGB_EXP,
+	.step = 1,
+	.def = DEF_RGB_EXP,
+	.dims = {1},
+	.elem_size = sizeof(u32),
+	.flags = V4L2_CTRL_FLAG_VOLATILE |
+		 V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 };
 
 static const struct v4l2_ctrl_config ds5_ctrl_log = {
@@ -4978,23 +5012,11 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 		}
 	}
 
-	/* Exposure time: V4L2_CID_EXPOSURE_ABSOLUTE default unit: 100 us. */
+	/* Exposure time is a one-element U32 payload in microseconds. */
 	if (sid == DEPTH_SID || sid == IR_SID) {
-		ctrls->exposure = v4l2_ctrl_new_std(hdl, ops,
-					V4L2_CID_EXPOSURE_ABSOLUTE,
-					1, MAX_DEPTH_EXP, 1, DEF_DEPTH_EXP);
+		ctrls->exposure = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_depth_exposure, sensor);
 	} else if (sid == RGB_SID) {
-		ctrls->exposure = v4l2_ctrl_new_std(hdl, ops,
-					V4L2_CID_EXPOSURE_ABSOLUTE,
-					1, MAX_RGB_EXP, 1, DEF_RGB_EXP);
-	}
-
-	if ((ctrls->exposure) && (sid >= DEPTH_SID && sid < IMU_SID)) {
-		ctrls->exposure->priv = sensor;
-		ctrls->exposure->flags |=
-				V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
-		/* override default int type to u32 to match SKU & UVC */
-		ctrls->exposure->type = V4L2_CTRL_TYPE_U32;
+		ctrls->exposure = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_rgb_exposure, sensor);
 	}
 
 	/* RGB-only ISP controls wired into the FW via DS5_RGB_CONTROL_BASE
