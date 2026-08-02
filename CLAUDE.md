@@ -38,10 +38,14 @@ The `--one-cam`/`--dual-cam` options only apply to JetPack 5.0.2. The target ver
 
 ### Deploy to Jetson
 
+`scripts/deploy_kernel.sh` is the deploy path for **all** JetPack versions (there is no `deploy_kernel_6.2.sh`). It packages the modules, copies them to the target, updates `/boot/<REMOTE_BOOT_FOLDER>` and reboots:
+
 ```bash
-./scripts/deploy_kernel.sh        # For JP 4.x/5.x
-./scripts/deploy_kernel_6.2.sh    # For JP 6.2+
+./scripts/deploy_kernel.sh <JP_VERSION> [TARGET] [USERNAME] [REMOTE_PATH] [REMOTE_BOOT_FOLDER]
+./scripts/deploy_kernel.sh 6.2 fw-orin-3 nvidia drgb_poc dev   # → /home/nvidia/drgb_poc, /boot/dev
 ```
+
+Deploy the **whole** module set this script produces — never hand-copy individual `.ko` files. `tegra-camera.ko` exports `camera_common_*` to `d4xx.ko` **and** `tegra_csi_*`/`csi5_fops` to `nvhost-nvcsi*`, so replacing it alone strands the other consumers ("disagrees about version of symbol") and NVCSI fails to load, leaving no `/dev/video*` at all. Two further traps on a live rig: `rmmod` of the SerDes/camera modules can wedge in **D-state** (unkillable, needs a power cycle), and a `modprobe` issued *after* boot binds the I2C devices but creates no `/dev/video*` — the VI nodes are only built during boot-time setup, so reboot instead of reloading by hand. `d4xx` has no `modules-load.d`/initramfs entry; it autoloads from the DT modalias, and that enumeration is intermittent — a boot with 0 nodes is usually the known GMSL cold-boot flakiness, so reboot (or power-cycle) rather than assuming the build is bad.
 
 On JetPack 5.x, `install_to_kernel.sh` refuses to install a kernel `Image` whose embedded `Linux version` differs from the running `uname -r` (JP5 installs only a few `.ko`, so a mismatched-JetPack Image boots with no modules and can latch the bootloader into recovery); `SKIP_KERNEL_CHECK=1` overrides. Keep this guard when editing the deploy scripts.
 
