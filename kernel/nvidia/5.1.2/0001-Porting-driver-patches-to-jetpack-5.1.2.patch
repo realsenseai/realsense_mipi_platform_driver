@@ -1148,7 +1148,24 @@ diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/p
 index b54833d3f..042a80e51 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
 +++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-@@ -422,6 +422,39 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+@@ -385,9 +385,16 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+ 	if (chan->valid_ports > NVCSI_STREAM_1) {
+ 		height = chan->gang_height;
+ 		width = chan->gang_width;
+ 		offset = buf->addr + chan->buffer_offset[1 - vi_port];
+ 	}
+ 
++	/* Y16I: one 32bpp L/R column pair per V4L2 pixel.
++	 * However, GMSL caps at 24bpp, so we alias it to RAW16, and the de-facto
++	 * width should be double the requested size
++	 */
++	if (chan->fmtinfo->fourcc == V4L2_PIX_FMT_Y16I)
++		width *= 2;
++
+ 	memcpy(desc, &capture_template, sizeof(capture_template));
+ 	memset(desc_memoryinfo, 0, sizeof(*desc_memoryinfo));
+ 
+@@ -422,6 +429,39 @@ static void vi5_setup_surface(struct tegra_channel *chan,
  	chan->capture_descr_sequence += 1;
  }
  
@@ -1188,7 +1205,7 @@ index b54833d3f..042a80e51 100644
  static void vi5_release_buffer(struct tegra_channel *chan,
  	struct tegra_channel_buffer *buf)
  {
-@@ -432,6 +465,9 @@ static void vi5_release_buffer(struct tegra_channel *chan,
+@@ -432,6 +472,9 @@ static void vi5_release_buffer(struct tegra_channel *chan,
  	vb2_set_plane_payload(&vbuf->vb2_buf, 0, chan->format.sizeimage);
  
  	vb2_buffer_done(&vbuf->vb2_buf, buf->vb2_state);
@@ -1198,7 +1215,7 @@ index b54833d3f..042a80e51 100644
  }
  
  static void vi5_capture_enqueue(struct tegra_channel *chan,
-@@ -483,6 +519,88 @@ uncorr_err:
+@@ -483,6 +526,88 @@ uncorr_err:
  	spin_unlock_irqrestore(&chan->capture_state_lock, flags);
  }
  
@@ -1287,7 +1304,7 @@ index b54833d3f..042a80e51 100644
  static void vi5_capture_dequeue(struct tegra_channel *chan,
  	struct tegra_channel_buffer *buf)
  {
-@@ -527,15 +645,29 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
+@@ -527,15 +652,29 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
  			} else {
  				dev_warn(vi->dev,
  					"corr_err: discarding frame %d, flags: %d, "
@@ -1320,7 +1337,7 @@ index b54833d3f..042a80e51 100644
  			}
  		} else if (!vi_port) {
  			gang_prev_frame_id = descr->status.frame_id;
-@@ -580,7 +712,6 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
+@@ -580,7 +719,6 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
  	trace_tegra_channel_capture_frame("eof", &ts);
  #endif
  
@@ -1372,7 +1389,7 @@ index 7ee3a6223..0c6d0ae88 100644
  	TEGRA_VIDEO_FORMAT(YUV422, 16, UYVY8_2X8, 2, 1, T_U8_Y8__V8_Y8,
  				YUV422_8, UYVY, "YUV 4:2:2 UYVY"),
  	TEGRA_VIDEO_FORMAT(YUV422, 16, VYUY8_2X8, 2, 1, T_V8_Y8__U8_Y8,
-@@ -141,6 +143,18 @@ static const struct tegra_video_format vi5_video_formats[] = {
+@@ -141,6 +143,20 @@ static const struct tegra_video_format vi5_video_formats[] = {
  				YUV422_8, YUYV, "YUV 4:2:2 YUYV"),
  	TEGRA_VIDEO_FORMAT(YUV422, 16, YVYU8_2X8, 2, 1, T_Y8_V8__Y8_U8,
  				YUV422_8, YVYU, "YUV 4:2:2 YVYU"),
@@ -1387,6 +1404,8 @@ index 7ee3a6223..0c6d0ae88 100644
 +	// R[7:3]R[3:0] | L[3:0]R[11:8] | L[11:8]L[7:4] | ALIGN[7:0]
 +	TEGRA_VIDEO_FORMAT(RGB888, 24, RGB888_1X24, 4, 1, T_A8R8G8B8,
 +				RGB888, Y12I, "Y12I 24"),
++	TEGRA_VIDEO_FORMAT(RAW16, 16, ARGB8888_1X32, 4, 1, T_R16,
++				RAW16, Y16I, "Y16I 32"),
 +
  };
  
@@ -1411,13 +1430,14 @@ diff --git a/include/media/gmsl-link.h b/include/media/gmsl-link.h
 index 1eab7bac9..533f31eb8 100644
 --- a/include/media/gmsl-link.h
 +++ b/include/media/gmsl-link.h
-@@ -53,6 +53,9 @@
+@@ -53,6 +53,10 @@
  #define GMSL_CSI_DT_RAW_12 0x2C
  #define GMSL_CSI_DT_UED_U1 0x30
  #define GMSL_CSI_DT_EMBED 0x12
 +#define GMSL_CSI_DT_YUV422_8 0x1E
 +#define GMSL_CSI_DT_RGB_888 0x24
 +#define GMSL_CSI_DT_RAW_8 0x2A
++#define GMSL_CSI_DT_RAW_16 0x2E
  
  #define GMSL_ST_ID_UNUSED 0xFF
  
@@ -1561,10 +1581,11 @@ index 788cf77dc..421c22491 100644
  	TEGRA_IMAGE_DT_YUV420_8 = 24,
  	TEGRA_IMAGE_DT_YUV420_10,
  
-@@ -56,6 +58,12 @@ enum tegra_image_dt {
+@@ -56,6 +58,13 @@ enum tegra_image_dt {
  	TEGRA_IMAGE_DT_RAW10,
  	TEGRA_IMAGE_DT_RAW12,
  	TEGRA_IMAGE_DT_RAW14,
++	TEGRA_IMAGE_DT_RAW16,
 +
 +	TEGRA_IMAGE_DT_USER_1 = 48,
 +	TEGRA_IMAGE_DT_USER_2,
@@ -1574,5 +1595,13 @@ index 788cf77dc..421c22491 100644
  };
  
  /* Supported CSI to VI Data Formats */
+@@ -66,6 +66,7 @@ enum tegra_vf_code {
+ 	TEGRA_VF_RAW10,
+ 	TEGRA_VF_RAW12,
+ 	TEGRA_VF_RAW14,
++	TEGRA_VF_RAW16,
+ 	TEGRA_VF_EMBEDDED8,
+ 	TEGRA_VF_RGB565,
+ 	TEGRA_VF_RGB555,
 -- 
 2.34.1

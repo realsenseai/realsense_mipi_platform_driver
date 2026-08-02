@@ -279,11 +279,12 @@ diff --git a/drivers/media/v4l2-core/v4l2-ioctl.c b/drivers/media/v4l2-core/v4l2
 index 62550fb6ca08..945ecb3842d9 100644
 --- a/drivers/media/v4l2-core/v4l2-ioctl.c
 +++ b/drivers/media/v4l2-core/v4l2-ioctl.c
-@@ -1300,6 +1300,7 @@ static void v4l_fill_fmtdesc(struct v4l2_fmtdesc *fmt)
+@@ -1300,6 +1300,8 @@ static void v4l_fill_fmtdesc(struct v4l2_fmtdesc *fmt)
  	case V4L2_PIX_FMT_GREY:		descr = "8-bit Greyscale"; break;
  	case V4L2_PIX_FMT_Y4:		descr = "4-bit Greyscale"; break;
  	case V4L2_PIX_FMT_Y6:		descr = "6-bit Greyscale"; break;
 +	case V4L2_PIX_FMT_Y8:           descr = "Y8-bit Greyscale"; break;
++	case V4L2_PIX_FMT_Y16I:		descr = "Interleaved 16-bit Greyscale"; break;
  	case V4L2_PIX_FMT_Y10:		descr = "10-bit Greyscale"; break;
  	case V4L2_PIX_FMT_Y12:		descr = "12-bit Greyscale"; break;
  	case V4L2_PIX_FMT_Y14:		descr = "14-bit Greyscale"; break;
@@ -291,13 +292,14 @@ diff --git a/include/uapi/linux/videodev2.h b/include/uapi/linux/videodev2.h
 index f750b6cce0e8..1e9e7e2e18de 100644
 --- a/include/uapi/linux/videodev2.h
 +++ b/include/uapi/linux/videodev2.h
-@@ -738,11 +738,15 @@ struct v4l2_pix_format {
+@@ -738,11 +738,16 @@ struct v4l2_pix_format {
  #define V4L2_PIX_FMT_JPGL	v4l2_fourcc('J', 'P', 'G', 'L') /* JPEG-Lite */
  #define V4L2_PIX_FMT_SE401      v4l2_fourcc('S', '4', '0', '1') /* se401 janggu compressed rgb */
  #define V4L2_PIX_FMT_S5C_UYVY_JPG v4l2_fourcc('S', '5', 'C', 'I') /* S5C73M3 interleaved UYVY/JPEG */
 +#define V4L2_PIX_FMT_Y8       v4l2_fourcc('Y', '8', ' ', ' ') /* Greyscale 8-bit */
  #define V4L2_PIX_FMT_Y8I      v4l2_fourcc('Y', '8', 'I', ' ') /* Greyscale 8-bit L/R interleaved */
  #define V4L2_PIX_FMT_Y12I     v4l2_fourcc('Y', '1', '2', 'I') /* Greyscale 12-bit L/R interleaved */
++#define V4L2_PIX_FMT_Y16I     v4l2_fourcc('Y', '1', '6', 'I') /* Greyscale 16-bit L/R interleaved */
  #define V4L2_PIX_FMT_Z16      v4l2_fourcc('Z', '1', '6', ' ') /* Depth data 16-bit */
  #define V4L2_PIX_FMT_MT21C    v4l2_fourcc('M', 'T', '2', '1') /* Mediatek compressed block mode  */
  #define V4L2_PIX_FMT_INZI     v4l2_fourcc('I', 'N', 'Z', 'I') /* Intel Planar Greyscale 10-bit and Depth 16-bit */
@@ -307,7 +309,7 @@ index f750b6cce0e8..1e9e7e2e18de 100644
  #define V4L2_PIX_FMT_SUNXI_TILED_NV12 v4l2_fourcc('S', 'T', '1', '2') /* Sunxi Tiled NV12 Format */
  #define V4L2_PIX_FMT_CNF4     v4l2_fourcc('C', 'N', 'F', '4') /* Intel 4-bit packed depth confidence information */
  #define V4L2_PIX_FMT_RW16     v4l2_fourcc('R', 'W', '1', '6') /* Raw data 16-bit */
-@@ -2287,6 +2291,7 @@ struct v4l2_sdr_format {
+@@ -2287,6 +2292,7 @@ struct v4l2_sdr_format {
  struct v4l2_meta_format {
  	__u32				dataformat;
  	__u32				buffersize;
