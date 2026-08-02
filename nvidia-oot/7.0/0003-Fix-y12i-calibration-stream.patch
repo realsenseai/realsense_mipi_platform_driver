@@ -2,7 +2,7 @@ diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/p
 index 7d07ccd7..c64dcc38 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
 +++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-@@ -582,7 +641,18 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
+@@ -582,7 +641,15 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
  	trace_tegra_channel_capture_frame("sof", &ts);
 -	vb->vb2_buf.timestamp = descr->status.sof_timestamp;
 +	/* RSDSO-20101: stamp at frame-done with CLOCK_MONOTONIC so
@@ -15,11 +15,7 @@ index 7d07ccd7..c64dcc38 100644
 +	 */
 +	vb->vb2_buf.timestamp = ktime_get_ns();
  
--	if (frame_err)
-+	/* TODO: Remove Y12I frame_err workaround once Y12I is fixed
-+	 * Currently there is a black-bar at the bottom of the frame.
-+	 */
-+	if (frame_err && chan->fmtinfo->fourcc != V4L2_PIX_FMT_Y12I)
+ 	if (frame_err)
  		buf->vb2_state = VB2_BUF_STATE_ERROR;
  	else
  		buf->vb2_state = VB2_BUF_STATE_DONE;
