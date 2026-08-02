@@ -738,8 +738,8 @@ index 8e237eef..d9694138 100644
 +		{MAX96712_MIPI_TX34_DST_10_MAP_ADDR + map_pipe_offs, (2 << 6) | 0x01},
 +		{MAX96712_MIPI_TX35_SRC_11_MAP_ADDR + map_pipe_offs, (2 << 6) | GMSL_CSI_DT_EMBED},
 +		{MAX96712_MIPI_TX36_DST_11_MAP_ADDR + map_pipe_offs, (2 << 6) | GMSL_CSI_DT_EMBED},
-+		{MAX96712_MIPI_TX37_SRC_12_MAP_ADDR + map_pipe_offs, (2 << 6) | GMSL_CSI_DT_RGB_888},
-+		{MAX96712_MIPI_TX38_DST_12_MAP_ADDR + map_pipe_offs, (2 << 6) | GMSL_CSI_DT_RGB_888},
++		{MAX96712_MIPI_TX37_SRC_12_MAP_ADDR + map_pipe_offs, (2 << 6) | GMSL_CSI_DT_RAW_16},
++		{MAX96712_MIPI_TX38_DST_12_MAP_ADDR + map_pipe_offs, (2 << 6) | GMSL_CSI_DT_RAW_16},
 +
 +		// Map vc_id 3 formats (IMU)
 +		{MAX96712_MIPI_TX39_SRC_13_MAP_ADDR + map_pipe_offs, (3 << 6) | GMSL_CSI_DT_RAW_8},
