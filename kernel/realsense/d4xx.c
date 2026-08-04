@@ -4913,11 +4913,20 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 	}
 
 	if (sid == DEPTH_SID || sid == IR_SID) {
+		struct v4l2_ctrl_config manual_laser_power_config =
+			ds5_ctrl_manual_laser_power;
+
+		if (is_d58x) {
+			manual_laser_power_config.max = 540;
+			manual_laser_power_config.step = 45;
+			manual_laser_power_config.def = 225;
+		}
+
 		ctrls->laser_power = v4l2_ctrl_new_custom(hdl,
 						&ds5_ctrl_laser_power,
 						sensor);
 		ctrls->manual_laser_power = v4l2_ctrl_new_custom(hdl,
-						&ds5_ctrl_manual_laser_power,
+						&manual_laser_power_config,
 						sensor);
 	}
 
