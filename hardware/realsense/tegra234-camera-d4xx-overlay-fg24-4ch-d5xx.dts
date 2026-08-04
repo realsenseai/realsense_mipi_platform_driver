@@ -353,96 +353,17 @@
 						};
 
 						/*
-						 * D585 Depth stream — VC0
-						 * Z16, 1280x720, 60fps
+						 * D585 IMU stream — VC3
+						 * RAW8 logical stream
 						 */
-						d5xx_depth: d5xx@1a {
+						d5xx_imu: d5xx@1d {
 							status = "okay";
 							def-addr = <0x10>;
-							reg = <0x1a>;
-							compatible = "realsense,d5xx";
-							use_sensor_mode_id = "true";
-							cam-type = "Depth";
-							nvidia,gmsl-ser-device = <&ser_a>;
-							nvidia,gmsl-dser-device = <&dser>;
-
-							ports {
-								#address-cells = <1>;
-								#size-cells = <0>;
-
-								port@0 {
-									reg = <0>;
-									d5xx_depth_out: endpoint {
-										vc-id = <0>;
-										port-index = <2>;
-										bus-width = <4>;
-										remote-endpoint = <&d5xx_csi_in0>;
-									};
-								};
-							};
-
-							/*
-							 * Pixel clock reference for mixed-VC tunnel mode:
-							 *   pix_clk_hz = lane_rate_bps * lane_count / bits_per_pixel
-							 *
-							 * The MAX96724->Orin D-PHY output is configured to
-							 * 2.0Gbps/lane over 4 lanes, so the payload budget is
-							 * 2,000,000,000 * 4 = 8,000,000,000 bits/s.
-							 *
-							 * Tunnel mode carries each source packet as-is. There is
-							 * no single rewritten DES-side BPP when VC0-3 run
-							 * concurrently, so each Orin mode uses its own
-							 * csi_pixel_bit_depth:
-							 *   16-bit modes: 8,000,000,000 / 16 = 500,000,000 Hz
-							 *   8-bit modes:  8,000,000,000 /  8 = 1,000,000,000 Hz
-							 *
-							 * Aggregate bandwidth closure is still checked against
-							 * the shared 4-lane physical link and the 6Gbps GMSL2
-							 * forward link; pix_clk_hz here is the per-mode parser
-							 * clock NVIDIA uses for VI/NVCSI bandwidth setup.
-							 */
-							mode0 {
-								pixel_t = "yuv_uyvy16";
-								num_lanes = "4";
-								csi_pixel_bit_depth = "16";
-								active_w = "1280";
-								active_h = "720";
-								tegra_sinterface = "serial_c";
-								phy_mode = "DPHY";
-								discontinuous_clk = "no";
-								cil_settletime = "0";
-								deskew_initial_enable = "true";
-								deskew_periodic_enable = "true";
-								mclk_khz = "24000";
-								pix_clk_hz = "500000000";
-								serdes_pix_clk_hz = "500000000";
-								line_length = "1280";
-								embedded_metadata_height = "1";
-							};
-
-							gmsl-link {
-								src-csi-port = "a";
-								dst-csi-port = "a";
-								serdes-csi-link = "a";
-								csi-mode = "1x4";
-								st-vc = <0>;
-								vc-id = <0>;
-								num-lanes = <4>;
-							};
-						};
-
-						/*
-						 * D585 RGB stream — VC1
-						 * YUY2, 1920x1080, 30fps
-						 */
-						d5xx_rgb: d5xx@1b {
-							status = "okay";
-							def-addr = <0x10>;
-							reg = <0x1b>;
+							reg = <0x1d>;
 							override_reg = <0x1a>;
 							compatible = "realsense,d5xx";
 							use_sensor_mode_id = "true";
-							cam-type = "RGB";
+							cam-type = "IMU";
 							nvidia,gmsl-ser-device = <&ser_a>;
 							nvidia,gmsl-dser-device = <&dser>;
 
@@ -452,32 +373,30 @@
 
 								port@0 {
 									reg = <0>;
-									d5xx_rgb_out: endpoint {
-										vc-id = <1>;
+									d5xx_imu_out: endpoint {
+										vc-id = <3>;
 										port-index = <2>;
 										bus-width = <4>;
-										remote-endpoint = <&d5xx_csi_in1>;
+										remote-endpoint = <&d5xx_csi_in3>;
 									};
 								};
 							};
 
 							mode0 {
-								pixel_t = "yuv_yuyv16";
+								pixel_t = "grey_y8";
 								num_lanes = "4";
-								csi_pixel_bit_depth = "16";
-								active_w = "1920";
-								active_h = "1080";
+								csi_pixel_bit_depth = "8";
+								active_w = "640";
+								active_h = "480";
 								tegra_sinterface = "serial_c";
 								phy_mode = "DPHY";
 								discontinuous_clk = "no";
 								cil_settletime = "0";
-								deskew_initial_enable = "true";
-								deskew_periodic_enable = "true";
 								mclk_khz = "24000";
-								pix_clk_hz = "500000000";
-								serdes_pix_clk_hz = "500000000";
-								line_length = "1920";
-								embedded_metadata_height = "1";
+								pix_clk_hz = "1000000000";
+								serdes_pix_clk_hz = "1000000000";
+								line_length = "640";
+								embedded_metadata_height = "0";
 							};
 
 							gmsl-link {
@@ -485,8 +404,8 @@
 								dst-csi-port = "a";
 								serdes-csi-link = "a";
 								csi-mode = "1x4";
-								st-vc = <1>;
-								vc-id = <1>;
+								st-vc = <3>;
+								vc-id = <3>;
 								num-lanes = <4>;
 							};
 						};
@@ -571,17 +490,17 @@
 						};
 
 						/*
-						 * D585 IMU stream — VC3
-						 * RAW8 logical stream
+						 * D585 RGB stream — VC1
+						 * YUY2, 1920x1080, 30fps
 						 */
-						d5xx_imu: d5xx@1d {
+						d5xx_rgb: d5xx@1b {
 							status = "okay";
 							def-addr = <0x10>;
-							reg = <0x1d>;
+							reg = <0x1b>;
 							override_reg = <0x1a>;
 							compatible = "realsense,d5xx";
 							use_sensor_mode_id = "true";
-							cam-type = "IMU";
+							cam-type = "RGB";
 							nvidia,gmsl-ser-device = <&ser_a>;
 							nvidia,gmsl-dser-device = <&dser>;
 
@@ -591,30 +510,32 @@
 
 								port@0 {
 									reg = <0>;
-									d5xx_imu_out: endpoint {
-										vc-id = <3>;
+									d5xx_rgb_out: endpoint {
+										vc-id = <1>;
 										port-index = <2>;
 										bus-width = <4>;
-										remote-endpoint = <&d5xx_csi_in3>;
+										remote-endpoint = <&d5xx_csi_in1>;
 									};
 								};
 							};
 
 							mode0 {
-								pixel_t = "grey_y8";
+								pixel_t = "yuv_yuyv16";
 								num_lanes = "4";
-								csi_pixel_bit_depth = "8";
-								active_w = "640";
-								active_h = "480";
+								csi_pixel_bit_depth = "16";
+								active_w = "1920";
+								active_h = "1080";
 								tegra_sinterface = "serial_c";
 								phy_mode = "DPHY";
 								discontinuous_clk = "no";
 								cil_settletime = "0";
+								deskew_initial_enable = "true";
+								deskew_periodic_enable = "true";
 								mclk_khz = "24000";
-								pix_clk_hz = "1000000000";
-								serdes_pix_clk_hz = "1000000000";
-								line_length = "640";
-								embedded_metadata_height = "0";
+								pix_clk_hz = "500000000";
+								serdes_pix_clk_hz = "500000000";
+								line_length = "1920";
+								embedded_metadata_height = "1";
 							};
 
 							gmsl-link {
@@ -622,8 +543,87 @@
 								dst-csi-port = "a";
 								serdes-csi-link = "a";
 								csi-mode = "1x4";
-								st-vc = <3>;
-								vc-id = <3>;
+								st-vc = <1>;
+								vc-id = <1>;
+								num-lanes = <4>;
+							};
+						};
+
+						/*
+						 * D585 Depth stream — VC0
+						 * Z16, 1280x720, 60fps
+						 */
+						d5xx_depth: d5xx@1a {
+							status = "okay";
+							def-addr = <0x10>;
+							reg = <0x1a>;
+							compatible = "realsense,d5xx";
+							use_sensor_mode_id = "true";
+							cam-type = "Depth";
+							nvidia,gmsl-ser-device = <&ser_a>;
+							nvidia,gmsl-dser-device = <&dser>;
+
+							ports {
+								#address-cells = <1>;
+								#size-cells = <0>;
+
+								port@0 {
+									reg = <0>;
+									d5xx_depth_out: endpoint {
+										vc-id = <0>;
+										port-index = <2>;
+										bus-width = <4>;
+										remote-endpoint = <&d5xx_csi_in0>;
+									};
+								};
+							};
+
+							/*
+							 * Pixel clock reference for mixed-VC tunnel mode:
+							 *   pix_clk_hz = lane_rate_bps * lane_count / bits_per_pixel
+							 *
+							 * The MAX96724->Orin D-PHY output is configured to
+							 * 2.0Gbps/lane over 4 lanes, so the payload budget is
+							 * 2,000,000,000 * 4 = 8,000,000,000 bits/s.
+							 *
+							 * Tunnel mode carries each source packet as-is. There is
+							 * no single rewritten DES-side BPP when VC0-3 run
+							 * concurrently, so each Orin mode uses its own
+							 * csi_pixel_bit_depth:
+							 *   16-bit modes: 8,000,000,000 / 16 = 500,000,000 Hz
+							 *   8-bit modes:  8,000,000,000 /  8 = 1,000,000,000 Hz
+							 *
+							 * Aggregate bandwidth closure is still checked against
+							 * the shared 4-lane physical link and the 6Gbps GMSL2
+							 * forward link; pix_clk_hz here is the per-mode parser
+							 * clock NVIDIA uses for VI/NVCSI bandwidth setup.
+							 */
+							mode0 {
+								pixel_t = "yuv_uyvy16";
+								num_lanes = "4";
+								csi_pixel_bit_depth = "16";
+								active_w = "1280";
+								active_h = "720";
+								tegra_sinterface = "serial_c";
+								phy_mode = "DPHY";
+								discontinuous_clk = "no";
+								cil_settletime = "0";
+								deskew_initial_enable = "true";
+								deskew_periodic_enable = "true";
+								mclk_khz = "24000";
+								pix_clk_hz = "500000000";
+								serdes_pix_clk_hz = "500000000";
+								line_length = "1280";
+								embedded_metadata_height = "1";
+							};
+
+							gmsl-link {
+								src-csi-port = "a";
+								dst-csi-port = "a";
+								serdes-csi-link = "a";
+								csi-mode = "1x4";
+								st-vc = <0>;
+								vc-id = <0>;
 								num-lanes = <4>;
 							};
 						};
