@@ -428,20 +428,12 @@ int max96717_set_pipe(struct device *dev, int pipe_id,
 {
 	struct max96717 *priv = dev_get_drvdata(dev);
 	int err = 0;
-	u8 bpp;
 
 	if (vc_id >= 8)
 		return -EINVAL;
 
 	mutex_lock(&priv->lock);
 
-	if (priv->pixel_mode) {
-		if (data_type1 == GMSL_CSI_DT_RGB_888)
-			bpp = 24;
-		else
-			bpp = 16;
-		err = max96717_write_reg(dev, MAX96717_VIDEO_TX1_ADDR, bpp);
-	}
 	priv->active_vc_mask |= (u8)BIT(vc_id);
 	mutex_unlock(&priv->lock);
 
