@@ -27,7 +27,7 @@
 							status = "okay";
 							vc-id = <0>;
 							port-index = <0>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out0>;
 						};
 					};
@@ -38,7 +38,7 @@
 							status = "okay";
 							vc-id = <1>;
 							port-index = <0>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out1>;
 						};
 					};
@@ -49,7 +49,7 @@
 							status = "okay";
 							vc-id = <2>;
 							port-index = <0>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out2>;
 						};
 					};
@@ -60,7 +60,7 @@
 							status = "okay";
 							vc-id = <3>;
 							port-index = <0>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out3>;
 						};
 					};
@@ -71,7 +71,7 @@
 							status = "okay";
 							vc-id = <4>;
 							port-index = <0>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out4>;
 						};
 					};
@@ -82,7 +82,7 @@
 							status = "okay";
 							vc-id = <5>;
 							port-index = <0>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out5>;
 						};
 					};
@@ -93,7 +93,7 @@
 							status = "okay";
 							vc-id = <6>;
 							port-index = <0>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out6>;
 						};
 					};
@@ -104,7 +104,7 @@
 							status = "okay";
 							vc-id = <7>;
 							port-index = <0>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out7>;
 						};
 					};
@@ -115,7 +115,7 @@
 							status = "okay";
 							vc-id = <8>;
 							port-index = <0>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out8>;
 						};
 					};
@@ -126,7 +126,7 @@
 							status = "okay";
 							vc-id = <9>;
 							port-index = <0>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out9>;
 						};
 					};
@@ -137,7 +137,7 @@
 							status = "okay";
 							vc-id = <10>;
 							port-index = <0>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out10>;
 						};
 					};
@@ -148,7 +148,7 @@
 							status = "okay";
 							vc-id = <11>;
 							port-index = <0>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out11>;
 						};
 					};
@@ -159,7 +159,7 @@
 							status = "okay";
 							vc-id = <12>;
 							port-index = <0>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out12>;
 						};
 					};
@@ -170,7 +170,7 @@
 							status = "okay";
 							vc-id = <13>;
 							port-index = <0>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out13>;
 						};
 					};
@@ -181,7 +181,7 @@
 							status = "okay";
 							vc-id = <14>;
 							port-index = <0>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out14>;
 						};
 					};
@@ -192,7 +192,7 @@
 							status = "okay";
 							vc-id = <15>;
 							port-index = <0>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out15>;
 						};
 					};
@@ -204,7 +204,7 @@
 							status = "okay";
 							vc-id = <0>;
 							port-index = <4>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out16>;
 						};
 					};
@@ -215,7 +215,7 @@
 							status = "okay";
 							vc-id = <1>;
 							port-index = <4>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out17>;
 						};
 					};
@@ -226,7 +226,7 @@
 							status = "okay";
 							vc-id = <2>;
 							port-index = <4>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out18>;
 						};
 					};
@@ -237,7 +237,7 @@
 							status = "okay";
 							vc-id = <3>;
 							port-index = <4>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out19>;
 						};
 					};
@@ -248,7 +248,7 @@
 							status = "okay";
 							vc-id = <4>;
 							port-index = <4>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out20>;
 						};
 					};
@@ -259,7 +259,7 @@
 							status = "okay";
 							vc-id = <5>;
 							port-index = <4>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out21>;
 						};
 					};
@@ -270,7 +270,7 @@
 							status = "okay";
 							vc-id = <6>;
 							port-index = <4>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out22>;
 						};
 					};
@@ -281,7 +281,7 @@
 							status = "okay";
 							vc-id = <7>;
 							port-index = <4>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out23>;
 						};
 					};
@@ -608,7 +608,7 @@
 									d4xx_csi_in0: endpoint@0 {
 										status = "okay";
 										port-index = <0>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_0_out>;
 									};
 								};
@@ -633,7 +633,7 @@
 									d4xx_csi_in1: endpoint@2 {
 										status = "okay";
 										port-index = <0>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_1_out>;
 									};
 								};
@@ -658,7 +658,7 @@
 									d4xx_csi_in2: endpoint@4 {
 										status = "okay";
 										port-index = <0>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_2_out>;
 									};
 								};
@@ -683,7 +683,7 @@
 									d4xx_csi_in3: endpoint@6 {
 										status = "okay";
 										port-index = <0>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_3_out>;
 									};
 								};
@@ -708,7 +708,7 @@
 									d4xx_csi_in4: endpoint@8 {
 										status = "okay";
 										port-index = <0>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_4_out>;
 									};
 								};
@@ -733,7 +733,7 @@
 									d4xx_csi_in5: endpoint@10 {
 										status = "okay";
 										port-index = <0>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_5_out>;
 									};
 								};
@@ -758,7 +758,7 @@
 									d4xx_csi_in6: endpoint@12 {
 										status = "okay";
 										port-index = <0>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_6_out>;
 									};
 								};
@@ -783,7 +783,7 @@
 									d4xx_csi_in7: endpoint@14 {
 										status = "okay";
 										port-index = <0>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_7_out>;
 									};
 								};
@@ -808,7 +808,7 @@
 									d4xx_csi_in8: endpoint@16 {
 										status = "okay";
 										port-index = <0>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_8_out>;
 									};
 								};
@@ -833,7 +833,7 @@
 									d4xx_csi_in9: endpoint@18 {
 										status = "okay";
 										port-index = <0>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_9_out>;
 									};
 								};
@@ -858,7 +858,7 @@
 									d4xx_csi_in10: endpoint@20 {
 										status = "okay";
 										port-index = <0>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_10_out>;
 									};
 								};
@@ -883,7 +883,7 @@
 									d4xx_csi_in11: endpoint@22 {
 										status = "okay";
 										port-index = <0>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_11_out>;
 									};
 								};
@@ -908,7 +908,7 @@
 									d4xx_csi_in12: endpoint@24 {
 										status = "okay";
 										port-index = <0>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_12_out>;
 									};
 								};
@@ -933,7 +933,7 @@
 									d4xx_csi_in13: endpoint@26 {
 										status = "okay";
 										port-index = <0>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_13_out>;
 									};
 								};
@@ -958,7 +958,7 @@
 									d4xx_csi_in14: endpoint@28 {
 										status = "okay";
 										port-index = <0>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_14_out>;
 									};
 								};
@@ -983,7 +983,7 @@
 									d4xx_csi_in15: endpoint@30 {
 										status = "okay";
 										port-index = <0>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_15_out>;
 									};
 								};
@@ -1009,7 +1009,7 @@
 									d4xx_csi_in16: endpoint@32 {
 										status = "okay";
 										port-index = <4>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_16_out>;
 									};
 								};
@@ -1034,7 +1034,7 @@
 									d4xx_csi_in17: endpoint@34 {
 										status = "okay";
 										port-index = <4>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_17_out>;
 									};
 								};
@@ -1059,7 +1059,7 @@
 									d4xx_csi_in18: endpoint@36 {
 										status = "okay";
 										port-index = <4>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_18_out>;
 									};
 								};
@@ -1084,7 +1084,7 @@
 									d4xx_csi_in19: endpoint@38 {
 										status = "okay";
 										port-index = <4>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_19_out>;
 									};
 								};
@@ -1109,7 +1109,7 @@
 									d4xx_csi_in20: endpoint@40 {
 										status = "okay";
 										port-index = <4>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_20_out>;
 									};
 								};
@@ -1134,7 +1134,7 @@
 									d4xx_csi_in21: endpoint@42 {
 										status = "okay";
 										port-index = <4>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_21_out>;
 									};
 								};
@@ -1159,7 +1159,7 @@
 									d4xx_csi_in22: endpoint@44 {
 										status = "okay";
 										port-index = <4>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_22_out>;
 									};
 								};
@@ -1184,7 +1184,7 @@
 									d4xx_csi_in23: endpoint@46 {
 										status = "okay";
 										port-index = <4>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_23_out>;
 									};
 								};
@@ -1210,6 +1210,8 @@
 						reg = <0x29>;
 						compatible = "maxim,max96712";
 						csi-mode = "2x4";
+						/* 4-lane CSI output towards the Jetson (1100 Mbps/lane). */
+						lane_cnt = <4>;
 						link-mask = <0xf>;
 						channel = "a";
 						force_clk0;
@@ -1273,13 +1275,14 @@
 						};
 						mode0 {
 							pixel_t = "grey_y16";
-							num_lanes = "2";
+							num_lanes = "4";
 							csi_pixel_bit_depth = "16";
 							active_w = "640";
 							active_h = "480";
 							tegra_sinterface = "serial_b";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
+							serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "0";
 						};
@@ -1321,13 +1324,14 @@
 						/* mode0: Y8, mode1: depth D16 */
 						mode0 {
 							pixel_t = "grey_y16";
-							num_lanes = "2";
+							num_lanes = "4";
 							csi_pixel_bit_depth = "16";
 							active_w = "1280";
 							active_h = "720";
 							tegra_sinterface = "serial_b";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
+							serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "1";
 						};
@@ -1368,13 +1372,14 @@
 						};
 						mode0 {
 							pixel_t = "grey_y16";
-							num_lanes = "2";
+							num_lanes = "4";
 							csi_pixel_bit_depth = "16";
 							active_w = "1920";
 							active_h = "1080";
 							tegra_sinterface = "serial_e";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
+							serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "1";
 						};
@@ -1414,13 +1419,14 @@
 						};
 						mode0 {
 							pixel_t = "grey_y16";
-							num_lanes = "2";
+							num_lanes = "4";
 							csi_pixel_bit_depth = "16";
 							active_w = "1280";
 							active_h = "720";
 							tegra_sinterface = "serial_a";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
+							serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "1";
 						};
@@ -1461,13 +1467,14 @@
 						};
 						mode0 {
 							pixel_t = "grey_y16";
-							num_lanes = "2";
+							num_lanes = "4";
 							csi_pixel_bit_depth = "16";
 							active_w = "640";
 							active_h = "480";
 							tegra_sinterface = "serial_b";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
+							serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "0";
 						};
@@ -1509,13 +1516,14 @@
 						/* mode0: Y8, mode1: depth D16 */
 						mode0 {
 							pixel_t = "grey_y16";
-							num_lanes = "2";
+							num_lanes = "4";
 							csi_pixel_bit_depth = "16";
 							active_w = "1280";
 							active_h = "720";
 							tegra_sinterface = "serial_b";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
+							serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "1";
 						};
@@ -1556,13 +1564,14 @@
 						};
 						mode0 {
 							pixel_t = "grey_y16";
-							num_lanes = "2";
+							num_lanes = "4";
 							csi_pixel_bit_depth = "16";
 							active_w = "1920";
 							active_h = "1080";
 							tegra_sinterface = "serial_e";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
+							serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "1";
 						};
@@ -1602,13 +1611,14 @@
 						};
 						mode0 {
 							pixel_t = "grey_y16";
-							num_lanes = "2";
+							num_lanes = "4";
 							csi_pixel_bit_depth = "16";
 							active_w = "1280";
 							active_h = "720";
 							tegra_sinterface = "serial_a";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
+							serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "1";
 						};
@@ -1649,13 +1659,14 @@
 						};
 						mode0 {
 							pixel_t = "grey_y16";
-							num_lanes = "2";
+							num_lanes = "4";
 							csi_pixel_bit_depth = "16";
 							active_w = "640";
 							active_h = "480";
 							tegra_sinterface = "serial_b";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
+							serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "0";
 						};
@@ -1697,13 +1708,14 @@
 						/* mode0: Y8, mode1: depth D16 */
 						mode0 {
 							pixel_t = "grey_y16";
-							num_lanes = "2";
+							num_lanes = "4";
 							csi_pixel_bit_depth = "16";
 							active_w = "1280";
 							active_h = "720";
 							tegra_sinterface = "serial_b";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
+							serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "1";
 						};
@@ -1744,13 +1756,14 @@
 						};
 						mode0 {
 							pixel_t = "grey_y16";
-							num_lanes = "2";
+							num_lanes = "4";
 							csi_pixel_bit_depth = "16";
 							active_w = "1920";
 							active_h = "1080";
 							tegra_sinterface = "serial_e";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
+							serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "1";
 						};
@@ -1790,13 +1803,14 @@
 						};
 						mode0 {
 							pixel_t = "grey_y16";
-							num_lanes = "2";
+							num_lanes = "4";
 							csi_pixel_bit_depth = "16";
 							active_w = "1280";
 							active_h = "720";
 							tegra_sinterface = "serial_a";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
+							serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "1";
 						};
@@ -1837,13 +1851,14 @@
 						};
 						mode0 {
 							pixel_t = "grey_y16";
-							num_lanes = "2";
+							num_lanes = "4";
 							csi_pixel_bit_depth = "16";
 							active_w = "640";
 							active_h = "480";
 							tegra_sinterface = "serial_b";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
+							serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "0";
 						};
@@ -1885,13 +1900,14 @@
 						/* mode0: Y8, mode1: depth D16 */
 						mode0 {
 							pixel_t = "grey_y16";
-							num_lanes = "2";
+							num_lanes = "4";
 							csi_pixel_bit_depth = "16";
 							active_w = "1280";
 							active_h = "720";
 							tegra_sinterface = "serial_b";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
+							serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "1";
 						};
@@ -1932,13 +1948,14 @@
 						};
 						mode0 {
 							pixel_t = "grey_y16";
-							num_lanes = "2";
+							num_lanes = "4";
 							csi_pixel_bit_depth = "16";
 							active_w = "1920";
 							active_h = "1080";
 							tegra_sinterface = "serial_e";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
+							serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "1";
 						};
@@ -1978,13 +1995,14 @@
 						};
 						mode0 {
 							pixel_t = "grey_y16";
-							num_lanes = "2";
+							num_lanes = "4";
 							csi_pixel_bit_depth = "16";
 							active_w = "1280";
 							active_h = "720";
 							tegra_sinterface = "serial_a";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
+							serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "1";
 						};
@@ -2009,6 +2027,8 @@
 						reg = <0x29>;
 						compatible = "maxim,max96712";
 						csi-mode = "2x4";
+						/* 4-lane CSI output towards the Jetson (1100 Mbps/lane). */
+						lane_cnt = <4>;
 						link-mask = <0x3>;
 						channel = "b";
 						force_clk0;
@@ -2056,13 +2076,14 @@
 						};
 						mode0 {
 							pixel_t = "grey_y16";
-							num_lanes = "2";
+							num_lanes = "4";
 							csi_pixel_bit_depth = "16";
 							active_w = "640";
 							active_h = "480";
 							tegra_sinterface = "serial_b";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
+							serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "0";
 						};
@@ -2104,13 +2125,14 @@
 						/* mode0: Y8, mode1: depth D16 */
 						mode0 {
 							pixel_t = "grey_y16";
-							num_lanes = "2";
+							num_lanes = "4";
 							csi_pixel_bit_depth = "16";
 							active_w = "1280";
 							active_h = "720";
 							tegra_sinterface = "serial_b";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
+							serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "1";
 						};
@@ -2151,13 +2173,14 @@
 						};
 						mode0 {
 							pixel_t = "grey_y16";
-							num_lanes = "2";
+							num_lanes = "4";
 							csi_pixel_bit_depth = "16";
 							active_w = "1920";
 							active_h = "1080";
 							tegra_sinterface = "serial_e";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
+							serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "1";
 						};
@@ -2197,13 +2220,14 @@
 						};
 						mode0 {
 							pixel_t = "grey_y16";
-							num_lanes = "2";
+							num_lanes = "4";
 							csi_pixel_bit_depth = "16";
 							active_w = "1280";
 							active_h = "720";
 							tegra_sinterface = "serial_a";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
+							serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "1";
 						};
@@ -2244,13 +2268,14 @@
 						};
 						mode0 {
 							pixel_t = "grey_y16";
-							num_lanes = "2";
+							num_lanes = "4";
 							csi_pixel_bit_depth = "16";
 							active_w = "640";
 							active_h = "480";
 							tegra_sinterface = "serial_b";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
+							serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "0";
 						};
@@ -2292,13 +2317,14 @@
 						/* mode0: Y8, mode1: depth D16 */
 						mode0 {
 							pixel_t = "grey_y16";
-							num_lanes = "2";
+							num_lanes = "4";
 							csi_pixel_bit_depth = "16";
 							active_w = "1280";
 							active_h = "720";
 							tegra_sinterface = "serial_b";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
+							serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "1";
 						};
@@ -2339,13 +2365,14 @@
 						};
 						mode0 {
 							pixel_t = "grey_y16";
-							num_lanes = "2";
+							num_lanes = "4";
 							csi_pixel_bit_depth = "16";
 							active_w = "1920";
 							active_h = "1080";
 							tegra_sinterface = "serial_e";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
+							serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "1";
 						};
@@ -2385,13 +2412,14 @@
 						};
 						mode0 {
 							pixel_t = "grey_y16";
-							num_lanes = "2";
+							num_lanes = "4";
 							csi_pixel_bit_depth = "16";
 							active_w = "1280";
 							active_h = "720";
 							tegra_sinterface = "serial_a";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
+							serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "1";
 						};
