@@ -3873,6 +3873,18 @@ static const struct v4l2_ctrl_config ds5_ctrl_manual_laser_power = {
 	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 };
 
+static const struct v4l2_ctrl_config ds5_ctrl_manual_laser_power_d58x = {
+	.ops = &ds5_ctrl_ops,
+	.id = DS5_CAMERA_CID_MANUAL_LASER_POWER,
+	.name = "Manual laser power",
+	.type = V4L2_CTRL_TYPE_INTEGER,
+	.min = 0,
+	.max = 540,
+	.step = 45,
+	.def = 225,
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
 static const struct v4l2_ctrl_config ds5_ctrl_fw_version = {
 	.ops = &ds5_ctrl_ops,
 	.id = DS5_CAMERA_CID_FW_VERSION,
@@ -4913,21 +4925,16 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 	}
 
 	if (sid == DEPTH_SID || sid == IR_SID) {
-		struct v4l2_ctrl_config manual_laser_power_config =
-			ds5_ctrl_manual_laser_power;
-
-		if (is_d58x) {
-			manual_laser_power_config.max = 540;
-			manual_laser_power_config.step = 45;
-			manual_laser_power_config.def = 225;
-		}
-
 		ctrls->laser_power = v4l2_ctrl_new_custom(hdl,
-						&ds5_ctrl_laser_power,
-						sensor);
-		ctrls->manual_laser_power = v4l2_ctrl_new_custom(hdl,
-						&manual_laser_power_config,
-						sensor);
+							&ds5_ctrl_laser_power,
+							sensor);
+		if (is_d58x) {
+			ctrls->manual_laser_power = v4l2_ctrl_new_custom(hdl,
+					&ds5_ctrl_manual_laser_power_d58x, sensor);
+		} else {
+			ctrls->manual_laser_power = v4l2_ctrl_new_custom(hdl,
+					&ds5_ctrl_manual_laser_power, sensor);
+		}
 	}
 
 	/* Total gain */
