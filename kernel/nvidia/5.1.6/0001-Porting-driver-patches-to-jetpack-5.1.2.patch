@@ -1151,10 +1151,7 @@ diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/p
 index b54833d3f..042a80e51 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
 +++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-@@ -397,9 +397,16 @@ static void vi5_setup_surface(struct tegra_channel *chan,
- 	if (chan->valid_ports > NVCSI_STREAM_1) {
- 		height = chan->gang_height;
- 		width = chan->gang_width;
+@@ -400,6 +400,13 @@ static void vi5_setup_surface(struct tegra_channel *chan,
  		offset = buf->addr + chan->buffer_offset[1 - vi_port];
  	}
  

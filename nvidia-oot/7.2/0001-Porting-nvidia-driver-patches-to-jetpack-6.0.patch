@@ -969,10 +969,7 @@ diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/p
 index 69d76521..e23df865 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
 +++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-@@ -416,9 +416,16 @@ static void vi5_setup_surface(struct tegra_channel *chan,
- 							   &offset)) {
- 			dev_err(chan->vi->dev, "%s: Buf addr overflow\n", __func__);
- 			return;
+@@ -419,6 +419,13 @@ static void vi5_setup_surface(struct tegra_channel *chan,
  		}
  	}
  
