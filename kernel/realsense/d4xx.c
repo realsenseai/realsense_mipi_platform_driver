@@ -1018,6 +1018,8 @@ static const u16 ds5_framerate_15_30[] = {15, 30};
 static const u16 ds5_framerate_15_60[] = {15, 30, 60};
 static const u16 ds5_framerate_15_90[] = {15, 30, 60, 90};
 static const u16 ds5_imu_framerates[] = {50, 100, 200, 400};
+/* D58x carries accel and gyro on one CSI node; expose their USB-rate union. */
+static const u16 d58x_imu_framerates[] = {100, 200, 400};
 static const u16 ds5_framerate_90[] = {90};
 static const u16 ds5_framerate_100[] = {100};
 
@@ -1391,6 +1393,15 @@ static const struct ds5_resolution ds5_size_imu_extended[] = {
 	},
 };
 
+static const struct ds5_resolution d58x_size_imu_extended_tunnel_mode[] = {
+	{
+	.width = 38,
+	.height = 1,
+	.framerates = d58x_imu_framerates,
+	.n_framerates = ARRAY_SIZE(d58x_imu_framerates),
+	},
+};
+
 /* D58x behind a PIXEL-mode serdes (d58x_pixel_mode): the 38-byte extended
  * IMU record is zero-padded to a wider wire slot (256) to meet GMSL2
  * pixel-mode minimum sync spacing when sharing the serdes pipe with video. */
@@ -1398,8 +1409,8 @@ static const struct ds5_resolution ds5_size_imu_extended_d58x_pixel_mode[] = {
 	{
 	.width = 256,
 	.height = 1,
-	.framerates = ds5_imu_framerates,
-	.n_framerates = ARRAY_SIZE(ds5_imu_framerates),
+	.framerates = d58x_imu_framerates,
+	.n_framerates = ARRAY_SIZE(d58x_imu_framerates),
 	},
 };
 
@@ -1577,7 +1588,6 @@ static const struct ds5_resolution d58x_depth_sizes[] = {
 	DS5_RES(640, 360, ds5_framerate_to_90)
 	DS5_RES(1280, 960, ds5_framerate_to_60)
 	DS5_RES(1280, 720, ds5_framerate_to_60)
-	DS5_RES(896, 504, ds5_framerate_to_60)
 	DS5_RES(848, 480, ds5_framerate_to_60)
 	DS5_RES(640, 480, ds5_framerate_to_90)
 	DS5_RES(480, 270, ds5_framerate_to_90)
@@ -1588,7 +1598,6 @@ static const struct ds5_resolution d58x_y8_sizes[] = {
 	DS5_RES(640, 360, ds5_framerate_to_90)
 	DS5_RES(1280, 960, ds5_framerate_to_60)
 	DS5_RES(1280, 720, ds5_framerate_to_60)
-	DS5_RES(896, 504, ds5_framerate_to_60)
 	DS5_RES(848, 480, ds5_framerate_to_60)
 	DS5_RES(640, 480, ds5_framerate_to_90)
 	DS5_RES(480, 270, ds5_framerate_to_90)
@@ -1603,7 +1612,6 @@ static const struct ds5_resolution d58x_rgb_sizes[] = {
 	DS5_RES(640, 360, ds5_framerate_to_90)
 	DS5_RES(1280, 960, ds5_framerate_to_60)
 	DS5_RES(1280, 720, ds5_framerate_to_60)
-	DS5_RES(896, 504, ds5_framerate_to_60)
 	DS5_RES(848, 480, ds5_framerate_to_60)
 	DS5_RES(640, 480, ds5_framerate_to_90)
 	DS5_RES(480, 270, ds5_framerate_to_90)
@@ -1676,6 +1684,16 @@ static const struct ds5_format ds5_imu_formats_extended[] = {
 		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
 		.n_resolutions = ARRAY_SIZE(ds5_size_imu_extended),
 		.resolutions = ds5_size_imu_extended,
+	},
+};
+
+static const struct ds5_format d58x_imu_formats_extended_tunnel_mode[] = {
+	{
+		/* First format: default */
+		.data_type = GMSL_CSI_DT_RAW_8,	/* IMU DT */
+		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
+		.n_resolutions = ARRAY_SIZE(d58x_size_imu_extended_tunnel_mode),
+		.resolutions = d58x_size_imu_extended_tunnel_mode,
 	},
 };
 
@@ -6402,7 +6420,7 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 		if (state->d58x_pixel_mode)
 			sensor->formats = ds5_imu_formats_extended_d58x_pixel_mode;
 		else
-			sensor->formats = ds5_imu_formats_extended;
+			sensor->formats = d58x_imu_formats_extended_tunnel_mode;
 	} else if (state->fw_version >= 0x510)
 		sensor->formats = ds5_imu_formats_extended;
 	else
