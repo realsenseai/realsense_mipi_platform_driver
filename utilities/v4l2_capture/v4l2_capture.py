@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Shared pure-Python V4L2 MMAP capture core for the D4XX CSI capture tools.
 
-depth_capture.py, ir_capture.py and nv12_capture.py all drive the V4L2 MMAP
+depth_capture.py, ir_capture.py and color_capture.py all drive the V4L2 MMAP
 pipeline identically -- the only per-stream differences are the pixel format
 requested and how the captured frame is decoded for display. That common core
 (the ioctl encoding, the V4L2 ctypes structs, the VIDIOC constants, the
@@ -98,6 +98,17 @@ def capture(dev, W, H, pixfmt, nframes, save_idx, raw_out):
         bpl, size = f.fmt.pix.bytesperline, f.fmt.pix.sizeimage
         print("fmt %ux%u fourcc=%s bpl=%u size=%u"
               % (W, H, fourcc_str(f.fmt.pix.pixelformat), bpl, size))
+        # VIDIOC_S_FMT does NOT fail on an unsupported pixel format: the driver
+        # silently substitutes one it does support. Every caller then decodes
+        # the buffer as the format it asked for, which renders pure garbage.
+        # Fail loudly instead -- a wrong image is far more expensive to debug.
+        got = f.fmt.pix.pixelformat
+        if got != pixfmt:
+            raise SystemExit(
+                "requested %s but the driver negotiated %s on %s -- this node does not "
+                "support %s.\nCheck 'v4l2-ctl -d %s --list-formats' (do not pipe it "
+                "through head; the format you want may be the last entry)."
+                % (fourcc_str(pixfmt), fourcc_str(got), dev, fourcc_str(pixfmt), dev))
 
         rb = v4l2_requestbuffers(); rb.count = 4
         rb.type = BUF_TYPE_VIDEO_CAPTURE; rb.memory = MEMORY_MMAP

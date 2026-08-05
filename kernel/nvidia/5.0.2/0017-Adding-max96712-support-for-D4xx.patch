@@ -7,11 +7,11 @@ Add MAX96712 deserializer driver support for D4XX cameras.
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- drivers/media/i2c/max96712.c | 881 ++++++++++++++++++++++++++++++++++++++++++-
- 1 file changed, 878 insertions(+), 3 deletions(-)
+ drivers/media/i2c/max96712.c | 911 ++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 908 insertions(+), 3 deletions(-)
 
 diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
-index 8081385f0..17ddaf4e7 100644
+index 8081385f0..aaa115696 100644
 --- a/drivers/media/i2c/max96712.c
 +++ b/drivers/media/i2c/max96712.c
 @@ -21,18 +21,148 @@
@@ -350,7 +350,7 @@ index 8081385f0..17ddaf4e7 100644
  		i2c_unregister_device(client);
  		client = NULL;
  	}
-@@ -252,13 +506,633 @@ max96712_remove(struct i2c_client *client)
+@@ -252,13 +506,663 @@ max96712_remove(struct i2c_client *client)
  	return 0;
  }
  
@@ -810,6 +810,34 @@ index 8081385f0..17ddaf4e7 100644
 +	return err;
 +}
 +
++/* Update mapping table entries that can change in runtime */
++static int __max96712_update_multi_vc_pipe(struct device *dev, int pipe_id, u32 vc_id, u8 data_type1)
++{
++	int err = 0;
++
++	/* Currently override only needed for RGB to switch between regular/calib */
++	if (vc_id == 1) {
++		struct max96712 *priv = dev_get_drvdata(dev);
++		uint32_t map_pipe_offs = 0x40 * pipe_id;
++
++		struct reg_pair map_pipe_control[] = {
++			// Update vc_id 1 formats (RGB)
++			{MAX96712_MIPI_TX21_SRC_4_MAP_ADDR + map_pipe_offs, (vc_id << 6) | data_type1},
++			{MAX96712_MIPI_TX22_DST_4_MAP_ADDR + map_pipe_offs, (vc_id << 6) | data_type1},
++		};
++		dev_dbg(dev, "%s: Updating vc_id %u on pipe %u to data type 0x%x\n",
++				__func__, vc_id, pipe_id, data_type1);
++		err |= max96712_set_registers(priv, map_pipe_control,
++						ARRAY_SIZE(map_pipe_control));
++	
++		if (err) {
++			return err;
++		}
++	}
++
++	return err;
++}
++
 +int max96712_set_pipe(struct device *dev, int pipe_id,
 +		     u8 data_type1, u8 data_type2, u32 vc_id)
 +{
@@ -838,6 +866,8 @@ index 8081385f0..17ddaf4e7 100644
 +			if (!err)
 +				priv->multi_vc_configured[pipe_id] = true;
 +		}
++		if (!err)
++			err = __max96712_update_multi_vc_pipe(dev, pipe_id, vc_id, data_type1);
 +	} else {
 +		err = __max96712_set_pipe(dev, pipe_id, data_type1, data_type2, vc_id);
 +	}
@@ -985,7 +1015,7 @@ index 8081385f0..17ddaf4e7 100644
  	{ },
  };
  
-@@ -268,6 +1142,7 @@ static struct i2c_driver max96712_i2c_driver = {
+@@ -268,6 +1172,7 @@ static struct i2c_driver max96712_i2c_driver = {
  	.driver = {
  		.name = "max96712",
  		.owner = THIS_MODULE,

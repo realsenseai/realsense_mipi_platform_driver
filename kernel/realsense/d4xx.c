@@ -1644,13 +1644,24 @@ static const struct ds5_format ds5_y_formats_d58x[] = {
 	},
 };
 
-static const struct ds5_format ds5_d58x_rgb_format = {
-	.data_type = GMSL_CSI_DT_YUV422_8,	/* UYVY */
-	.mbus_code = MEDIA_BUS_FMT_YUYV8_1X16,
-	.n_resolutions = ARRAY_SIZE(d58x_rgb_sizes),
-	.resolutions = d58x_rgb_sizes,
+static const struct ds5_format ds5_rgb_formats_d58x[] = {
+	{
+		/* First format: default */
+		.data_type = GMSL_CSI_DT_YUV422_8,	/* UYVY */
+		.mbus_code = MEDIA_BUS_FMT_YUYV8_1X16,
+		.n_resolutions = ARRAY_SIZE(d58x_rgb_sizes),
+		.resolutions = d58x_rgb_sizes,
+	}, {
+		/* RGB calibration: unpacked GRBG10, one little-endian
+		 * 10-bit sample per 16-bit container, 2 bytes/pixel.
+		 */
+		.data_type = GMSL_CSI_DT_RAW_16,
+		.mbus_code = MEDIA_BUS_FMT_SGRBG16_1X16,
+		.n_resolutions = ARRAY_SIZE(d58x_calibration_sizes),
+		.resolutions = d58x_calibration_sizes,
+	},
 };
-#define DS5_D58X_RGB_N_FORMATS 1
+#define DS5_D58X_RGB_N_FORMATS 2
 
 static const struct ds5_variant ds5_variants[] = {
 	[DS5_DS5U] = {
@@ -6374,7 +6385,7 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
 		break;
 	case DS5_DEVICE_TYPE_D58X:
-		sensor->formats = &ds5_d58x_rgb_format;
+		sensor->formats = ds5_rgb_formats_d58x;
 		sensor->n_formats = DS5_D58X_RGB_N_FORMATS;
 		break;
 	default:
