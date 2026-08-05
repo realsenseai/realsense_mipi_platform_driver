@@ -1386,7 +1386,7 @@ index 7ee3a6223..0c6d0ae88 100644
  	TEGRA_VIDEO_FORMAT(YUV422, 16, UYVY8_2X8, 2, 1, T_U8_Y8__V8_Y8,
  				YUV422_8, UYVY, "YUV 4:2:2 UYVY"),
  	TEGRA_VIDEO_FORMAT(YUV422, 16, VYUY8_2X8, 2, 1, T_V8_Y8__U8_Y8,
-@@ -141,6 +143,20 @@ static const struct tegra_video_format vi5_video_formats[] = {
+@@ -141,6 +143,22 @@ static const struct tegra_video_format vi5_video_formats[] = {
  				YUV422_8, YUYV, "YUV 4:2:2 YUYV"),
  	TEGRA_VIDEO_FORMAT(YUV422, 16, YVYU8_2X8, 2, 1, T_Y8_V8__Y8_U8,
  				YUV422_8, YVYU, "YUV 4:2:2 YVYU"),
@@ -1403,6 +1403,8 @@ index 7ee3a6223..0c6d0ae88 100644
 +				RGB888, Y12I, "Y12I 24"),
 +	TEGRA_VIDEO_FORMAT(RAW16, 16, ARGB8888_1X32, 4, 1, T_R16,
 +				RAW16, Y16I, "Y16I 32"),
++	TEGRA_VIDEO_FORMAT(RAW16, 16, SGRBG16_1X16, 2, 1, T_R16,
++				RAW16, RW16, "RW16 16"),
 +
  };
  
