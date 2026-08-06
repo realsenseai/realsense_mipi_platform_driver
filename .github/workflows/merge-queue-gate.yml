@@ -84,16 +84,19 @@ jobs:
           echo "Build: $BUILD_URL"
           echo "BUILD_URL=$BUILD_URL" >> "$GITHUB_ENV"
 
-          # Label the Jenkins build with every PR this batch is testing (like GHPRB shows one
-          # PR per build), so the job page makes clear which PRs the merge queue is checking.
-          # With ALLGREEN grouping, one merge-group commit cumulatively includes all queue
-          # entries from position 1 up to this entry's own position - not just the PR named
-          # in the merge_group head_ref (which only ever names the entry that triggered this
-          # particular check). Query the live merge queue to find that position and collect
-          # every PR at or ahead of it. Best-effort: needs Jenkins Run/Update permission,
-          # which not every credential has, and the GraphQL lookup can legitimately miss
-          # (e.g. the entry already left the queue) - fall back to the single PR named in
-          # head_ref so the build is still labeled with something.
+          # Label the Jenkins build with every PR actually baked into this exact tested
+          # commit, so the job page makes clear which PRs the merge queue is checking.
+          # Match by exact headCommit.oid equality, NOT queue position: GitHub does not
+          # cumulatively include lower-position entries in a higher-position entry's test
+          # here - each entry gets its own independent head commit containing only its own
+          # PR (confirmed empirically: position-based "everyone at or ahead of me" inclusion
+          # mislabeled solo builds as multi-PR batches, e.g. build #3101 tested ONLY #459's
+          # commit but got labeled "PR#548, PR#459" because #548 still occupied a lower
+          # queue position at query time). If GitHub ever does combine multiple entries into
+          # one shared head commit, they will share the same oid and this still finds all of
+          # them correctly. Best-effort: needs Jenkins Run/Update permission, which not every
+          # credential has, and the GraphQL lookup can legitimately miss (e.g. the entry
+          # already left the queue) - fall back to the single PR named in head_ref.
           BASE_BRANCH=$(printf '%s' "$HEAD_REF" | sed -E 's#^refs/heads/gh-readonly-queue/([^/]+)/.*#\1#')
           IFS='/' read -r REPO_OWNER REPO_NAME <<< "$REPO"
           GQL_QUERY='query($owner:String!,$name:String!,$branch:String!){repository(owner:$owner,name:$name){mergeQueue(branch:$branch){entries(first:50){nodes{position headCommit{oid} pullRequest{number}}}}}}'
@@ -102,13 +105,8 @@ jobs:
           ENTRIES=$(curl -s --max-time 20 -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/json" \
             -d "$GQL_BODY" "https://api.github.com/graphql" | jq -c '.data.repository.mergeQueue.entries.nodes // []' 2>/dev/null || echo '[]')
 
-          MY_POSITION=$(printf '%s' "$ENTRIES" | jq -r --arg sha "$SHA" '[.[] | select(.headCommit.oid == $sha)][0].position // empty' 2>/dev/null || true)
-          if [ -n "$MY_POSITION" ]; then
-            PR_LIST=$(printf '%s' "$ENTRIES" | jq -r --argjson pos "$MY_POSITION" \
-              '[.[] | select(.position <= $pos)] | sort_by(.position) | map("PR#" + (.pullRequest.number | tostring)) | join(", ")')
-          else
-            PR_LIST=""
-          fi
+          PR_LIST=$(printf '%s' "$ENTRIES" | jq -r --arg sha "$SHA" \
+            '[.[] | select(.headCommit.oid == $sha)] | sort_by(.position) | map("PR#" + (.pullRequest.number | tostring)) | join(", ")' 2>/dev/null || true)
 
           if [ -z "$PR_LIST" ]; then
             # Fallback: just the PR named in the merge-group ref itself.
