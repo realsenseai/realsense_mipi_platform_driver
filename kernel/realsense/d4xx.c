@@ -126,6 +126,33 @@ struct ser_interface {
 #define DS5_DRIVER_NAME_CLASS "d4xx-class"
 #define DS5_DRIVER_NAME_DFU "d4xx-dfu"
 
+static int metadata_override = -1;
+
+static int metadata_override_set(const char *val,
+				 const struct kernel_param *kp)
+{
+	int value;
+	int ret;
+
+	ret = kstrtoint(val, 0, &value);
+	if (ret)
+		return ret;
+	if (value < -1 || value > 1)
+		return -EINVAL;
+
+	return param_set_int(val, kp);
+}
+
+static const struct kernel_param_ops metadata_override_ops = {
+	.set = metadata_override_set,
+	.get = param_get_int,
+};
+
+module_param_cb(metadata_override, &metadata_override_ops,
+		&metadata_override, 0644);
+MODULE_PARM_DESC(metadata_override,
+	"Embedded metadata override: -1=device tree, 0=disabled, 1=enabled");
+
 #define DS5_MIPI_SUPPORT_LINES		0x0300
 #define DS5_MIPI_SUPPORT_PHY		0x0304
 #define DS5_MIPI_DATARATE_MIN		0x0308
@@ -621,6 +648,21 @@ struct ds5 {
 #endif
 	struct ds5_dev *ds5_dev; /* pointer to DS5 device struct */
 };
+
+static void ds5_sync_receiver_metadata_height(struct ds5 *state)
+{
+#ifdef CONFIG_TEGRA_CAMERA_PLATFORM
+	struct sensor_properties *props = &state->mux.sd.sensor_props;
+	int enabled = READ_ONCE(metadata_override);
+	int idx = state->mux.sd.mode_prop_idx;
+
+	if (enabled < 0)
+		enabled = state->metadata_enabled;
+	if (idx >= 0 && (u32)idx < props->num_modes)
+		WRITE_ONCE(props->sensor_modes[idx].image_properties.
+			   embedded_metadata_height, enabled ? 1U : 0U);
+#endif
+}
 
 struct ds5_dev {
 	struct mutex lock;
@@ -2056,9 +2098,11 @@ static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 #endif
 #endif
 
-	else
+	else {
 // FIXME: use this format in .s_stream()
 		sensor->format = *mf;
+		ds5_sync_receiver_metadata_height(state);
+	}
 
 	state->mux.last_set = sensor;
 
@@ -2165,6 +2209,7 @@ static int ds5_configure(struct ds5 *state)
 {
 	struct ds5_sensor *sensor;
 	u16 md_fmt, vc_id;
+	int md_override;
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	u16 data_type1, data_type2;
 	bool is_calib = 0;
@@ -2216,7 +2261,13 @@ static int ds5_configure(struct ds5 *state)
 		return -EINVAL;
 	}
 
-	md_fmt = (state->metadata_enabled) ? GMSL_CSI_DT_EMBED : 0x00;
+	md_override = READ_ONCE(metadata_override);
+	if (md_override == 0)
+		md_fmt = 0x00;
+	else if (md_override == 1)
+		md_fmt = GMSL_CSI_DT_EMBED;
+	else
+		md_fmt = state->metadata_enabled ? GMSL_CSI_DT_EMBED : 0x00;
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	data_type1 = sensor->config.format->data_type;
@@ -2316,7 +2367,10 @@ static int ds5_configure(struct ds5 *state)
 	}
 
 	md_value = (vc_id << 8) | md_fmt;
-	if (sensor->cached_md_value != md_value) {
+	/* An HKR restart resets STREAM_MD without changing the host driver's
+	 * cache.  A requested runtime override must therefore reach the device
+	 * even when the cached value happens to match it. */
+	if (md_override >= 0 || sensor->cached_md_value != md_value) {
 		ret = ds5_write(state, md_addr, md_value);
 		if (ret < 0)
 			return ret;
