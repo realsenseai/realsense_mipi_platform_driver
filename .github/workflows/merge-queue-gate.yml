@@ -84,16 +84,42 @@ jobs:
           echo "Build: $BUILD_URL"
           echo "BUILD_URL=$BUILD_URL" >> "$GITHUB_ENV"
 
-          # Label the Jenkins build with the PR it belongs to (like GHPRB), so the job page shows it.
-          # PR number comes from the merge_group head_ref, e.g. gh-readonly-queue/master/pr-173-<sha>.
-          # Best-effort: needs Jenkins Run/Update permission, which not every credential has.
-          PR_NUM=$(printf '%s' "$HEAD_REF" | grep -oiE 'pr-[0-9]+' | grep -oE '[0-9]+' | head -1 || true)
-          if [ -n "$PR_NUM" ]; then
-            PR_TITLE=$(curl -s --max-time 20 -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/$REPO/pulls/$PR_NUM" | jq -r '.title // empty' 2>/dev/null || true)
+          # Label the Jenkins build with every PR this batch is testing (like GHPRB shows one
+          # PR per build), so the job page makes clear which PRs the merge queue is checking.
+          # With ALLGREEN grouping, one merge-group commit cumulatively includes all queue
+          # entries from position 1 up to this entry's own position - not just the PR named
+          # in the merge_group head_ref (which only ever names the entry that triggered this
+          # particular check). Query the live merge queue to find that position and collect
+          # every PR at or ahead of it. Best-effort: needs Jenkins Run/Update permission,
+          # which not every credential has, and the GraphQL lookup can legitimately miss
+          # (e.g. the entry already left the queue) - fall back to the single PR named in
+          # head_ref so the build is still labeled with something.
+          BASE_BRANCH=$(printf '%s' "$HEAD_REF" | sed -E 's#^refs/heads/gh-readonly-queue/([^/]+)/.*#\1#')
+          IFS='/' read -r REPO_OWNER REPO_NAME <<< "$REPO"
+          GQL_QUERY='query($owner:String!,$name:String!,$branch:String!){repository(owner:$owner,name:$name){mergeQueue(branch:$branch){entries(first:50){nodes{position headCommit{oid} pullRequest{number}}}}}}'
+          GQL_BODY=$(jq -n --arg q "$GQL_QUERY" --arg owner "$REPO_OWNER" --arg name "$REPO_NAME" --arg branch "$BASE_BRANCH" \
+            '{query:$q, variables:{owner:$owner,name:$name,branch:$branch}}')
+          ENTRIES=$(curl -s --max-time 20 -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/json" \
+            -d "$GQL_BODY" "https://api.github.com/graphql" | jq -c '.data.repository.mergeQueue.entries.nodes // []' 2>/dev/null || echo '[]')
+
+          MY_POSITION=$(printf '%s' "$ENTRIES" | jq -r --arg sha "$SHA" '[.[] | select(.headCommit.oid == $sha)][0].position // empty' 2>/dev/null || true)
+          if [ -n "$MY_POSITION" ]; then
+            PR_LIST=$(printf '%s' "$ENTRIES" | jq -r --argjson pos "$MY_POSITION" \
+              '[.[] | select(.position <= $pos)] | sort_by(.position) | map("PR#" + (.pullRequest.number | tostring)) | join(", ")')
+          else
+            PR_LIST=""
+          fi
+
+          if [ -z "$PR_LIST" ]; then
+            # Fallback: just the PR named in the merge-group ref itself.
+            PR_NUM=$(printf '%s' "$HEAD_REF" | grep -oiE 'pr-[0-9]+' | grep -oE '[0-9]+' | head -1 || true)
+            [ -n "$PR_NUM" ] && PR_LIST="PR#${PR_NUM}"
+          fi
+
+          if [ -n "$PR_LIST" ]; then
             curl -s --max-time 20 -u "$AUTH" -X POST "${BUILD_URL%/}/submitDescription" \
-              --data-urlencode "description=PR #${PR_NUM}: ${PR_TITLE} (merge queue)" -o /dev/null || true
-            echo "Set Jenkins build description for PR #$PR_NUM"
+              --data-urlencode "description=Merge Queue: ${PR_LIST}" -o /dev/null || true
+            echo "Set Jenkins build description: Merge Queue: ${PR_LIST}"
           fi
 
           # Poll to completion (up to ~3h at 15s cadence)
