@@ -5018,9 +5018,14 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 						V4L2_CID_ANALOGUE_GAIN,
 						16, 248, 1, 16);
 	} else if (sid == RGB_SID) {
-		ctrls->gain = v4l2_ctrl_new_std(hdl, ops,
-						V4L2_CID_ANALOGUE_GAIN,
-						0, 128, 1, 64);
+		if (is_d58x)
+			ctrls->gain = v4l2_ctrl_new_std(hdl, ops,
+							V4L2_CID_ANALOGUE_GAIN,
+							16, 248, 1, 16);
+		else
+			ctrls->gain = v4l2_ctrl_new_std(hdl, ops,
+							V4L2_CID_ANALOGUE_GAIN,
+							0, 128, 1, 64);
 	}
 
 	if ((ctrls->gain) && (sid >= DEPTH_SID && sid < IMU_SID)) {
