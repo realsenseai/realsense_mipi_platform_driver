@@ -1,0 +1,86 @@
+From 5bf0ae88273e963dac1fa2fc9f08deea64d0d1cf Mon Sep 17 00:00:00 2001
+From: zhou <shengyong.zhou@realsenseai.com>
+Date: Wed, 5 Aug 2026 20:35:31 +0800
+Subject: [PATCH] media: tegra: keep VI5 kthread task references alive
+
+The VI5 dequeue worker can return after fatal capture recovery failure.
+Keep an owned task reference until stream-off so kthread_stop() never
+receives a stale task pointer.
+
+Signed-off-by: zhou <shengyong.zhou@realsenseai.com>
+---
+ .../media/platform/tegra/camera/vi/vi5_fops.c   | 17 +++++++++++++++--
+ 1 file changed, 15 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+index cd7083c26..ecbab54fa 100644
+--- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
++++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+@@ -12,6 +12,7 @@
+ 
+ #include <linux/freezer.h>
+ #include <linux/kthread.h>
++#include <linux/sched/task.h>
+ #include <linux/nvhost.h>
+ #include <linux/semaphore.h>
+ #include <linux/version.h>
+@@ -868,14 +869,18 @@ static int vi5_channel_start_kthreads(struct tegra_channel *chan)
+ 		err = -1;
+ 		goto done;
+ 	}
+-	chan->kthread_capture_start = kthread_run(
++	chan->kthread_capture_start = kthread_create(
+ 		tegra_channel_kthread_capture_enqueue, chan, chan->video->name);
+ 	if (IS_ERR(chan->kthread_capture_start)) {
+ 		dev_err(&chan->video->dev,
+ 			"failed to run kthread for capture enqueue\n");
+ 		err = PTR_ERR(chan->kthread_capture_start);
++		chan->kthread_capture_start = NULL;
+ 		goto done;
+ 	}
++	/* Keep the task valid if the worker exits before stream-off. */
++	get_task_struct(chan->kthread_capture_start);
++	wake_up_process(chan->kthread_capture_start);
+ 
+ 	/* Start the kthread for capture dequeue */
+ 	if (chan->kthread_capture_dequeue) {
+@@ -883,14 +888,20 @@ static int vi5_channel_start_kthreads(struct tegra_channel *chan)
+ 		err = -1;
+ 		goto done;
+ 	}
+-	chan->kthread_capture_dequeue = kthread_run(
++	chan->kthread_capture_dequeue = kthread_create(
+ 		tegra_channel_kthread_capture_dequeue, chan, chan->video->name);
+ 	if (IS_ERR(chan->kthread_capture_dequeue)) {
+ 		dev_err(&chan->video->dev,
+ 			"failed to run kthread for capture dequeue\n");
+ 		err = PTR_ERR(chan->kthread_capture_dequeue);
++		chan->kthread_capture_dequeue = NULL;
++		kthread_stop(chan->kthread_capture_start);
++		put_task_struct(chan->kthread_capture_start);
++		chan->kthread_capture_start = NULL;
+ 		goto done;
+ 	}
++	get_task_struct(chan->kthread_capture_dequeue);
++	wake_up_process(chan->kthread_capture_dequeue);
+ 
+ done:
+ 	return err;
+@@ -903,12 +914,14 @@ static void vi5_channel_stop_kthreads(struct tegra_channel *chan)
+ 	/* Stop the kthread for capture enqueue */
+ 	if (chan->kthread_capture_start) {
+ 		kthread_stop(chan->kthread_capture_start);
++		put_task_struct(chan->kthread_capture_start);
+ 		chan->kthread_capture_start = NULL;
+ 	}
+ 
+ 	/* Stop the kthread for capture dequeue */
+ 	if (chan->kthread_capture_dequeue) {
+ 		kthread_stop(chan->kthread_capture_dequeue);
++		put_task_struct(chan->kthread_capture_dequeue);
+ 		chan->kthread_capture_dequeue = NULL;
+ 	}
+ 
+-- 
+2.34.1
+

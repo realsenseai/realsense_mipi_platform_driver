@@ -164,6 +164,9 @@ Each MIPI segment's lane count comes from a **different** DT property, so the ca
 
 ## Concurrency notes
 
+- A stored kthread pointer whose worker may return before teardown must own an
+  extra task reference. Acquire it before waking the new task, release it after
+  `kthread_stop()`, and clear the stored pointer on creation failure and after stop.
 - In SERDES builds, hold `serdes_lock__` while scanning or assigning global topology slots (`ds5_inited[]`, `dser_inited[]`).
 - Protect per-camera mutable slot state (`ds5_primary`, `depth/rgb/ir/imu_streaming`) with `struct ds5_dev::lock`.
 - Protect per-deserializer slot assignment (`dser_dev`) with `struct dser_control::lock`.
