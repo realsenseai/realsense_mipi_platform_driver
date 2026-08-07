@@ -393,6 +393,15 @@ int max96717_init_settings(struct device *dev)
 		{MAX96717_GPIO8_B_ADDR, MAX96717_GPIO_B_NO_PULL},
 	};
 
+	/*
+	 * Raise the camera-side I2C master to Fast-mode Plus (980 kbps):
+	 * 0x40 SLV_SH=0b00/SLV_TO=0b001, 0x41 MST_BT=0b111/MST_TO=0b001.
+	 */
+	struct reg_pair i2c_fast_plus[] = {
+		{0x0040, 0x09},
+		{0x0041, 0x71},
+	};
+
 	mutex_lock(&priv->lock);
 
 	/* Fresh link bring-up: no pipe is streaming yet. Clearing this here
@@ -402,6 +411,9 @@ int max96717_init_settings(struct device *dev)
 
 	err |= max96717_set_registers(dev, gpio_release,
 				     ARRAY_SIZE(gpio_release));
+
+	err |= max96717_set_registers(dev, i2c_fast_plus,
+				     ARRAY_SIZE(i2c_fast_plus));
 
 	if (priv->pixel_mode) {
 		err |= max96717_set_registers(dev, ser_cfg_pre,
