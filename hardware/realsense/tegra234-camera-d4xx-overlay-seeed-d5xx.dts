@@ -291,7 +291,7 @@
 							tegra_sinterface = "serial_b";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
-							serdes_pix_clk_hz = "275000000";
+							serdes_pix_clk_hz = "325000000";
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "0";
 						};
@@ -340,7 +340,7 @@
 							tegra_sinterface = "serial_b";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
-							serdes_pix_clk_hz = "275000000";
+							serdes_pix_clk_hz = "325000000";
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "1";
 						};
@@ -388,7 +388,7 @@
 							tegra_sinterface = "serial_e";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
-							serdes_pix_clk_hz = "275000000";
+							serdes_pix_clk_hz = "325000000";
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "1";
 						};
@@ -435,7 +435,7 @@
 							tegra_sinterface = "serial_a";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
-							serdes_pix_clk_hz = "275000000";
+							serdes_pix_clk_hz = "325000000";
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "1";
 						};

@@ -48,7 +48,7 @@ index 8e237eef..12729a1e 100644
 +#define MAX96712_BACKTOP25_ADDR 0x418
 +#define MAX96712_BACKTOP25_PHY1_SW_OVRR_OFFS 0x5
 +#define MAX96712_BACKTOP25_2500Mbps 0x19
-+#define MAX96712_BACKTOP25_1100Mbps 0xb
++#define MAX96712_BACKTOP25_1300Mbps 0xd
 +
 +#define MAX96712_MIPI_TX_EXT0_ADDR 0x800
 +#define MAX96712_MIPI_TX_EXT1_ADDR 0x801
@@ -819,8 +819,8 @@ index 8e237eef..12729a1e 100644
 +		{MAX96712_VIDEO_PIPE_EN_ADDR, 0x00}, //0xF4, Disable all pipes for now
 +	};
 +
-+	/* 1100Mbps per lane for 4 lanes, 2500Mbps per lane for 2 lanes */
-+	uint8_t lane_rate = (priv->lane_cnt == 4) ? MAX96712_BACKTOP25_1100Mbps : MAX96712_BACKTOP25_2500Mbps;
++	/* 1300Mbps per lane for 4 lanes, 2500Mbps per lane for 2 lanes */
++	uint8_t lane_rate = (priv->lane_cnt == 4) ? MAX96712_BACKTOP25_1300Mbps : MAX96712_BACKTOP25_2500Mbps;
 +
 +	struct reg_pair map_phy_opt[] =
 +	{

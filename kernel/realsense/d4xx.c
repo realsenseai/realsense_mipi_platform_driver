@@ -261,7 +261,8 @@ struct ser_interface {
 #define DS5_STATUS_INVALID_RES		0x4
 #define DS5_STATUS_INVALID_FPS		0x8
 
-#define MIPI_LANE_RATE			1000
+#define MIPI_LANE_RATE_DS5			1000
+#define MIPI_LANE_RATE_HKR			1200
 
 #define MAX_DEPTH_EXP			200000
 #define MAX_RGB_EXP			10000
@@ -6202,6 +6203,7 @@ static int ds5_hw_init(struct i2c_client *c, struct ds5 *state)
 {
 	struct v4l2_subdev *sd = &state->mux.sd.subdev;
 	u16 mipi_status, n_lanes, phy, drate_min, drate_max;
+	bool is_d58x = ds5_is_d58x(state);
 	int ret = ds5_read(state, DS5_MIPI_SUPPORT_LINES, &n_lanes);
 	if (!ret)
 		ret = ds5_read(state, DS5_MIPI_SUPPORT_PHY, &phy);
@@ -6223,8 +6225,13 @@ static int ds5_hw_init(struct i2c_client *c, struct ds5 *state)
 #endif
 
 	ret = ds5_write(state, DS5_MIPI_LANE_NUMS, n_lanes - 1);
-	if (!ret)
-		ret = ds5_write(state, DS5_MIPI_LANE_DATARATE, MIPI_LANE_RATE);
+	if (!ret) {
+		if (is_d58x) {
+			ret = ds5_write(state, DS5_MIPI_LANE_DATARATE, MIPI_LANE_RATE_HKR);
+		} else {
+			ret = ds5_write(state, DS5_MIPI_LANE_DATARATE, MIPI_LANE_RATE_DS5);
+		}
+	}
 
 	if (!ret && state->d58x_pixel_mode) {
 		/* Tell HKR FW the deserializer runs in PIXEL mode so it

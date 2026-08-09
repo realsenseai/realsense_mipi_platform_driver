@@ -285,7 +285,7 @@
 						reg = <0x29>;
 						compatible = "maxim,max96712";
 						csi-mode = "2x4";
-						/* 4-lane CSI output towards the Jetson (1100 Mbps/lane). */
+						/* 4-lane CSI output towards the Jetson (1300 Mbps/lane). */
 						lane_cnt = <4>;
 						link-mask = <0x1>;
 						channel = "a";
@@ -333,7 +333,7 @@
 							tegra_sinterface = "serial_c";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
-							serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+							serdes_pix_clk_hz = "325000000"; /* 4 lanes x 1300 Mbps / 16 bpp */
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "0";
 						};
@@ -382,7 +382,7 @@
 							tegra_sinterface = "serial_c";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
-							serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+							serdes_pix_clk_hz = "325000000"; /* 4 lanes x 1300 Mbps / 16 bpp */
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "1";
 						};
@@ -430,7 +430,7 @@
 							tegra_sinterface = "serial_c";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
-							serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+							serdes_pix_clk_hz = "325000000"; /* 4 lanes x 1300 Mbps / 16 bpp */
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "1";
 						};
@@ -477,7 +477,7 @@
 							tegra_sinterface = "serial_c";
 							mclk_khz = "24000";
 							pix_clk_hz = "74250000";
-							serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+							serdes_pix_clk_hz = "325000000"; /* 4 lanes x 1300 Mbps / 16 bpp */
 							line_length = "1280"; /* 2200 */
 							embedded_metadata_height = "1";
 						};
