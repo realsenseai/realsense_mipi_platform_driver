@@ -20,6 +20,8 @@
 #define MAX96717_ENMINUS_FORCE_ON (BIT(4) | BIT(3))
 #define MAX96717_EXT11_ADDR 0x383
 #define MAX96717_FRONTTOP_10_ADDR 0x312
+#define MAX96717_FRONTTOP_22_ADDR 0x31E
+#define MAX96717_FRONTTOP_22_BPP16_OVERRIDE 0x30
 #define MAX96717_VIDEO_TX0_ADDR 0x110
 #define MAX96717_VIDEO_TX1_ADDR 0x111
 #define MAX96717_VIDEO_TX0_TUN 0xED
@@ -29,10 +31,13 @@
 #define MAX96717_MIPI_RX3_ADDR 0x333
 #define MAX96717_MIPI_RX8_ADDR 0x338
 
-/* MIPI_RX0 (0x330): bit3 = mipi_rx_reset (not self-clearing), bit6 = non-cont-clk.
- * Pulsing reset re-arms the serializer MIPI RX PHY; both values keep bit6 as-is. */
-#define MAX96717_MIPI_RX0_RESET 0x48
-#define MAX96717_MIPI_RX0_NORMAL 0x40
+/*
+ * MIPI_RX0 (0x330): bit3 = mipi_rx_reset (not self-clearing), bit6 =
+ * non-cont-clk. Keep bit6 clear because the D5x CSI transmitter supplies a
+ * continuous clock.
+ */
+#define MAX96717_MIPI_RX0_RESET 0x08
+#define MAX96717_MIPI_RX0_NORMAL 0x00
 
 #define MAX96717_SRC_CTRL_ADDR 0x2BF
 #define MAX96717_SRC_PWDN_ADDR 0x02BE
@@ -322,16 +327,13 @@ static int max96717_set_registers(struct device *dev, struct reg_pair *map,
 
 static int max96717_mipi_rx_reset_pulse(struct device *dev)
 {
-	struct max96717 *priv = dev_get_drvdata(dev);
-	u8 reset = priv->pixel_mode ? MAX96717_MIPI_RX0_RESET : 0x08;
-	u8 normal = priv->pixel_mode ? MAX96717_MIPI_RX0_NORMAL : 0x00;
 	int err;
 
 	err  = max96717_write_reg(dev, MAX96717_MIPI_RX0_ADDR,
-				  reset);
+				  MAX96717_MIPI_RX0_RESET);
 	usleep_range(2000, 2100);
 	err |= max96717_write_reg(dev, MAX96717_MIPI_RX0_ADDR,
-				  normal);
+				  MAX96717_MIPI_RX0_NORMAL);
 
 	return err;
 }
@@ -353,12 +355,15 @@ int max96717_init_settings(struct device *dev)
 		{MAX96717_REG2_ADDR, 0x03}, /* 0x2 - REG2: VID_TX_EN=0, INIT=1 */
 		{MAX96717_CTRL0_ADDR, 0x21}, /* 0x10 - CTRL0: RESET_ONESHOT, GMSL2 link A */
 	};
-	struct reg_pair ser_cfg_mid[] = {
+	struct reg_pair pixel_cfg_mid[] = {
 		{MAX96717_TX1_ADDR, 0x00}, /* 0x29 - FEC OFF */
 		{MAX96717_EXT11_ADDR, 0x00}, /* 0x383 - Pixel mode */
 		{MAX96717_VIDEO_TX0_ADDR, 0x60}, /* 0x110 - VIDEO_TX0 AUTO_BPP=0 ENC_MODE=10 */
 		{MAX96717_VIDEO_TX1_ADDR, 0x10}, /* 0x111 - VIDEO_TX1 BPP=16 forced (matches DT) */
 		{MAX96717_FRONTTOP_10_ADDR, 0x4}, /* 0x312 - Fronttop_10 double 8bit */
+		/* 0x31E - force 16bpp after metadata 8-to-16 double-load */
+		{MAX96717_FRONTTOP_22_ADDR,
+		 MAX96717_FRONTTOP_22_BPP16_OVERRIDE},
 		{MAX96717_MIPI_RX1_ADDR, 0x30}, /* 0x331 - MIPI_RX1: 4-lane */
 	};
 	struct reg_pair ser_cfg_post[] = {
@@ -405,8 +410,8 @@ int max96717_init_settings(struct device *dev)
 		err |= max96717_set_registers(dev, ser_cfg_pre,
 					     ARRAY_SIZE(ser_cfg_pre));
 		msleep(100);
-		err |= max96717_set_registers(dev, ser_cfg_mid,
-					     ARRAY_SIZE(ser_cfg_mid));
+		err |= max96717_set_registers(dev, pixel_cfg_mid,
+					     ARRAY_SIZE(pixel_cfg_mid));
 		err |= max96717_mipi_rx_reset_pulse(dev);
 		err |= max96717_set_registers(dev, ser_cfg_post,
 					     ARRAY_SIZE(ser_cfg_post));

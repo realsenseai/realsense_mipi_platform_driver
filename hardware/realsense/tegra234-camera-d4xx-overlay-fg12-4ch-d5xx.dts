@@ -281,6 +281,8 @@
 							compatible = "maxim,max96712";
 							csi-mode = "2x4";
 							lane_cnt = <4>;
+							csi-lane-rate-mbps = <1400>;
+							force-csi-out-clock;
 							link-mask = <0x1>;
 							channel = "a";
 							fangzhu,fg12-reverse-lane-polarity;
@@ -302,6 +304,7 @@
 							compatible = "intel,d4xx";
 							use_sensor_mode_id = "true";
 							cam-type = "IMU";
+							mipi-lane-rate-mbps = <1300>;
 							nvidia,gmsl-ser-device = <&ser_a>;
 							nvidia,gmsl-dser-device = <&dser>;
 							ports {
@@ -325,9 +328,12 @@
 								active_w = "640";
 								active_h = "480";
 								tegra_sinterface = "serial_c";
+								discontinuous_clk = "no";
+								deskew_initial_enable = "false";
+								deskew_periodic_enable = "false";
 								mclk_khz = "24000";
 								pix_clk_hz = "74250000";
-								serdes_pix_clk_hz = "325000000";
+								serdes_pix_clk_hz = "350000000";
 								line_length = "1280"; /* 2200 */
 								embedded_metadata_height = "0";
 							};
@@ -350,6 +356,7 @@
 							compatible = "intel,d4xx";
 							use_sensor_mode_id = "true";
 							cam-type = "Y8";
+							mipi-lane-rate-mbps = <1300>;
 							nvidia,gmsl-ser-device = <&ser_a>;
 							nvidia,gmsl-dser-device = <&dser>;
 							ports {
@@ -374,9 +381,12 @@
 								active_w = "1280";
 								active_h = "720";
 								tegra_sinterface = "serial_c";
+								discontinuous_clk = "no";
+								deskew_initial_enable = "false";
+								deskew_periodic_enable = "false";
 								mclk_khz = "24000";
 								pix_clk_hz = "74250000";
-								serdes_pix_clk_hz = "325000000";
+								serdes_pix_clk_hz = "350000000";
 								line_length = "1280"; /* 2200 */
 								embedded_metadata_height = "1";
 							};
@@ -399,6 +409,7 @@
 							compatible = "intel,d4xx";
 							use_sensor_mode_id = "true";
 							cam-type = "RGB";
+							mipi-lane-rate-mbps = <1300>;
 							nvidia,gmsl-ser-device = <&ser_a>;
 							nvidia,gmsl-dser-device = <&dser>;
 							ports {
@@ -422,9 +433,12 @@
 								active_w = "1920";
 								active_h = "1080";
 								tegra_sinterface = "serial_c";
+								discontinuous_clk = "no";
+								deskew_initial_enable = "false";
+								deskew_periodic_enable = "false";
 								mclk_khz = "24000";
 								pix_clk_hz = "74250000";
-								serdes_pix_clk_hz = "325000000";
+								serdes_pix_clk_hz = "350000000";
 								line_length = "1280"; /* 2200 */
 								embedded_metadata_height = "1";
 							};
@@ -446,6 +460,7 @@
 							compatible = "intel,d4xx";
 							use_sensor_mode_id = "true";
 							cam-type = "Depth";
+							mipi-lane-rate-mbps = <1300>;
 							nvidia,gmsl-ser-device = <&ser_a>;
 							nvidia,gmsl-dser-device = <&dser>;
 							ports {
@@ -469,9 +484,12 @@
 								active_w = "1280";
 								active_h = "720";
 								tegra_sinterface = "serial_c";
+								discontinuous_clk = "no";
+								deskew_initial_enable = "false";
+								deskew_periodic_enable = "false";
 								mclk_khz = "24000";
 								pix_clk_hz = "74250000";
-								serdes_pix_clk_hz = "325000000";
+								serdes_pix_clk_hz = "350000000";
 								line_length = "1280"; /* 2200 */
 								embedded_metadata_height = "1";
 							};

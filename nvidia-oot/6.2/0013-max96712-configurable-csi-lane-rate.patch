@@ -1,0 +1,101 @@
+diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
+index 88de8179..74848273 100644
+--- a/drivers/media/i2c/max96712.c
++++ b/drivers/media/i2c/max96712.c
+@@ -45,8 +45,12 @@
+ 
+ #define MAX96712_BACKTOP25_ADDR 0x418
+ #define MAX96712_BACKTOP25_PHY1_SW_OVRR_OFFS 0x5
+-#define MAX96712_BACKTOP25_2500Mbps 0x19
+-#define MAX96712_BACKTOP25_1300Mbps 0xd
++#define MAX96712_CSI_LANE_COUNT_DEFAULT 2
++#define MAX96712_CSI_LANE_RATE_2_LANE_DEFAULT_MBPS 2500
++#define MAX96712_CSI_LANE_RATE_4_LANE_DEFAULT_MBPS 1300
++#define MAX96712_CSI_LANE_RATE_MIN_MBPS 100
++#define MAX96712_CSI_LANE_RATE_MAX_MBPS 2500
++#define MAX96712_CSI_LANE_RATE_STEP_MBPS 100
+ 
+ #define MAX96712_MIPI_TX_EXT0_ADDR 0x800
+ #define MAX96712_MIPI_TX_EXT1_ADDR 0x801
+@@ -154,7 +158,9 @@ struct max96712 {
+ 	int link_multi_vc_pipe[MAX96712_MAX_LINKS];
+ 	bool multi_vc_configured[MAX96712_MAX_PIPES];
+ 	bool force_clk0;
++	bool force_csi_out_clock;
+ 	int lane_cnt;
++	u32 csi_lane_rate_mbps;
+ 	bool fangzhu_fg12_reverse_lane_polarity;
+ 	bool fangzhu_fg12_poc_enable;
+ };
+@@ -424,6 +430,10 @@ static int max96712_probe(struct i2c_client *client,
+ 		return -ENODEV;
+ 	}
+ 	mutex_init(&priv->lock);
++	/* Preserve legacy defaults when the device has no OF node. */
++	priv->lane_cnt = MAX96712_CSI_LANE_COUNT_DEFAULT;
++	priv->csi_lane_rate_mbps =
++		MAX96712_CSI_LANE_RATE_2_LANE_DEFAULT_MBPS;
+ 
+ 	np = client->dev.of_node;
+ 	if (np) {
+@@ -451,6 +461,8 @@ static int max96712_probe(struct i2c_client *client,
+ 		} else {
+ 			priv->force_clk0 = false;
+ 		}
++		priv->force_csi_out_clock =
++			of_property_read_bool(np, "force-csi-out-clock");
+ 
+ 		err = of_property_read_u32(np, "lane_cnt", &value);
+ 		if (err < 0) {
+@@ -465,6 +477,22 @@ static int max96712_probe(struct i2c_client *client,
+ 			priv->lane_cnt = value;
+ 		}
+ 
++		priv->csi_lane_rate_mbps = priv->lane_cnt == 4 ?
++			MAX96712_CSI_LANE_RATE_4_LANE_DEFAULT_MBPS :
++			MAX96712_CSI_LANE_RATE_2_LANE_DEFAULT_MBPS;
++		err = of_property_read_u32(np, "csi-lane-rate-mbps", &value);
++		if (!err) {
++			if (value < MAX96712_CSI_LANE_RATE_MIN_MBPS ||
++			    value > MAX96712_CSI_LANE_RATE_MAX_MBPS ||
++			    value % MAX96712_CSI_LANE_RATE_STEP_MBPS) {
++				dev_warn(&client->dev,
++					 "%s: invalid csi-lane-rate-mbps %u, using %u\n",
++					 __func__, value, priv->csi_lane_rate_mbps);
++			} else {
++				priv->csi_lane_rate_mbps = value;
++			}
++		}
++
+ 		priv->fangzhu_fg12_reverse_lane_polarity =
+ 			of_property_read_bool(np, "fangzhu,fg12-reverse-lane-polarity");
+ 		priv->fangzhu_fg12_poc_enable =
+@@ -913,13 +941,16 @@ int max96712_init_settings(struct device *dev)
+ 		{MAX96712_VIDEO_PIPE_EN_ADDR, 0x00}, //0xF4, Disable all pipes for now
+ 	};
+ 
+-	/* 1300Mbps per lane for 4 lanes, 2500Mbps per lane for 2 lanes */
+-	uint8_t lane_rate = (priv->lane_cnt == 4) ? MAX96712_BACKTOP25_1300Mbps : MAX96712_BACKTOP25_2500Mbps;
++	/* BACKTOP25 encodes the per-lane rate in 100 Mbps units. */
++	u8 lane_rate = priv->csi_lane_rate_mbps /
++		MAX96712_CSI_LANE_RATE_STEP_MBPS;
+ 
+ 	struct reg_pair map_phy_opt[] =
+ 	{
+ 		/* MIPI D-PHY Config */
+-		{MAX96712_MIPI_PHY0_ADDR, (priv->force_clk0 ? 0x20 : 0x0) | 0x04}, //0x8A0
++		{MAX96712_MIPI_PHY0_ADDR,
++			(priv->force_csi_out_clock ? 0x80 : 0x0) |
++			(priv->force_clk0 ? 0x20 : 0x0) | 0x04}, //0x8A0
+ 
+ 		/* 0x94a - 2/4 MIPI lanes (Master controller for PHYA), and enable extended VC */
+ 		{MAX96712_MIPI_TX10_ADDR,
+@@ -945,6 +976,8 @@ int max96712_init_settings(struct device *dev)
+ 	};
+ 
+ 	mutex_lock(&priv->lock);
++	dev_info(dev, "CSI TX configured: %d lanes at %u Mbps/lane\n",
++		 priv->lane_cnt, priv->csi_lane_rate_mbps);
+ 
+ 	err |= max96712_set_registers(priv, map_pipe_opt, ARRAY_SIZE(map_pipe_opt));
+ 	err |= max96712_set_registers(priv, map_phy_opt, ARRAY_SIZE(map_phy_opt));
