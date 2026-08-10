@@ -87,8 +87,13 @@
 #define MAX96724_CSI_OUT_EN_VAL		0x84
 #define MAX96724_CSI_PHY_EN_ALL		0xF0
 #define MAX96724_CSI_LANE_MAP_DEFAULT	0xE4
-#define MAX96724_LANE_CTRL_4LANE	0xC0
-#define MAX96724_DPLL_2000MBPS		0x34
+#define MAX96724_LANE_CTRL_NUM_LANES(n)	(((n) - 1) << 6)
+#define MAX96724_DPLL_FREQ_OVERRIDE	BIT(5)
+#define MAX96724_CSI_LANE_RATE_MIN_MBPS	100
+#define MAX96724_CSI_LANE_RATE_MAX_MBPS	2500
+#define MAX96724_CSI_LANE_RATE_STEP_MBPS	100
+#define MAX96724_CSI_LANE_RATE_DEFAULT_MBPS	1500
+#define MAX96724_CSI_LANE_COUNT_DEFAULT	4
 #define MAX96724_ONESHOT_ALL		0x0F
 #define MAX96724_PIPE_SEL0		0x62
 #define MAX96724_PIPE_SEL1		0xEA
@@ -143,6 +148,8 @@ struct max96724 {
 	struct pipe_ctx pipe[MAX96724_MAX_PIPES];
 	u8 csi_mode;
 	u8 lane_mp1;
+	u32 csi_lane_rate_mbps;
+	u32 csi_lane_count;
 	struct gpio_desc *reset_gpio;
 	int pw_ref;
 	struct regulator *vdd_cam_1v2;
@@ -364,7 +371,7 @@ static int max96724_configure_csi_port(struct device *dev,
 		u16 addr = MAX96724_LANE_CTRL0_ADDR + 0x40 * i;
 
 		err = max96724_write_reg(dev, addr,
-					 MAX96724_LANE_CTRL_4LANE);
+			MAX96724_LANE_CTRL_NUM_LANES(priv->csi_lane_count));
 	}
 
 	return err;
@@ -398,7 +405,11 @@ static int max96724_configure_datapath(struct device *dev, bool oneshot,
 {
 	struct max96724 *priv = dev_get_drvdata(dev);
 	unsigned int i;
+	u8 dpll_freq;
 	int err;
+
+	dpll_freq = MAX96724_DPLL_FREQ_OVERRIDE |
+		priv->csi_lane_rate_mbps / MAX96724_CSI_LANE_RATE_STEP_MBPS;
 
 	err = max96724_write_reg(dev, MAX96724_PIPE_EN_ADDR, 0x00);
 	err |= max96724_write_reg(dev, MAX96724_PIPE_SEL0_ADDR,
@@ -410,9 +421,11 @@ static int max96724_configure_datapath(struct device *dev, bool oneshot,
 	for (i = 0; !err && i < MAX96724_MAX_PIPES; i++) {
 		u16 addr = MAX96724_DPLL_FREQ0_ADDR + 3 * i;
 
-		err = max96724_write_reg(dev, addr,
-					 MAX96724_DPLL_2000MBPS);
+		err = max96724_write_reg(dev, addr, dpll_freq);
 	}
+	if (!err)
+		dev_info(dev, "CSI TX configured at %u Mbps/lane, %u lanes\n",
+			 priv->csi_lane_rate_mbps, priv->csi_lane_count);
 
 	err |= max96724_write_reg(dev, MAX96724_MIPI_CTRL_SEL_ADDR,
 				  MAX96724_MIPI_CTRL_SEL);
@@ -1370,6 +1383,30 @@ static int max96724_parse_dt(struct max96724 *priv,
 		return -EINVAL;
 	}
 	priv->link_mask = value;
+	priv->csi_lane_count = MAX96724_CSI_LANE_COUNT_DEFAULT;
+	err = of_property_read_u32(node, "csi-lane-count", &value);
+	if (!err) {
+		if (value != MAX96724_CSI_LANE_COUNT_DEFAULT) {
+			dev_warn(&client->dev,
+				 "unsupported csi-lane-count %u, using %u lanes\n",
+				 value, priv->csi_lane_count);
+		} else {
+			priv->csi_lane_count = value;
+		}
+	}
+	priv->csi_lane_rate_mbps = MAX96724_CSI_LANE_RATE_DEFAULT_MBPS;
+	err = of_property_read_u32(node, "csi-lane-rate-mbps", &value);
+	if (!err) {
+		if (value < MAX96724_CSI_LANE_RATE_MIN_MBPS ||
+		    value > MAX96724_CSI_LANE_RATE_MAX_MBPS ||
+		    value % MAX96724_CSI_LANE_RATE_STEP_MBPS) {
+			dev_warn(&client->dev,
+				 "invalid csi-lane-rate-mbps %u, using %u Mbps\n",
+				 value, priv->csi_lane_rate_mbps);
+		} else {
+			priv->csi_lane_rate_mbps = value;
+		}
+	}
 
 	priv->reset_gpio = devm_gpiod_get_optional(&client->dev, "reset",
 						   GPIOD_OUT_LOW);
