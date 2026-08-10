@@ -31,6 +31,7 @@
 #include <linux/videodev2.h>
 #include <linux/version.h>
 #include <linux/mutex.h>
+#include <linux/workqueue.h>
 #include <media/media-entity.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
@@ -577,7 +578,7 @@ struct ds5_dfu_dev {
 	enum dfu_state dfu_state_flag;
 	unsigned char *dfu_msg;
 	u16 msg_write_once;
-	// unsigned char init_v4l_f; // need refactoring
+	bool reprobe_after_dfu;
 	u32 bus_clk_rate;
 };
 
@@ -671,6 +672,10 @@ struct ds5_dev {
 
 	/* Pointer to the primary DS5 struct */
 	struct ds5 *ds5_primary;
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	struct i2c_client *clients[4];
+	unsigned int client_count;
+#endif
 	bool serdes_setup_complete;
 
 	bool depth_streaming;
@@ -4321,11 +4326,59 @@ static void ds5_init_ds5_dev(struct ds5 *state, struct ds5_dev *ds5_dev)
 	state->ds5_dev = ds5_dev;
 	mutex_lock(&ds5_dev->lock);
 	ds5_dev->ds5_primary = state;
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	memset(ds5_dev->clients, 0, sizeof(ds5_dev->clients));
+	ds5_dev->client_count = 0;
+#endif
 	ds5_dev->serdes_setup_complete = false;
 	ds5_dev->cached_device_type = DS5_DEVICE_TYPE_UNKNOWN;
 	mutex_unlock(&ds5_dev->lock);
 	ds5_reset_streaming_flags(ds5_dev);
 }
+
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+static int ds5_track_client(struct ds5 *state)
+{
+	struct ds5_dev *ds5_dev = state->ds5_dev;
+	unsigned int i;
+
+	mutex_lock(&ds5_dev->lock);
+	for (i = 0; i < ds5_dev->client_count; i++) {
+		if (ds5_dev->clients[i] == state->client) {
+			mutex_unlock(&ds5_dev->lock);
+			return 0;
+		}
+	}
+	if (ds5_dev->client_count == ARRAY_SIZE(ds5_dev->clients)) {
+		mutex_unlock(&ds5_dev->lock);
+		return -ENOSPC;
+	}
+	ds5_dev->clients[ds5_dev->client_count++] = state->client;
+	mutex_unlock(&ds5_dev->lock);
+	return 0;
+}
+
+static void ds5_untrack_client(struct ds5 *state)
+{
+	struct ds5_dev *ds5_dev = state->ds5_dev;
+	unsigned int i;
+
+	if (!ds5_dev)
+		return;
+
+	mutex_lock(&ds5_dev->lock);
+	for (i = 0; i < ds5_dev->client_count; i++) {
+		if (ds5_dev->clients[i] != state->client)
+			continue;
+		memmove(&ds5_dev->clients[i], &ds5_dev->clients[i + 1],
+			(ds5_dev->client_count - i - 1) *
+			sizeof(ds5_dev->clients[0]));
+		ds5_dev->clients[--ds5_dev->client_count] = NULL;
+		break;
+	}
+	mutex_unlock(&ds5_dev->lock);
+}
+#endif
 
 /* Caller must hold serdes_lock__. */
 static bool ds5_release_slot(struct ds5 *state)
@@ -6871,6 +6924,7 @@ static ssize_t ds5_dfu_device_write(struct file *flip,
 
 dfu_write_error:
 	state->dfu_dev.dfu_state_flag = DS5_DFU_ERROR;
+	state->dfu_dev.reprobe_after_dfu = false;
 	// Reset DFU device to IDLE states
 	if (!ds5_write(state, 0x5010, 0x0))
 		state->dfu_dev.dfu_state_flag = DS5_DFU_IDLE;
@@ -6892,11 +6946,15 @@ static int ds5_dfu_device_open(struct inode *inode, struct file *file)
 		return -EBUSY;
 	}
 	state->dfu_dev.device_open_count++;
+	state->dfu_dev.reprobe_after_dfu =
+		state->dfu_dev.dfu_state_flag == DS5_DFU_RECOVERY;
 	if (state->dfu_dev.dfu_state_flag != DS5_DFU_RECOVERY)
 		state->dfu_dev.dfu_state_flag = DS5_DFU_OPEN;
 	state->dfu_dev.dfu_msg = devm_kzalloc(&state->client->dev,
 			DFU_BLOCK_SIZE, GFP_KERNEL);
 	if (!state->dfu_dev.dfu_msg) {
+		state->dfu_dev.device_open_count--;
+		state->dfu_dev.reprobe_after_dfu = false;
 		mutex_unlock(&state->lock);
 		return -ENOMEM;
 	}
@@ -7052,6 +7110,149 @@ e_depth:
 	return ret;
 }
 
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+/* HKR reboot resets the GMSL tunnel; normal probe recreates it after boot. */
+#define DS5_DFU_REPROBE_BOOT_DELAY_MS	10000
+
+struct ds5_dfu_reprobe_ctx {
+	struct delayed_work work;
+	struct ds5_dev *owner;
+	struct i2c_client *clients[4];
+	unsigned int client_count;
+	unsigned int primary_index;
+	unsigned int depth_index;
+	bool pending;
+};
+
+static struct ds5_dfu_reprobe_ctx ds5_dfu_reprobe[MAX_DS5_NUM];
+static DEFINE_MUTEX(ds5_dfu_reprobe_lock);
+
+static void ds5_dfu_reprobe_put_clients(struct ds5_dfu_reprobe_ctx *ctx)
+{
+	unsigned int i;
+
+	for (i = 0; i < ctx->client_count; i++) {
+		put_device(&ctx->clients[i]->dev);
+		ctx->clients[i] = NULL;
+	}
+	ctx->client_count = 0;
+	ctx->owner = NULL;
+	ctx->pending = false;
+}
+
+static void ds5_dfu_reprobe_work(struct work_struct *work)
+{
+	struct ds5_dfu_reprobe_ctx *ctx = container_of(to_delayed_work(work),
+		struct ds5_dfu_reprobe_ctx, work);
+	struct i2c_client *primary = ctx->clients[ctx->primary_index];
+	struct i2c_client *depth = ctx->clients[ctx->depth_index];
+	bool reprobe_failed = false;
+	unsigned int i;
+	int ret;
+
+	dev_info(&depth->dev,
+		 "re-probing %u D585 instances after DFU reboot\n",
+		 ctx->client_count);
+	/* Peers share the primary's SerDes slot, so release the actual primary
+	 * last and recreate it before attaching any peers.
+	 */
+	for (i = 0; i < ctx->client_count; i++) {
+		if (i != ctx->primary_index)
+			device_release_driver(&ctx->clients[i]->dev);
+	}
+	device_release_driver(&primary->dev);
+
+	ret = device_attach(&primary->dev);
+	if (ret <= 0) {
+		dev_warn(&primary->dev,
+			 "D585 primary re-probe failed: %d\n", ret);
+		goto out;
+	}
+	for (i = 0; i < ctx->client_count; i++) {
+		if (i == ctx->primary_index)
+			continue;
+		ret = device_attach(&ctx->clients[i]->dev);
+		if (ret <= 0) {
+			reprobe_failed = true;
+			dev_warn(&ctx->clients[i]->dev,
+				 "D585 peer re-probe failed: %d\n", ret);
+		}
+	}
+	if (!reprobe_failed)
+		dev_info(&depth->dev,
+			 "D585 automatic post-DFU re-probe complete\n");
+
+out:
+	mutex_lock(&ds5_dfu_reprobe_lock);
+	ds5_dfu_reprobe_put_clients(ctx);
+	mutex_unlock(&ds5_dfu_reprobe_lock);
+}
+
+static int ds5_dfu_schedule_reprobe(struct ds5 *state)
+{
+	struct ds5_dfu_reprobe_ctx *ctx = NULL;
+	struct ds5_dev *ds5_dev = state->ds5_dev;
+	unsigned long delay = msecs_to_jiffies(DS5_DFU_REPROBE_BOOT_DELAY_MS);
+	unsigned int i;
+	int ret = 0;
+
+	mutex_lock(&ds5_dfu_reprobe_lock);
+	for (i = 0; i < ARRAY_SIZE(ds5_dfu_reprobe); i++) {
+		if (ds5_dfu_reprobe[i].pending &&
+		    ds5_dfu_reprobe[i].owner == ds5_dev)
+			goto out;
+		if (!ctx && !ds5_dfu_reprobe[i].pending)
+			ctx = &ds5_dfu_reprobe[i];
+	}
+	if (!ctx) {
+		ret = -ENOSPC;
+		goto out;
+	}
+
+	mutex_lock(&ds5_dev->lock);
+	if (ds5_dev->client_count != ARRAY_SIZE(ctx->clients) ||
+	    !ds5_dev->ds5_primary) {
+		ret = -ENODEV;
+		goto out_unlock_camera;
+	}
+	ctx->primary_index = ARRAY_SIZE(ctx->clients);
+	ctx->depth_index = ARRAY_SIZE(ctx->clients);
+	for (i = 0; i < ds5_dev->client_count; i++) {
+		ctx->clients[i] = ds5_dev->clients[i];
+		get_device(&ctx->clients[i]->dev);
+		if (ctx->clients[i] == ds5_dev->ds5_primary->client)
+			ctx->primary_index = i;
+		if (ctx->clients[i] == state->client)
+			ctx->depth_index = i;
+	}
+	ctx->client_count = ds5_dev->client_count;
+	if (ctx->primary_index == ctx->client_count ||
+	    ctx->depth_index == ctx->client_count) {
+		ret = -ENODEV;
+		ds5_dfu_reprobe_put_clients(ctx);
+		goto out_unlock_camera;
+	}
+	ctx->owner = ds5_dev;
+	ctx->pending = true;
+
+out_unlock_camera:
+	mutex_unlock(&ds5_dev->lock);
+	if (!ret && !schedule_delayed_work(&ctx->work, delay)) {
+		ds5_dfu_reprobe_put_clients(ctx);
+		ret = -EBUSY;
+	}
+out:
+	mutex_unlock(&ds5_dfu_reprobe_lock);
+	if (ret)
+		dev_warn(&state->client->dev,
+			 "unable to schedule automatic post-DFU re-probe: %d\n", ret);
+	else
+		dev_info(&state->client->dev,
+			 "DFU reboot announced; automatic D585 re-probe scheduled\n");
+	return ret;
+}
+#endif
+
 static int ds5_dfu_device_release(struct inode *inode, struct file *file)
 {
 	struct ds5 *state = container_of(inode->i_cdev, struct ds5, dfu_dev.ds5_cdev);
@@ -7059,17 +7260,19 @@ static int ds5_dfu_device_release(struct inode *inode, struct file *file)
 	struct i2c_adapter *parent = i2c_parent_is_i2c_adapter(
 			state->client->adapter);
 #endif
+	bool auto_reprobe = false;
 	int ret = 0, retry = 10;
 	mutex_lock(&state->lock);
 	state->dfu_dev.device_open_count--;
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	auto_reprobe = state->dfu_dev.dfu_state_flag == DS5_DFU_DONE &&
+		state->dfu_dev.reprobe_after_dfu && ds5_is_d58x(state);
+	if (auto_reprobe)
+		ds5_dfu_schedule_reprobe(state);
+#endif
 	if (state->dfu_dev.dfu_state_flag != DS5_DFU_RECOVERY)
 		state->dfu_dev.dfu_state_flag = DS5_DFU_IDLE;
-	/* We disable this section as it has no effect when device in operational
-	   mode and has not enough effect when device in recovery mode */
-	// if (state->dfu_dev.dfu_state_flag == DS5_DFU_DONE
-	// 		&& state->dfu_dev.init_v4l_f)
-	// 	ds5_v4l_init(state->client, state);
-	// state->dfu_dev.init_v4l_f = 0;
+	state->dfu_dev.reprobe_after_dfu = false;
 	if (state->dfu_dev.dfu_msg)
 		devm_kfree(&state->client->dev, state->dfu_dev.dfu_msg);
 	state->dfu_dev.dfu_msg = NULL;
@@ -7088,6 +7291,10 @@ static int ds5_dfu_device_release(struct inode *inode, struct file *file)
 
 	i2c_set_adapter_bus_clk_rate(parent, state->dfu_dev.bus_clk_rate);
 #endif
+	if (auto_reprobe) {
+		mutex_unlock(&state->lock);
+		return 0;
+	}
 	/* Verify communication */
 	do {
 		ret = ds5_read(state, DS5_FW_VERSION, &state->fw_version);
@@ -7475,6 +7682,14 @@ static int ds5_probe(struct i2c_client *c
 	 */
 	ret = ds5_read(state, DS5_DFU_MAGIC_REG, &rec_state);
 	if (!ret && rec_state == DS5_DFU_MAGIC_LSW) {
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+		ret = ds5_track_client(state);
+		if (ret < 0) {
+			dev_err(&c->dev, "failed to track recovery instance: %d\n",
+				ret);
+			goto e_chardev;
+		}
+#endif
 		dev_info(&c->dev, "%s(): D4XX recovery state\n", __func__);
 		state->dfu_dev.dfu_state_flag = DS5_DFU_RECOVERY;
 		/* Override I2C drvdata with state for use in remove function */
@@ -7520,6 +7735,9 @@ e_chardev:
 	if (state->dfu_dev.ds5_class)
 		ds5_chrdev_remove(state);
 e_regulator:
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	ds5_untrack_client(state);
+#endif
 	if (state->vcc)
 		regulator_disable(state->vcc);
 #ifdef CONFIG_VIDEO_D4XX_SERDES
@@ -7545,6 +7763,7 @@ static void ds5_remove(struct i2c_client *c)
 	}
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
+	ds5_untrack_client(state);
 	if (state->ser_primary) {
 		int ret;
 		bool do_cleanup = false;
@@ -7631,7 +7850,35 @@ static struct i2c_driver ds5_i2c_driver = {
 	.id_table	= ds5_id,
 };
 
-module_i2c_driver(ds5_i2c_driver);
+static int __init ds5_module_init(void)
+{
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(ds5_dfu_reprobe); i++)
+		INIT_DELAYED_WORK(&ds5_dfu_reprobe[i].work,
+				  ds5_dfu_reprobe_work);
+#endif
+	return i2c_add_driver(&ds5_i2c_driver);
+}
+module_init(ds5_module_init);
+
+static void __exit ds5_module_exit(void)
+{
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(ds5_dfu_reprobe); i++) {
+		cancel_delayed_work_sync(&ds5_dfu_reprobe[i].work);
+		mutex_lock(&ds5_dfu_reprobe_lock);
+		if (ds5_dfu_reprobe[i].pending)
+			ds5_dfu_reprobe_put_clients(&ds5_dfu_reprobe[i]);
+		mutex_unlock(&ds5_dfu_reprobe_lock);
+	}
+#endif
+	i2c_del_driver(&ds5_i2c_driver);
+}
+module_exit(ds5_module_exit);
 
 MODULE_DESCRIPTION("RealSense D4XX and D5XX MIPI Camera Driver");
 MODULE_AUTHOR("Guennadi Liakhovetski <guennadi.liakhovetski@intel.com>,\n\
