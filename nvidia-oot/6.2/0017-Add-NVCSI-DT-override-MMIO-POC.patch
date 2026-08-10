@@ -1,0 +1,254 @@
+From: zhou <shengyong.zhou@realsenseai.com>
+Date: Mon, 10 Aug 2026 19:47:57 +0800
+Subject: [PATCH] media: tegra: add NVCSI DT override MMIO POC
+
+Add a default-disabled debugfs probe for the Orin NVCSI per-stream,
+per-VC Data Type override register. The probe is restricted to idle CSI,
+rejects inaccessible or invalid reads, and restores the original value
+immediately after write/readback.
+
+This is a register-access POC only. It does not configure the streaming
+data path or resolve the TrustZone, shadow commit, and RCE lifecycle gaps.
+
+On Orin JP6.2.2, the stream 2 / VC1 register read returned 0xffffffff and
+the CBB reported FIREWALL_ERR for the Non-Secure CCPLEX access. The probe
+returned -EACCES before issuing a write, confirming that direct Host MMIO
+cannot implement the override on the tested platform.
+
+Signed-off-by: zhou <shengyong.zhou@realsenseai.com>
+---
+ drivers/media/platform/tegra/camera/csi/csi.c | 200 ++++++++++++++++++
+ 1 file changed, 200 insertions(+)
+
+diff --git a/drivers/media/platform/tegra/camera/csi/csi.c b/drivers/media/platform/tegra/camera/csi/csi.c
+index fea546c5..4e225e34 100644
+--- a/drivers/media/platform/tegra/camera/csi/csi.c
++++ b/drivers/media/platform/tegra/camera/csi/csi.c
+@@ -11,6 +11,8 @@
+ #include <linux/device.h>
+ #include <linux/err.h>
+ #include <linux/gpio/consumer.h>
++#include <linux/io.h>
++#include <linux/module.h>
+ #include <linux/of.h>
+ #include <linux/of_graph.h>
+ #include <linux/platform_device.h>
+@@ -18,6 +20,7 @@
+ #include <linux/property.h>
+ #include <linux/nospec.h>
+ #include <linux/seq_file.h>
++#include <linux/uaccess.h>
+ #include <uapi/linux/media-bus-format.h>
+ 
+ #include <media/media-entity.h>
+@@ -314,6 +317,201 @@ static int tegra_csi_debugfs_summary_show(struct seq_file *s, void *unused)
+ 
+ DEFINE_SHOW_ATTRIBUTE(tegra_csi_debugfs_summary);
+ 
++#define NVCSI_POC_NUM_STREAMS		6U
++#define NVCSI_POC_NUM_VCS		16U
++#define NVCSI_POC_PHYS_BASE		0x15a00000ULL
++#define NVCSI_POC_STREAM_PAIR_STRIDE	0x10000U
++#define NVCSI_POC_ODD_STREAM_OFFSET	0x8000U
++#define NVCSI_POC_STREAM0_OFFSET		0x10000U
++#define NVCSI_POC_VC_STRIDE		0x18U
++#define NVCSI_POC_DT_OVERRIDE_OFFSET	0x24U
++#define NVCSI_POC_DT_ENABLE		BIT(31)
++#define NVCSI_POC_DT_MASK		GENMASK(5, 0)
++#define NVCSI_POC_VALID_MASK		(NVCSI_POC_DT_ENABLE | NVCSI_POC_DT_MASK)
++
++struct tegra_csi_dt_override_poc_result {
++	bool attempted;
++	u32 stream;
++	u32 vc;
++	u32 dt;
++	u32 offset;
++	u32 before;
++	u32 written;
++	u32 readback;
++	u32 restored;
++	int status;
++};
++
++static struct tegra_csi_dt_override_poc_result dt_override_poc_result;
++static bool dt_override_mmio_poc_enable;
++module_param_named(dt_override_mmio_poc_enable,
++		   dt_override_mmio_poc_enable, bool, 0600);
++MODULE_PARM_DESC(dt_override_mmio_poc_enable,
++		 "Enable the invasive NVCSI DT override MMIO proof of concept");
++
++static u32 tegra_csi_dt_override_poc_offset(u32 stream, u32 vc)
++{
++	return NVCSI_POC_STREAM0_OFFSET +
++		(stream / 2U) * NVCSI_POC_STREAM_PAIR_STRIDE +
++		(stream % 2U) * NVCSI_POC_ODD_STREAM_OFFSET +
++		NVCSI_POC_DT_OVERRIDE_OFFSET + vc * NVCSI_POC_VC_STRIDE;
++}
++
++static bool tegra_csi_dt_override_poc_streaming(struct tegra_csi_device *csi)
++{
++	struct tegra_csi_channel *chan;
++
++	if (csi->sensor_active || csi->tpg_active)
++		return true;
++
++	list_for_each_entry(chan, &csi->csi_chans, list) {
++		if (atomic_read(&chan->is_streaming))
++			return true;
++	}
++
++	return false;
++}
++
++static int tegra_csi_dt_override_poc_show(struct seq_file *s, void *unused)
++{
++	struct tegra_csi_device *csi = s->private;
++	struct tegra_csi_dt_override_poc_result result;
++
++	seq_printf(s, "enabled: %u\n", READ_ONCE(dt_override_mmio_poc_enable));
++	seq_puts(s, "usage: echo '<stream 0-5> <vc 0-15> <dt 0x00-0x3f>' > dt_override_mmio_poc\n");
++	seq_puts(s, "operation: read, write/readback, then restore; CSI must be idle\n");
++	mutex_lock(&csi->source_update);
++	result = dt_override_poc_result;
++	mutex_unlock(&csi->source_update);
++	if (!result.attempted) {
++		seq_puts(s, "last_result: not run\n");
++		return 0;
++	}
++
++	seq_printf(s,
++		   "last_result: stream=%u vc=%u dt=0x%02x offset=0x%05x status=%d\n",
++		   result.stream, result.vc, result.dt, result.offset,
++		   result.status);
++	seq_printf(s,
++		   "registers: before=0x%08x written=0x%08x readback=0x%08x restored=0x%08x\n",
++		   result.before, result.written, result.readback,
++		   result.restored);
++
++	return 0;
++}
++
++static int tegra_csi_dt_override_poc_open(struct inode *inode,
++					 struct file *file)
++{
++	return single_open(file, tegra_csi_dt_override_poc_show,
++			   inode->i_private);
++}
++
++static ssize_t tegra_csi_dt_override_poc_write(struct file *file,
++					       const char __user *user_buf,
++					       size_t count, loff_t *ppos)
++{
++	struct seq_file *s = file->private_data;
++	struct tegra_csi_device *csi = s->private;
++	struct tegra_csi_dt_override_poc_result result = { 0 };
++	void __iomem *reg;
++	phys_addr_t phys;
++	char buf[48];
++	size_t len;
++	int ret;
++
++	if (!csi)
++		return -ENODEV;
++	if (!READ_ONCE(dt_override_mmio_poc_enable))
++		return -EPERM;
++	if (count >= sizeof(buf))
++		return -E2BIG;
++
++	len = count;
++	if (copy_from_user(buf, user_buf, len))
++		return -EFAULT;
++	buf[len] = '\0';
++
++	if (sscanf(buf, "%u %u %x", &result.stream, &result.vc,
++		   &result.dt) != 3)
++		return -EINVAL;
++	if (result.stream >= NVCSI_POC_NUM_STREAMS ||
++	    result.vc >= NVCSI_POC_NUM_VCS ||
++	    result.dt > NVCSI_POC_DT_MASK)
++		return -ERANGE;
++
++	result.attempted = true;
++	result.offset = tegra_csi_dt_override_poc_offset(result.stream,
++							 result.vc);
++	result.status = -EINPROGRESS;
++
++	/* Serialize the POC with stream start/stop and never touch active CSI. */
++	mutex_lock(&csi->source_update);
++	if (tegra_csi_dt_override_poc_streaming(csi)) {
++		ret = -EBUSY;
++		goto out_unlock;
++	}
++
++	ret = nvhost_module_busy(csi->pdev);
++	if (ret)
++		goto out_unlock;
++
++	phys = NVCSI_POC_PHYS_BASE + result.offset;
++	reg = ioremap(phys, sizeof(u32));
++	if (!reg) {
++		ret = -ENOMEM;
++		goto out_idle;
++	}
++
++	result.before = readl(reg);
++	if (result.before == U32_MAX ||
++	    (result.before & (u32)~NVCSI_POC_VALID_MASK)) {
++		ret = -EACCES;
++		goto out_unmap;
++	}
++
++	result.written =
++		(result.before & ~NVCSI_POC_VALID_MASK) |
++		NVCSI_POC_DT_ENABLE | result.dt;
++	writel(result.written, reg);
++	result.readback = readl(reg);
++
++	/* The POC never leaves a changed register value behind. */
++	writel(result.before, reg);
++	result.restored = readl(reg);
++
++	if (result.readback != result.written ||
++	    result.restored != result.before)
++		ret = -EIO;
++	else
++		ret = 0;
++
++out_unmap:
++	iounmap(reg);
++out_idle:
++	nvhost_module_idle(csi->pdev);
++out_unlock:
++	result.status = ret;
++	dt_override_poc_result = result;
++	mutex_unlock(&csi->source_update);
++
++	dev_info(csi->dev,
++		 "DT override MMIO POC: stream=%u vc=%u dt=0x%02x offset=0x%05x before=0x%08x readback=0x%08x restored=0x%08x status=%d\n",
++		 result.stream, result.vc, result.dt, result.offset,
++		 result.before, result.readback, result.restored, ret);
++
++	return ret ? ret : count;
++}
++
++static const struct file_operations tegra_csi_dt_override_poc_fops = {
++	.owner = THIS_MODULE,
++	.open = tegra_csi_dt_override_poc_open,
++	.read = seq_read,
++	.write = tegra_csi_dt_override_poc_write,
++	.llseek = seq_lseek,
++	.release = single_release,
++};
++
+ static void tegra_csi_debugfs_init(struct tegra_csi_device *csi)
+ {
+ 	if (!debugfs_initialized())
+@@ -327,6 +515,8 @@ static void tegra_csi_debugfs_init(struct tegra_csi_device *csi)
+ 
+ 	debugfs_create_file("summary", 0444, csi->debugdir, csi,
+ 			    &tegra_csi_debugfs_summary_fops);
++	debugfs_create_file("dt_override_mmio_poc", 0600, csi->debugdir, csi,
++			    &tegra_csi_dt_override_poc_fops);
+ }
+ 
+ static void tegra_csi_debugfs_remove(struct tegra_csi_device *csi)
