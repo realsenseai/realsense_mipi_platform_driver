@@ -127,7 +127,7 @@
 				status = "okay";
 				compatible = "nvidia, tegra-camera-platform";
 				num_csi_lanes = <4>;
-				max_lane_speed = <2000000>;
+				max_lane_speed = <1500000>;
 				min_bits_per_pixel = <10>;
 				vi_peak_byte_per_pixel = <2>;
 				vi_bw_margin_pct = <25>;
@@ -334,7 +334,9 @@
 							reg = <0x27>;
 							compatible = "adi,max96724";
 							csi-mode = "2x4";
+							csi-lane-count = <4>;
 							max-src = <1>;
+							csi-lane-rate-mbps = <1500>;
 							link-mask = <0x1>;
 							gmsl-link-speed = <6>;
 						};
@@ -364,6 +366,7 @@
 							compatible = "realsense,d5xx";
 							use_sensor_mode_id = "true";
 							cam-type = "IMU";
+							mipi-lane-rate-mbps = <1300>;
 							nvidia,gmsl-ser-device = <&ser_a>;
 							nvidia,gmsl-dser-device = <&dser>;
 
@@ -392,9 +395,11 @@
 								phy_mode = "DPHY";
 								discontinuous_clk = "no";
 								cil_settletime = "0";
+								deskew_initial_enable = "false";
+								deskew_periodic_enable = "false";
 								mclk_khz = "24000";
-								pix_clk_hz = "1000000000";
-								serdes_pix_clk_hz = "1000000000";
+								pix_clk_hz = "700000000";
+								serdes_pix_clk_hz = "750000000";
 								line_length = "640";
 								embedded_metadata_height = "0";
 							};
@@ -422,6 +427,7 @@
 							compatible = "realsense,d5xx";
 							use_sensor_mode_id = "true";
 							cam-type = "Y8";
+							mipi-lane-rate-mbps = <1300>;
 							nvidia,gmsl-ser-device = <&ser_a>;
 							nvidia,gmsl-dser-device = <&dser>;
 
@@ -451,9 +457,11 @@
 								phy_mode = "DPHY";
 								discontinuous_clk = "no";
 								cil_settletime = "0";
+								deskew_initial_enable = "false";
+								deskew_periodic_enable = "false";
 								mclk_khz = "24000";
-								pix_clk_hz = "1000000000";
-								serdes_pix_clk_hz = "1000000000";
+								pix_clk_hz = "700000000";
+								serdes_pix_clk_hz = "750000000";
 								line_length = "1280";
 								embedded_metadata_height = "1";
 							};
@@ -469,11 +477,11 @@
 								phy_mode = "DPHY";
 								discontinuous_clk = "no";
 								cil_settletime = "0";
-								deskew_initial_enable = "true";
-								deskew_periodic_enable = "true";
+								deskew_initial_enable = "false";
+								deskew_periodic_enable = "false";
 								mclk_khz = "24000";
-								pix_clk_hz = "500000000";
-								serdes_pix_clk_hz = "500000000";
+								pix_clk_hz = "350000000";
+								serdes_pix_clk_hz = "375000000";
 								line_length = "1280";
 								embedded_metadata_height = "1";
 							};
@@ -501,6 +509,7 @@
 							compatible = "realsense,d5xx";
 							use_sensor_mode_id = "true";
 							cam-type = "RGB";
+							mipi-lane-rate-mbps = <1300>;
 							nvidia,gmsl-ser-device = <&ser_a>;
 							nvidia,gmsl-dser-device = <&dser>;
 
@@ -529,11 +538,11 @@
 								phy_mode = "DPHY";
 								discontinuous_clk = "no";
 								cil_settletime = "0";
-								deskew_initial_enable = "true";
-								deskew_periodic_enable = "true";
+								deskew_initial_enable = "false";
+								deskew_periodic_enable = "false";
 								mclk_khz = "24000";
-								pix_clk_hz = "500000000";
-								serdes_pix_clk_hz = "500000000";
+								pix_clk_hz = "350000000";
+								serdes_pix_clk_hz = "375000000";
 								line_length = "1920";
 								embedded_metadata_height = "1";
 							};
@@ -560,6 +569,7 @@
 							compatible = "realsense,d5xx";
 							use_sensor_mode_id = "true";
 							cam-type = "Depth";
+							mipi-lane-rate-mbps = <1300>;
 							nvidia,gmsl-ser-device = <&ser_a>;
 							nvidia,gmsl-dser-device = <&dser>;
 
@@ -578,26 +588,8 @@
 								};
 							};
 
-							/*
-							 * Pixel clock reference for mixed-VC tunnel mode:
-							 *   pix_clk_hz = lane_rate_bps * lane_count / bits_per_pixel
-							 *
-							 * The MAX96724->Orin D-PHY output is configured to
-							 * 2.0Gbps/lane over 4 lanes, so the payload budget is
-							 * 2,000,000,000 * 4 = 8,000,000,000 bits/s.
-							 *
-							 * Tunnel mode carries each source packet as-is. There is
-							 * no single rewritten DES-side BPP when VC0-3 run
-							 * concurrently, so each Orin mode uses its own
-							 * csi_pixel_bit_depth:
-							 *   16-bit modes: 8,000,000,000 / 16 = 500,000,000 Hz
-							 *   8-bit modes:  8,000,000,000 /  8 = 1,000,000,000 Hz
-							 *
-							 * Aggregate bandwidth closure is still checked against
-							 * the shared 4-lane physical link and the 6Gbps GMSL2
-							 * forward link; pix_clk_hz here is the per-mode parser
-							 * clock NVIDIA uses for VI/NVCSI bandwidth setup.
-							 */
+							/* 1.5Gbps/lane x4 gives a 375MHz SerDes pixel clock at
+							 * 16bpp and 750MHz at 8bpp in mixed-VC tunnel mode. */
 							mode0 {
 								pixel_t = "yuv_uyvy16";
 								num_lanes = "4";
@@ -608,11 +600,11 @@
 								phy_mode = "DPHY";
 								discontinuous_clk = "no";
 								cil_settletime = "0";
-								deskew_initial_enable = "true";
-								deskew_periodic_enable = "true";
+								deskew_initial_enable = "false";
+								deskew_periodic_enable = "false";
 								mclk_khz = "24000";
-								pix_clk_hz = "500000000";
-								serdes_pix_clk_hz = "500000000";
+								pix_clk_hz = "350000000";
+								serdes_pix_clk_hz = "375000000";
 								line_length = "1280";
 								embedded_metadata_height = "1";
 							};
