@@ -263,7 +263,7 @@
 						def-addr = <0x10>;
 						reg = <0x1d>;
 						override_reg = <0x1a>;
-						compatible = "intel,d4xx";
+						compatible = "realsense,d5xx";
 						use_sensor_mode_id = "true";
 						cam-type = "IMU";
 						nvidia,gmsl-ser-device = <&ser_a>;
@@ -311,7 +311,7 @@
 						def-addr = <0x10>;
 						reg = <0x1c>;
 						override_reg = <0x1a>;
-						compatible = "intel,d4xx";
+						compatible = "realsense,d5xx";
 						use_sensor_mode_id = "true";
 						cam-type = "Y8";
 						nvidia,gmsl-ser-device = <&ser_a>;
@@ -360,7 +360,7 @@
 						def-addr = <0x10>;
 						reg = <0x1b>;
 						override_reg = <0x1a>;
-						compatible = "intel,d4xx";
+						compatible = "realsense,d5xx";
 						use_sensor_mode_id = "true";
 						cam-type = "RGB";
 						nvidia,gmsl-ser-device = <&ser_a>;
@@ -407,7 +407,7 @@
 						status = "okay";
 						def-addr = <0x10>;
 						reg = <0x1a>;
-						compatible = "intel,d4xx";
+						compatible = "realsense,d5xx";
 						use_sensor_mode_id = "true";
 						cam-type = "Depth";
 						nvidia,gmsl-ser-device = <&ser_a>;
