@@ -1,263 +1,21 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 22a861c140da507ae16f202fba58f86a922f6c72 Mon Sep 17 00:00:00 2001
 From: zhou <shengyong.zhou@realsenseai.com>
-Date: Fri, 24 Jul 2026 19:30:00 +0800
-Subject: [PATCH] media: tegra: receive D5x RGB Bayer surfaces
-
-D5x RGB ISYS stores FMT_SGRBG10P as 50 little-endian 10-bit pixels
-in each 64-byte cache line. HIF MIPI preserves the complete aligned
-row in a CSI User Defined 1 packet so the receiver treats the payload
-as an opaque byte stream.
-
-The optional unpacked path stores one 10-bit sample in each 16-bit
-container and sends those containers unchanged using CSI RAW16.
-
-Add separate internal mbus tuples for both transports. The packed path
-keeps its private GR0P ABI. The unpacked RAW16 path uses T_R16 and exposes
-the standard V4L2 SGRBG10/BA10 surface or, through a D5x frame-finish
-callback, the associated standard packed SGRBG10P/pgAA surface. Prefer
-formats advertised by the active subdevice when transport tuples share
-a standard FourCC.
+Date: Tue, 11 Aug 2026 11:39:40 +0800
+Subject: [PATCH 2/3] media: tegra: receive D5x RGB Bayer surfaces
 
 Signed-off-by: zhou <shengyong.zhou@realsenseai.com>
 ---
-diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-index 079b5865..fa0acd21 100644
---- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-+++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-@@ -394,6 +394,8 @@ static void vi5_setup_surface(struct tegra_channel *chan,
- 	u32 bpl = chan->format.bytesperline;
- 	u32 data_type = chan->fmtinfo->img_dt;
- 	bool flat_nv12 = chan->fmtinfo->fourcc == V4L2_PIX_FMT_NV12;
-+	bool d5x_sgrbg10p =
-+		chan->fmtinfo->fourcc == V4L2_PIX_FMT_RS_SGRBG10P;
- 	u32 nvcsi_stream = chan->port[vi_port];
- 	struct capture_descriptor_memoryinfo *desc_memoryinfo =
- 		&chan->tegra_vi_channel[vi_port]->
-@@ -409,6 +411,9 @@ static void vi5_setup_surface(struct tegra_channel *chan,
- 	/* D5xx carries flat NV12 bytes as W x (H * 3 / 2) RAW8 rows. */
- 	if (flat_nv12)
- 		height = height * 3 / 2;
-+	else if (d5x_sgrbg10p)
-+		/* RAW8 parser width is the byte-identical HKR DDR stride. */
-+		width = bpl;
- 
- 	memcpy(desc, &capture_template, sizeof(capture_template));
- 	memset(desc_memoryinfo, 0, sizeof(*desc_memoryinfo));
-@@ -421,6 +426,14 @@ static void vi5_setup_surface(struct tegra_channel *chan,
- 	desc->ch_cfg.frame.frame_y = height;
- 	desc->ch_cfg.match.datatype = data_type;
- 	desc->ch_cfg.match.datatype_mask = 0x3f;
-+	if (d5x_sgrbg10p) {
-+		/*
-+		 * UD30 is an opaque byte stream. Map it to RAW8 only inside VI
-+		 * so each packet payload byte reaches the V4L2 surface unchanged.
-+		 */
-+		desc->ch_cfg.dt_enable = 1;
-+		desc->ch_cfg.dt_override = TEGRA_IMAGE_DT_RAW8;
-+	}
- 	desc->ch_cfg.pixfmt_enable = 1;
- 	desc->ch_cfg.pixfmt.format = format;
- 
+ .../media/platform/tegra/camera/vi/channel.c  | 26 +++++++++++++
+ .../platform/tegra/camera/vi/vi5_formats.h    | 39 +++++++++++++++++++
+ include/media/camera_common.h                 |  6 +++
+ include/media/tegra_camera_core.h             |  1 +
+ 4 files changed, 72 insertions(+)
+
 diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
-index 6dc16c9f..58f80bd4 100644
+index 61f1aaf1..603612b4 100644
 --- a/drivers/media/platform/tegra/camera/vi/channel.c
 +++ b/drivers/media/platform/tegra/camera/vi/channel.c
-@@ -1156,6 +1156,9 @@ tegra_channel_enum_format(struct file *file, void *fh, struct v4l2_fmtdesc *f)
- 	index -= 1;
- 	f->pixelformat = tegra_core_get_fourcc_by_idx(chan, index);
- 
-+	if (f->pixelformat == v4l2_fourcc('G', 'R', '0', 'P'))
-+		strscpy(f->description, "RealSense GRBG10P CL64", sizeof(f->description));
-+
- 	return 0;
- }
- 
-diff --git a/drivers/media/platform/tegra/camera/vi/core.c b/drivers/media/platform/tegra/camera/vi/core.c
-index 4923d9b6..6ec75573 100644
---- a/drivers/media/platform/tegra/camera/vi/core.c
-+++ b/drivers/media/platform/tegra/camera/vi/core.c
-@@ -94,13 +94,19 @@ int tegra_core_get_code_by_fourcc(struct tegra_channel *chan,
--		unsigned int fourcc, unsigned offset)
-+		unsigned int fourcc, unsigned offset)
- {
--	unsigned int i;
--
--	for (i = offset; i < chan->num_video_formats; ++i) {
--		if (chan->video_formats[i]->fourcc == fourcc)
--			return chan->video_formats[i]->code;
--	}
--	spec_bar();
--
--	return -1;
-+	unsigned int i;
-+	int fallback = -1;
-+
-+	for (i = offset; i < chan->num_video_formats; ++i) {
-+		if (chan->video_formats[i]->fourcc != fourcc)
-+			continue;
-+
-+		if (fallback < 0)
-+			fallback = chan->video_formats[i]->code;
-+		if (test_bit(i, chan->fmts_bitmap))
-+			return chan->video_formats[i]->code;
-+	}
-+	spec_bar();
-+
-+	return fallback;
- }
- EXPORT_SYMBOL(tegra_core_get_code_by_fourcc);
-@@ -154,13 +160,19 @@ const struct tegra_video_format *
- tegra_core_get_format_by_fourcc(struct tegra_channel *chan, u32 fourcc)
- {
--	unsigned int i;
--
--	for (i = 0; i < chan->num_video_formats; ++i) {
--		if (chan->video_formats[i]->fourcc == fourcc)
--			return chan->video_formats[i];
--	}
--	spec_bar();
--
--	return NULL;
-+	unsigned int i;
-+	const struct tegra_video_format *fallback = NULL;
-+
-+	for (i = 0; i < chan->num_video_formats; ++i) {
-+		if (chan->video_formats[i]->fourcc != fourcc)
-+			continue;
-+
-+		if (!fallback)
-+			fallback = chan->video_formats[i];
-+		if (test_bit(i, chan->fmts_bitmap))
-+			return chan->video_formats[i];
-+	}
-+	spec_bar();
-+
-+	return fallback;
- }
- EXPORT_SYMBOL(tegra_core_get_format_by_fourcc);
-diff --git a/include/media/tegra_camera_core.h b/include/media/tegra_camera_core.h
-index 43d5316b..d9e459b8 100644
---- a/include/media/tegra_camera_core.h
-+++ b/include/media/tegra_camera_core.h
-@@ -49,16 +49,17 @@ enum tegra_image_dt {
--
--	TEGRA_IMAGE_DT_RAW6 = 40,
--	TEGRA_IMAGE_DT_RAW7,
--	TEGRA_IMAGE_DT_RAW8,
--	TEGRA_IMAGE_DT_RAW10,
--	TEGRA_IMAGE_DT_RAW12,
--	TEGRA_IMAGE_DT_RAW14,
--
--	TEGRA_IMAGE_DT_USER_1 = 48,
--	TEGRA_IMAGE_DT_USER_2,
--	TEGRA_IMAGE_DT_USER_3,
--	TEGRA_IMAGE_DT_USER_4,
--
--};
--
-+
-+	TEGRA_IMAGE_DT_RAW6 = 40,
-+	TEGRA_IMAGE_DT_RAW7,
-+	TEGRA_IMAGE_DT_RAW8,
-+	TEGRA_IMAGE_DT_RAW10,
-+	TEGRA_IMAGE_DT_RAW12,
-+	TEGRA_IMAGE_DT_RAW14,
-+	TEGRA_IMAGE_DT_RAW16,
-+
-+	TEGRA_IMAGE_DT_USER_1 = 48,
-+	TEGRA_IMAGE_DT_USER_2,
-+	TEGRA_IMAGE_DT_USER_3,
-+	TEGRA_IMAGE_DT_USER_4,
-+
-+};
-+
- /* Supported CSI to VI Data Formats */
-diff --git a/drivers/media/platform/tegra/camera/vi/vi5_formats.h b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
-index fb07cfd2..1cb54ba8 100644
---- a/drivers/media/platform/tegra/camera/vi/vi5_formats.h
-+++ b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
-@@ -76,6 +76,26 @@ enum tegra_image_format {
- 	TEGRA_IMAGE_FORMAT_T_DPCM_RAW20,
- };
- 
-+#ifndef MEDIA_BUS_FMT_RS_SGRBG10_1X16
-+#define MEDIA_BUS_FMT_RS_SGRBG10_1X16 0x5003
-+#endif
-+
-+#ifndef MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16
-+#define MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16 0x5004
-+#endif
-+
-+#ifndef MEDIA_BUS_FMT_RS_SGRBG10P_1X10
-+#define MEDIA_BUS_FMT_RS_SGRBG10P_1X10 0x5002
-+#endif
-+
-+#ifndef V4L2_PIX_FMT_RS_SGRBG10P
-+#define V4L2_PIX_FMT_RS_SGRBG10P v4l2_fourcc('G', 'R', '0', 'P')
-+#endif
-+
-+#ifndef V4L2_PIX_FMT_SGRBG10P
-+#define V4L2_PIX_FMT_SGRBG10P v4l2_fourcc('p', 'g', 'A', 'A')
-+#endif
-+
- static const struct tegra_video_format vi5_video_formats[] = {
- 	/* RAW 6: TODO */
- 
-@@ -170,6 +190,27 @@ static const struct tegra_video_format vi5_video_formats[] = {
- 	TEGRA_VIDEO_FORMAT(RAW8, 8, UYYVYY8_0_5X24, 1, 1, T_R8,
- 				RAW8, NV12, "YUV 4:2:0 NV12"),
- 
-+	/*
-+	 * D5x unpacked GRBG10: CSI RAW16 carries one complete 16-bit
-+	 * container per sample. Expose the standard V4L2 BA10 surface.
-+	 */
-+	TEGRA_VIDEO_FORMAT(RAW10, 10, RS_SGRBG10_1X16, 2, 1, T_R16,
-+				RAW16, SGRBG10, "GRBG10 in 16-bit containers"),
-+
-+	/*
-+	 * Associated Host-output option for the same D5x RAW16/T_R16
-+	 * transport. The D5x frame-finish callback packs each row to pgAA.
-+	 */
-+	TEGRA_VIDEO_FORMAT(RAW10, 10, RS_SGRBG10P_RAW16_1X16, 2, 1, T_R16,
-+				RAW16, SGRBG10P, "Packed GRBG10 from RAW16"),
-+
-+	/*
-+	 * D5x FMT_SGRBG10P: 50 little-endian 10-bit pixels per 64-byte
-+	 * cache line. Receive CSI UD30 and preserve every byte in T_R8.
-+	 */
-+	TEGRA_VIDEO_FORMAT(RAW10, 10, RS_SGRBG10P_1X10, 32, 25, T_R8,
-+				USER_1, RS_SGRBG10P, "RealSense GRBG10P CL64"),
-+
- };
- 
- #endif
-diff --git a/include/media/camera_common.h b/include/media/camera_common.h
---- a/include/media/camera_common.h
-+++ b/include/media/camera_common.h
-@@ -164,6 +164,11 @@ struct camera_common_framesync {
- struct tegracam_device ;
- struct camera_common_data;
- 
-+struct tegra_frame_postprocess_ops {
-+	int (*process)(struct camera_common_data *s_data, void *data,
-+		       size_t bytesused, u32 mbus_code);
-+};
-+
- struct camera_common_sensor_ops {
- 	u32 numfrmfmts;
- 	const struct camera_common_frmfmt *frmfmt_table;
-@@ -258,6 +263,7 @@ struct camera_common_data {
- 	bool	use_sensor_mode_id;
- 	bool	override_enable;
- 	const struct tegra_embedded_metadata_ops *embedded_metadata_ops;
-+	const struct tegra_frame_postprocess_ops *frame_postprocess_ops;
- 	u32	version;
- };
- 
-diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
---- a/drivers/media/platform/tegra/camera/vi/channel.c
-+++ b/drivers/media/platform/tegra/camera/vi/channel.c
-@@ -1068,10 +1068,33 @@ static void tegra_channel_stop_streaming(struct vb2_queue *vq)
+@@ -1035,10 +1035,33 @@ static void tegra_channel_stop_streaming(struct vb2_queue *vq)
  	queue_init_ts = 0;
  }
  
@@ -291,3 +49,115 @@ diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/pl
  	.wait_prepare = vb2_ops_wait_prepare,
  	.wait_finish = vb2_ops_wait_finish,
  	.start_streaming = tegra_channel_start_streaming,
+@@ -1156,6 +1179,9 @@ tegra_channel_enum_format(struct file *file, void *fh, struct v4l2_fmtdesc *f)
+ 	index -= 1;
+ 	f->pixelformat = tegra_core_get_fourcc_by_idx(chan, index);
+ 
++	if (f->pixelformat == v4l2_fourcc('G', 'R', '0', 'P'))
++		strscpy(f->description, "RealSense GRBG10P CL64", sizeof(f->description));
++
+ 	return 0;
+ }
+ 
+diff --git a/drivers/media/platform/tegra/camera/vi/vi5_formats.h b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
+index 7caad538..a0929b5e 100644
+--- a/drivers/media/platform/tegra/camera/vi/vi5_formats.h
++++ b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
+@@ -86,6 +86,26 @@ enum tegra_image_format {
+ #define MEDIA_BUS_FMT_RS_NV12_UD30_1X8 0x5008
+ #endif
+ 
++#ifndef MEDIA_BUS_FMT_RS_SGRBG10_1X16
++#define MEDIA_BUS_FMT_RS_SGRBG10_1X16 0x5003
++#endif
++
++#ifndef MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16
++#define MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16 0x5004
++#endif
++
++#ifndef MEDIA_BUS_FMT_RS_SGRBG10P_1X10
++#define MEDIA_BUS_FMT_RS_SGRBG10P_1X10 0x5002
++#endif
++
++#ifndef V4L2_PIX_FMT_RS_SGRBG10P
++#define V4L2_PIX_FMT_RS_SGRBG10P v4l2_fourcc('G', 'R', '0', 'P')
++#endif
++
++#ifndef V4L2_PIX_FMT_SGRBG10P
++#define V4L2_PIX_FMT_SGRBG10P v4l2_fourcc('p', 'g', 'A', 'A')
++#endif
++
+ struct tegra_vi_surface_override {
+ 	u32 code;
+ 	u8 dt_override;
+@@ -102,6 +122,13 @@ static const struct tegra_vi_surface_override tegra_vi_surface_overrides[] = {
+ 		.height_numerator = 3,
+ 		.height_denominator = 2,
+ 	},
++	{
++		.code = MEDIA_BUS_FMT_RS_SGRBG10P_1X10,
++		.dt_override = TEGRA_IMAGE_DT_RAW8,
++		.bpl_width_divisor = 1,
++		.height_numerator = 1,
++		.height_denominator = 1,
++	},
+ };
+ 
+ static const struct tegra_vi_surface_override *
+@@ -204,6 +231,18 @@ static const struct tegra_video_format vi5_video_formats[] = {
+ 	TEGRA_VIDEO_FORMAT(RAW8, 8, RS_NV12_UD30_1X8, 1, 1, T_R8,
+ 				USER_1, NV12, "YUV 4:2:0 NV12 UD30"),
+ 
++	/* RAW16 carries one complete 16-bit container per GRBG10 sample. */
++	TEGRA_VIDEO_FORMAT(RAW10, 10, RS_SGRBG10_1X16, 2, 1, T_R16,
++				RAW16, SGRBG10, "GRBG10 in 16-bit containers"),
++
++	/* The frame-finish callback packs this RAW16 surface to pgAA. */
++	TEGRA_VIDEO_FORMAT(RAW10, 10, RS_SGRBG10P_RAW16_1X16, 2, 1, T_R16,
++				RAW16, SGRBG10P, "Packed GRBG10 from RAW16"),
++
++	/* 50 little-endian 10-bit pixels per 64-byte cache line over UD30. */
++	TEGRA_VIDEO_FORMAT(RAW10, 10, RS_SGRBG10P_1X10, 32, 25, T_R8,
++				USER_1, RS_SGRBG10P, "RealSense GRBG10P CL64"),
++
+ };
+ 
+ #endif
+diff --git a/include/media/camera_common.h b/include/media/camera_common.h
+index 69c42461..bcc69a9d 100644
+--- a/include/media/camera_common.h
++++ b/include/media/camera_common.h
+@@ -164,6 +164,11 @@ struct camera_common_framesync {
+ struct tegracam_device ;
+ struct camera_common_data;
+ 
++struct tegra_frame_postprocess_ops {
++	int (*process)(struct camera_common_data *s_data, void *data,
++		       size_t bytesused, u32 mbus_code);
++};
++
+ struct camera_common_sensor_ops {
+ 	u32 numfrmfmts;
+ 	const struct camera_common_frmfmt *frmfmt_table;
+@@ -258,6 +263,7 @@ struct camera_common_data {
+ 	bool	use_sensor_mode_id;
+ 	bool	override_enable;
+ 	const struct tegra_embedded_metadata_ops *embedded_metadata_ops;
++	const struct tegra_frame_postprocess_ops *frame_postprocess_ops;
+ 	u32	version;
+ };
+ 
+diff --git a/include/media/tegra_camera_core.h b/include/media/tegra_camera_core.h
+index 3b63f5bc..7bccffaf 100644
+--- a/include/media/tegra_camera_core.h
++++ b/include/media/tegra_camera_core.h
+@@ -53,6 +53,7 @@ enum tegra_image_dt {
+ 	TEGRA_IMAGE_DT_RAW10,
+ 	TEGRA_IMAGE_DT_RAW12,
+ 	TEGRA_IMAGE_DT_RAW14,
++	TEGRA_IMAGE_DT_RAW16,
+ 
+ 	TEGRA_IMAGE_DT_USER_1 = 48,
+ 	TEGRA_IMAGE_DT_USER_2,
+-- 
+2.34.1

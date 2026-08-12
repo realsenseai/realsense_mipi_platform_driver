@@ -1,0 +1,311 @@
+From 86a9bae15f5c6a2ae769417eb1676196077ea5f2 Mon Sep 17 00:00:00 2001
+From: zhou <shengyong.zhou@realsenseai.com>
+Date: Wed, 12 Aug 2026 10:41:45 +0800
+Subject: [PATCH] media: tegra: add declarative D5x byte surfaces
+
+Signed-off-by: zhou <shengyong.zhou@realsenseai.com>
+---
+ .../media/platform/tegra/camera/vi/channel.c  |  38 +++++-
+ drivers/media/platform/tegra/camera/vi/core.c |   6 +-
+ .../media/platform/tegra/camera/vi/vi5_fops.c |  13 ++
+ .../platform/tegra/camera/vi/vi5_formats.h    | 111 ++++++++++++++++++
+ include/media/camera_common.h                 |   6 +
+ 5 files changed, 171 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
+index 98a7bba..64ef731 100644
+--- a/drivers/media/platform/tegra/camera/vi/channel.c
++++ b/drivers/media/platform/tegra/camera/vi/channel.c
+@@ -338,6 +338,9 @@ static void tegra_channel_update_format(struct tegra_channel *chan,
+ 
+ 	if (fourcc == V4L2_PIX_FMT_NV16)
+ 		chan->format.sizeimage *= 2;
++	else if (fourcc == V4L2_PIX_FMT_NV12)
++		/* NV12 V4L2 buffer: Y plane + half-height UV plane */
++		chan->format.sizeimage = chan->format.sizeimage * 3 / 2;
+ }
+ 
+ static void tegra_channel_fmts_bitmap_init(struct tegra_channel *chan)
+@@ -1104,10 +1107,33 @@ static void tegra_channel_stop_streaming(struct vb2_queue *vq)
+ 	queue_init_ts = 0;
+ }
+ 
++static void tegra_channel_buffer_finish(struct vb2_buffer *vb)
++{
++	struct tegra_channel *chan = vb2_get_drv_priv(vb->vb2_queue);
++	struct camera_common_data *s_data;
++	void *data;
++	size_t bytesused;
++
++	if (!chan->subdev_on_csi)
++		return;
++
++	s_data = to_camera_common_data(chan->subdev_on_csi->dev);
++	if (!s_data || !s_data->frame_postprocess_ops ||
++	    !s_data->frame_postprocess_ops->process)
++		return;
++
++	bytesused = vb2_get_plane_payload(vb, 0);
++	data = vb2_plane_vaddr(vb, 0);
++	if (s_data->frame_postprocess_ops->process(s_data, data, bytesused,
++						  chan->fmtinfo->code))
++		to_vb2_v4l2_buffer(vb)->flags |= V4L2_BUF_FLAG_ERROR;
++}
++
+ static const struct vb2_ops tegra_channel_queue_qops = {
+ 	.queue_setup = tegra_channel_queue_setup,
+ 	.buf_prepare = tegra_channel_buffer_prepare,
+ 	.buf_queue = tegra_channel_buffer_queue,
++	.buf_finish = tegra_channel_buffer_finish,
+ 	.wait_prepare = vb2_ops_wait_prepare,
+ 	.wait_finish = vb2_ops_wait_finish,
+ 	.start_streaming = tegra_channel_start_streaming,
+@@ -1232,6 +1258,9 @@ tegra_channel_enum_format(struct file *file, void *fh, struct v4l2_fmtdesc *f)
+ 	}
+ 	f->pixelformat = tegra_core_get_fourcc_by_idx(chan, index);
+ 
++	if (f->pixelformat == v4l2_fourcc('G', 'R', '0', 'P'))
++		strscpy(f->description, "RealSense GRBG10P CL64", sizeof(f->description));
++
+ 	return 0;
+ }
+ 
+@@ -2235,12 +2264,19 @@ __tegra_channel_try_format(struct tegra_channel *chan,
+ 				&pix->width, &pix->height, &pix->bytesperline);
+ 	pix->sizeimage = get_aligned_buffer_size(chan,
+ 			pix->bytesperline, pix->height);
+-	if (chan->fmtinfo->fourcc == V4L2_PIX_FMT_NV16) {
++	if (vfmt->fourcc == V4L2_PIX_FMT_NV16) {
+ 		if (__builtin_umul_overflow(pix->sizeimage, 2, &pix->sizeimage)) {
+ 			dev_err(chan->vi->dev, "%s: update size image failed due to an overflow\n",
+ 			__func__);
+ 			return -EOVERFLOW;
+ 		}
++	} else if (vfmt->fourcc == V4L2_PIX_FMT_NV12) {
++		if (__builtin_umul_overflow(pix->sizeimage, 3, &pix->sizeimage)) {
++			dev_err(chan->vi->dev, "%s: update size image failed due to an overflow\n",
++				__func__);
++			return -EOVERFLOW;
++		}
++		pix->sizeimage /= 2;
+ 	}
+ 
+ 	return ret;
+diff --git a/drivers/media/platform/tegra/camera/vi/core.c b/drivers/media/platform/tegra/camera/vi/core.c
+index 30ed130..dd8ac87 100644
+--- a/drivers/media/platform/tegra/camera/vi/core.c
++++ b/drivers/media/platform/tegra/camera/vi/core.c
+@@ -106,7 +106,8 @@ int tegra_core_get_code_by_fourcc(struct tegra_channel *chan,
+ 	unsigned int i;
+ 
+ 	for (i = offset; i < chan->num_video_formats; ++i) {
+-		if (chan->video_formats[i]->fourcc == fourcc)
++		if (chan->video_formats[i]->fourcc == fourcc &&
++		    test_bit(i, chan->fmts_bitmap))
+ 			return chan->video_formats[i]->code;
+ 	}
+ 	spec_bar();
+@@ -166,7 +167,8 @@ tegra_core_get_format_by_fourcc(struct tegra_channel *chan, u32 fourcc)
+ 	unsigned int i;
+ 
+ 	for (i = 0; i < chan->num_video_formats; ++i) {
+-		if (chan->video_formats[i]->fourcc == fourcc)
++		if (chan->video_formats[i]->fourcc == fourcc &&
++		    test_bit(i, chan->fmts_bitmap))
+ 			return chan->video_formats[i];
+ 	}
+ 	spec_bar();
+diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+index dac37f9..5e6d0d4 100644
+--- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
++++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+@@ -391,6 +391,8 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+ 	u32 format = chan->fmtinfo->img_fmt;
+ 	u32 bpl = chan->format.bytesperline;
+ 	u32 data_type = chan->fmtinfo->img_dt;
++	const struct tegra_vi_surface_override *surface_override =
++		tegra_vi_get_surface_override(chan->fmtinfo->code);
+ 	u32 nvcsi_stream = chan->port[vi_port];
+ 	unsigned int range = 0;
+ 	struct capture_descriptor_memoryinfo *desc_memoryinfo =
+@@ -419,6 +421,13 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+ 		}
+ 	}
+ 
++	if (surface_override) {
++		if (surface_override->bpl_width_divisor)
++			width = bpl / surface_override->bpl_width_divisor;
++		height = height * surface_override->height_numerator /
++			surface_override->height_denominator;
++	}
++
+ 	memcpy(desc, &capture_template, sizeof(capture_template));
+ 	memset(desc_memoryinfo, 0, sizeof(*desc_memoryinfo));
+ 
+@@ -429,6 +438,10 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+ 	desc->ch_cfg.frame.frame_y = height;
+ 	desc->ch_cfg.match.datatype = data_type;
+ 	desc->ch_cfg.match.datatype_mask = 0x3f;
++	if (surface_override && surface_override->dt_override) {
++		desc->ch_cfg.dt_enable = 1;
++		desc->ch_cfg.dt_override = surface_override->dt_override;
++	}
+ 	desc->ch_cfg.pixfmt_enable = 1;
+ 	desc->ch_cfg.pixfmt.format = format;
+ 
+diff --git a/drivers/media/platform/tegra/camera/vi/vi5_formats.h b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
+index bcd612f..d0cbffe 100644
+--- a/drivers/media/platform/tegra/camera/vi/vi5_formats.h
++++ b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
+@@ -82,6 +82,94 @@ enum tegra_image_format {
+ 	TEGRA_IMAGE_FORMAT_T_DPCM_RAW20,
+ };
+ 
++#ifndef MEDIA_BUS_FMT_RS_NV12_UD30_1X8
++#define MEDIA_BUS_FMT_RS_NV12_UD30_1X8 0x5008
++#endif
++
++#ifndef MEDIA_BUS_FMT_RS_SGRBG10_1X16
++#define MEDIA_BUS_FMT_RS_SGRBG10_1X16 0x5003
++#endif
++
++#ifndef MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16
++#define MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16 0x5004
++#endif
++
++#ifndef MEDIA_BUS_FMT_RS_Y12I_UD30_4X8
++#define MEDIA_BUS_FMT_RS_Y12I_UD30_4X8 0x5005
++#endif
++
++#ifndef MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8
++#define MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8 0x5006
++#endif
++
++#ifndef MEDIA_BUS_FMT_RS_SGRBG10P_1X10
++#define MEDIA_BUS_FMT_RS_SGRBG10P_1X10 0x5002
++#endif
++
++#ifndef V4L2_PIX_FMT_RS_SGRBG10P
++#define V4L2_PIX_FMT_RS_SGRBG10P v4l2_fourcc('G', 'R', '0', 'P')
++#endif
++
++#ifndef V4L2_PIX_FMT_SGRBG10P
++#define V4L2_PIX_FMT_SGRBG10P v4l2_fourcc('p', 'g', 'A', 'A')
++#endif
++
++#ifndef V4L2_PIX_FMT_Y16I
++#define V4L2_PIX_FMT_Y16I v4l2_fourcc('Y', '1', '6', 'I')
++#endif
++
++struct tegra_vi_surface_override {
++	u32 code;
++	u8 dt_override;
++	u8 bpl_width_divisor;
++	u8 height_numerator;
++	u8 height_denominator;
++};
++
++static const struct tegra_vi_surface_override tegra_vi_surface_overrides[] = {
++	{
++		.code = MEDIA_BUS_FMT_RS_NV12_UD30_1X8,
++		.dt_override = TEGRA_IMAGE_DT_RAW8,
++		.bpl_width_divisor = 0,
++		.height_numerator = 3,
++		.height_denominator = 2,
++	},
++	{
++		.code = MEDIA_BUS_FMT_RS_SGRBG10P_1X10,
++		.dt_override = TEGRA_IMAGE_DT_RAW8,
++		.bpl_width_divisor = 1,
++		.height_numerator = 1,
++		.height_denominator = 1,
++	},
++	{
++		.code = MEDIA_BUS_FMT_RS_Y12I_UD30_4X8,
++		.dt_override = TEGRA_IMAGE_DT_RAW8,
++		.bpl_width_divisor = 1,
++		.height_numerator = 1,
++		.height_denominator = 1,
++	},
++	{
++		.code = MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8,
++		.dt_override = 0,
++		.bpl_width_divisor = 2,
++		.height_numerator = 1,
++		.height_denominator = 1,
++	},
++};
++
++static const struct tegra_vi_surface_override *
++tegra_vi_get_surface_override(u32 code)
++{
++	unsigned int i;
++
++	for (i = 0; i < ARRAY_SIZE(tegra_vi_surface_overrides); i++) {
++		if (tegra_vi_surface_overrides[i].code == code)
++			return &tegra_vi_surface_overrides[i];
++	}
++
++	return NULL;
++}
++
+ static const struct tegra_video_format vi5_video_formats[] = {
+ 	/* RAW 6: TODO */
+ 
+@@ -176,6 +264,29 @@ static const struct tegra_video_format vi5_video_formats[] = {
+ 	TEGRA_VIDEO_FORMAT(RGB888, 24, RGB888_1X24, 4, 1, T_A8R8G8B8,
+ 				RGB888, Y12I, "Y12I 24"),
+ 
++	TEGRA_VIDEO_FORMAT(RAW8, 8, RS_NV12_UD30_1X8, 1, 1, T_R8,
++				USER_1, NV12, "YUV 4:2:0 NV12 UD30"),
++
++	/* RAW16 carries one complete 16-bit container per GRBG10 sample. */
++	TEGRA_VIDEO_FORMAT(RAW10, 10, RS_SGRBG10_1X16, 2, 1, T_R16,
++				RAW16, SGRBG10, "GRBG10 in 16-bit containers"),
++
++	/* The frame-finish callback packs this RAW16 surface to pgAA. */
++	TEGRA_VIDEO_FORMAT(RAW10, 10, RS_SGRBG10P_RAW16_1X16, 2, 1, T_R16,
++				RAW16, SGRBG10P, "Packed GRBG10 from RAW16"),
++
++	/* 50 little-endian 10-bit pixels per 64-byte cache line over UD30. */
++	TEGRA_VIDEO_FORMAT(RAW10, 10, RS_SGRBG10P_1X10, 32, 25, T_R8,
++				USER_1, RS_SGRBG10P, "RealSense GRBG10P CL64"),
++
++	/* UD30 preserves little-endian L/R 16-bit slot bytes through T_R8. */
++	TEGRA_VIDEO_FORMAT(RAW12, 12, RS_Y12I_UD30_4X8, 4, 1, T_R8,
++				USER_1, Y16I, "Y12I in 16-bit L/R containers"),
++
++	/* RAW16 carrier for the same slots; the frame callback restores order. */
++	TEGRA_VIDEO_FORMAT(RAW12, 12, RS_Y12I_RAW16_4X8, 4, 1, T_R16,
++				RAW16, Y16I, "Y12I RAW16 byte carrier"),
++
+ };
+ 
+ #endif
+diff --git a/include/media/camera_common.h b/include/media/camera_common.h
+index 823090d..30ea649 100644
+--- a/include/media/camera_common.h
++++ b/include/media/camera_common.h
+@@ -175,6 +175,11 @@ struct camera_common_framesync {
+ struct tegracam_device ;
+ struct camera_common_data;
+ 
++struct tegra_frame_postprocess_ops {
++	int (*process)(struct camera_common_data *s_data, void *data,
++		       size_t bytesused, u32 mbus_code);
++};
++
+ struct camera_common_sensor_ops {
+ 	u32 numfrmfmts;
+ 	const struct camera_common_frmfmt *frmfmt_table;
+@@ -269,6 +274,7 @@ struct camera_common_data {
+ 	bool	use_sensor_mode_id;
+ 	bool	override_enable;
+ 	const struct tegra_embedded_metadata_ops *embedded_metadata_ops;
++	const struct tegra_frame_postprocess_ops *frame_postprocess_ops;
+ 	u32	version;
+ };
+ 
+-- 
+2.34.1
+
