@@ -4,6 +4,9 @@ set -e
 
 ACTION="apply"
 SOURCE_OVERLAY_MODE="${RS_SOURCE_OVERLAY_MODE:-link}"
+# D5xx-only patches touch NVIDIA code shared with D4xx, so they stay opt-in.
+USE_D5XX=0
+[[ "${RS_USE_D5XX^^}" == "ON" || "${RS_USE_D5XX}" == "1" ]] && USE_D5XX=1
 # Default to single camera DT for JetPack 5.0.2
 # single - jp5 [default] single cam GMSL board
 # dual - dual cam GMSL board SC20220126
@@ -13,6 +16,8 @@ while [[ $# -gt 0 ]]; do
         JP5_D4XX_DTSI="tegra194-camera-d4xx-single.dtsi"
     elif [[ "$1" == "--dual-cam" ]]; then
         JP5_D4XX_DTSI="tegra194-camera-d4xx-dual.dtsi"
+    elif [[ "$1" == "--d5xx" ]]; then
+        USE_D5XX=1
     elif [[ "$1" == "--max96712-EVB" ]]; then
         JP5_D4XX_DTSI="tegra194-camera-d4xx-max96712-EVB.dtsi"
     elif [[ "$1" == "--fg12-16ch" ]]; then
@@ -23,7 +28,8 @@ while [[ $# -gt 0 ]]; do
         ACTION="reset"
     elif [[ $1 == "-h" ]]; then
         echo Usage:
-        echo "$0 [--one-cam | --dual-cam | --max96712-EVB | --fg12-16ch | --fg12-16ch-dual ] [reset] [-h]"
+        echo "$0 [--one-cam | --dual-cam | --d5xx | --max96712-EVB | --fg12-16ch | --fg12-16ch-dual ] [reset] [-h]"
+        echo -e '--d5xx\t: also apply D5xx-only patches (or set RS_USE_D5XX=ON)'
         echo -e 'reset\t: hard reset (git) to version from jetpack_version file'
         echo -e '-h\t: show this help'
         exit 0
@@ -160,12 +166,21 @@ apply_external_patches() {
     fi
 }
 
+apply_d5xx_only_patches() {
+	local dir="${PWD}/$2/$1-d5xx"
+    [[ "$ACTION" == 'apply' && "$USE_D5XX" == 1 && -d "$dir" ]] || return 0
+    printf '%s\n' "$(ls -Ld "$dir")"
+    ls -Lw1 "$dir"
+    git -C "${BUILD_SRCS}/$2" apply "$dir"/*
+}
+
 if [[ ! -d "${BUILD_SRCS}" ]]; then
     echo "Sources folder not found. Run ./setup_workspace.sh first"
     exit 2
 fi
 
 apply_external_patches "$JP_INPUT_VERSION" "$D4XX_SRC_DST"
+apply_d5xx_only_patches "$JP_INPUT_VERSION" "$D4XX_SRC_DST"
 apply_external_patches "$JP_INPUT_VERSION" "$KERNEL_DIR"
 
 if version_lt "$JETPACK_VERSION" "6.0"; then
@@ -199,6 +214,9 @@ if [[ "$ACTION" = "apply" ]]; then
             fi
             if [[ -f "$JP6_OVERLAY_MAKEFILE" ]] && ! grep -q '^dtbo-y += tegra234-camera-d5xx-overlay-fg24-4ch.dtbo$' "$JP6_OVERLAY_MAKEFILE"; then
                 sed -i '/^dtbo-y += tegra234-camera-d5xx-overlay.dtbo$/a dtbo-y += tegra234-camera-d5xx-overlay-fg24-4ch.dtbo' "$JP6_OVERLAY_MAKEFILE"
+            fi
+            if [[ -f "$JP6_OVERLAY_MAKEFILE" ]] && ! grep -q '^dtbo-y += tegra234-camera-d5xx-overlay-fg24-5ch-dual-rgb.dtbo$' "$JP6_OVERLAY_MAKEFILE"; then
+                sed -i '/^dtbo-y += tegra234-camera-d5xx-overlay-fg24-4ch.dtbo$/a dtbo-y += tegra234-camera-d5xx-overlay-fg24-5ch-dual-rgb.dtbo' "$JP6_OVERLAY_MAKEFILE"
             fi
             ln -f ${BUILD_SRCS}/hardware/nvidia/t23x/nv-public/include/platforms/dt-bindings/tegra234-p3737-0000+p3701-0000.h \
                     ${BUILD_SRCS}/$KERNEL_DIR/include/dt-bindings/

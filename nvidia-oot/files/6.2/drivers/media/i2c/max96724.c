@@ -1618,13 +1618,44 @@ EXPORT_SYMBOL(max96724_stop_streaming);
  * Pipe Management
  * ================================================================ */
 
-int max96724_get_available_pipe_id(struct device *dev, int vc_id)
+int max96724_get_available_pipe_id(struct device *dev, int vc_id, u32 link_id)
 {
 	int i;
 	int pipe_id = -ENOMEM;
 	struct max96724 *priv = dev_get_drvdata(dev);
 
 	mutex_lock(&priv->lock);
+	if (!max96724_is_pixel_mode(priv)) {
+		/* Tunnel mode preserves the complete CSI packet stream for a GMSL
+		 * link, including every VC. Logical VCs therefore share one physical
+		 * DES tunnel pipe instead of consuming one pipe each. */
+		switch (link_id) {
+		case GMSL_SERDES_CSI_LINK_A:
+			pipe_id = MAX96724_PIPE_X;
+			break;
+		case GMSL_SERDES_CSI_LINK_B:
+			pipe_id = MAX96724_PIPE_Y;
+			break;
+		default:
+			pipe_id = -EINVAL;
+			break;
+		}
+		if (pipe_id >= 0)
+			priv->pipe[pipe_id].st_count++;
+		goto done;
+	}
+
+	/* Pixel mode binds one VC to one physical pipe, so it cannot carry a VC
+	 * beyond the available pipes. Report that as unsupported rather than as
+	 * pipe exhaustion. */
+	if (vc_id < 0 || vc_id >= MAX96724_MAX_PIPES) {
+		dev_err(dev,
+			"pixel mode supports vc 0..%d only; vc %d requires tunnel mode\n",
+			MAX96724_MAX_PIPES - 1, vc_id);
+		pipe_id = -EOPNOTSUPP;
+		goto done;
+	}
+
 	for (i = 0; i < MAX96724_MAX_PIPES; i++) {
 		if (i == vc_id && !priv->pipe[i].st_count) {
 			priv->pipe[i].st_count++;
@@ -1632,6 +1663,8 @@ int max96724_get_available_pipe_id(struct device *dev, int vc_id)
 			break;
 		}
 	}
+
+done:
 	mutex_unlock(&priv->lock);
 
 	return pipe_id;
@@ -1647,7 +1680,15 @@ int max96724_release_pipe(struct device *dev, int pipe_id)
 		return -EINVAL;
 
 	mutex_lock(&priv->lock);
-	priv->pipe[pipe_id].st_count = 0;
+	if (!priv->pipe[pipe_id].st_count) {
+		mutex_unlock(&priv->lock);
+		return -EINVAL;
+	}
+	priv->pipe[pipe_id].st_count--;
+	if (priv->pipe[pipe_id].st_count) {
+		mutex_unlock(&priv->lock);
+		return 0;
+	}
 	priv->retriggered_pipe_mask &= ~BIT(pipe_id);
 	for (i = 0; i < MAX96724_MAX_PIPES; i++) {
 		if (priv->pipe[i].st_count)
@@ -2035,10 +2076,10 @@ void max96724_retrigger_datapath(struct device *dev)
 		goto out;
 	}
 	if (!full_retrigger && priv->retriggered_pipe_mask) {
-		/* All logical pipes on Link A share one tunnel detector. Once the
-		 * first stream has armed it, toggling any PIPE_EN bit can interrupt
-		 * VCs that are already live. set_pipe() has already installed the
-		 * joining stream's mapping, so only track it here. */
+		/* All logical VCs on Link A share one tunnel detector. Once the
+		 * first stream has armed it, toggling PIPE_EN can interrupt VCs that
+		 * are already live. Tunnel mode needs no per-VC mapping, so only
+		 * track the additional logical stream here. */
 		dev_info(dev,
 			 "Link A tunnel already active; adding CSI pipes 0x%02x without toggling live pipes 0x%02x\n",
 			 retrigger_mask, priv->retriggered_pipe_mask);
@@ -2149,17 +2190,19 @@ void max96724_retrigger_datapath(struct device *dev)
 		msleep(20);
 	}
 
-	for (i = 0; i < MAX96724_MAX_PIPES; i++) {
-		struct pipe_ctx *pipe = &priv->pipe[i];
+	if (max96724_is_pixel_mode(priv)) {
+		for (i = 0; i < MAX96724_MAX_PIPES; i++) {
+			struct pipe_ctx *pipe = &priv->pipe[i];
 
-		if (!(retrigger_mask & BIT(i)) || !pipe->st_count ||
-		    !pipe->map_configured)
-			continue;
-		dev_info(dev,
-			 "re-applying pipe %u mapping dt1 0x%x dt2 0x%x vc %u\n",
-			 i, pipe->dt_type, pipe->dt_type2, pipe->vc_id);
-		err |= __max96724_set_pipe(dev, i, pipe->dt_type,
-					   pipe->dt_type2, pipe->vc_id);
+			if (!(retrigger_mask & BIT(i)) || !pipe->st_count ||
+			    !pipe->map_configured)
+				continue;
+			dev_info(dev,
+				 "re-applying pipe %u mapping dt1 0x%x dt2 0x%x vc %u\n",
+				 i, pipe->dt_type, pipe->dt_type2, pipe->vc_id);
+			err |= __max96724_set_pipe(dev, i, pipe->dt_type,
+						   pipe->dt_type2, pipe->vc_id);
+		}
 	}
 	if (err)
 		dev_warn(dev, "failed to re-apply active pipe mappings: %d\n",
@@ -2215,7 +2258,7 @@ EXPORT_SYMBOL(max96724_init_settings);
 int max96724_bind_ser_to_dser_pipe(struct device *dev, int dser_pipe_id,
 				   int ser_pipe_id, u32 vc_id)
 {
-	/* In Tunnel Mode, pipe mapping is 1:1 (each camera → one pipe) */
+	/* Tunnel mode forwards the link packet stream without VC remapping. */
 	return 0;
 }
 EXPORT_SYMBOL(max96724_bind_ser_to_dser_pipe);
@@ -2234,6 +2277,11 @@ int max96724_set_pipe(struct device *dev, int pipe_id,
 
 	dev_dbg(dev, "%s pipe_id %d, data_type1 %u, data_type2 %u, vc_id %u\n",
 		__func__, pipe_id, data_type1, data_type2, vc_id);
+	if (!max96724_is_pixel_mode(priv)) {
+		dev_dbg(dev, "%s: tunnel mode preserves VC/DT; no per-VC map needed\n",
+			__func__);
+		return 0;
+	}
 
 	mutex_lock(&priv->lock);
 

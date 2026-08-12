@@ -9,17 +9,66 @@
  *   I2C Mux:      GPIO-based (i2c-mux-gpio)
  *   Board:        FangZhu FG24-4CH (Orin Nano/NX P3767+P3768)
  *
- * VC assignment:
- *   VC0 = Depth  (Z16,  1280x720  @60fps)
- *   VC1 = RGB    (YUY2, 1920x1080 @30fps)
- *   VC2 = IR     (Y8/Y8I/Y12I, 1280x720 @60fps)
- *   VC3 = IMU    (RAW8)
+ * NAMING NOTE
+ *   "FG24-4CH" is the CARRIER BOARD name (FangZhu 4-channel GMSL board), not the
+ *   number of camera streams this overlay declares. This file is the SUPERSET
+ *   source for every D5xx stream count: it can emit 4, 5 or 8 CSI virtual
+ *   channels depending on D5XX_CHANNEL_COUNT below. Do not add a new .dts per
+ *   stream combination.
+ *
+ * SUPERSET / OVERLAY
+ *   overlay  - a /plugin/ device tree compiled to .dtbo and merged by the
+ *              bootloader into the base board DTB at boot (fragment@0 /
+ *              __overlay__). It patches nodes into the base tree; it does not
+ *              replace it. Selected by the OVERLAYS line in
+ *              /boot/extlinux/extlinux.conf, so changing it needs a reboot.
+ *   superset - declare the MAXIMUM hardware topology once and let the driver
+ *              decide at runtime which streams the attached device actually
+ *              provides. Streams the device does not report stay registered but
+ *              enumerate no formats, so userspace skips them. This keeps the
+ *              boot configuration constant while the product stream set
+ *              (3C vs 2C) varies. The same mechanism is what a later VC5-VC7
+ *              perception overlay plugs into; only VC0-VC4 ship today.
+ *
+ * VC assignment (SAS D5X5 3.4.5):
+ *   VC0 = Depth        Z16                    1280x720  @60
+ *   VC1 = RGB          YUY2 / NV12            1920x1080 @30
+ *   VC2 = IR           Y8 / Y8I / Y12I        1280x720  @60
+ *   VC3 = IMU          RAW8
+ *   VC4 = DUALRGB_RIGHT        same profiles as RGB   (D5XX_CHANNEL_COUNT >= 5)
+ *
+ * LAYER MAPPING for one VC (VC=N)
+ *   HKR FlowGmsl        stream slot -> CameraId -> VC N, source DT, output DT
+ *   HKR HIF MIPI TX     emits CSI-2 long packets tagged (VC=N, DT)
+ *   MAX96717 (SER)      tunnel mode: forwards whole CSI packets, NO per-VC
+ *                       remap; ports/port@N below is driver bookkeeping only
+ *   GMSL2 link          one serial link carries every VC
+ *   MAX96724 (DES)      tunnel mode: ALL VCs of a link share ONE physical pipe
+ *                       (Link A -> PIPE_X), refcounted; pixel mode instead binds
+ *                       one VC per physical pipe and only has 4, so VC4+ is
+ *                       rejected with -EOPNOTSUPP
+ *   Orin NVCSI          nvcsi@15a00000/channel@N: the real per-VC demux on the
+ *                       host side; port-index 2 = CSI-C ("serial_c")
+ *   Orin VI             tegra-capture-vi/port@N: vi_parse_dt() turns each port
+ *                       into one tegra_channel at PROBE time
+ *   V4L2                each VI channel -> one /dev/videoN (+ one metadata node
+ *                       when embedded_metadata_height = 1)
+ *   udev                stable alias /dev/video-rs-<stream>-<index>, e.g. DUALRGB_RIGHT
+ *                       appears as video-rs-color-1
+ *   App                 opens by stable alias or media graph, never by videoN
+ *
+ *   Per added VC the cost is: +1 SER port node, +1 DES channel node, +1 NVCSI
+ *   channel, +1 VI channel, +1 i2c d5xx@ node, +1 cam_module. Only the VI
+ *   channel is a real host resource, and the VI channel pool is 64
+ *   (DEFAULT_VI_CHANNELS), so 8 is well inside budget. In tunnel mode the extra
+ *   VCs do NOT consume extra deserializer pipes.
  *
  * GMSL link:
  *   GMSL2 Tunnel Mode, 6 Gbps
  *   HKR MIPI Tx → MAX96717: 4-lane CSI-2
  *   MAX96724 Port A → Orin NVCSI: 4-lane CSI-2 over the Orin Nano CAM1
  *   22-pin connector.
+ *   Lane count is independent of VC count: all VCs share the same 4 lanes.
  *
  * CSI port / control I2C:
  *   The physical CAM1 connector is not auto-bound to I2C by Linux. This
@@ -34,7 +83,8 @@
  *   MAX96724 deser:  0x27
  *   MAX96717 ser:    0x40 (default), 0x60 (aliased)
  *   HKR camera SoC:  0x10 (def-addr)
- *   Sensor aliases:   0x1a (Depth), 0x1b (RGB), 0x1c (IR), 0x1d (IMU)
+ *   Sensor aliases:   0x1a (Depth), 0x1b (RGB), 0x1c (IR), 0x1d (IMU),
+ *                     0x1e (DUALRGB_RIGHT), 0x1f (Per1), 0x20 (Per2), 0x21 (Per3)
  */
 
 /dts-v1/;
@@ -46,8 +96,24 @@
 
 #define CAM_I2C_MUX	TEGRA234_AON_GPIO(CC, 3)
 
+/*
+ * Stream-count selector. Wrappers define one of these and include this file:
+ *   (none)          -> 4 channels, VC0-VC3
+ *   D5XX_DUAL_RGB   -> 5 channels, adds DUALRGB_RIGHT on VC4
+ * Everything below keys off D5XX_CHANNEL_COUNT, never off the wrapper macro.
+ */
+#if defined(D5XX_DUAL_RGB)
+#define D5XX_CHANNEL_COUNT 5
+#else
+#define D5XX_CHANNEL_COUNT 4
+#endif
+
 / {
+#if D5XX_CHANNEL_COUNT >= 5
+	overlay-name = "Jetson RealSense Camera D5xx dual RGB with max96724 on FG24-4CH";
+#else
 	overlay-name = "Jetson RealSense Camera D5xx with max96724 on FG24-4CH";
+#endif
 	jetson-header-name = "Jetson 22pin CSI Connector";
 	compatible = JETSON_COMPATIBLE_P3768;
 
@@ -55,7 +121,7 @@
 		target-path = "/";
 		__overlay__ {
 			tegra-capture-vi {
-				num-channels = <4>;
+				num-channels = <D5XX_CHANNEL_COUNT>;
 				ports {
 					#address-cells = <1>;
 					#size-cells = <0>;
@@ -111,6 +177,21 @@
 							remote-endpoint = <&d5xx_csi_out3>;
 						};
 					};
+
+#if D5XX_CHANNEL_COUNT >= 5
+					/* VC4: second RGB channel, enabled by the dual-RGB overlay. */
+					port@4 {
+						status = "okay";
+						reg = <4>;
+						d5xx_vi_in4: endpoint {
+							status = "okay";
+							vc-id = <4>;
+							port-index = <2>;
+							bus-width = <4>;
+							remote-endpoint = <&d5xx_csi_out4>;
+						};
+					};
+#endif
 				};
 			};
 
@@ -172,13 +253,24 @@
 							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/cam_i2cmux/i2c@1/d5xx@1d";
 						};
 					};
+#if D5XX_CHANNEL_COUNT >= 5
+					cam_module4: module4 {
+						badge = "d5xx_dualrgb_right";
+						position = "centerright";
+						orientation = "1";
+						cam_module4_drivernode0: drivernode0 {
+							pcl_id = "v4l2_sensor";
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/cam_i2cmux/i2c@1/d5xx@1e";
+						};
+					};
+#endif
 				};
 			};
 
 			bus@0 {
 				host1x@13e00000 {
 					nvcsi@15a00000 {
-						num-channels = <4>;
+						num-channels = <D5XX_CHANNEL_COUNT>;
 						#address-cells = <1>;
 						#size-cells = <0>;
 
@@ -301,6 +393,38 @@
 								};
 							};
 						};
+
+#if D5XX_CHANNEL_COUNT >= 5
+						/* NVCSI channel 4: second RGB stream (VC4) */
+						channel@4 {
+							status = "okay";
+							reg = <4>;
+							ports {
+								status = "okay";
+								#address-cells = <1>;
+								#size-cells = <0>;
+								port@0 {
+									status = "okay";
+									reg = <0>;
+									d5xx_csi_in4: endpoint@8 {
+										status = "okay";
+										port-index = <2>;
+										bus-width = <4>;
+										vc-id = <4>;
+										remote-endpoint = <&d5xx_dualrgb_right_out>;
+									};
+								};
+								port@1 {
+									status = "okay";
+									reg = <1>;
+									d5xx_csi_out4: endpoint@9 {
+										status = "okay";
+										remote-endpoint = <&d5xx_vi_in4>;
+									};
+								};
+							};
+						};
+#endif
 					};
 				};
 
@@ -500,6 +624,69 @@
 							};
 						};
 
+#if D5XX_CHANNEL_COUNT >= 5
+						/*
+						 * D585 second RGB stream — VC4
+						 * Reuses the RGB format/profile table; HKR AutoSrc supplies
+						 * the initial source until a second physical RGB is integrated.
+						 */
+						d5xx_dualrgb_right: d5xx@1e {
+							status = "okay";
+							def-addr = <0x10>;
+							reg = <0x1e>;
+							override_reg = <0x1a>;
+							compatible = "realsense,d5xx";
+							use_sensor_mode_id = "true";
+							cam-type = "DUALRGB_RIGHT";
+							nvidia,gmsl-ser-device = <&ser_a>;
+							nvidia,gmsl-dser-device = <&dser>;
+
+							ports {
+								#address-cells = <1>;
+								#size-cells = <0>;
+
+								port@0 {
+									reg = <0>;
+									d5xx_dualrgb_right_out: endpoint {
+										vc-id = <4>;
+										port-index = <2>;
+										bus-width = <4>;
+										remote-endpoint = <&d5xx_csi_in4>;
+									};
+								};
+							};
+
+							mode0 {
+								pixel_t = "yuv_yuyv16";
+								num_lanes = "4";
+								csi_pixel_bit_depth = "16";
+								active_w = "1920";
+								active_h = "1080";
+								tegra_sinterface = "serial_c";
+								phy_mode = "DPHY";
+								discontinuous_clk = "no";
+								cil_settletime = "0";
+								deskew_initial_enable = "true";
+								deskew_periodic_enable = "true";
+								mclk_khz = "24000";
+								pix_clk_hz = "500000000";
+								serdes_pix_clk_hz = "500000000";
+								line_length = "1920";
+								embedded_metadata_height = "1";
+							};
+
+							gmsl-link {
+								src-csi-port = "a";
+								dst-csi-port = "a";
+								serdes-csi-link = "a";
+								csi-mode = "1x4";
+								st-vc = <4>;
+								vc-id = <4>;
+								num-lanes = <4>;
+							};
+						};
+#endif
+
 						/*
 						 * D585 IR stream — VC2
 						 * Y8/Y8I/Y12I, 1280x720, 60fps
@@ -541,8 +728,17 @@
 								phy_mode = "DPHY";
 								discontinuous_clk = "no";
 								cil_settletime = "0";
-								deskew_initial_enable = "true";
-								deskew_periodic_enable = "true";
+								/*
+								 * No deskew here. tegra_csi deskew_setup() calls
+								 * nvcsi_deskew_setup() whenever a mode declares
+								 * deskew_initial_enable and its (serdes_)pix_clk_hz
+								 * reaches CLK_HZ_FOR_DESKEW (750 MHz). In JetPack 6.x
+								 * nvidia-oot nothing ever calls
+								 * nvcsi_deskew_platform_setup(), so deskew.c's mc_csi
+								 * stays NULL and that path dereferences NULL on
+								 * STREAMON. Same reason the IMU mode dropped deskew.
+								 * Any mode at or above 750 MHz must leave deskew off.
+								 */
 								mclk_khz = "24000";
 								pix_clk_hz = "1000000000";
 								serdes_pix_clk_hz = "1000000000";

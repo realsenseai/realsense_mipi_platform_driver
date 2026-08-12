@@ -886,6 +886,11 @@ int max96717_set_pipe(struct device *dev, int pipe_id,
 
 	dev_dbg(dev, "%s pipe_id %d, data_type1 %u, data_type2 %u, vc_id %u\n",
 		__func__, pipe_id, data_type1, data_type2, vc_id);
+	if (!priv->pixel_mode) {
+		dev_dbg(dev, "%s: tunnel mode preserves VC/DT; no per-VC map needed\n",
+			__func__);
+		return 0;
+	}
 
 	mutex_lock(&priv->lock);
 
