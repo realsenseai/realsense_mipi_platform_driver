@@ -1,68 +1,18 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 6c2abe84404fc6d807f16c686e6bf3c332f93985 Mon Sep 17 00:00:00 2001
 From: zhou <shengyong.zhou@realsenseai.com>
-Date: Mon, 27 Jul 2026 22:45:00 +0800
-Subject: [PATCH] media: tegra: receive D5x Y12I byte carriers
-
-D5x stores calibration IR as little-endian L/R 16-bit containers and
-transmits both containers unchanged. UD30 is the default opaque carrier;
-RAW16 is an explicit secondary transport.
-
-Add private mbus tuples that match either packet DT. UD30 uses opaque
-T_R8 byte DMA; RAW16 uses native T_R16 sample DMA before the D5x frame
-callback restores slot byte order. Scope the width and receive-DT
-handling to those tuples so generic RAW16, User Defined DT, and existing
-D4xx formats remain unchanged.
+Date: Tue, 11 Aug 2026 11:40:09 +0800
+Subject: [PATCH 3/3] media: tegra: receive D5x Y12I byte carriers
 
 Signed-off-by: zhou <shengyong.zhou@realsenseai.com>
 ---
-diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-index 8889cb2e..40c8a0e0 100644
---- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-+++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-@@ -396,6 +396,10 @@ static void vi5_setup_surface(struct tegra_channel *chan,
- 	bool flat_nv12 = chan->fmtinfo->fourcc == V4L2_PIX_FMT_NV12;
- 	bool d5x_sgrbg10p =
- 		chan->fmtinfo->fourcc == V4L2_PIX_FMT_RS_SGRBG10P;
-+	bool d5x_y12i_ud30_surface =
-+		chan->fmtinfo->code == MEDIA_BUS_FMT_RS_Y12I_UD30_4X8;
-+	bool d5x_y12i_raw16_surface =
-+		chan->fmtinfo->code == MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8;
- 	u32 nvcsi_stream = chan->port[vi_port];
- 	struct capture_descriptor_memoryinfo *desc_memoryinfo =
- 		&chan->tegra_vi_channel[vi_port]->
-@@ -414,6 +418,12 @@ static void vi5_setup_surface(struct tegra_channel *chan,
- 	else if (d5x_sgrbg10p)
- 		/* RAW8 parser width is the byte-identical HKR DDR stride. */
- 		width = bpl;
-+	else if (d5x_y12i_ud30_surface)
-+		/* T_R8 frame_x is the complete byte-identical row. */
-+		width = bpl;
-+	else if (d5x_y12i_raw16_surface)
-+		/* RAW16 packet WC is bpl; T_R16 frame_x counts 16-bit samples. */
-+		width = bpl / 2U;
- 
- 	memcpy(desc, &capture_template, sizeof(capture_template));
- 	memset(desc_memoryinfo, 0, sizeof(*desc_memoryinfo));
-@@ -425,11 +435,11 @@ static void vi5_setup_surface(struct tegra_channel *chan,
- 	desc->ch_cfg.frame.frame_y = height;
- 	desc->ch_cfg.match.datatype = data_type;
- 	desc->ch_cfg.match.datatype_mask = 0x3f;
--	if (d5x_sgrbg10p) {
-+	if (d5x_sgrbg10p || d5x_y12i_ud30_surface) {
- 		/*
--		 * UD30 is an opaque byte stream. Map it to RAW8 only inside VI
--		 * so each packet payload byte reaches the V4L2 surface unchanged.
-+		 * Map the selected byte carrier to RAW8 only inside VI so each
-+		 * packet payload byte reaches the V4L2 surface unchanged.
- 		 */
- 		desc->ch_cfg.dt_enable = 1;
- 		desc->ch_cfg.dt_override = TEGRA_IMAGE_DT_RAW8;
- 	}
+ .../platform/tegra/camera/vi/vi5_formats.h    | 34 +++++++++++++++++++
+ 1 file changed, 34 insertions(+)
+
 diff --git a/drivers/media/platform/tegra/camera/vi/vi5_formats.h b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
-index 0d200227..11769852 100644
+index a0929b5e..ff291f39 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi5_formats.h
 +++ b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
-@@ -90,6 +90,14 @@ enum tegra_image_format {
+@@ -94,6 +94,14 @@ enum tegra_image_format {
  #define MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16 0x5004
  #endif
  
@@ -77,7 +27,7 @@ index 0d200227..11769852 100644
  #ifndef MEDIA_BUS_FMT_RS_SGRBG10P_1X10
  #define MEDIA_BUS_FMT_RS_SGRBG10P_1X10 0x5002
  #endif
-@@ -102,6 +110,10 @@ enum tegra_image_format {
+@@ -106,6 +114,10 @@ enum tegra_image_format {
  #define V4L2_PIX_FMT_SGRBG10P v4l2_fourcc('p', 'g', 'A', 'A')
  #endif
  
@@ -85,27 +35,45 @@ index 0d200227..11769852 100644
 +#define V4L2_PIX_FMT_Y16I v4l2_fourcc('Y', '1', '6', 'I')
 +#endif
 +
- static const struct tegra_video_format vi5_video_formats[] = {
- 	/* RAW 6: TODO */
+ struct tegra_vi_surface_override {
+ 	u32 code;
+ 	u8 dt_override;
+@@ -129,6 +141,20 @@ static const struct tegra_vi_surface_override tegra_vi_surface_overrides[] = {
+ 		.height_numerator = 1,
+ 		.height_denominator = 1,
+ 	},
++	{
++		.code = MEDIA_BUS_FMT_RS_Y12I_UD30_4X8,
++		.dt_override = TEGRA_IMAGE_DT_RAW8,
++		.bpl_width_divisor = 1,
++		.height_numerator = 1,
++		.height_denominator = 1,
++	},
++	{
++		.code = MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8,
++		.dt_override = 0,
++		.bpl_width_divisor = 2,
++		.height_numerator = 1,
++		.height_denominator = 1,
++	},
+ };
  
-@@ -211,6 +223,20 @@ static const struct tegra_video_format vi5_video_formats[] = {
+ static const struct tegra_vi_surface_override *
+@@ -243,6 +269,14 @@ static const struct tegra_video_format vi5_video_formats[] = {
  	TEGRA_VIDEO_FORMAT(RAW10, 10, RS_SGRBG10P_1X10, 32, 25, T_R8,
  				USER_1, RS_SGRBG10P, "RealSense GRBG10P CL64"),
  
-+	/*
-+	 * D5x native Y12I: opaque CSI UD30 preserves little-endian L/R
-+	 * 16-bit slot bytes. T_R8 writes the complete standard Y16I row.
-+	 */
++	/* UD30 preserves little-endian L/R 16-bit slot bytes through T_R8. */
 +	TEGRA_VIDEO_FORMAT(RAW12, 12, RS_Y12I_UD30_4X8, 4, 1, T_R8,
 +				USER_1, Y16I, "Y12I in 16-bit L/R containers"),
 +
-+	/*
-+	 * Secondary RAW16 carrier for the same Y12I L/R slot surface. Match
-+	 * and DMA it as native RAW16; the D5x callback restores byte order.
-+	 */
++	/* RAW16 carrier for the same slots; the frame callback restores order. */
 +	TEGRA_VIDEO_FORMAT(RAW12, 12, RS_Y12I_RAW16_4X8, 4, 1, T_R16,
 +				RAW16, Y16I, "Y12I RAW16 byte carrier"),
 +
  };
  
  #endif
+-- 
+2.34.1
+

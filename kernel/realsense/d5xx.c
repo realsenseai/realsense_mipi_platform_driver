@@ -90,6 +90,10 @@ struct dser_interface {
 #define GMSL_CSI_DT_RAW_10          0x2B
 #endif
 
+#ifndef GMSL_CSI_DT_YUV420_8
+#define GMSL_CSI_DT_YUV420_8        0x18
+#endif
+
 #ifndef GMSL_CSI_DT_RAW_16
 #define GMSL_CSI_DT_RAW_16          0x2E
 #endif
@@ -112,6 +116,10 @@ struct dser_interface {
 
 #ifndef MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8
 #define MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8 0x5006
+#endif
+
+#ifndef MEDIA_BUS_FMT_RS_NV12_UD30_1X8
+#define MEDIA_BUS_FMT_RS_NV12_UD30_1X8 0x5008
 #endif
 
 static bool y12i_raw16_carrier;
@@ -202,6 +210,7 @@ MODULE_PARM_DESC(y12i_raw16_carrier,
 #define D5X_RGB_RES_WIDTH			0x4024
 #define D5X_RGB_RES_HEIGHT			0x4028
 #define D5X_RGB_FPS					0x402C
+#define D5X_RGB_OVERRIDE			0x403C
 #define D5X_RGB_CONTROL_STATUS 		0x402E
 
 #define D5X_IMU_STREAM_DT			0x4040
@@ -531,7 +540,8 @@ struct d5x_format {
 	unsigned int n_resolutions;
 	const struct d5x_resolution *resolutions;
 	u32 mbus_code;
-	u8 data_type;
+	u8 source_dt;		/* Theoretical standard DT for the source format. */
+	u8 csi_out_dt;		/* Actual CSI packet DT after any override. */
 };
 
 struct d5x_sensor {
@@ -1538,12 +1548,14 @@ static const struct d5x_resolution d5x_size_imu_extended[] = {
 
 static const struct d5x_format d5x_depth_formats_d58x[] = {
 	{
-		.data_type = GMSL_CSI_DT_YUV422_8,	/* Z16 */
+		.source_dt = GMSL_CSI_DT_RAW_16,
+		.csi_out_dt = GMSL_CSI_DT_YUV422_8,	/* Z16 carrier */
 		.mbus_code = MEDIA_BUS_FMT_UYVY8_1X16,
 		.n_resolutions = ARRAY_SIZE(d58x_depth_sizes),
 		.resolutions = d58x_depth_sizes,
 	}, {
-		.data_type = GMSL_CSI_DT_RAW_8,	/* Y8 */
+		.source_dt = GMSL_CSI_DT_RAW_8,
+		.csi_out_dt = GMSL_CSI_DT_RAW_8,	/* Y8 */
 		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
 		.n_resolutions = ARRAY_SIZE(d58x_depth_sizes),
 		.resolutions = d58x_depth_sizes,
@@ -1555,12 +1567,14 @@ static const struct d5x_format d5x_depth_formats_d58x[] = {
 static const struct d5x_format d5x_y_formats_d58x[] = {
 	{
 		/* First format: default */
-		.data_type = GMSL_CSI_DT_RAW_8,	/* Y8 */
+		.source_dt = GMSL_CSI_DT_RAW_8,
+		.csi_out_dt = GMSL_CSI_DT_RAW_8,	/* Y8 */
 		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
 		.n_resolutions = ARRAY_SIZE(d58x_y8_sizes),
 		.resolutions = d58x_y8_sizes,
 	}, {
-		.data_type = GMSL_CSI_DT_YUV422_8,	/* Y8I */
+		.source_dt = GMSL_CSI_DT_RAW_16,
+		.csi_out_dt = GMSL_CSI_DT_YUV422_8,	/* Y8I */
 		.mbus_code = MEDIA_BUS_FMT_VYUY8_1X16,
 		.n_resolutions = ARRAY_SIZE(d58x_y8_sizes),
 		.resolutions = d58x_y8_sizes,
@@ -1570,7 +1584,8 @@ static const struct d5x_format d5x_y_formats_d58x[] = {
 		 * 12 valid bits per sample. UD30 carries the slot bytes opaquely;
 		 * VI exposes the same byte order through the Y16I container ABI.
 		 */
-		.data_type = GMSL_CSI_DT_USER_1,
+		.source_dt = GMSL_CSI_DT_RAW_16,
+		.csi_out_dt = GMSL_CSI_DT_USER_1,
 		.mbus_code = MEDIA_BUS_FMT_RS_Y12I_UD30_4X8,
 		.n_resolutions = ARRAY_SIZE(d58x_y12i_sizes),
 		.resolutions = d58x_y12i_sizes,
@@ -1580,12 +1595,14 @@ static const struct d5x_format d5x_y_formats_d58x[] = {
 static const struct d5x_format d5x_y_formats_d58x_raw16[] = {
 	{
 		/* First format: default */
-		.data_type = GMSL_CSI_DT_RAW_8,	/* Y8 */
+		.source_dt = GMSL_CSI_DT_RAW_8,
+		.csi_out_dt = GMSL_CSI_DT_RAW_8,	/* Y8 */
 		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
 		.n_resolutions = ARRAY_SIZE(d58x_y8_sizes),
 		.resolutions = d58x_y8_sizes,
 	}, {
-		.data_type = GMSL_CSI_DT_YUV422_8,	/* Y8I */
+		.source_dt = GMSL_CSI_DT_RAW_16,
+		.csi_out_dt = GMSL_CSI_DT_YUV422_8,	/* Y8I */
 		.mbus_code = MEDIA_BUS_FMT_VYUY8_1X16,
 		.n_resolutions = ARRAY_SIZE(d58x_y8_sizes),
 		.resolutions = d58x_y8_sizes,
@@ -1594,7 +1611,8 @@ static const struct d5x_format d5x_y_formats_d58x_raw16[] = {
 		 * RAW16/T_R16 reverses each 16-bit slot relative to the HKR DDR
 		 * bytes. The D5x frame callback restores the Y16I byte order.
 		 */
-		.data_type = GMSL_CSI_DT_RAW_16,
+		.source_dt = GMSL_CSI_DT_RAW_16,
+		.csi_out_dt = GMSL_CSI_DT_RAW_16,
 		.mbus_code = MEDIA_BUS_FMT_RS_Y12I_RAW16_4X8,
 		.n_resolutions = ARRAY_SIZE(d58x_y12i_sizes),
 		.resolutions = d58x_y12i_sizes,
@@ -1604,14 +1622,16 @@ static const struct d5x_format d5x_y_formats_d58x_raw16[] = {
 static const struct d5x_format d5x_rgb_formats_d58x[] = {
 	{
 		/* CSI2_DT 0x1E uses MC-FCVT UYVY bytes; V4L2 exposes YUYV. */
-		.data_type = GMSL_CSI_DT_YUV422_8,
+		.source_dt = GMSL_CSI_DT_YUV422_8,
+		.csi_out_dt = GMSL_CSI_DT_YUV422_8,
 		.mbus_code = MEDIA_BUS_FMT_YUYV8_1X16,
 		.n_resolutions = ARRAY_SIZE(d58x_rgb_sizes),
 		.resolutions = d58x_rgb_sizes,
 	}, {
-		/* Flat NV12 surface carried as width x (height * 3 / 2) RAW8. */
-		.data_type = GMSL_CSI_DT_RAW_8,
-		.mbus_code = MEDIA_BUS_FMT_UYYVYY8_0_5X24,
+		/* Flat NV12 bytes use an opaque UD30 carrier. */
+		.source_dt = GMSL_CSI_DT_YUV420_8,
+		.csi_out_dt = GMSL_CSI_DT_USER_1,
+		.mbus_code = MEDIA_BUS_FMT_RS_NV12_UD30_1X8,
 		.n_resolutions = ARRAY_SIZE(d58x_rgb_sizes),
 		.resolutions = d58x_rgb_sizes,
 	}, {
@@ -1619,7 +1639,8 @@ static const struct d5x_format d5x_rgb_formats_d58x[] = {
 		 * HKR emits one 10-bit GRBG sample in each 16-bit container.
 		 * RAW16 preserves those containers on wire; V4L2 exposes BA10.
 		 */
-		.data_type = GMSL_CSI_DT_RAW_16,
+		.source_dt = GMSL_CSI_DT_RAW_16,
+		.csi_out_dt = GMSL_CSI_DT_RAW_16,
 		.mbus_code = MEDIA_BUS_FMT_RS_SGRBG10_1X16,
 		.n_resolutions = ARRAY_SIZE(d58x_rgb_raw_sizes),
 		.resolutions = d58x_rgb_raw_sizes,
@@ -1628,7 +1649,8 @@ static const struct d5x_format d5x_rgb_formats_d58x[] = {
 		 * This Host-output option reuses the same RAW16 transport as
 		 * BA10, then packs each completed T_R16 row into standard pgAA.
 		 */
-		.data_type = GMSL_CSI_DT_RAW_16,
+		.source_dt = GMSL_CSI_DT_RAW_16,
+		.csi_out_dt = GMSL_CSI_DT_RAW_16,
 		.mbus_code = MEDIA_BUS_FMT_RS_SGRBG10P_RAW16_1X16,
 		.n_resolutions = ARRAY_SIZE(d58x_rgb_raw_sizes),
 		.resolutions = d58x_rgb_raw_sizes,
@@ -1638,7 +1660,8 @@ static const struct d5x_format d5x_rgb_formats_d58x[] = {
 		 * The private mbus code prevents this surface from being exposed
 		 * as standard BA10 or V4L2 IPU3 SGRBG10.
 		 */
-		.data_type = GMSL_CSI_DT_USER_1,
+		.source_dt = GMSL_CSI_DT_RAW_10,
+		.csi_out_dt = GMSL_CSI_DT_USER_1,
 		.mbus_code = MEDIA_BUS_FMT_RS_SGRBG10P_1X10,
 		.n_resolutions = ARRAY_SIZE(d58x_rgb_raw_sizes),
 		.resolutions = d58x_rgb_raw_sizes,
@@ -1655,7 +1678,8 @@ static const struct d5x_variant d5x_variants[] = {
 static const struct d5x_format d5x_imu_formats[] = {
 	{
 		/* First format: default */
-		.data_type = GMSL_CSI_DT_RAW_8,	/* IMU DT */
+		.source_dt = GMSL_CSI_DT_RAW_8,
+		.csi_out_dt = GMSL_CSI_DT_RAW_8,	/* IMU DT */
 		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
 		.n_resolutions = ARRAY_SIZE(d5x_size_imu),
 		.resolutions = d5x_size_imu,
@@ -1665,7 +1689,8 @@ static const struct d5x_format d5x_imu_formats[] = {
 static const struct d5x_format d5x_imu_formats_extended[] = {
 	{
 		/* First format: default */
-		.data_type = GMSL_CSI_DT_RAW_8,	/* IMU DT */
+		.source_dt = GMSL_CSI_DT_RAW_8,
+		.csi_out_dt = GMSL_CSI_DT_RAW_8,	/* IMU DT */
 		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
 		.n_resolutions = ARRAY_SIZE(d5x_size_imu_extended),
 		.resolutions = d5x_size_imu_extended,
@@ -1971,7 +1996,7 @@ static void d5x_tegra_update_rgb_mode(struct d5x *state,
 		return;
 
 	switch (sensor->config.format->mbus_code) {
-	case MEDIA_BUS_FMT_UYYVYY8_0_5X24:
+	case MEDIA_BUS_FMT_RS_NV12_UD30_1X8:
 		pixel_format = V4L2_PIX_FMT_NV12;
 		bit_depth = 12;
 		break;
@@ -2239,6 +2264,12 @@ static void d5x_invalidate_sensor(struct d5x *state, struct d5x_sensor *sensor)
 	sensor->pipe_reapply_gen = 0;
 }
 
+static u16 d5x_csi_override_dt(const struct d5x_format *format)
+{
+	return format->csi_out_dt == format->source_dt ? 0 :
+		format->csi_out_dt;
+}
+
 static int d5x_configure(struct d5x *state)
 {
 	struct d5x_sensor *sensor;
@@ -2272,7 +2303,7 @@ static int d5x_configure(struct d5x *state)
 #if !D5X_BYPASS_CAMERA_I2C
 		dt_addr = D5X_RGB_STREAM_DT;
 		md_addr = D5X_RGB_STREAM_MD;
-		override_addr = 0;
+		override_addr = D5X_RGB_OVERRIDE;
 		fps_addr = D5X_RGB_FPS;
 		width_addr = D5X_RGB_RES_WIDTH;
 		height_addr = D5X_RGB_RES_HEIGHT;
@@ -2304,7 +2335,7 @@ static int d5x_configure(struct d5x *state)
 	md_fmt = (state->metadata_enabled) ? GMSL_CSI_DT_EMBED : 0x00;
 
 #ifdef CONFIG_VIDEO_D5XX_SERDES
-	data_type1 = sensor->config.format->data_type;
+	data_type1 = sensor->config.format->csi_out_dt;
 	if (y12i_raw16_carrier && state->is_y8 &&
 	    data_type1 == GMSL_CSI_DT_RAW_16)
 		md_fmt = 0x00;
@@ -2397,15 +2428,8 @@ static int d5x_configure(struct d5x *state)
 	/* Skip camera I2C config writes - camera is already streaming */
 	return 0;
 #else
-	/* Determine desired data-type (special cases for depth/IR), then write
-	 * it only when it differs from cached value. This avoids overwriting a
-	 * correct DT with 0 (which caused INVALID_DT on subsequent attempts).
-	 */
-	dt_value = sensor->config.format->data_type;
-	if (state->is_depth && dt_value != 0)
-		dt_value = 0x31;
-	else if (state->is_y8 && dt_value == GMSL_CSI_DT_YUV422_8)
-		dt_value = 0x32;
+	/* Program source DT first; a non-zero override selects the wire DT. */
+	dt_value = sensor->config.format->source_dt;
 
 	dev_dbg(&state->client->dev,
 		"sensor %p: dt_value=0x%x, cached_dt_value=0x%x, cached_fps_value=%u, framerate=%u\n",
@@ -2427,7 +2451,7 @@ static int d5x_configure(struct d5x *state)
 	}
 
 	if (override_addr != 0) {
-		dt_value = sensor->config.format->data_type;
+		dt_value = d5x_csi_override_dt(sensor->config.format);
 		if (sensor->cached_override_value != dt_value) {
 			ret = d5x_write(state, override_addr, dt_value);
 			if (ret < 0)
