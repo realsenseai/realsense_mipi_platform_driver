@@ -6208,9 +6208,8 @@ static int ds5_hw_init(struct i2c_client *c, struct ds5 *state)
 {
 	struct v4l2_subdev *sd = &state->mux.sd.subdev;
 	u16 mipi_status, n_lanes, phy, drate_min, drate_max;
-	u16 lane_rate, default_lane_rate;
+	u16 lane_rate;
 	u32 dt_lane_rate;
-	bool mipi_caps_valid;
 	bool is_d58x = ds5_is_d58x(state);
 	int ret = ds5_read(state, DS5_MIPI_SUPPORT_LINES, &n_lanes);
 	if (!ret)
@@ -6222,36 +6221,37 @@ static int ds5_hw_init(struct i2c_client *c, struct ds5 *state)
 	if (!ret)
 		ret = ds5_read(state, DS5_MIPI_DATARATE_MAX, &drate_max);
 
-	mipi_caps_valid = !ret;
 	if (!ret)
 		dev_dbg(sd->dev, "%s(): %d: %u lanes, phy %x, data rate %u-%u\n",
 			 __func__, __LINE__, n_lanes, phy, drate_min, drate_max);
 
-	/* D58x board/link overlays may override the product default.
-	 * D4xx keeps its existing 1000 Mbps rate. */
-	default_lane_rate = is_d58x ? MIPI_LANE_RATE_HKR : MIPI_LANE_RATE_DS5;
-	lane_rate = default_lane_rate;
-	if (is_d58x && sd->dev->of_node &&
-	    !of_property_read_u32(sd->dev->of_node,
-				  "mipi-lane-rate-mbps", &dt_lane_rate)) {
-		if (!mipi_caps_valid) {
-			dev_warn(sd->dev,
-				 "FW MIPI caps unavailable, ignoring DT rate %u; using %u Mbps\n",
-				 dt_lane_rate, default_lane_rate);
-		} else if (!dt_lane_rate || dt_lane_rate > U16_MAX) {
-			dev_warn(sd->dev,
-				 "invalid DT MIPI lane rate %u, using %u Mbps\n",
-				 dt_lane_rate, default_lane_rate);
-		} else {
-			lane_rate = dt_lane_rate;
+	/*
+	 * Product defaults remain in-driver. A board/link overlay may request a
+	 * different input rate, but an explicit rate must match the FW-reported
+	 * capabilities so the camera and serializer cannot silently drift.
+	 */
+	lane_rate = is_d58x ? MIPI_LANE_RATE_HKR : MIPI_LANE_RATE_DS5;
+	if (sd->dev->of_node &&
+	    of_find_property(sd->dev->of_node, "mipi-lane-rate-mbps", NULL)) {
+		if (ret) {
+			dev_err(sd->dev,
+				"cannot validate DT MIPI lane rate: FW caps unavailable\n");
+			return ret;
 		}
-	}
-	if (mipi_caps_valid &&
-	    (lane_rate < drate_min || lane_rate > drate_max)) {
-		dev_warn(sd->dev,
-			 "MIPI lane rate %u outside FW range %u-%u, using %u Mbps\n",
-			 lane_rate, drate_min, drate_max, default_lane_rate);
-		lane_rate = default_lane_rate;
+		ret = of_property_read_u32(sd->dev->of_node,
+					   "mipi-lane-rate-mbps", &dt_lane_rate);
+		if (ret) {
+			dev_err(sd->dev, "invalid mipi-lane-rate-mbps property\n");
+			return ret;
+		}
+		if (!dt_lane_rate || dt_lane_rate > U16_MAX ||
+		    dt_lane_rate < drate_min || dt_lane_rate > drate_max) {
+			dev_err(sd->dev,
+				"DT MIPI lane rate %u outside FW range %u-%u\n",
+				dt_lane_rate, drate_min, drate_max);
+			return -EINVAL;
+		}
+		lane_rate = dt_lane_rate;
 	}
 
 #ifdef CONFIG_TEGRA_CAMERA_PLATFORM

@@ -92,7 +92,12 @@
 #define MAX96724_CSI_LANE_RATE_MIN_MBPS	100
 #define MAX96724_CSI_LANE_RATE_MAX_MBPS	2500
 #define MAX96724_CSI_LANE_RATE_STEP_MBPS	100
-#define MAX96724_CSI_LANE_RATE_DEFAULT_MBPS	1500
+/*
+ * Preserve the legacy rate for boards without an explicit DT setting.
+ * Single-link 4-lane boards may select 1500 Mbps/lane to match one 6 Gbps
+ * GMSL2 forward link without changing other MAX96724 topologies.
+ */
+#define MAX96724_CSI_LANE_RATE_DEFAULT_MBPS	2000
 #define MAX96724_CSI_LANE_COUNT_DEFAULT	4
 #define MAX96724_ONESHOT_ALL		0x0F
 #define MAX96724_PIPE_SEL0		0x62
@@ -1384,28 +1389,36 @@ static int max96724_parse_dt(struct max96724 *priv,
 	}
 	priv->link_mask = value;
 	priv->csi_lane_count = MAX96724_CSI_LANE_COUNT_DEFAULT;
-	err = of_property_read_u32(node, "csi-lane-count", &value);
-	if (!err) {
-		if (value != MAX96724_CSI_LANE_COUNT_DEFAULT) {
-			dev_warn(&client->dev,
-				 "unsupported csi-lane-count %u, using %u lanes\n",
-				 value, priv->csi_lane_count);
-		} else {
-			priv->csi_lane_count = value;
+	if (of_find_property(node, "csi-lane-count", NULL)) {
+		err = of_property_read_u32(node, "csi-lane-count", &value);
+		if (err) {
+			dev_err(&client->dev, "invalid csi-lane-count property\n");
+			return err;
 		}
+		if (value != MAX96724_CSI_LANE_COUNT_DEFAULT) {
+			dev_err(&client->dev,
+				"unsupported csi-lane-count %u (only %u lanes supported)\n",
+				value, MAX96724_CSI_LANE_COUNT_DEFAULT);
+			return -EINVAL;
+		}
+		priv->csi_lane_count = value;
 	}
 	priv->csi_lane_rate_mbps = MAX96724_CSI_LANE_RATE_DEFAULT_MBPS;
-	err = of_property_read_u32(node, "csi-lane-rate-mbps", &value);
-	if (!err) {
+	if (of_find_property(node, "csi-lane-rate-mbps", NULL)) {
+		err = of_property_read_u32(node, "csi-lane-rate-mbps", &value);
+		if (err) {
+			dev_err(&client->dev,
+				"invalid csi-lane-rate-mbps property\n");
+			return err;
+		}
 		if (value < MAX96724_CSI_LANE_RATE_MIN_MBPS ||
 		    value > MAX96724_CSI_LANE_RATE_MAX_MBPS ||
 		    value % MAX96724_CSI_LANE_RATE_STEP_MBPS) {
-			dev_warn(&client->dev,
-				 "invalid csi-lane-rate-mbps %u, using %u Mbps\n",
-				 value, priv->csi_lane_rate_mbps);
-		} else {
-			priv->csi_lane_rate_mbps = value;
+			dev_err(&client->dev,
+				"invalid csi-lane-rate-mbps %u\n", value);
+			return -EINVAL;
 		}
+		priv->csi_lane_rate_mbps = value;
 	}
 
 	priv->reset_gpio = devm_gpiod_get_optional(&client->dev, "reset",
