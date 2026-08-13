@@ -22,13 +22,12 @@
  *              __overlay__). It patches nodes into the base tree; it does not
  *              replace it. Selected by the OVERLAYS line in
  *              /boot/extlinux/extlinux.conf, so changing it needs a reboot.
- *   superset - declare the MAXIMUM hardware topology once and let the driver
- *              decide at runtime which streams the attached device actually
- *              provides. Streams the device does not report stay registered but
- *              enumerate no formats, so userspace skips them. This keeps the
- *              boot configuration constant while the product stream set
- *              (3C vs 2C) varies. The same mechanism is what a later VC5-VC7
- *              perception overlay plugs into; only VC0-VC4 ship today.
+ *   superset - declare the MAXIMUM hardware topology (all 8 VCs) once, and let
+ *              the driver decide at runtime which streams the attached device
+ *              actually provides. Streams the device does not report stay
+ *              registered but enumerate no formats, so userspace skips them.
+ *              This keeps the boot configuration constant while the product
+ *              stream set (3C vs 2C, VC5-VC7 perception) varies.
  *
  * VC assignment (SAS D5X5 3.4.5):
  *   VC0 = Depth        Z16                    1280x720  @60
@@ -36,6 +35,9 @@
  *   VC2 = IR           Y8 / Y8I / Y12I        1280x720  @60
  *   VC3 = IMU          RAW8
  *   VC4 = DUALRGB_RIGHT        same profiles as RGB   (D5XX_CHANNEL_COUNT >= 5)
+ *   VC5 = Perception_1 RAW8 over UD33         (D5XX_CHANNEL_COUNT >= 8)
+ *   VC6 = Perception_2 RAW8 over UD34         (D5XX_CHANNEL_COUNT >= 8)
+ *   VC7 = Perception_3 RAW8 over UD35         (D5XX_CHANNEL_COUNT >= 8)
  *
  * LAYER MAPPING for one VC (VC=N)
  *   HKR FlowGmsl        stream slot -> CameraId -> VC N, source DT, output DT
@@ -100,16 +102,21 @@
  * Stream-count selector. Wrappers define one of these and include this file:
  *   (none)          -> 4 channels, VC0-VC3
  *   D5XX_DUAL_RGB   -> 5 channels, adds DUALRGB_RIGHT on VC4
+ *   D5XX_ALL_VC     -> 8 channels, adds Perception_1..3 on VC5-VC7
  * Everything below keys off D5XX_CHANNEL_COUNT, never off the wrapper macro.
  */
-#if defined(D5XX_DUAL_RGB)
+#if defined(D5XX_ALL_VC)
+#define D5XX_CHANNEL_COUNT 8
+#elif defined(D5XX_DUAL_RGB)
 #define D5XX_CHANNEL_COUNT 5
 #else
 #define D5XX_CHANNEL_COUNT 4
 #endif
 
 / {
-#if D5XX_CHANNEL_COUNT >= 5
+#if D5XX_CHANNEL_COUNT >= 8
+	overlay-name = "Jetson RealSense Camera D5xx all VC with max96724 on FG24-4CH";
+#elif D5XX_CHANNEL_COUNT >= 5
 	overlay-name = "Jetson RealSense Camera D5xx dual RGB with max96724 on FG24-4CH";
 #else
 	overlay-name = "Jetson RealSense Camera D5xx with max96724 on FG24-4CH";
@@ -192,6 +199,42 @@
 						};
 					};
 #endif
+#if D5XX_CHANNEL_COUNT >= 8
+					/* VC5-VC7: Perception_1..3 byte streams over UD33/UD34/UD35. */
+					port@5 {
+						status = "okay";
+						reg = <5>;
+						d5xx_vi_in5: endpoint {
+							status = "okay";
+							vc-id = <5>;
+							port-index = <2>;
+							bus-width = <4>;
+							remote-endpoint = <&d5xx_csi_out5>;
+						};
+					};
+					port@6 {
+						status = "okay";
+						reg = <6>;
+						d5xx_vi_in6: endpoint {
+							status = "okay";
+							vc-id = <6>;
+							port-index = <2>;
+							bus-width = <4>;
+							remote-endpoint = <&d5xx_csi_out6>;
+						};
+					};
+					port@7 {
+						status = "okay";
+						reg = <7>;
+						d5xx_vi_in7: endpoint {
+							status = "okay";
+							vc-id = <7>;
+							port-index = <2>;
+							bus-width = <4>;
+							remote-endpoint = <&d5xx_csi_out7>;
+						};
+					};
+#endif
 				};
 			};
 
@@ -261,6 +304,35 @@
 						cam_module4_drivernode0: drivernode0 {
 							pcl_id = "v4l2_sensor";
 							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/cam_i2cmux/i2c@1/d5xx@1e";
+						};
+					};
+#endif
+#if D5XX_CHANNEL_COUNT >= 8
+					cam_module5: module5 {
+						badge = "d5xx_per1";
+						position = "topleft";
+						orientation = "1";
+						cam_module5_drivernode0: drivernode0 {
+							pcl_id = "v4l2_sensor";
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/cam_i2cmux/i2c@1/d5xx@1f";
+						};
+					};
+					cam_module6: module6 {
+						badge = "d5xx_per2";
+						position = "topright";
+						orientation = "1";
+						cam_module6_drivernode0: drivernode0 {
+							pcl_id = "v4l2_sensor";
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/cam_i2cmux/i2c@1/d5xx@20";
+						};
+					};
+					cam_module7: module7 {
+						badge = "d5xx_per3";
+						position = "bottomright";
+						orientation = "1";
+						cam_module7_drivernode0: drivernode0 {
+							pcl_id = "v4l2_sensor";
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/cam_i2cmux/i2c@1/d5xx@21";
 						};
 					};
 #endif
@@ -420,6 +492,97 @@
 									d5xx_csi_out4: endpoint@9 {
 										status = "okay";
 										remote-endpoint = <&d5xx_vi_in4>;
+									};
+								};
+							};
+						};
+#endif
+#if D5XX_CHANNEL_COUNT >= 8
+						/* NVCSI channel 5: Perception_1 (VC5) */
+						channel@5 {
+							status = "okay";
+							reg = <5>;
+							ports {
+								status = "okay";
+								#address-cells = <1>;
+								#size-cells = <0>;
+								port@0 {
+									status = "okay";
+									reg = <0>;
+									d5xx_csi_in5: endpoint@10 {
+										status = "okay";
+										port-index = <2>;
+										bus-width = <4>;
+										vc-id = <5>;
+										remote-endpoint = <&d5xx_per1_out>;
+									};
+								};
+								port@1 {
+									status = "okay";
+									reg = <1>;
+									d5xx_csi_out5: endpoint@11 {
+										status = "okay";
+										remote-endpoint = <&d5xx_vi_in5>;
+									};
+								};
+							};
+						};
+
+						/* NVCSI channel 6: Perception_2 (VC6) */
+						channel@6 {
+							status = "okay";
+							reg = <6>;
+							ports {
+								status = "okay";
+								#address-cells = <1>;
+								#size-cells = <0>;
+								port@0 {
+									status = "okay";
+									reg = <0>;
+									d5xx_csi_in6: endpoint@12 {
+										status = "okay";
+										port-index = <2>;
+										bus-width = <4>;
+										vc-id = <6>;
+										remote-endpoint = <&d5xx_per2_out>;
+									};
+								};
+								port@1 {
+									status = "okay";
+									reg = <1>;
+									d5xx_csi_out6: endpoint@13 {
+										status = "okay";
+										remote-endpoint = <&d5xx_vi_in6>;
+									};
+								};
+							};
+						};
+
+						/* NVCSI channel 7: Perception_3 (VC7) */
+						channel@7 {
+							status = "okay";
+							reg = <7>;
+							ports {
+								status = "okay";
+								#address-cells = <1>;
+								#size-cells = <0>;
+								port@0 {
+									status = "okay";
+									reg = <0>;
+									d5xx_csi_in7: endpoint@14 {
+										status = "okay";
+										port-index = <2>;
+										bus-width = <4>;
+										vc-id = <7>;
+										remote-endpoint = <&d5xx_per3_out>;
+									};
+								};
+								port@1 {
+									status = "okay";
+									reg = <1>;
+									d5xx_csi_out7: endpoint@15 {
+										status = "okay";
+										remote-endpoint = <&d5xx_vi_in7>;
 									};
 								};
 							};
@@ -682,6 +845,181 @@
 								csi-mode = "1x4";
 								st-vc = <4>;
 								vc-id = <4>;
+								num-lanes = <4>;
+							};
+						};
+#endif
+#if D5XX_CHANNEL_COUNT >= 8
+						/*
+						 * Perception_1..3 — VC5/VC6/VC7.
+						 * SAS carries these as UD33/UD34/UD35; the host exposes them
+						 * through the RAW8 GREY fallback until the product payload
+						 * contract is fixed, so the FourCC here is provisional.
+						 *
+						 * The 0x1f/0x20/0x21 sensor aliases were validated on the
+						 * FG24 board: all eight d5xx instances probe (9-001a..9-0021)
+						 * with no address collision on the muxed cam_i2c bus.
+						 * Firmware that does not publish VC5-VC7 simply fails
+						 * STREAMON with -EAGAIN; the other streams are unaffected.
+						 */
+						d5xx_per1: d5xx@1f {
+							status = "okay";
+							def-addr = <0x10>;
+							reg = <0x1f>;
+							override_reg = <0x1a>;
+							compatible = "realsense,d5xx";
+							use_sensor_mode_id = "true";
+							cam-type = "PER1";
+							nvidia,gmsl-ser-device = <&ser_a>;
+							nvidia,gmsl-dser-device = <&dser>;
+
+							ports {
+								#address-cells = <1>;
+								#size-cells = <0>;
+
+								port@0 {
+									reg = <0>;
+									d5xx_per1_out: endpoint {
+										vc-id = <5>;
+										port-index = <2>;
+										bus-width = <4>;
+										remote-endpoint = <&d5xx_csi_in5>;
+									};
+								};
+							};
+
+							mode0 {
+								pixel_t = "grey_y8";
+								num_lanes = "4";
+								csi_pixel_bit_depth = "8";
+								active_w = "1024";
+								active_h = "1024";
+								tegra_sinterface = "serial_c";
+								phy_mode = "DPHY";
+								discontinuous_clk = "no";
+								cil_settletime = "0";
+								mclk_khz = "24000";
+								pix_clk_hz = "1000000000";
+								serdes_pix_clk_hz = "1000000000";
+								line_length = "1024";
+								embedded_metadata_height = "0";
+							};
+
+							gmsl-link {
+								src-csi-port = "a";
+								dst-csi-port = "a";
+								serdes-csi-link = "a";
+								csi-mode = "1x4";
+								st-vc = <5>;
+								vc-id = <5>;
+								num-lanes = <4>;
+							};
+						};
+
+						d5xx_per2: d5xx@20 {
+							status = "okay";
+							def-addr = <0x10>;
+							reg = <0x20>;
+							override_reg = <0x1a>;
+							compatible = "realsense,d5xx";
+							use_sensor_mode_id = "true";
+							cam-type = "PER2";
+							nvidia,gmsl-ser-device = <&ser_a>;
+							nvidia,gmsl-dser-device = <&dser>;
+
+							ports {
+								#address-cells = <1>;
+								#size-cells = <0>;
+
+								port@0 {
+									reg = <0>;
+									d5xx_per2_out: endpoint {
+										vc-id = <6>;
+										port-index = <2>;
+										bus-width = <4>;
+										remote-endpoint = <&d5xx_csi_in6>;
+									};
+								};
+							};
+
+							mode0 {
+								pixel_t = "grey_y8";
+								num_lanes = "4";
+								csi_pixel_bit_depth = "8";
+								active_w = "1024";
+								active_h = "1024";
+								tegra_sinterface = "serial_c";
+								phy_mode = "DPHY";
+								discontinuous_clk = "no";
+								cil_settletime = "0";
+								mclk_khz = "24000";
+								pix_clk_hz = "1000000000";
+								serdes_pix_clk_hz = "1000000000";
+								line_length = "1024";
+								embedded_metadata_height = "0";
+							};
+
+							gmsl-link {
+								src-csi-port = "a";
+								dst-csi-port = "a";
+								serdes-csi-link = "a";
+								csi-mode = "1x4";
+								st-vc = <6>;
+								vc-id = <6>;
+								num-lanes = <4>;
+							};
+						};
+
+						d5xx_per3: d5xx@21 {
+							status = "okay";
+							def-addr = <0x10>;
+							reg = <0x21>;
+							override_reg = <0x1a>;
+							compatible = "realsense,d5xx";
+							use_sensor_mode_id = "true";
+							cam-type = "PER3";
+							nvidia,gmsl-ser-device = <&ser_a>;
+							nvidia,gmsl-dser-device = <&dser>;
+
+							ports {
+								#address-cells = <1>;
+								#size-cells = <0>;
+
+								port@0 {
+									reg = <0>;
+									d5xx_per3_out: endpoint {
+										vc-id = <7>;
+										port-index = <2>;
+										bus-width = <4>;
+										remote-endpoint = <&d5xx_csi_in7>;
+									};
+								};
+							};
+
+							mode0 {
+								pixel_t = "grey_y8";
+								num_lanes = "4";
+								csi_pixel_bit_depth = "8";
+								active_w = "1024";
+								active_h = "1024";
+								tegra_sinterface = "serial_c";
+								phy_mode = "DPHY";
+								discontinuous_clk = "no";
+								cil_settletime = "0";
+								mclk_khz = "24000";
+								pix_clk_hz = "1000000000";
+								serdes_pix_clk_hz = "1000000000";
+								line_length = "1024";
+								embedded_metadata_height = "0";
+							};
+
+							gmsl-link {
+								src-csi-port = "a";
+								dst-csi-port = "a";
+								serdes-csi-link = "a";
+								csi-mode = "1x4";
+								st-vc = <7>;
+								vc-id = <7>;
 								num-lanes = <4>;
 							};
 						};

@@ -188,12 +188,20 @@ MODULE_PARM_DESC(y12i_raw16_carrier,
 #define D5X_IMU_STREAM_STATUS		0x100C
 #define D5X_DUALRGB_RIGHT_STREAM_STATUS		0x1010
 #define D5X_IR_STREAM_STATUS		0x1014
+/* Perception_1..3 (VC5-VC7) extend the stream-control window to 0x102F. */
+#define D5X_PER1_STREAM_STATUS		0x1018
+#define D5X_PER2_STREAM_STATUS		0x101C
+#define D5X_PER3_STREAM_STATUS		0x1020
 
 #define D5X_STREAM_DEPTH			0x0
 #define D5X_STREAM_RGB				0x1
 #define D5X_STREAM_IMU				0x2
 #define D5X_STREAM_DUALRGB_RIGHT				0x3
 #define D5X_STREAM_IR				0x4
+#define D5X_STREAM_PER1				0x5
+#define D5X_STREAM_PER2				0x6
+#define D5X_STREAM_PER3				0x7
+#define D5X_PER_STREAM_COUNT			3
 #define D5X_STREAM_STOP				0x100
 #define D5X_STREAM_START			0x200
 #define D5X_STREAM_IDLE				0x1
@@ -238,6 +246,31 @@ MODULE_PARM_DESC(y12i_raw16_carrier,
 #define D5X_IR_OVERRIDE				0x409C
 #define D5X_IR_CONTROL_STATUS 		0x409E
 
+/* Perception_1..3 config blocks are appended after IR; existing bases never move. */
+#define D5X_PER1_STREAM_DT			0x40A0
+#define D5X_PER1_STREAM_MD			0x40A2
+#define D5X_PER1_RES_WIDTH			0x40A4
+#define D5X_PER1_RES_HEIGHT			0x40A8
+#define D5X_PER1_FPS				0x40AC
+#define D5X_PER1_OVERRIDE			0x40BC
+#define D5X_PER1_CONTROL_STATUS		0x40BE
+
+#define D5X_PER2_STREAM_DT			0x40C0
+#define D5X_PER2_STREAM_MD			0x40C2
+#define D5X_PER2_RES_WIDTH			0x40C4
+#define D5X_PER2_RES_HEIGHT			0x40C8
+#define D5X_PER2_FPS				0x40CC
+#define D5X_PER2_OVERRIDE			0x40DC
+#define D5X_PER2_CONTROL_STATUS		0x40DE
+
+#define D5X_PER3_STREAM_DT			0x40E0
+#define D5X_PER3_STREAM_MD			0x40E2
+#define D5X_PER3_RES_WIDTH			0x40E4
+#define D5X_PER3_RES_HEIGHT			0x40E8
+#define D5X_PER3_FPS				0x40EC
+#define D5X_PER3_OVERRIDE			0x40FC
+#define D5X_PER3_CONTROL_STATUS		0x40FE
+
 #define D5X_DEPTH_CONTROL_BASE		0x4100
 #define D5X_RGB_CONTROL_BASE		0x4200
 #define D5X_MANUAL_EXPOSURE_LSB		0x0000
@@ -276,6 +309,9 @@ MODULE_PARM_DESC(y12i_raw16_carrier,
 #define D5X_IMU_CONFIG_STATUS		0x4804
 #define D5X_DUALRGB_RIGHT_CONFIG_STATUS		0x4806
 #define D5X_IR_CONFIG_STATUS		0x4808
+#define D5X_PER1_CONFIG_STATUS		0x480A
+#define D5X_PER2_CONFIG_STATUS		0x480C
+#define D5X_PER3_CONFIG_STATUS		0x480E
 
 #define D5X_STATUS_STREAMING		0x1
 #define D5X_STATUS_INVALID_DT		0x2
@@ -631,6 +667,9 @@ struct d5x {
 	struct regulator *vcc;
 	const struct d5x_variant *variant;
 	int is_depth, is_y8, is_rgb, is_dualrgb_right, is_imu;
+	/* Perception_1..3 (VC5-VC7). is_per selects the family, per_index picks 0..2. */
+	int is_per;
+	int per_index;
 	bool metadata_enabled;
 	int aggregated;
 	int reset_ref_d5x;
@@ -845,6 +884,7 @@ struct d5x_dev {
 	bool ir_streaming;
 	bool rgb_streaming;
 	bool dualrgb_right_streaming;
+	bool per_streaming[D5X_PER_STREAM_COUNT];
 	bool imu_streaming;
 };
 
@@ -1608,6 +1648,27 @@ static const struct d5x_format d5x_y_formats_d58x[] = {
 	},
 };
 
+static const struct d5x_resolution d58x_per_sizes[] = {
+	D5X_RES(1024, 1024, d5x_framerate_to_60)	/* default */
+};
+
+/*
+ * Perception_1..3 payloads are opaque bytes produced by the camera's on-board
+ * processing; there is no imager-level pixel semantic. RAW8 in / RAW8 out with
+ * a GREY-compatible mbus code is a provisional container so the data reaches
+ * userspace unmodified. Both the FourCC and the geometry are expected to change
+ * once the perception payload format is finalised.
+ */
+static const struct d5x_format d5x_per_formats_d58x[] = {
+	{
+		.source_dt = GMSL_CSI_DT_RAW_8,
+		.csi_out_dt = GMSL_CSI_DT_RAW_8,
+		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
+		.n_resolutions = ARRAY_SIZE(d58x_per_sizes),
+		.resolutions = d58x_per_sizes,
+	},
+};
+
 static const struct d5x_format d5x_y_formats_d58x_raw16[] = {
 	{
 		/* First format: default */
@@ -1734,9 +1795,12 @@ static inline bool d5x_is_dualrgb_left(const struct d5x *state)
 static const char *d5x_get_sensor_name(struct d5x *state)
 {
 	static const char *sensor_name[] = {"unknown", "RGB", "DEPTH", "Y8", "IMU"};
+	static const char *per_name[D5X_PER_STREAM_COUNT] = {"PER1", "PER2", "PER3"};
 	int sensor_id = state->is_rgb * 1 + state->is_depth * 2 + \
 			state->is_y8 * 3 + state->is_imu * 4;
 
+	if (state->is_per)
+		return per_name[state->per_index];
 	if (state->is_dualrgb_right)
 		return "DUALRGB_RIGHT";
 	if (sensor_id >= (sizeof(sensor_name)/sizeof(*sensor_name)))
@@ -1752,6 +1816,8 @@ static void d5x_set_state_last_set(struct d5x *state)
 
 	if (state->is_depth)
 		state->mux.last_set = &state->depth.sensor;
+	else if (state->is_per)
+		state->mux.last_set = &state->ir.sensor;
 	else if (state->is_rgb)
 		state->mux.last_set = &state->rgb.sensor;
 	else if (state->is_y8)
@@ -2340,6 +2406,33 @@ static int d5x_configure(struct d5x *state)
 		width_addr = D5X_DUALRGB_RIGHT_RES_WIDTH;
 		height_addr = D5X_DUALRGB_RIGHT_RES_HEIGHT;
 #endif
+	} else if (state->is_per) {
+		static const u16 per_dt[D5X_PER_STREAM_COUNT] = {
+			D5X_PER1_STREAM_DT, D5X_PER2_STREAM_DT, D5X_PER3_STREAM_DT };
+		static const u16 per_md[D5X_PER_STREAM_COUNT] = {
+			D5X_PER1_STREAM_MD, D5X_PER2_STREAM_MD, D5X_PER3_STREAM_MD };
+		static const u16 per_override[D5X_PER_STREAM_COUNT] = {
+			D5X_PER1_OVERRIDE, D5X_PER2_OVERRIDE, D5X_PER3_OVERRIDE };
+		static const u16 per_fps[D5X_PER_STREAM_COUNT] = {
+			D5X_PER1_FPS, D5X_PER2_FPS, D5X_PER3_FPS };
+		static const u16 per_width[D5X_PER_STREAM_COUNT] = {
+			D5X_PER1_RES_WIDTH, D5X_PER2_RES_WIDTH, D5X_PER3_RES_WIDTH };
+		static const u16 per_height[D5X_PER_STREAM_COUNT] = {
+			D5X_PER1_RES_HEIGHT, D5X_PER2_RES_HEIGHT, D5X_PER3_RES_HEIGHT };
+
+		/*
+		 * Perception payloads are opaque byte streams, so they reuse the
+		 * IR (grey) sensor plumbing rather than a dedicated struct.
+		 */
+		sensor = &state->ir.sensor;
+#if !D5X_BYPASS_CAMERA_I2C
+		dt_addr = per_dt[state->per_index];
+		md_addr = per_md[state->per_index];
+		override_addr = per_override[state->per_index];
+		fps_addr = per_fps[state->per_index];
+		width_addr = per_width[state->per_index];
+		height_addr = per_height[state->per_index];
+#endif
 	} else if (d5x_is_dualrgb_left(state)) {
 		sensor = &state->rgb.sensor;
 #if !D5X_BYPASS_CAMERA_I2C
@@ -2473,6 +2566,7 @@ static int d5x_configure(struct d5x *state)
 	}
 #else /* Non-SERDES configuration */
 	vc_id = (state->is_depth) ? 0 : (state->is_dualrgb_right) ? 4 :
+		(state->is_per) ? (5 + state->per_index) :
 		d5x_is_dualrgb_left(state) ? 1 : (state->is_y8) ? 2 : 3;
 #endif
 
@@ -5696,7 +5790,7 @@ static int d5x_mux_enum_mbus_code(struct v4l2_subdev *sd,
 			remote_sd = &state->depth.sensor.sd;
 			break;
 		}
-		if (state->is_y8) {
+		if (state->is_y8 || state->is_per) {
 			remote_sd = &state->ir.sensor.sd;
 			break;
 		}
@@ -5731,7 +5825,7 @@ static int d5x_mux_enum_mbus_code(struct v4l2_subdev *sd,
 		remote_sd = &state->rgb.sensor.sd;
 	if (state->is_depth)
 		remote_sd = &state->depth.sensor.sd;
-	if (state->is_y8)
+	if (state->is_y8 || state->is_per)
 		remote_sd = &state->ir.sensor.sd;
 	if (state->is_imu)
 		remote_sd = &state->imu.sensor.sd;
@@ -5750,7 +5844,7 @@ static int d5x_state_to_pad(struct d5x *state) {
 	int pad = -1;
 	if (state->is_depth)
 		pad = D5X_MUX_PAD_DEPTH;
-	if (state->is_y8)
+	if (state->is_y8 || state->is_per)
 		pad = D5X_MUX_PAD_IR;
 	if (state->is_rgb)
 		pad = D5X_MUX_PAD_RGB;
@@ -6089,6 +6183,8 @@ static int d5x_mux_s_stream(struct v4l2_subdev *sd, int on)
 		streaming_flag = &state->d5x_dev->depth_streaming;
 	else if (state->is_dualrgb_right)
 		streaming_flag = &state->d5x_dev->dualrgb_right_streaming;
+	else if (state->is_per)
+		streaming_flag = &state->d5x_dev->per_streaming[state->per_index];
 	else if (d5x_is_dualrgb_left(state))
 		streaming_flag = &state->d5x_dev->rgb_streaming;
 	else if (state->is_y8)
@@ -6192,6 +6288,21 @@ static int d5x_mux_s_stream(struct v4l2_subdev *sd, int on)
 		stream_id = D5X_STREAM_DUALRGB_RIGHT;
 		vc_id = 4;
 		streaming_flag = &state->d5x_dev->dualrgb_right_streaming;
+	} else if (state->is_per) {
+		static const u16 per_config_status[D5X_PER_STREAM_COUNT] = {
+			D5X_PER1_CONFIG_STATUS, D5X_PER2_CONFIG_STATUS,
+			D5X_PER3_CONFIG_STATUS };
+		static const u16 per_stream_status[D5X_PER_STREAM_COUNT] = {
+			D5X_PER1_STREAM_STATUS, D5X_PER2_STREAM_STATUS,
+			D5X_PER3_STREAM_STATUS };
+		static const u16 per_stream_id[D5X_PER_STREAM_COUNT] = {
+			D5X_STREAM_PER1, D5X_STREAM_PER2, D5X_STREAM_PER3 };
+
+		config_status_base = per_config_status[state->per_index];
+		stream_status_base = per_stream_status[state->per_index];
+		stream_id = per_stream_id[state->per_index];
+		vc_id = 5 + state->per_index;
+		streaming_flag = &state->d5x_dev->per_streaming[state->per_index];
 	} else if (d5x_is_dualrgb_left(state)) {
 		config_status_base = D5X_RGB_CONFIG_STATUS;
 		stream_status_base = D5X_RGB_STREAM_STATUS;
@@ -6768,6 +6879,15 @@ static int d5x_mux_init(struct i2c_client *c, struct d5x *state)
 	}
 	else if (state->is_dualrgb_right)
 		state->mux.last_set = &state->rgb.sensor;
+	else if (state->is_per)
+		/*
+		 * Perception streams carry an opaque, already-processed byte
+		 * payload, so imager controls (exposure, gain, laser power)
+		 * have no meaning here and no handler is attached. If firmware
+		 * later exposes per-stream tunables, add a dedicated
+		 * handler_per here rather than reusing handler_y8.
+		 */
+		state->mux.last_set = &state->ir.sensor;
 	else if (state->is_y8) {
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 20, 0)
 		v4l2_ctrl_add_handler(&state->ctrls.handler,
@@ -6870,20 +6990,27 @@ static int d5x_fixed_configuration(struct i2c_client *client, struct d5x *state)
 	sensor->mux_pad = D5X_MUX_PAD_DEPTH;
 
 	sensor = &state->ir.sensor;
-	switch (dev_type) {
-	case D5X_DEVICE_TYPE_D58X:
-		if (y12i_raw16_carrier) {
-			sensor->formats = d5x_y_formats_d58x_raw16;
-			sensor->n_formats =
-				ARRAY_SIZE(d5x_y_formats_d58x_raw16);
-		} else {
-			sensor->formats = d5x_y_formats_d58x;
-			sensor->n_formats = ARRAY_SIZE(d5x_y_formats_d58x);
+	if (state->is_per) {
+		/* Perception instances reuse the IR pad with their own table. */
+		sensor->formats = d5x_per_formats_d58x;
+		sensor->n_formats = ARRAY_SIZE(d5x_per_formats_d58x);
+	} else {
+		switch (dev_type) {
+		case D5X_DEVICE_TYPE_D58X:
+			if (y12i_raw16_carrier) {
+				sensor->formats = d5x_y_formats_d58x_raw16;
+				sensor->n_formats =
+					ARRAY_SIZE(d5x_y_formats_d58x_raw16);
+			} else {
+				sensor->formats = d5x_y_formats_d58x;
+				sensor->n_formats =
+					ARRAY_SIZE(d5x_y_formats_d58x);
+			}
+			break;
+		default:
+			sensor->formats = state->variant->formats;
+			sensor->n_formats = state->variant->n_formats;
 		}
-		break;
-	default:
-		sensor->formats = state->variant->formats;
-		sensor->n_formats = state->variant->n_formats;
 	}
 	sensor->mux_pad = D5X_MUX_PAD_IR;
 
@@ -7764,6 +7891,8 @@ static int d5x_probe(struct i2c_client *c
 	state->is_rgb = 0;
 	state->is_dualrgb_right = 0;
 	state->is_imu = 0;
+	state->is_per = 0;
+	state->per_index = 0;
 #ifdef CONFIG_OF
 	ret = of_property_read_string(c->dev.of_node, "cam-type", &str);
 	if (!ret && !strncmp(str, "Depth", strlen("Depth"))) {
@@ -7793,6 +7922,23 @@ static int d5x_probe(struct i2c_client *c
 		state->is_imu = 1;
 		state->control_base = D5X_DEPTH_CONTROL_BASE;
 		state->control_status_reg = D5X_DEPTH_CONTROL_STATUS;
+	}
+	if (!ret && !strncmp(str, "PER", strlen("PER"))) {
+		/* "PER1"."PER3" -> per_index 0..2; anything else stays unclaimed. */
+		int idx = str[strlen("PER")] - '1';
+
+		if (idx >= 0 && idx < D5X_PER_STREAM_COUNT) {
+			static const u16 per_ctrl_status[D5X_PER_STREAM_COUNT] = {
+				D5X_PER1_CONTROL_STATUS,
+				D5X_PER2_CONTROL_STATUS,
+				D5X_PER3_CONTROL_STATUS,
+			};
+
+			state->is_per = 1;
+			state->per_index = idx;
+			state->control_base = D5X_DEPTH_CONTROL_BASE;
+			state->control_status_reg = per_ctrl_status[idx];
+		}
 	}
 
 	mode0_node = of_get_child_by_name(state->client->dev.of_node, "mode0");
