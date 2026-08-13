@@ -449,6 +449,15 @@ static const struct hwm_cmd cmd_hw_reset = {
 	.opcode = 0x20,  /* HW reset opcode */
 };
 
+#define DS5_HWMC_OPCODE_SET_CAM_SYNC	0x69
+#define DS5_HWMC_OPCODE_GET_CAM_SYNC	0x6A
+#define DS5_HWMC_OPCODE_CUSTOM_CMD	0x80
+
+#define DS5_CUSTOM_SET_DUAL_RGB_AE_MODE	35
+#define DS5_CUSTOM_GET_DUAL_RGB_AE_MODE	38
+#define DS5_CUSTOM_SET_DEVICE_MODE	39
+#define DS5_CUSTOM_GET_DEVICE_MODE	40
+
 static const struct hwm_cmd log_prepare = {
 	.header = 0x014,
 	.magic_word = 0xCDAB,
@@ -500,6 +509,8 @@ struct ds5_ctrls {
 		struct v4l2_ctrl *query_sub_stream;
 		struct v4l2_ctrl *set_sub_stream;
 		struct v4l2_ctrl *sync_mode;
+		struct v4l2_ctrl *device_mode;
+		struct v4l2_ctrl *dual_rgb_ae_policy;
 		/* RGB-only ISP controls. Only ae_priority needs a stored
 		 * pointer because it must be disabled per-SKU after probe
 		 * (D40X/D401 does not support it). The remaining controls
@@ -664,6 +675,10 @@ struct ds5_dev {
 	/* Pointer to the primary DS5 struct */
 	struct ds5 *ds5_primary;
 	bool serdes_setup_complete;
+	int sync_mode;
+	int configured_device_mode;
+	int active_device_mode;
+	bool device_mode_valid;
 
 	bool depth_streaming;
 	bool ir_streaming;
@@ -2548,6 +2563,13 @@ enum ds5_sync_mode {
 	DS5_SYNC_MODE_EXTERNAL = 2,
 };
 
+enum ds5_d58x_sync_mode {
+	DS5_D58X_SYNC_MODE_DISABLED = 0,
+	DS5_D58X_SYNC_MODE_RGB_MASTER_UNSUPPORTED = 1,
+	DS5_D58X_SYNC_MODE_PWM_MASTER = 2,
+	DS5_D58X_SYNC_MODE_EXTERNAL = 3,
+};
+
 #define DS5_CAMERA_CID_PWM			(DS5_CAMERA_CID_BASE+22)
 #define DS5_CAMERA_CID_SOC_PVT_TEMPERATURE	(DS5_CAMERA_CID_BASE+24)
 #define DS5_CAMERA_CID_PROJECTOR_TEMPERATURE	(DS5_CAMERA_CID_BASE+25)
@@ -2565,6 +2587,19 @@ enum ds5_sync_mode {
 
 /* Depth AE mode: single R/W control, maps to librealsense XU selector 0x11 */
 #define DS5_CAMERA_CID_AE_MODE		(DS5_CAMERA_CID_BASE+35)
+#define DS5_CAMERA_CID_DEVICE_MODE	(DS5_CAMERA_CID_BASE + 36)
+#define DS5_CAMERA_CID_DUAL_RGB_AE_POLICY (DS5_CAMERA_CID_BASE + 37)
+
+enum ds5_d58x_device_mode {
+	DS5_D58X_DEVICE_MODE_3C = 0,
+	DS5_D58X_DEVICE_MODE_2C = 1,
+};
+
+enum ds5_d58x_ae_policy {
+	DS5_D58X_AE_POLICY_INDEPENDENT = 0,
+	DS5_D58X_AE_POLICY_DEPTH_MASTER = 1,
+	DS5_D58X_AE_POLICY_RGB_MASTER = 2,
+};
 
 /* Auto-exposure algorithm types — mirrors FW ETAeType */
 enum ds5_ae_type {
@@ -2590,6 +2625,54 @@ enum DS5_HWMC_ERR {
 	DS5_HWMC_ERR_UNKNOWN = -64,
 	DS5_HWMC_ERR_LAST,
 };
+
+/* Firmware ErrorTypes values used by the typed D58x HWMC controls. */
+#define DS5_FW_ERR_INVALID_PARAM		2
+#define DS5_FW_ERR_HW_NOT_READY		3
+#define DS5_FW_ERR_UNAUTHORIZED		4
+#define DS5_FW_ERR_ILLEGAL_SIZE		10
+#define DS5_FW_ERR_VALUE_OUT_OF_RANGE	17
+#define DS5_FW_ERR_TIMEOUT		18
+#define DS5_FW_ERR_NOT_SUPPORTED	19
+#define DS5_FW_ERR_SW_NOT_READY		21
+
+static int ds5_hwmc_error_to_errno(int error)
+{
+	if (!error)
+		return 0;
+
+	switch (error) {
+	case DS5_FW_ERR_INVALID_PARAM:
+	case -DS5_FW_ERR_INVALID_PARAM:
+	case DS5_FW_ERR_VALUE_OUT_OF_RANGE:
+	case -DS5_FW_ERR_VALUE_OUT_OF_RANGE:
+		return -EINVAL;
+	case DS5_FW_ERR_HW_NOT_READY:
+	case -DS5_FW_ERR_HW_NOT_READY:
+		return -EIO;
+	case DS5_FW_ERR_UNAUTHORIZED:
+	case -DS5_FW_ERR_UNAUTHORIZED:
+		return -EACCES;
+	case DS5_FW_ERR_ILLEGAL_SIZE:
+	case -DS5_FW_ERR_ILLEGAL_SIZE:
+		return -EBADMSG;
+	case DS5_FW_ERR_TIMEOUT:
+	case -DS5_FW_ERR_TIMEOUT:
+		return -ETIMEDOUT;
+	case DS5_FW_ERR_NOT_SUPPORTED:
+	case -DS5_FW_ERR_NOT_SUPPORTED:
+		return -EOPNOTSUPP;
+	case DS5_FW_ERR_SW_NOT_READY:
+	case -DS5_FW_ERR_SW_NOT_READY:
+		return -EBUSY;
+	default:
+		/*
+		 * Preserve transport errno values; unknown positive values are
+		 * firmware status codes and must not escape as success.
+		 */
+		return error < 0 ? error : -EIO;
+	}
+}
 
 static int ds5_hwmc_wait(struct ds5 *state)
 {
@@ -2697,6 +2780,250 @@ static int ds5_hwmc_send(struct ds5 *state,
 	ds5_write_with_check(state, DS5_HWMC_EXEC, 0x01); /* execute cmd */
 
 	return 0;
+}
+
+static int ds5_hwmc_send_wait(struct ds5 *state, const struct hwm_cmd *cmd)
+{
+	int ret;
+
+	ret = ds5_hwmc_send(state, sizeof(*cmd), cmd);
+	if (!ret)
+		ret = ds5_hwmc_wait(state);
+
+	return ds5_hwmc_error_to_errno(ret);
+}
+
+static int ds5_hwmc_get_u32(struct ds5 *state, const struct hwm_cmd *cmd,
+			    u32 *value)
+{
+	u8 response[8];
+	u16 response_len = 0;
+	__le32 value_le;
+	int ret;
+
+	if (!value)
+		return -EINVAL;
+
+	ret = ds5_hwmc_send(state, sizeof(*cmd), cmd);
+	if (ret)
+		return ret;
+	ret = ds5_hwmc_wait(state);
+	if (ret)
+		return ds5_hwmc_error_to_errno(ret);
+
+	ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN, &response_len,
+			   sizeof(response_len));
+	if (ret)
+		return ret;
+	if (response_len != sizeof(response))
+		return -EBADMSG;
+
+	ret = ds5_raw_read(state, DS5_HWMC_DATA, response, sizeof(response));
+	if (ret)
+		return ret;
+
+	memcpy(&value_le, response + 4, sizeof(value_le));
+	*value = le32_to_cpu(value_le);
+	return 0;
+}
+
+static int ds5_hwmc_set_custom_u32(struct ds5 *state, u32 subcommand, u32 value)
+{
+	const struct hwm_cmd cmd = {
+		.header = 0x14,
+		.magic_word = 0xCDAB,
+		.opcode = DS5_HWMC_OPCODE_CUSTOM_CMD,
+		.param1 = subcommand,
+		.param2 = value,
+	};
+
+	return ds5_hwmc_send_wait(state, &cmd);
+}
+
+static int ds5_hwmc_get_custom_u32(struct ds5 *state, u32 subcommand, u32 *value)
+{
+	const struct hwm_cmd cmd = {
+		.header = 0x14,
+		.magic_word = 0xCDAB,
+		.opcode = DS5_HWMC_OPCODE_CUSTOM_CMD,
+		.param1 = subcommand,
+	};
+
+	return ds5_hwmc_get_u32(state, &cmd, value);
+}
+
+static bool ds5_camera_is_idle(struct ds5 *state)
+{
+	bool idle;
+
+	mutex_lock(&state->ds5_dev->lock);
+	idle = !state->ds5_dev->depth_streaming &&
+	       !state->ds5_dev->rgb_streaming &&
+	       !state->ds5_dev->ir_streaming &&
+	       !state->ds5_dev->imu_streaming;
+	mutex_unlock(&state->ds5_dev->lock);
+	return idle;
+}
+
+static int ds5_get_d58x_device_mode(struct ds5 *state, u32 *mode)
+{
+	int ret;
+
+	ret = ds5_hwmc_get_custom_u32(state, DS5_CUSTOM_GET_DEVICE_MODE, mode);
+	if (!ret && *mode > DS5_D58X_DEVICE_MODE_2C)
+		ret = -EBADMSG;
+	return ret;
+}
+
+static int ds5_set_d58x_device_mode(struct ds5 *state, u32 mode)
+{
+	int ret;
+
+	if (mode > DS5_D58X_DEVICE_MODE_2C)
+		return -EINVAL;
+	if (!ds5_camera_is_idle(state))
+		return -EBUSY;
+
+	ret = ds5_hwmc_set_custom_u32(state, DS5_CUSTOM_SET_DEVICE_MODE, mode);
+	if (!ret) {
+		mutex_lock(&state->ds5_dev->lock);
+		state->ds5_dev->configured_device_mode = mode;
+		mutex_unlock(&state->ds5_dev->lock);
+	}
+	return ret;
+}
+
+static int ds5_get_d58x_ae_policy(struct ds5 *state, u32 *policy)
+{
+	int ret;
+
+	mutex_lock(&state->ds5_dev->lock);
+	ret = (!state->ds5_dev->device_mode_valid ||
+	       state->ds5_dev->active_device_mode != DS5_D58X_DEVICE_MODE_2C) ?
+		-EOPNOTSUPP : 0;
+	mutex_unlock(&state->ds5_dev->lock);
+	if (ret)
+		return ret;
+
+	ret = ds5_hwmc_get_custom_u32(state, DS5_CUSTOM_GET_DUAL_RGB_AE_MODE, policy);
+	if (!ret && *policy > DS5_D58X_AE_POLICY_RGB_MASTER)
+		ret = -EBADMSG;
+	return ret;
+}
+
+static int ds5_set_d58x_ae_policy(struct ds5 *state, u32 policy)
+{
+	int ret;
+
+	if (policy > DS5_D58X_AE_POLICY_RGB_MASTER)
+		return -EINVAL;
+
+	mutex_lock(&state->ds5_dev->lock);
+	ret = (!state->ds5_dev->device_mode_valid ||
+	       state->ds5_dev->active_device_mode != DS5_D58X_DEVICE_MODE_2C) ?
+		-EOPNOTSUPP : 0;
+	mutex_unlock(&state->ds5_dev->lock);
+	if (ret)
+		return ret;
+	if (!ds5_camera_is_idle(state))
+		return -EBUSY;
+
+	return ds5_hwmc_set_custom_u32(state,
+				       DS5_CUSTOM_SET_DUAL_RGB_AE_MODE,
+				       policy);
+}
+
+static int ds5_refresh_d58x_device_mode(struct ds5 *state, bool boot_mode)
+{
+	u32 mode;
+	int ret;
+
+	ret = ds5_get_d58x_device_mode(state, &mode);
+	mutex_lock(&state->ds5_dev->lock);
+	if (!ret) {
+		state->ds5_dev->configured_device_mode = mode;
+		if (boot_mode)
+			state->ds5_dev->active_device_mode = mode;
+		state->ds5_dev->device_mode_valid = true;
+	} else if (boot_mode) {
+		state->ds5_dev->device_mode_valid = false;
+	}
+	mutex_unlock(&state->ds5_dev->lock);
+
+	if (state->ctrls.dual_rgb_ae_policy) {
+		const bool active = !ret && mode == DS5_D58X_DEVICE_MODE_2C;
+
+		v4l2_ctrl_activate(state->ctrls.dual_rgb_ae_policy, active);
+	}
+
+	return ret;
+}
+
+static int ds5_hwmc_set_d58x_sync_mode(struct ds5 *state, u16 sync_mode)
+{
+	struct hwm_cmd cmd = {
+		.header = 0x14,
+		.magic_word = 0xCDAB,
+		.opcode = DS5_HWMC_OPCODE_SET_CAM_SYNC,
+		.param1 = sync_mode,
+	};
+	int ret;
+
+	if (sync_mode == DS5_D58X_SYNC_MODE_RGB_MASTER_UNSUPPORTED ||
+	    sync_mode > DS5_D58X_SYNC_MODE_EXTERNAL)
+		return -EINVAL;
+
+	ret = ds5_hwmc_send(state, sizeof(cmd), &cmd);
+	if (!ret)
+		ret = ds5_hwmc_wait(state);
+
+	return ds5_hwmc_error_to_errno(ret);
+}
+
+static int ds5_hwmc_get_d58x_sync_mode(struct ds5 *state, u16 *sync_mode)
+{
+	struct hwm_cmd cmd = {
+		.header = 0x14,
+		.magic_word = 0xCDAB,
+		.opcode = DS5_HWMC_OPCODE_GET_CAM_SYNC,
+	};
+	unsigned char response[6];
+	u16 response_len = 0;
+	__le16 sync_mode_le;
+	int ret;
+
+	if (!sync_mode)
+		return -EINVAL;
+
+	ret = ds5_hwmc_send(state, sizeof(cmd), &cmd);
+	if (ret)
+		return ret;
+
+	ret = ds5_get_hwmc(state, response, sizeof(response), &response_len);
+	if (ret)
+		return ret;
+	if (response_len < sizeof(response))
+		return -EBADMSG;
+
+	memcpy(&sync_mode_le, response + 4, sizeof(sync_mode_le));
+	*sync_mode = le16_to_cpu(sync_mode_le);
+	if (*sync_mode == DS5_D58X_SYNC_MODE_RGB_MASTER_UNSUPPORTED ||
+	    *sync_mode > DS5_D58X_SYNC_MODE_EXTERNAL)
+		return -ERANGE;
+
+	return 0;
+}
+
+static int ds5_refresh_d58x_sync_mode(struct ds5 *state)
+{
+	u16 sync_mode;
+	int ret;
+
+	ret = ds5_hwmc_get_d58x_sync_mode(state, &sync_mode);
+	if (!ret)
+		WRITE_ONCE(state->ds5_dev->sync_mode, sync_mode);
+
+	return ret;
 }
 
 static int ds5_set_calibration_data(struct ds5 *state,
@@ -2826,6 +3153,177 @@ static int ds5_set_ser_esync_tunneling(struct ds5 *state, bool enable)
 #endif
 }
 
+static int ds5_set_d58x_ser_esync_tunneling(struct ds5 *state, bool enable)
+{
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	struct ds5 *owner;
+	int ret;
+
+	if (!state || !state->client || !state->ds5_dev)
+		return -EINVAL;
+
+	owner = state->ds5_dev->ds5_primary ?
+		state->ds5_dev->ds5_primary : state;
+	if (!owner || !owner->ser_dev || !owner->ser_ops || !owner->dser_ops)
+		return -EINVAL;
+	if (owner->dser_ops != &max96724_interface)
+		return 0;
+
+	if (enable)
+		ret = owner->ser_ops->enable_gpio_tunneling(owner->ser_dev);
+	else
+		ret = owner->ser_ops->disable_gpio_tunneling(owner->ser_dev);
+
+	if (ret)
+		dev_warn(&state->client->dev,
+			 "%s(): serializer GPIO tunnel %s failed (%d)\n",
+			 __func__, enable ? "enable" : "disable", ret);
+	else
+		dev_dbg(&state->client->dev,
+			"%s(): serializer GPIO tunnel %s\n",
+			__func__, enable ? "enabled" : "disabled");
+
+	return ret;
+#else
+	return 0;
+#endif
+}
+
+static int ds5_set_d58x_des_fsync(struct ds5 *state, bool enable)
+{
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	struct ds5 *owner;
+	u32 fps = 0;
+	int ret = 0;
+
+	if (!state || !state->client || !state->ds5_dev)
+		return -EINVAL;
+
+	owner = state->ds5_dev->ds5_primary ?
+		state->ds5_dev->ds5_primary : state;
+	if (!owner || !owner->dser_dev || !owner->dser_ops)
+		return -EINVAL;
+	if (owner->dser_ops != &max96724_interface)
+		return 0;
+
+	if (state->mux.last_set)
+		fps = state->mux.last_set->config.framerate;
+	if (!fps)
+		fps = state->depth.sensor.config.framerate;
+
+	if (enable) {
+		if (owner->dser_ops->setup_fsync)
+			ret = owner->dser_ops->setup_fsync(owner->dser_dev, fps);
+	} else if (owner->dser_ops->disable_fsync) {
+		ret = owner->dser_ops->disable_fsync(owner->dser_dev);
+	}
+
+	if (ret)
+		dev_warn(&state->client->dev,
+			 "%s(): deserializer FSYNC %s failed (%d), fps=%u\n",
+			 __func__, enable ? "enable" : "disable", ret, fps);
+	else
+		dev_dbg(&state->client->dev,
+			"%s(): deserializer FSYNC %s, fps=%u\n",
+			__func__, enable ? "enabled" : "disabled", fps);
+
+	return ret;
+#else
+	return 0;
+#endif
+}
+
+static bool ds5_d58x_sync_mode_uses_esync(struct ds5 *state)
+{
+	int sync_mode;
+
+	if (!state || !state->ds5_dev)
+		return false;
+	if (READ_ONCE(state->ds5_dev->cached_device_type) !=
+	    DS5_DEVICE_TYPE_D58X)
+		return false;
+
+	sync_mode = READ_ONCE(state->ds5_dev->sync_mode);
+	return sync_mode == DS5_D58X_SYNC_MODE_EXTERNAL;
+}
+
+static int ds5_apply_d58x_sync_mode(struct ds5 *state, u32 sync_mode)
+{
+	bool need_esync;
+	bool streaming;
+	int ret;
+
+	if (!state || !state->ds5_dev ||
+	    READ_ONCE(state->ds5_dev->cached_device_type) !=
+	    DS5_DEVICE_TYPE_D58X)
+		return -EINVAL;
+	if (sync_mode == DS5_D58X_SYNC_MODE_RGB_MASTER_UNSUPPORTED ||
+	    sync_mode > DS5_D58X_SYNC_MODE_EXTERNAL)
+		return -EINVAL;
+
+	ret = ds5_hwmc_set_d58x_sync_mode(state, (u16)sync_mode);
+	if (ret) {
+		dev_warn(&state->client->dev,
+			 "%s(): firmware sync mode %u failed (%d)\n",
+			 __func__, sync_mode, ret);
+		return ret;
+	}
+
+	WRITE_ONCE(state->ds5_dev->sync_mode, sync_mode);
+	need_esync = sync_mode == DS5_D58X_SYNC_MODE_EXTERNAL;
+
+	ret = ds5_set_d58x_ser_esync_tunneling(state, need_esync);
+	if (ret)
+		return ret;
+
+	mutex_lock(&state->ds5_dev->lock);
+	streaming = state->ds5_dev->depth_streaming ||
+		    state->ds5_dev->rgb_streaming ||
+		    state->ds5_dev->ir_streaming ||
+		    state->ds5_dev->imu_streaming;
+	mutex_unlock(&state->ds5_dev->lock);
+
+	if (!need_esync || streaming)
+		ret = ds5_set_d58x_des_fsync(state, need_esync);
+
+	return ret;
+}
+
+static void ds5_update_d58x_fsync_for_stream(struct ds5 *state, bool on)
+{
+	bool any_streaming;
+	int ret;
+
+	if (!ds5_d58x_sync_mode_uses_esync(state))
+		return;
+
+	if (on) {
+		ret = ds5_set_d58x_ser_esync_tunneling(state, true);
+		if (!ret)
+			ret = ds5_set_d58x_des_fsync(state, true);
+		if (ret)
+			dev_warn(&state->client->dev,
+				 "%s(): stream-on FSYNC setup failed (%d)\n",
+				 __func__, ret);
+		return;
+	}
+
+	mutex_lock(&state->ds5_dev->lock);
+	any_streaming = state->ds5_dev->depth_streaming ||
+			state->ds5_dev->rgb_streaming ||
+			state->ds5_dev->ir_streaming ||
+			state->ds5_dev->imu_streaming;
+	mutex_unlock(&state->ds5_dev->lock);
+
+	if (!any_streaming) {
+		ret = ds5_set_d58x_des_fsync(state, false);
+		if (ret)
+			dev_warn(&state->client->dev,
+				 "%s(): stream-off FSYNC teardown failed (%d)\n",
+				 __func__, ret);
+	}
+}
+
 /*
  * ds5_hw_reset_with_recovery - Perform hardware reset with readiness polling
  * @state: Driver state structure
@@ -2851,6 +3349,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	bool rgb_streaming;
 	bool ir_streaming;
 	bool imu_streaming;
+	bool d58x_need_esync;
 	unsigned long ds5_last_reset_jiffies = READ_ONCE(state->ds5_dev->last_reset_jiffies);
 	unsigned long ts, timeout;
 
@@ -3038,8 +3537,29 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	if (state->dser_ops->reset_oneshot_link)
 		state->dser_ops->reset_oneshot_link(state->dser_dev, state->g_ctx.dst_vc);
 
-	/* Re-apply ESYNC tunneling to match cached sync_mode control */
-	if (state->ctrls.sync_mode) {
+	if (dev_type == DS5_DEVICE_TYPE_D58X) {
+		struct ds5 *owner = state->ds5_dev->ds5_primary ?
+			state->ds5_dev->ds5_primary : state;
+		int mode_ret;
+
+		ret = ds5_refresh_d58x_sync_mode(state);
+		if (!ret) {
+			d58x_need_esync = ds5_d58x_sync_mode_uses_esync(state);
+			ret = ds5_set_d58x_ser_esync_tunneling(state,
+							       d58x_need_esync);
+		}
+		if (!ret)
+			ret = ds5_set_d58x_des_fsync(state, false);
+		if (ret)
+			dev_warn(&state->client->dev,
+				 "%s(): D58x sync restore after HW reset failed (%d)\n",
+				 __func__, ret);
+		mode_ret = ds5_refresh_d58x_device_mode(owner, true);
+		if (mode_ret)
+			dev_warn(&state->client->dev,
+				 "%s(): D58x device-mode refresh after HW reset failed (%d)\n",
+				 __func__, mode_ret);
+	} else if (state->ctrls.sync_mode) {
 		int sync_val = state->ctrls.sync_mode->cur.val;
 		bool need_esync = (sync_val == DS5_SYNC_MODE_EXTERNAL);
 
@@ -3419,6 +3939,26 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 					"%s(): HW reset detected via HWMC_RW, using recovery path\n",
 					__func__);
 				ret = ds5_hw_reset_with_recovery(state);
+			} else if (READ_ONCE(state->ds5_dev->cached_device_type) ==
+				   DS5_DEVICE_TYPE_D58X &&
+				   cmd->opcode == DS5_HWMC_OPCODE_SET_CAM_SYNC) {
+				if (size + 4 < sizeof(*cmd))
+					ret = -EINVAL;
+				else
+					ret = ds5_apply_d58x_sync_mode(state,
+								       cmd->param1);
+			} else if (READ_ONCE(state->ds5_dev->cached_device_type) ==
+				   DS5_DEVICE_TYPE_D58X &&
+				   cmd->opcode == DS5_HWMC_OPCODE_CUSTOM_CMD &&
+				   size + 4 >= sizeof(*cmd) &&
+				   cmd->param1 == DS5_CUSTOM_SET_DEVICE_MODE) {
+				ret = ds5_set_d58x_device_mode(state, cmd->param2);
+			} else if (READ_ONCE(state->ds5_dev->cached_device_type) ==
+				   DS5_DEVICE_TYPE_D58X &&
+				   cmd->opcode == DS5_HWMC_OPCODE_CUSTOM_CMD &&
+				   size + 4 >= sizeof(*cmd) &&
+				   cmd->param1 == DS5_CUSTOM_SET_DUAL_RGB_AE_MODE) {
+				ret = ds5_set_d58x_ae_policy(state, cmd->param2);
 			} else {
 				ret = ds5_hwmc_send(state, size + 4, cmd);
 			}
@@ -3435,22 +3975,37 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 					ctrl->val);
 		break;
 	case DS5_CAMERA_CID_SYNC_MODE:
-		dev_info(&state->client->dev, "%s(): XU SYNC_MODE control received, value: %d\n",
-			__func__, ctrl->val);
+		dev_info(&state->client->dev, "%s(): SYNC_MODE control received, value: %d\n",
+			 __func__, ctrl->val);
 		if (state->is_depth) {
-			ret = ds5_write(state, base | DS5_CAMERA_SYNC_MODE, ctrl->val);
-			dev_info(&state->client->dev, "%s(): SYNC_MODE command passed to FW, addr: 0x%x, value: %d, ret: %d\n",
-				__func__, base | DS5_CAMERA_SYNC_MODE, ctrl->val, ret);
-			if (!ret) {
-				bool need_esync = (ctrl->val == DS5_SYNC_MODE_EXTERNAL);
+			if (READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X) {
+				ret = ds5_apply_d58x_sync_mode(state, ctrl->val);
+			} else {
+				ret = ds5_write(state,
+						base | DS5_CAMERA_SYNC_MODE,
+						ctrl->val);
+				if (!ret) {
+					bool need_esync =
+						ctrl->val == DS5_SYNC_MODE_EXTERNAL;
 
-				dev_dbg(&state->client->dev,
-					"%s(): sync_mode=%d -> serializer ESYNC %s\n",
-					__func__, ctrl->val,
-					need_esync ? "enable" : "disable");
-				ret = ds5_set_ser_esync_tunneling(state, need_esync);
+					ret = ds5_set_ser_esync_tunneling(state,
+									  need_esync);
+				}
 			}
 		}
+		break;
+	case DS5_CAMERA_CID_DEVICE_MODE:
+		if (state->is_depth &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X)
+			ret = ds5_set_d58x_device_mode(state, ctrl->val);
+		break;
+	case DS5_CAMERA_CID_DUAL_RGB_AE_POLICY:
+		if (state->is_depth &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X)
+			ret = ds5_set_d58x_ae_policy(state, ctrl->val);
 		break;
 	case DS5_CAMERA_CID_PWM:
 		if (state->is_depth)
@@ -3894,8 +4449,50 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			*ctrl->p_new.p_s32 = reg & 0xff;
 		break;
 	case DS5_CAMERA_CID_SYNC_MODE:
-		if (state->is_depth)
-			ds5_read(state, base | DS5_CAMERA_SYNC_MODE, ctrl->p_new.p_u16);
+		if (state->is_depth) {
+			if (READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X && ctrl->p_new.p_u16) {
+				u16 sync_mode;
+
+				ret = ds5_hwmc_get_d58x_sync_mode(state,
+								  &sync_mode);
+				if (!ret) {
+					*ctrl->p_new.p_u16 = sync_mode;
+					WRITE_ONCE(state->ds5_dev->sync_mode,
+						   sync_mode);
+				}
+			} else {
+				ret = ds5_read(state,
+					       base | DS5_CAMERA_SYNC_MODE,
+					       ctrl->p_new.p_u16);
+			}
+		}
+		break;
+	case DS5_CAMERA_CID_DEVICE_MODE:
+		if (state->is_depth && ctrl->p_new.p_s32 &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X) {
+			u32 mode;
+
+			ret = ds5_get_d58x_device_mode(state, &mode);
+			if (!ret) {
+				*ctrl->p_new.p_s32 = mode;
+				mutex_lock(&state->ds5_dev->lock);
+				state->ds5_dev->configured_device_mode = mode;
+				mutex_unlock(&state->ds5_dev->lock);
+			}
+		}
+		break;
+	case DS5_CAMERA_CID_DUAL_RGB_AE_POLICY:
+		if (state->is_depth && ctrl->p_new.p_s32 &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X) {
+			u32 policy;
+
+			ret = ds5_get_d58x_ae_policy(state, &policy);
+			if (!ret)
+				*ctrl->p_new.p_s32 = policy;
+		}
 		break;
 	case DS5_CAMERA_CID_PWM:
 		if (state->is_depth)
@@ -4165,7 +4762,7 @@ static const char * const sync_mode_menu[] = {
 	[DS5_SYNC_MODE_EXTERNAL] = "External Sync",
 };
 
-static struct v4l2_ctrl_config ds5_ctrl_sync_mode = {
+static const struct v4l2_ctrl_config ds5_ctrl_sync_mode = {
 	.ops = &ds5_ctrl_ops,
 	.id = DS5_CAMERA_CID_SYNC_MODE,
 	.name = "Camera Sync Mode",
@@ -4249,6 +4846,61 @@ static const struct v4l2_ctrl_config ds5_ctrl_error_code = {
 	.flags = DS5_READ_ONLY_TELEMETRY_FLAGS,
 };
 
+static const char * const d58x_sync_mode_menu[] = {
+	[DS5_D58X_SYNC_MODE_DISABLED] = "Disabled",
+	[DS5_D58X_SYNC_MODE_RGB_MASTER_UNSUPPORTED] = "(unsupported)",
+	[DS5_D58X_SYNC_MODE_PWM_MASTER] = "PWM Master",
+	[DS5_D58X_SYNC_MODE_EXTERNAL] = "External",
+};
+
+static const struct v4l2_ctrl_config ds5_ctrl_sync_mode_d58x = {
+	.ops = &ds5_ctrl_ops,
+	.id = DS5_CAMERA_CID_SYNC_MODE,
+	.name = "Camera Sync Mode",
+	.type = V4L2_CTRL_TYPE_MENU,
+	.min = DS5_D58X_SYNC_MODE_DISABLED,
+	.max = DS5_D58X_SYNC_MODE_EXTERNAL,
+	.def = DS5_D58X_SYNC_MODE_PWM_MASTER,
+	.qmenu = d58x_sync_mode_menu,
+	.menu_skip_mask = BIT(DS5_D58X_SYNC_MODE_RGB_MASTER_UNSUPPORTED),
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
+static const char * const d58x_device_mode_menu[] = {
+	[DS5_D58X_DEVICE_MODE_3C] = "3C",
+	[DS5_D58X_DEVICE_MODE_2C] = "2C",
+};
+
+static const struct v4l2_ctrl_config ds5_ctrl_device_mode_d58x = {
+	.ops = &ds5_ctrl_ops,
+	.id = DS5_CAMERA_CID_DEVICE_MODE,
+	.name = "Device Mode",
+	.type = V4L2_CTRL_TYPE_MENU,
+	.min = DS5_D58X_DEVICE_MODE_3C,
+	.max = DS5_D58X_DEVICE_MODE_2C,
+	.def = DS5_D58X_DEVICE_MODE_3C,
+	.qmenu = d58x_device_mode_menu,
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
+static const char * const d58x_ae_policy_menu[] = {
+	[DS5_D58X_AE_POLICY_INDEPENDENT] = "Independent",
+	[DS5_D58X_AE_POLICY_DEPTH_MASTER] = "Depth Master",
+	[DS5_D58X_AE_POLICY_RGB_MASTER] = "RGB Master",
+};
+
+static const struct v4l2_ctrl_config ds5_ctrl_dual_rgb_ae_policy_d58x = {
+	.ops = &ds5_ctrl_ops,
+	.id = DS5_CAMERA_CID_DUAL_RGB_AE_POLICY,
+	.name = "2C AE Policy",
+	.type = V4L2_CTRL_TYPE_MENU,
+	.min = DS5_D58X_AE_POLICY_INDEPENDENT,
+	.max = DS5_D58X_AE_POLICY_RGB_MASTER,
+	.def = DS5_D58X_AE_POLICY_DEPTH_MASTER,
+	.qmenu = d58x_ae_policy_menu,
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
 static const struct v4l2_ctrl_config ds5_ctrl_pwm = {
 	.ops = &ds5_ctrl_ops,
 	.id = DS5_CAMERA_CID_PWM,
@@ -4315,6 +4967,10 @@ static void ds5_init_ds5_dev(struct ds5 *state, struct ds5_dev *ds5_dev)
 	ds5_dev->ds5_primary = state;
 	ds5_dev->serdes_setup_complete = false;
 	ds5_dev->cached_device_type = DS5_DEVICE_TYPE_UNKNOWN;
+	ds5_dev->sync_mode = DS5_SYNC_MODE_DEFAULT;
+	ds5_dev->configured_device_mode = DS5_D58X_DEVICE_MODE_3C;
+	ds5_dev->active_device_mode = DS5_D58X_DEVICE_MODE_3C;
+	ds5_dev->device_mode_valid = false;
 	mutex_unlock(&ds5_dev->lock);
 	ds5_reset_streaming_flags(ds5_dev);
 }
@@ -5218,8 +5874,21 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 	}
 	// DEPTH custom
 	if (sid == DEPTH_SID) {
-		ctrls->sync_mode = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_sync_mode, sensor);
+		const struct v4l2_ctrl_config *sync_cfg = &ds5_ctrl_sync_mode;
+
+		if (is_d58x)
+			sync_cfg = &ds5_ctrl_sync_mode_d58x;
+		ctrls->sync_mode = v4l2_ctrl_new_custom(hdl, sync_cfg, sensor);
 		if (is_d58x) {
+			ctrls->device_mode =
+				v4l2_ctrl_new_custom(hdl, &ds5_ctrl_device_mode_d58x,
+						     sensor);
+			ctrls->dual_rgb_ae_policy =
+				v4l2_ctrl_new_custom(hdl,
+						     &ds5_ctrl_dual_rgb_ae_policy_d58x,
+						     sensor);
+			if (ctrls->dual_rgb_ae_policy)
+				v4l2_ctrl_activate(ctrls->dual_rgb_ae_policy, false);
 			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_visual_preset, sensor);
 			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_soc_pvt_temperature,
 					     sensor);
@@ -5231,8 +5900,8 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 		} else {
 			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_readout_shaping,
 					     sensor);
+			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_pwm, sensor);
 		}
-		v4l2_ctrl_new_custom(hdl, &ds5_ctrl_pwm, sensor);
 	}
 	// IMU custom
 	if (sid == IMU_SID)
@@ -5937,6 +6606,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			if (on && state->dser_ops->retrigger_datapath)
 				state->dser_ops->retrigger_datapath(state->dser_dev);
 #endif
+			ds5_update_d58x_fsync_for_stream(state, on);
 			return 0;
 		}
 	}
@@ -6096,6 +6766,8 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	if (on && ret >= 0 && state->dser_ops->retrigger_datapath)
 		state->dser_ops->retrigger_datapath(state->dser_dev);
 #endif
+	if (ret >= 0)
+		ds5_update_d58x_fsync_for_stream(state, on);
 	return ret;
 }
 
@@ -6904,6 +7576,7 @@ static int ds5_dfu_device_open(struct inode *inode, struct file *file)
 static void ds5_adjust_sync_mode_control(struct i2c_client *client, struct ds5 *state)
 {
 	u16 dev_type = 0;
+	bool need_esync;
 	int ret;
 
 	if (!state->ctrls.sync_mode)
@@ -6917,11 +7590,38 @@ static void ds5_adjust_sync_mode_control(struct i2c_client *client, struct ds5 *
 
 	dev_type = ds5_dev_type(state, dev_type);
 	switch (dev_type) {
+	case DS5_DEVICE_TYPE_D58X:
+		__v4l2_ctrl_modify_range(state->ctrls.sync_mode,
+					 DS5_D58X_SYNC_MODE_DISABLED,
+					 DS5_D58X_SYNC_MODE_EXTERNAL,
+					 0, DS5_D58X_SYNC_MODE_PWM_MASTER);
+		state->ctrls.sync_mode->qmenu = d58x_sync_mode_menu;
+		state->ctrls.sync_mode->menu_skip_mask =
+			BIT(DS5_D58X_SYNC_MODE_RGB_MASTER_UNSUPPORTED);
+		ret = ds5_refresh_d58x_sync_mode(state);
+		if (ret) {
+			WRITE_ONCE(state->ds5_dev->sync_mode,
+				   DS5_D58X_SYNC_MODE_PWM_MASTER);
+			dev_warn(&client->dev,
+				 "%s(): failed to read D58x sync mode, using default (%d)\n",
+				 __func__, ret);
+		}
+		need_esync = ds5_d58x_sync_mode_uses_esync(state);
+		ret = ds5_set_d58x_ser_esync_tunneling(state, need_esync);
+		if (!ret)
+			ret = ds5_set_d58x_des_fsync(state, false);
+		if (ret)
+			dev_warn(&client->dev,
+				 "%s(): failed to align D58x sync policy (%d)\n",
+				 __func__, ret);
+		dev_dbg(&client->dev,
+			"%s(): D58x sync mode: 0/2/3 (Disabled/PWM Master/External)\n",
+			__func__);
+		break;
 	case DS5_DEVICE_TYPE_D40X:
 	case DS5_DEVICE_TYPE_D41X:
 	case DS5_DEVICE_TYPE_D43X:
 	case DS5_DEVICE_TYPE_D45X:
-	case DS5_DEVICE_TYPE_D58X:
 		/* Unified 3-value public interface (RSDEV-6449): Default/Master/External */
 		__v4l2_ctrl_modify_range(state->ctrls.sync_mode,
 					 0, DS5_SYNC_MODE_EXTERNAL, 0, 0);
@@ -6936,6 +7636,23 @@ static void ds5_adjust_sync_mode_control(struct i2c_client *client, struct ds5 *
 		__v4l2_ctrl_modify_range(state->ctrls.sync_mode, 0, 0, 0, 0);
 		break;
 	}
+}
+
+static void ds5_adjust_d58x_device_mode_controls(struct i2c_client *client,
+						 struct ds5 *state)
+{
+	int ret;
+
+	if (!state->ctrls.device_mode ||
+	    READ_ONCE(state->ds5_dev->cached_device_type) !=
+		    DS5_DEVICE_TYPE_D58X)
+		return;
+
+	ret = ds5_refresh_d58x_device_mode(state, true);
+	if (ret)
+		dev_warn(&client->dev,
+			 "%s(): failed to read D58x device mode; 2C AE Policy remains inactive (%d)\n",
+			 __func__, ret);
 }
 
 /* Per-SKU adjustment of the RGB ISP controls registered in ds5_ctrl_init().
@@ -7000,6 +7717,7 @@ static int ds5_v4l_init(struct i2c_client *c, struct ds5 *state)
 	/* Adjust sync_mode control range based on device type - must be done
 	 * after ds5_mux_init() creates the control */
 	ds5_adjust_sync_mode_control(c, state);
+	ds5_adjust_d58x_device_mode_controls(c, state);
 
 	/* Adjust RGB ISP controls per SKU (e.g. hide AE Priority on D40X) -
 	 * must be done after ds5_mux_init() registered them. */
