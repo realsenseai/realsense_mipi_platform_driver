@@ -1,0 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-FileCopyrightText: Copyright (c) 2026, RealSense CORPORATION.  All rights reserved.
+
+/*
+ * Superset overlay: declares the maximum D5xx topology, VC0-VC7.
+ * Streams the attached device does not report stay registered but enumerate no
+ * formats, so the boot configuration no longer has to change when the product
+ * stream set does. See tegra234-camera-d5xx-overlay-fg24-4ch.dts for the layer
+ * mapping and for the sensor alias addresses that still need hardware
+ * validation.
+ */
+
+#define D5XX_ALL_VC 1
+#include "tegra234-camera-d5xx-overlay-fg24-4ch.dts"
