@@ -12,3 +12,4 @@ jetpack_version
 /.d4xx_build_version
 /log
 config.ini
+*.code-workspace
