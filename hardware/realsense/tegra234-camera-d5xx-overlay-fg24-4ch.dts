@@ -97,11 +97,15 @@
 #define CAM_I2C_MUX	TEGRA234_AON_GPIO(CC, 3)
 
 /*
- * Stream-count selector. Wrappers define one of these and include this file:
- *   (none)          -> 4 channels, VC0-VC3
- *   D5XX_DUAL_RGB   -> 5 channels, adds DUALRGB_RIGHT on VC4
+ * Stream-count selector. This is the only FG24-4CH overlay source; future VC
+ * expansion raises D5XX_CHANNEL_COUNT here instead of adding another .dts.
+ * DUALRGB_RIGHT is a permanent host capability, not a per-SKU build option:
+ * the driver only registers VC4 when the device answers on its I2C address,
+ * so old firmware and older SDKs keep seeing exactly VC0-VC3.
  * Everything below keys off D5XX_CHANNEL_COUNT, never off the wrapper macro.
  */
+#define D5XX_DUAL_RGB 1
+
 #if defined(D5XX_DUAL_RGB)
 #define D5XX_CHANNEL_COUNT 5
 #else

@@ -1,5 +1,0 @@
-// SPDX-License-Identifier: GPL-2.0-only
-// SPDX-FileCopyrightText: Copyright (c) 2026, RealSense CORPORATION.  All rights reserved.
-
-#define D5XX_DUAL_RGB 1
-#include "tegra234-camera-d5xx-overlay-fg24-4ch.dts"

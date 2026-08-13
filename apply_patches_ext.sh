@@ -87,9 +87,6 @@ if [[ "$JETPACK_VERSION" == "6.x" ]]; then
     if [[ -f "$JP6_OVERLAY_MAKEFILE" ]] && ! grep -q '^dtbo-y += tegra234-camera-d5xx-overlay-fg24-4ch.dtbo$' "$JP6_OVERLAY_MAKEFILE"; then
         sed -i '/^dtbo-y += tegra234-camera-d5xx-overlay.dtbo$/a dtbo-y += tegra234-camera-d5xx-overlay-fg24-4ch.dtbo' "$JP6_OVERLAY_MAKEFILE"
     fi
-    if [[ -f "$JP6_OVERLAY_MAKEFILE" ]] && ! grep -q '^dtbo-y += tegra234-camera-d5xx-overlay-fg24-5ch-dual-rgb.dtbo$' "$JP6_OVERLAY_MAKEFILE"; then
-        sed -i '/^dtbo-y += tegra234-camera-d5xx-overlay-fg24-4ch.dtbo$/a dtbo-y += tegra234-camera-d5xx-overlay-fg24-5ch-dual-rgb.dtbo' "$JP6_OVERLAY_MAKEFILE"
-    fi
     # max96712 header
     cp nvidia-oot/max96712.h "$TARGET/nvidia-oot/include/media/"
 elif [[ "$JETPACK_VERSION" == "4.x" || "$JETPACK_VERSION" == "5.x" ]]; then

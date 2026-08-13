@@ -3918,7 +3918,7 @@ static int d5x_get_calibration_data(struct d5x *state, enum table_id id,
 	return 0;
 }
 
-static int d5x_gvd(struct d5x *state, unsigned char *data)
+static int d5x_gvd(struct d5x *state, unsigned char *data, u16 max_len)
 {
 	struct hwm_cmd cmd;
 	int ret;
@@ -3938,6 +3938,14 @@ static int d5x_gvd(struct d5x *state, unsigned char *data)
 	}
 	/* Read response length */
 	ret = d5x_raw_read(state, D5X_HWMC_RESP_LEN, &length, sizeof(length));
+	if (ret)
+		return ret;
+	if (length > max_len) {
+		dev_err(&state->client->dev,
+			"%s(): GVD response %u exceeds buffer %u\n",
+			__func__, length, max_len);
+		return -EMSGSIZE;
+	}
 	/* Read response data */
 	d5x_raw_read_with_check(state, D5X_HWMC_DATA, data, length);
 
@@ -4172,7 +4180,7 @@ static int d5x_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 	}
 	case D5X_CAMERA_CID_GVD:
-		ret = d5x_gvd(state, ctrl->p_new.p_u8);
+		ret = d5x_gvd(state, ctrl->p_new.p_u8, ctrl->dims[0]);
 		break;
 	case D5X_CAMERA_CID_AE_ROI_GET:
 		if (ctrl->p_new.p_u16) {
@@ -4335,7 +4343,13 @@ static const struct v4l2_ctrl_config d5x_ctrl_gvd = {
 	.id = D5X_CAMERA_CID_GVD,
 	.name = "GVD",
 	.type = V4L2_CTRL_TYPE_U8,
-	.dims = {239},
+	/*
+	 * librealsense sizes its GVD read from this control and needs the whole
+	 * D500 struct (4B opcode header + 8B header + payload) to validate the
+	 * CRC32; a short buffer makes it fall back to the D400 one-byte product
+	 * id and reject the device. The legacy 239 covered only D4xx.
+	 */
+	.dims = {1024},
 	.elem_size = sizeof(u8),
 	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_READ_ONLY,
 	.step = 1,
