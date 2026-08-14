@@ -5575,6 +5575,7 @@ static int d5x_sensor_init(struct i2c_client *c, struct d5x *state,
 #endif
 	sensor->pipe_id = PIPE_NOT_CONFIGURED;
 	sensor->pipe_reapply_gen = 0;
+	d5x_config_cache_clear(sensor);
 	v4l2_i2c_subdev_init(sd, c, ops);
 	/* See tegracam_v4l2.c tegracam_v4l2subdev_register() */
 	/* Set owner to NULL so we can unload the driver module */
