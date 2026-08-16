@@ -164,9 +164,8 @@ int max96717_enable_gpio_tunneling(struct device *dev)
 
 	/*
 	 * GPIO0 carries H_VSYNC_TRIG from the deserializer on RX channel 23,
-	 * GPIO1 carries RGB_FSYNC on the same channel (Currently unused by HKR), and GPIO6 returns the
-	 * camera H_STROBE_OUT_1V8 signal on TX channel 31. These camera-side
-	 * signals are required in both pixel and tunnel video modes.
+	 * GPIO1 carries RGB_FSYNC on the same channel (Currently unused),
+	 * GPIO6 returns the camera H_STROBE_OUT_1V8 signal on TX channel 31.
 	 */
 	/* GPIO 0 receiver */
 	max96717_write_acc(dev, priv->regmap, MAX96717_2BE_ADDR, MAX96717_2BE_ESYNC, &err);
