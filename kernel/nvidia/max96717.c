@@ -37,8 +37,8 @@
 #define MAX96717_MIPI_RX0_RESET 0x48
 #define MAX96717_MIPI_RX0_NORMAL 0x40
 
-#define MAX96717_SRC_CTRL_ADDR 0x2BF
-#define MAX96717_SRC_PWDN_ADDR 0x02BE
+#define MAX96717_2BE_ADDR 0x02BE
+#define MAX96717_2BF_ADDR 0x02BF
 #define MAX96717_2C0_ADDR 0x02C0
 #define MAX96717_2C1_ADDR 0x02C1
 #define MAX96717_2C2_ADDR 0x02C2
@@ -47,21 +47,23 @@
 #define MAX96717_I2C4_ADDR 0x44
 #define MAX96717_I2C5_ADDR 0x45
 
-#define MAX96717_RESET_SRC 0x60
-#define MAX96717_RESET_ESYNC 0x77
 
-#define MAX96717_PWDN_GPIO 0x90
-#define MAX96717_PWDN_ESYNC_EXT 0x24
-
+/* GPIO 0 config values - Receives ID 0x17 */
+#define MAX96717_2BE_ESYNC 0x24
+#define MAX96717_2BF_ESYNC 0x60
 #define MAX96717_2C0_ESYNC 0x57
-#define MAX96717_2C1_ESYNC 0x05
-#define MAX96717_2C2_ESYNC 0x1F
+/* GPIO 1 config values - Receives ID 0x17 */
+#define MAX96717_2C1_ESYNC 0x24
+#define MAX96717_2C2_ESYNC 0x60
 #define MAX96717_2C3_ESYNC 0x57
 
 #define MAX96717_GPIO7_A_ADDR		0x02D3	/* MFP7 / pass-through SDA1 */
 #define MAX96717_GPIO7_B_ADDR		0x02D4
 #define MAX96717_GPIO8_A_ADDR		0x02D6	/* MFP8 / pass-through SCL1 */
 #define MAX96717_GPIO8_B_ADDR		0x02D7
+#define MAX96717_GPIO6_A_ADDR		0x02D0
+#define MAX96717_GPIO6_B_ADDR		0x02D1
+#define MAX96717_GPIO6_C_ADDR		0x02D2
 /* GPIO_A: GPIO_OUT_DIS=1 (high-Z), GPIO_TX_EN=0, GPIO_RX_EN=0 */
 #define MAX96717_GPIO_A_HIGH_Z		0x01
 /* GPIO_B: PULL_UPDN_SEL=None, TX_ID=0 */
@@ -150,13 +152,24 @@ int max96717_enable_gpio_tunneling(struct device *dev)
 
 	mutex_lock(&priv->lock);
 
-	/* Configure ESYNC registers for MAX96712A deserializer */
-	max96717_write_acc(dev, priv->regmap, MAX96717_SRC_PWDN_ADDR, MAX96717_PWDN_ESYNC_EXT, &err);
-	max96717_write_acc(dev, priv->regmap, MAX96717_SRC_CTRL_ADDR, MAX96717_RESET_ESYNC, &err);
+	/*
+	 * GPIO0 carries H_VSYNC_TRIG from the deserializer on RX channel 23,
+	 * GPIO1 carries RGB_FSYNC on the same channel (Currently unused by HKR), and GPIO6 returns the
+	 * camera H_STROBE_OUT_1V8 signal on TX channel 31. These camera-side
+	 * signals are required in both pixel and tunnel video modes.
+	 */
+	/* GPIO 0 receiver */
+	max96717_write_acc(dev, priv->regmap, MAX96717_2BE_ADDR, MAX96717_2BE_ESYNC, &err);
+	max96717_write_acc(dev, priv->regmap, MAX96717_2BF_ADDR, MAX96717_2BF_ESYNC, &err);
 	max96717_write_acc(dev, priv->regmap, MAX96717_2C0_ADDR, MAX96717_2C0_ESYNC, &err);
+	/* GPIO 1 receiver */
 	max96717_write_acc(dev, priv->regmap, MAX96717_2C1_ADDR, MAX96717_2C1_ESYNC, &err);
 	max96717_write_acc(dev, priv->regmap, MAX96717_2C2_ADDR, MAX96717_2C2_ESYNC, &err);
 	max96717_write_acc(dev, priv->regmap, MAX96717_2C3_ADDR, MAX96717_2C3_ESYNC, &err);
+	/* GPIO 6 transmitter */
+	max96717_write_acc(dev, priv->regmap, MAX96717_GPIO6_A_ADDR, 0x27, &err);
+	max96717_write_acc(dev, priv->regmap, MAX96717_GPIO6_B_ADDR, 0x1F, &err);
+	max96717_write_acc(dev, priv->regmap, MAX96717_GPIO6_C_ADDR, 0x00, &err);
 
 	mutex_unlock(&priv->lock);
 
@@ -172,12 +185,15 @@ int max96717_disable_gpio_tunneling(struct device *dev)
 	mutex_lock(&priv->lock);
 
 	/* Restore default SRC pin function — plain GPIO, no ESYNC tunneling */
-	max96717_write_acc(dev, priv->regmap, MAX96717_SRC_PWDN_ADDR, MAX96717_PWDN_GPIO, &err);
-	max96717_write_acc(dev, priv->regmap, MAX96717_SRC_CTRL_ADDR, MAX96717_RESET_SRC, &err);
+	max96717_write_acc(dev, priv->regmap, MAX96717_2BE_ADDR, 0x00, &err);
+	max96717_write_acc(dev, priv->regmap, MAX96717_2BF_ADDR, 0x00, &err);
 	max96717_write_acc(dev, priv->regmap, MAX96717_2C0_ADDR, 0x00, &err);
 	max96717_write_acc(dev, priv->regmap, MAX96717_2C1_ADDR, 0x00, &err);
 	max96717_write_acc(dev, priv->regmap, MAX96717_2C2_ADDR, 0x00, &err);
 	max96717_write_acc(dev, priv->regmap, MAX96717_2C3_ADDR, 0x00, &err);
+	max96717_write_acc(dev, priv->regmap, MAX96717_GPIO6_A_ADDR, 0x99, &err);
+	max96717_write_acc(dev, priv->regmap, MAX96717_GPIO6_B_ADDR, 0xA6, &err);
+	max96717_write_acc(dev, priv->regmap, MAX96717_GPIO6_C_ADDR, 0x46, &err);
 
 	mutex_unlock(&priv->lock);
 
