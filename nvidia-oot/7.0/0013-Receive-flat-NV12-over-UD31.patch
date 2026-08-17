@@ -9,14 +9,34 @@ capture descriptor, expand the transport height to H*3/2, and expose the
 resulting byte-identical surface through the standard NV12 V4L2 ABI.
 
 Scope NV12 buffer sizing and channel-format lookup to the private tuple,
-while preserving legacy lookup behavior for every other FourCC.
+while preserving legacy lookup behavior for every other FourCC. Classify
+UD31 with the existing RAW8 double-pixel handling in MAX9295 Pixel Mode.
 ---
+ drivers/media/i2c/max9295.c                   |  7 +++++--
  .../media/platform/tegra/camera/vi/channel.c  | 14 ++++++++++++++
  drivers/media/platform/tegra/camera/vi/core.c | 16 ++++++++++++++--
  .../media/platform/tegra/camera/vi/vi5_fops.c | 12 +++++++
  .../platform/tegra/camera/vi/vi5_formats.h    | 32 +++++++++++++++++++
- 4 files changed, 72 insertions(+), 2 deletions(-)
+ 5 files changed, 77 insertions(+), 4 deletions(-)
 
+diff --git a/drivers/media/i2c/max9295.c b/drivers/media/i2c/max9295.c
+index 5b9a4dcf..f360ec4c 100644
+--- a/drivers/media/i2c/max9295.c
++++ b/drivers/media/i2c/max9295.c
+@@ -576,8 +576,11 @@ static int __max9295_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
+ 		{0x0102, 0x0E}, // LIM_HEART Pipe X: Disabled
+ 	};
+ 
+-	if (data_type1 == GMSL_CSI_DT_RAW_8 || data_type1 == GMSL_CSI_DT_EMBED
+-	    || data_type2 == GMSL_CSI_DT_RAW_8 || data_type2 == GMSL_CSI_DT_EMBED) {
++	bool has_ud31_8bit = data_type1 == 0x31 || data_type2 == 0x31;
++
++	if (data_type1 == GMSL_CSI_DT_RAW_8 || data_type1 == GMSL_CSI_DT_EMBED ||
++	    data_type2 == GMSL_CSI_DT_RAW_8 || data_type2 == GMSL_CSI_DT_EMBED ||
++	    has_ud31_8bit) {
+ 		map_bpp8dbl[0].val |= (1 << pipe_id);
+ 	} else {
+ 		map_bpp8dbl[0].val &= ~(1 << pipe_id);
 diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
 index 993db7bd..0405886e 100644
 --- a/drivers/media/platform/tegra/camera/vi/channel.c

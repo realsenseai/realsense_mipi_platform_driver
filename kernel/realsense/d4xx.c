@@ -1675,11 +1675,21 @@ static const struct ds5_format ds5_y_formats_d58x[] = {
 	},
 };
 
+#define DS5_D58X_NV12_SOURCE_DT		0x18
+#define DS5_D58X_NV12_CARRIER_DT	0x31
+
 static const struct ds5_format ds5_rgb_formats_d58x[] = {
 	{
 		/* First format: default */
 		.data_type = GMSL_CSI_DT_YUV422_8,	/* UYVY */
 		.mbus_code = MEDIA_BUS_FMT_YUYV8_1X16,
+		.n_resolutions = ARRAY_SIZE(d58x_rgb_sizes),
+		.resolutions = d58x_rgb_sizes,
+	}, {
+		/* Flat NV12 bytes use UD31 as an opaque 8-bit CSI carrier. */
+		.data_type = DS5_D58X_NV12_SOURCE_DT,
+		.override_data_type = DS5_D58X_NV12_CARRIER_DT,
+		.mbus_code = MEDIA_BUS_FMT_RS_NV12_UD31_1X8,
 		.n_resolutions = ARRAY_SIZE(d58x_rgb_sizes),
 		.resolutions = d58x_rgb_sizes,
 	}, {
@@ -1692,9 +1702,6 @@ static const struct ds5_format ds5_rgb_formats_d58x[] = {
 		.resolutions = d58x_calibration_sizes,
 	},
 };
-
-#define DS5_D58X_NV12_SOURCE_DT		0x18
-#define DS5_D58X_NV12_CARRIER_DT	0x31
 
 /* Keep shared YUYV and calibration entries aligned with the base table. */
 static const struct ds5_format ds5_rgb_formats_d58x_tunnel[] = {
@@ -2227,10 +2234,10 @@ static int ds5_configure(struct ds5 *state)
 		sensor = &state->rgb.sensor;
 		dt_addr = DS5_RGB_STREAM_DT;
 		md_addr = DS5_RGB_STREAM_MD;
-		/* D58x tunnel formats always program the stream override contract:
+		/* D58x formats always program the stream override contract:
 		 * non-zero selects a carrier DT and zero clears any prior carrier.
 		 * The format cache avoids redundant I2C writes. D4xx is unchanged. */
-		override_addr = (ds5_is_d58x(state) && !state->d58x_pixel_mode) ||
+		override_addr = ds5_is_d58x(state) ||
 			sensor->config.format->mbus_code == MEDIA_BUS_FMT_SBGGR8_1X8 ?
 			DS5_RGB_OVERRIDE : 0;
 		fps_addr = DS5_RGB_FPS;
@@ -2364,11 +2371,10 @@ static int ds5_configure(struct ds5 *state)
 	}
 
 	if (override_addr != 0) {
-		/* D58x tunnel uses an explicit per-format carrier contract, including
+		/* D58x uses an explicit per-format carrier contract, including
 		 * zero to clear a previous override. Preserve the existing D4xx
 		 * depth/IR override values. */
-		if (state->is_rgb && ds5_is_d58x(state) &&
-		    !state->d58x_pixel_mode)
+		if (state->is_rgb && ds5_is_d58x(state))
 			dt_value = sensor->config.format->override_data_type;
 		else
 			dt_value = sensor->config.format->data_type;
