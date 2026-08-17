@@ -1,0 +1,12 @@
+diff --git a/include/uapi/linux/media-bus-format.h b/include/uapi/linux/media-bus-format.h
+index b2362999fd3d..2327f0a740aa 100644
+--- a/include/uapi/linux/media-bus-format.h
++++ b/include/uapi/linux/media-bus-format.h
+@@ -159,4 +159,6 @@
+ #define MEDIA_BUS_FMT_S5C_UYVY_JPEG_1X8		0x5001
+-
++/* RealSense flat NV12 bytes carried over CSI-2 DT 0x32 (UD32) */
++#define MEDIA_BUS_FMT_RS_NV12_UD32_1X8		0x5008
++
+ /* HSV - next is	0x6002 */
+ #define MEDIA_BUS_FMT_AHSV8888_1X32		0x6001
