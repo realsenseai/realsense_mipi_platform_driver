@@ -23,9 +23,9 @@
  *              replace it. Selected by the OVERLAYS line in
  *              /boot/extlinux/extlinux.conf, so changing it needs a reboot.
  *   superset - declare the MAXIMUM hardware topology once and let the driver
- *              decide at runtime which streams the attached device actually
- *              provides. Streams the device does not report stay registered but
- *              enumerate no formats, so userspace skips them. This keeps the
+ *              decide at runtime which product stream identities the attached
+ *              device actually provides. SKU-specific nodes that do not match
+ *              are rejected during probe. This keeps the
  *              boot configuration constant while the product stream set
  *              (3C vs 2C) varies. The same mechanism is what a later VC5-VC7
  *              perception overlay plugs into; only VC0-VC4 ship today.
@@ -35,7 +35,7 @@
  *   VC1 = RGB          YUY2 / NV12            1920x1080 @30
  *   VC2 = IR           Y8 / Y8I / Y12I        1280x720  @60
  *   VC3 = IMU          RAW8
- *   VC4 = DUALRGB_RIGHT        same profiles as RGB   (D5XX_CHANNEL_COUNT >= 5)
+ *   VC4 = DUALRGB_RIGHT        current 2C mapping; same profiles as RGB
  *
  * LAYER MAPPING for one VC (VC=N)
  *   HKR FlowGmsl        stream slot -> CameraId -> VC N, source DT, output DT
@@ -99,9 +99,10 @@
 /*
  * Stream-count selector. This is the only FG24-4CH overlay source; future VC
  * expansion raises D5XX_CHANNEL_COUNT here instead of adding another .dts.
- * DUALRGB_RIGHT is a permanent host capability, not a per-SKU build option:
- * the driver only registers VC4 when the device answers on its I2C address,
- * so old firmware and older SDKs keep seeing exactly VC0-VC3.
+ * DUALRGB_RIGHT is a permanent topology declaration, not a per-SKU build option:
+ * the driver registers this product stream only when GVD identifies 2C hardware.
+ * The admission rule is tied to cam-type, not to VC4; a future 3C VCx stream can
+ * reuse VC4 with its own stream identity and route.
  * Everything below keys off D5XX_CHANNEL_COUNT, never off the wrapper macro.
  */
 #define D5XX_DUAL_RGB 1

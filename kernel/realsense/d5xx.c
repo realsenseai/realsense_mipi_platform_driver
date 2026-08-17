@@ -178,6 +178,12 @@ MODULE_PARM_DESC(y12i_raw16_carrier,
 #define D5X_DEVICE_TYPE_D58X		9
 #define D5X_DEVICE_TYPE_UNKNOWN		0
 
+#define D5X_D585_DUAL_RGB_PID		0x0C07
+#define D5X_DUAL_RGB_MAX_OUTPUT_FPS	30
+#define D5X_GVD_RESPONSE_SIZE		1024
+/* 4-byte HWM opcode + 8-byte GVD header + skuComponent + USBVID. */
+#define D5X_GVD_USB_PID_OFFSET		0x12
+
 #define D5X_MIPI_LANE_NUMS			0x0400
 #define D5X_MIPI_LANE_DATARATE		0x0402
 #define D5X_MIPI_CONF_STATUS		0x0500
@@ -824,6 +830,8 @@ struct d5x_dev {
 	* read still returns 0.
 	*/
 	u16 cached_device_type;
+	u16 product_pid;
+	bool product_pid_valid;
 
 	/* 
 	* Timestamp (jiffies) of last completed HW reset.
@@ -847,6 +855,19 @@ struct d5x_dev {
 	bool dualrgb_right_streaming;
 	bool imu_streaming;
 };
+
+static bool d5x_is_dual_rgb_2c(const struct d5x *state)
+{
+	return state->d5x_dev &&
+		READ_ONCE(state->d5x_dev->product_pid_valid) &&
+		(READ_ONCE(state->d5x_dev->product_pid) == D5X_D585_DUAL_RGB_PID);
+}
+
+static bool d5x_is_dual_rgb_tdm_image(const struct d5x *state)
+{
+	return d5x_is_dual_rgb_2c(state) &&
+		(state->is_depth || state->is_y8 || state->is_rgb);
+}
 
 #ifdef CONFIG_VIDEO_D5XX_SERDES
 static DEFINE_MUTEX(serdes_lock__);
@@ -1856,6 +1877,7 @@ static int d5x_sensor_enum_frame_interval(struct v4l2_subdev *sd,
 #endif
 		struct v4l2_subdev_frame_interval_enum *fie)
 {
+	struct d5x *state = v4l2_get_subdevdata(sd);
 	struct d5x_sensor *sensor = container_of(sd, struct d5x_sensor, sd);
 	const struct d5x_format *fmt;
 	const struct d5x_resolution *res;
@@ -1876,6 +1898,9 @@ static int d5x_sensor_enum_frame_interval(struct v4l2_subdev *sd,
 		return -EINVAL;
 
 	if (fie->index >= res->n_framerates)
+		return -EINVAL;
+	if (d5x_is_dual_rgb_tdm_image(state) &&
+	    res->framerates[fie->index] > D5X_DUAL_RGB_MAX_OUTPUT_FPS)
 		return -EINVAL;
 
 	fie->interval.numerator = 1;
@@ -2567,6 +2592,7 @@ static int d5x_sensor_s_frame_interval(struct v4l2_subdev *sd,
 #endif
 		struct v4l2_subdev_frame_interval *fi)
 {
+	struct d5x *d5x_state = v4l2_get_subdevdata(sd);
 	struct d5x_sensor *sensor = container_of(sd, struct d5x_sensor, sd);
 	u16 framerate = 1;
 
@@ -2574,6 +2600,9 @@ static int d5x_sensor_s_frame_interval(struct v4l2_subdev *sd,
 		return -EINVAL;
 
 	framerate = fi->interval.denominator / fi->interval.numerator;
+	if (d5x_is_dual_rgb_tdm_image(d5x_state) &&
+	    framerate > D5X_DUAL_RGB_MAX_OUTPUT_FPS)
+		return -EINVAL;
 	framerate = __d5x_probe_framerate(sensor->config.resolution, framerate);
 	sensor->config.framerate = framerate;
 	fi->interval.numerator = 1;
@@ -3952,6 +3981,47 @@ static int d5x_gvd(struct d5x *state, unsigned char *data, u16 max_len)
 	return ret;
 }
 
+static int d5x_cache_product_pid(struct d5x *state)
+{
+	unsigned char *data;
+	u16 pid;
+	int ret = 0;
+
+	if (READ_ONCE(state->d5x_dev->product_pid_valid))
+		return 0;
+
+	data = kzalloc(D5X_GVD_RESPONSE_SIZE, GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
+
+	mutex_lock(&state->d5x_dev->lock);
+	if (state->d5x_dev->product_pid_valid)
+		goto unlock;
+
+	ret = d5x_gvd(state, data, D5X_GVD_RESPONSE_SIZE);
+	if (ret)
+		goto unlock;
+	if (get_unaligned_le32(data) != 0x10) {
+		ret = -EPROTO;
+		goto unlock;
+	}
+
+	pid = get_unaligned_le16(data + D5X_GVD_USB_PID_OFFSET);
+	if (!pid) {
+		ret = -ENODATA;
+		goto unlock;
+	}
+
+	state->d5x_dev->product_pid = pid;
+	state->d5x_dev->product_pid_valid = true;
+	dev_info(&state->client->dev, "D5xx GVD product PID: 0x%04x\n", pid);
+
+unlock:
+	mutex_unlock(&state->d5x_dev->lock);
+	kfree(data);
+	return ret;
+}
+
 static int d5x_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 {
 	struct d5x *state = container_of(ctrl->handler, struct d5x,
@@ -4650,6 +4720,8 @@ static void d5x_init_d5x_dev(struct d5x *state, struct d5x_dev *d5x_dev)
 	mutex_lock(&d5x_dev->lock);
 	d5x_dev->d5x_primary = state;
 	d5x_dev->cached_device_type = D5X_DEVICE_TYPE_UNKNOWN;
+	d5x_dev->product_pid = 0;
+	d5x_dev->product_pid_valid = false;
 	d5x_dev->sync_mode = D5X_SYNC_MODE_DISABLED;
 	mutex_unlock(&d5x_dev->lock);
 	d5x_reset_streaming_flags(d5x_dev);
@@ -6079,6 +6151,9 @@ static int d5x_mux_s_frame_interval(struct v4l2_subdev *sd,
 	sensor = d5x_state->mux.last_set;
 
 	framerate = fi->interval.denominator / fi->interval.numerator;
+	if (d5x_is_dual_rgb_tdm_image(d5x_state) &&
+	    framerate > D5X_DUAL_RGB_MAX_OUTPUT_FPS)
+		return -EINVAL;
 	framerate = __d5x_probe_framerate(sensor->config.resolution, framerate);
 	sensor->config.framerate = framerate;
 	fi->interval.numerator = 1;
@@ -7874,6 +7949,19 @@ static int d5x_probe(struct i2c_client *c
 		/* Override I2C drvdata with state for use in remove function */
 		i2c_set_clientdata(c, state);
 		return 0;
+	}
+
+	ret = d5x_cache_product_pid(state);
+	if (ret < 0)
+		dev_warn(&c->dev, "%s(): failed to read product PID: %d\n",
+			 __func__, ret);
+	if (state->is_dualrgb_right &&
+	    (ret < 0 || !d5x_is_dual_rgb_2c(state))) {
+		dev_info(&c->dev,
+			 "%s(): RGB-right is not present on this product\n",
+			 __func__);
+		ret = -ENODEV;
+		goto e_chardev;
 	}
 #endif
 
