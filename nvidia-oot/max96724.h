@@ -58,6 +58,21 @@ void max96724_retrigger_datapath(struct device *dev);
 int max96724_setup_link(struct device *dev, struct device *s_dev);
 
 /**
+ * @brief Re-trains one GMSL link after its serializer lost power.
+ *
+ * Unlike max96724_setup_link(), this function deliberately ignores the
+ * cached link_setup state. It waits for the selected link to lock and restores
+ * the serializer's assigned I2C address if the serializer returned to its
+ * default address after a remote power cycle.
+ *
+ * @param  [in]  dev          The deserializer device handle.
+ * @param  [in]  s_dev        The registered sensor device for the link.
+ *
+ * @return  0 for success, or negative error code.
+ */
+int max96724_recover_link(struct device *dev, struct device *s_dev);
+
+/**
  * @brief  Sets up the deserializer link's control pipeline.
  *
  * Configures I2C pass-through and enables tunnel-mode pipe routing

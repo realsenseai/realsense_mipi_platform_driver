@@ -609,8 +609,7 @@ static int max96724_enable_links(struct device *dev, u8 link_mask,
 	 * before polling lock or accessing the serializer.
 	 */
 	msleep(20);
-	err = max96724_write_reg(dev, MAX96724_ONESHOT_ADDR,
-				 MAX96724_ONESHOT_ALL);
+	err = max96724_write_reg(dev, MAX96724_ONESHOT_ADDR, link_mask);
 	if (!err)
 		msleep(100);
 
@@ -680,6 +679,151 @@ static int max96724_assign_serializer_addresses(struct device *dev)
 
 	return err;
 }
+
+int max96724_recover_link(struct device *dev, struct device *s_dev)
+{
+	struct max96724 *priv;
+	struct max96724_source_ctx *source;
+	unsigned int source_idx;
+	unsigned int reg_val = 0;
+	unsigned int link;
+	u8 source_link_mask;
+	u8 target_addr;
+	int restore_err;
+	int err;
+
+	if (!dev || !s_dev)
+		return -EINVAL;
+
+	priv = dev_get_drvdata(dev);
+	if (!priv)
+		return -ENODEV;
+
+	mutex_lock(&priv->lock);
+
+	err = max96724_get_sdev_idx_locked(priv, s_dev, &source_idx);
+	if (err) {
+		dev_err(dev, "%s: no source found for %s\n",
+			__func__, dev_name(s_dev));
+		goto out;
+	}
+
+	source = &priv->sources[source_idx];
+	if (!source->g_ctx) {
+		err = -EINVAL;
+		goto out;
+	}
+
+	/*
+	 * gmsl-link.h represents the link as a one-hot value (A=BIT(0),
+	 * B=BIT(1)). Convert it to the MAX96724 link index and reject malformed
+	 * source descriptions before touching the shared deserializer.
+	 */
+	source_link_mask = (u8)source->serdes_csi_link;
+	if (!source_link_mask ||
+	    (source_link_mask & (source_link_mask - 1)) ||
+	    (source_link_mask & ~((u8)GENMASK(MAX96724_MAX_LINKS - 1, 0)))) {
+		dev_err(dev, "%s: invalid source link 0x%x\n",
+			__func__, source->serdes_csi_link);
+		err = -EINVAL;
+		goto out;
+	}
+
+	for (link = 0; link < MAX96724_MAX_LINKS; link++)
+		if (source_link_mask & BIT(link))
+			break;
+
+	if (!(priv->link_mask & BIT(link))) {
+		dev_err(dev, "%s: link %c is not enabled (mask 0x%x)\n",
+			__func__, 'A' + link, priv->link_mask);
+		err = -EINVAL;
+		goto out;
+	}
+
+	target_addr = (u8)source->g_ctx->ser_reg;
+	if (!target_addr || target_addr > 0x7f) {
+		dev_err(dev, "%s: invalid serializer address 0x%x\n",
+			__func__, source->g_ctx->ser_reg);
+		err = -EINVAL;
+		goto out;
+	}
+
+	dev_info(dev,
+		 "%s: recovering GMSL link %c serializer at 0x%02x\n",
+		 __func__, 'A' + link, target_addr);
+
+	/*
+	 * Isolate the affected link while accessing the serializer's default
+	 * address. This avoids an address collision with a healthy link-A
+	 * serializer when a serializer on link B/C/D returns to 0x40.
+	 */
+	err = max96724_write_reg(dev, MAX96724_BACKTOP_EN_ADDR, 0x00);
+	if (err)
+		goto out;
+
+	err = max96724_enable_links(dev, BIT(link), true);
+	if (err)
+		goto restore;
+
+	err = max96724_wait_link_lock(dev, link);
+	if (err)
+		goto restore;
+
+	/* Link lock may precede the remote I2C port becoming usable. */
+	msleep(20);
+	err = max96724_read_slave_reg(priv, target_addr,
+					 MAX96717_DEV_ADDR, &reg_val);
+	if (!err && reg_val == target_addr << 1) {
+		dev_dbg(dev, "%s: serializer already responds at 0x%02x\n",
+			__func__, target_addr);
+		goto restore;
+	}
+
+	err = max96724_write_slave_reg(priv, MAX96717_DEFAULT_ADDR,
+					  MAX96717_DEV_ADDR,
+					  target_addr << 1);
+	if (err)
+		goto restore;
+
+	msleep(20);
+	err = max96724_read_slave_reg(priv, target_addr,
+					 MAX96717_DEV_ADDR, &reg_val);
+	if (err || reg_val != target_addr << 1) {
+		dev_err(dev,
+			"%s: serializer address restore failed on link %c (reg 0x%x, err %d)\n",
+			__func__, 'A' + link, reg_val, err);
+		if (!err)
+			err = -ENODEV;
+		goto restore;
+	}
+
+	dev_info(dev, "%s: serializer address 0x%02x restored on link %c\n",
+		 __func__, target_addr, 'A' + link);
+
+restore:
+	/*
+	 * Restore every configured link even on failure. The deserializer itself
+	 * did not lose power, so its CSI mappings remain valid; only force the
+	 * next stream start to re-arm the tunnel datapath.
+	 */
+	restore_err = max96724_enable_links(dev, priv->link_mask, true);
+	if (!err)
+		err = restore_err;
+	restore_err = max96724_write_reg(dev, MAX96724_BACKTOP_EN_ADDR,
+					 MAX96724_BACKTOP_CSIB_EN);
+	if (!err)
+		err = restore_err;
+	if (!err)
+		err = max96724_wait_link_lock(dev, link);
+
+	priv->datapath_retriggered = false;
+	priv->retriggered_pipe_mask = 0;
+
+out:
+	mutex_unlock(&priv->lock);
+	return err;
+}
+EXPORT_SYMBOL(max96724_recover_link);
 
 int max96724_setup_link(struct device *dev, struct device *s_dev)
 {

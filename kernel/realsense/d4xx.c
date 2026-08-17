@@ -65,6 +65,11 @@ struct dser_interface {
 
 	/* Setup and control */
 	int (*setup_link)(struct device *dev, struct device *s_dev);
+	/*
+	 * Re-establish a link after the remote serializer lost power. Optional:
+	 * only products whose HW reset power-cycles the serializer need it.
+	 */
+	int (*recover_link)(struct device *dev, struct device *s_dev);
 	int (*setup_control)(struct device *dev, struct device *s_dev);
 	int (*reset_control)(struct device *dev, struct device *s_dev);
 	int (*setup_fsync)(struct device *dev, u32 fps);
@@ -625,6 +630,11 @@ struct ds5 {
 
 struct ds5_dev {
 	struct mutex lock;
+	/*
+	 * Serialize HW reset/recovery across the four I2C instances which expose
+	 * one physical camera (Depth, RGB, IR and IMU).
+	 */
+	struct mutex reset_lock;
 
 	/*
 	* Per-camera reset generation counter.
@@ -693,8 +703,10 @@ static void ds5_init_global_slots_once(void)
 		return;
 	}
 
-	for (i = 0; i < MAX_DS5_NUM; i++)
+	for (i = 0; i < MAX_DS5_NUM; i++) {
 		mutex_init(&ds5_inited[i].lock);
+		mutex_init(&ds5_inited[i].reset_lock);
+	}
 
 	for (i = 0; i < MAX_DSER_NUM; i++)
 		mutex_init(&dser_inited[i].lock);
@@ -735,6 +747,7 @@ static const struct dser_interface max96712_interface = {
 	.reset_oneshot = max96712_reset_oneshot,
 	.reset_oneshot_link = max96712_reset_oneshot_link,
 	.setup_link = max96712_setup_link,
+	.recover_link = max96712_setup_link,
 	.setup_control = max96712_setup_control,
 	.reset_control = max96712_reset_control,
 	.sdev_register = max96712_sdev_register,
@@ -753,6 +766,7 @@ static const struct dser_interface max96724_interface = {
 	.reset_oneshot = max96724_reset_oneshot,
 	.retrigger_datapath = max96724_retrigger_datapath,
 	.setup_link = max96724_setup_link,
+	.recover_link = max96724_recover_link,
 	.setup_control = max96724_setup_control,
 	.reset_control = max96724_reset_control,
 	.setup_fsync = max96724_setup_fsync,
@@ -812,6 +826,7 @@ static void ds5_init_global_slots_once(void)
 	mutex_lock(&ds5_slots_lock__);
 	if (!ds5_slots_inited) {
 		mutex_init(&ds5_inited[0].lock);
+		mutex_init(&ds5_inited[0].reset_lock);
 		ds5_slots_inited = true;
 	}
 	mutex_unlock(&ds5_slots_lock__);
@@ -2826,6 +2841,97 @@ static int ds5_set_ser_esync_tunneling(struct ds5 *state, bool enable)
 #endif
 }
 
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+#define DS5_D500_SERDES_RECOVERY_RETRIES 2
+
+/*
+ * D500 HW reset also removes serializer power. Rebuild only the remote link
+ * and serializer state; the deserializer stays powered and must not be globally
+ * reset because it may be shared with other cameras.
+ */
+static int ds5_d500_serdes_recover(struct ds5 *state)
+{
+	struct ds5 *primary;
+	int attempt;
+	int ret = -ENODEV;
+
+	mutex_lock(&state->ds5_dev->lock);
+	primary = state->ds5_dev->ds5_primary;
+	mutex_unlock(&state->ds5_dev->lock);
+
+	if (!primary || !primary->ser_dev || !primary->dser_dev ||
+	    !primary->ser_ops || !primary->dser_ops) {
+		dev_err(&state->client->dev,
+			"%s(): missing primary SERDES context\n", __func__);
+		return -ENODEV;
+	}
+
+	if (!primary->dser_ops->recover_link) {
+		dev_err(&state->client->dev,
+			"%s(): %s has no serializer power-cycle recovery\n",
+			__func__, primary->dser_ops->name);
+		return -EOPNOTSUPP;
+	}
+
+	/*
+	 * Exclude stream pipe programming while the serializer is temporarily at
+	 * its default address and the deserializer is in exclusive-link mode.
+	 */
+	mutex_lock(&serdes_lock__);
+	for (attempt = 1; attempt <= DS5_D500_SERDES_RECOVERY_RETRIES;
+	     attempt++) {
+		dev_info(&state->client->dev,
+			 "%s(): D500 cold SERDES recovery attempt %d/%d\n",
+			 __func__, attempt, DS5_D500_SERDES_RECOVERY_RETRIES);
+
+		ret = primary->dser_ops->recover_link(primary->dser_dev,
+						     &primary->client->dev);
+		if (ret) {
+			dev_warn(&state->client->dev,
+				 "%s(): %s link recovery failed (%d)\n",
+				 __func__, primary->dser_ops->name, ret);
+			goto retry;
+		}
+
+		/*
+		 * Serializer power loss clears both the camera I2C alias and all
+		 * MIPI/tunnel registers. Restore them in the same order as probe.
+		 */
+		ret = primary->ser_ops->setup_control(primary->ser_dev);
+		if (ret) {
+			dev_warn(&state->client->dev,
+				 "%s(): %s I2C alias restore failed (%d)\n",
+				 __func__, primary->ser_ops->name, ret);
+			goto retry;
+		}
+
+		ret = primary->ser_ops->init_settings(primary->ser_dev);
+		if (!ret)
+			break;
+
+		dev_warn(&state->client->dev,
+			 "%s(): %s settings restore failed (%d)\n",
+			 __func__, primary->ser_ops->name, ret);
+
+retry:
+		if (attempt < DS5_D500_SERDES_RECOVERY_RETRIES)
+			msleep(100);
+	}
+	mutex_unlock(&serdes_lock__);
+
+	if (ret)
+		dev_err(&state->client->dev,
+			"%s(): D500 cold SERDES recovery failed (%d)\n",
+			__func__, ret);
+	else
+		dev_info(&state->client->dev,
+			 "%s(): D500 serializer link and I2C alias restored\n",
+			 __func__);
+
+	return ret;
+}
+#endif
+
 /*
  * ds5_hw_reset_with_recovery - Perform hardware reset with readiness polling
  * @state: Driver state structure
@@ -2839,7 +2945,7 @@ static int ds5_set_ser_esync_tunneling(struct ds5 *state, bool enable)
  *
  * Returns 0 on success, negative error code on failure.
  */
-static int ds5_hw_reset_with_recovery(struct ds5 *state)
+static int __ds5_hw_reset_with_recovery(struct ds5 *state)
 {
 	int ret;
 	int retry;
@@ -2851,11 +2957,22 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	bool rgb_streaming;
 	bool ir_streaming;
 	bool imu_streaming;
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	bool d500_serdes_cold_reset;
+#endif
 	unsigned long ds5_last_reset_jiffies = READ_ONCE(state->ds5_dev->last_reset_jiffies);
 	unsigned long ts, timeout;
 
 	dev_info(&state->client->dev, "%s(): Initiating HW reset with recovery\n",
 		__func__);
+
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	/*
+	 * Capture the product family before cached_device_type is invalidated
+	 * below. Only D500 power-cycles its serializer as part of camera reset.
+	 */
+	d500_serdes_cold_reset = ds5_is_d58x(state);
+#endif
 
 	/* 0. Reset cooldown — prevent rapid consecutive resets.
 	 *    Repeated HW resets without sufficient recovery time
@@ -2952,6 +3069,20 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	/* 5. Delay to allow reset to complete */
 	ts = jiffies;
 	msleep(DS5_HW_RESET_INITIAL_DELAY_MS);
+
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	if (d500_serdes_cold_reset) {
+		ret = ds5_d500_serdes_recover(state);
+		if (ret)
+			return ret;
+
+		/*
+		 * Camera I2C was unreachable until the alias was restored. Give the
+		 * normal FW-readiness handshake its full timeout from this point.
+		 */
+		ts = jiffies;
+	}
+#endif
 
 	/* 6. Poll for control-status defaults to confirm reset completion. */
 	for (retry = 0, timeout = ts + msecs_to_jiffies(DS5_HW_RESET_TIMEOUT_MS);
@@ -3053,6 +3184,17 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	WRITE_ONCE(state->ds5_dev->last_reset_jiffies, jiffies);
 
 	return 0;
+}
+
+static int ds5_hw_reset_with_recovery(struct ds5 *state)
+{
+	int ret;
+
+	mutex_lock(&state->ds5_dev->reset_lock);
+	ret = __ds5_hw_reset_with_recovery(state);
+	mutex_unlock(&state->ds5_dev->reset_lock);
+
+	return ret;
 }
 
 static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on);
