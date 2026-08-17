@@ -121,6 +121,11 @@ struct ser_interface {
 #define GMSL_CSI_DT_EMBED 0x12
 #endif
 
+/* NVIDIA's JP6.2/JP7.1 gmsl-link.h does not define the RAW16 CSI-2 DT. */
+#ifndef GMSL_CSI_DT_RAW_16
+#define GMSL_CSI_DT_RAW_16 0x2E
+#endif
+
 /* D40x FW CSI-PT mode selector for the OV9782 (not a MIPI wire DT). */
 #define DS5_FW_CSI_PT	0x2E
 
