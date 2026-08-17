@@ -520,7 +520,8 @@ struct ds5_format {
 	unsigned int n_resolutions;
 	const struct ds5_resolution *resolutions;
 	u32 mbus_code;
-	u8 data_type;
+	u8 data_type;		/* Source format DT programmed into HKR. */
+	u8 override_data_type;	/* Non-zero CSI packet DT override on the wire. */
 };
 
 struct ds5_sensor {
@@ -1691,7 +1692,35 @@ static const struct ds5_format ds5_rgb_formats_d58x[] = {
 		.resolutions = d58x_calibration_sizes,
 	},
 };
-#define DS5_D58X_RGB_N_FORMATS 2
+
+#define DS5_D58X_NV12_SOURCE_DT		0x18
+#define DS5_D58X_NV12_CARRIER_DT	0x31
+
+/* Keep shared YUYV and calibration entries aligned with the base table. */
+static const struct ds5_format ds5_rgb_formats_d58x_tunnel[] = {
+	{
+		/* First format: default */
+		.data_type = GMSL_CSI_DT_YUV422_8,	/* UYVY */
+		.mbus_code = MEDIA_BUS_FMT_YUYV8_1X16,
+		.n_resolutions = ARRAY_SIZE(d58x_rgb_sizes),
+		.resolutions = d58x_rgb_sizes,
+	}, {
+		/* Flat NV12 bytes use UD31 as an opaque 8-bit CSI carrier. */
+		.data_type = DS5_D58X_NV12_SOURCE_DT,
+		.override_data_type = DS5_D58X_NV12_CARRIER_DT,
+		.mbus_code = MEDIA_BUS_FMT_RS_NV12_UD31_1X8,
+		.n_resolutions = ARRAY_SIZE(d58x_rgb_sizes),
+		.resolutions = d58x_rgb_sizes,
+	}, {
+		/* RGB calibration: unpacked GRBG10, one little-endian
+		 * 10-bit sample per 16-bit container, 2 bytes/pixel.
+		 */
+		.data_type = GMSL_CSI_DT_RAW_16,
+		.mbus_code = MEDIA_BUS_FMT_SGRBG16_1X16,
+		.n_resolutions = ARRAY_SIZE(d58x_calibration_sizes),
+		.resolutions = d58x_calibration_sizes,
+	},
+};
 
 static const struct ds5_variant ds5_variants[] = {
 	[DS5_DS5U] = {
@@ -2162,6 +2191,14 @@ static void ds5_invalidate_sensor(struct ds5 *state, struct ds5_sensor *sensor)
 	sensor->pipe_vc_id = 0xFFFF;
 }
 
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+static u8 ds5_wire_data_type(const struct ds5_format *format)
+{
+	return format->override_data_type ? format->override_data_type :
+		format->data_type;
+}
+#endif
+
 static int ds5_configure(struct ds5 *state)
 {
 	struct ds5_sensor *sensor;
@@ -2190,10 +2227,12 @@ static int ds5_configure(struct ds5 *state)
 		sensor = &state->rgb.sensor;
 		dt_addr = DS5_RGB_STREAM_DT;
 		md_addr = DS5_RGB_STREAM_MD;
-		/* Only CSI-PT needs the FW DT override; leave the YUYV path on the
-		 * FW default so non-passthrough RGB behaviour is unchanged. */
-		override_addr = sensor->config.format->mbus_code ==
-				MEDIA_BUS_FMT_SBGGR8_1X8 ? DS5_RGB_OVERRIDE : 0;
+		/* D58x tunnel formats always program the stream override contract:
+		 * non-zero selects a carrier DT and zero clears any prior carrier.
+		 * The format cache avoids redundant I2C writes. D4xx is unchanged. */
+		override_addr = (ds5_is_d58x(state) && !state->d58x_pixel_mode) ||
+			sensor->config.format->mbus_code == MEDIA_BUS_FMT_SBGGR8_1X8 ?
+			DS5_RGB_OVERRIDE : 0;
 		fps_addr = DS5_RGB_FPS;
 		width_addr = DS5_RGB_RES_WIDTH;
 		height_addr = DS5_RGB_RES_HEIGHT;
@@ -2220,7 +2259,7 @@ static int ds5_configure(struct ds5 *state)
 	md_fmt = (state->metadata_enabled) ? GMSL_CSI_DT_EMBED : 0x00;
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
-	data_type1 = sensor->config.format->data_type;
+	data_type1 = ds5_wire_data_type(sensor->config.format);
 	data_type2 = md_fmt;
 	is_calib = (state->is_y8 && (data_type1 == GMSL_CSI_DT_RGB_888));
 
@@ -2325,7 +2364,14 @@ static int ds5_configure(struct ds5 *state)
 	}
 
 	if (override_addr != 0) {
-		dt_value = sensor->config.format->data_type;
+		/* D58x tunnel uses an explicit per-format carrier contract, including
+		 * zero to clear a previous override. Preserve the existing D4xx
+		 * depth/IR override values. */
+		if (state->is_rgb && ds5_is_d58x(state) &&
+		    !state->d58x_pixel_mode)
+			dt_value = sensor->config.format->override_data_type;
+		else
+			dt_value = sensor->config.format->data_type;
 		/* RAW8 CSI passthrough: FW runs in CSI-PT mode (0x2E → dt_addr) and
 		 * remaps all wire DTs to RAW8 via override_addr=0x2A.
 		 */
@@ -6409,6 +6455,12 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 
 	sensor = &state->depth.sensor;
 	dev_type = ds5_dev_type(state, dev_type);
+	state->d58x_pixel_mode = false;
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	state->d58x_pixel_mode = (dev_type == DS5_DEVICE_TYPE_D58X) &&
+				 (state->dser_ops == &max96712_interface);
+#endif
+
 	switch (dev_type) {
 	case DS5_DEVICE_TYPE_D41X:
 		sensor->formats = ds5_depth_formats_d41x;
@@ -6477,8 +6529,13 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
 		break;
 	case DS5_DEVICE_TYPE_D58X:
-		sensor->formats = ds5_rgb_formats_d58x;
-		sensor->n_formats = DS5_D58X_RGB_N_FORMATS;
+		if (!state->d58x_pixel_mode) {
+			sensor->formats = ds5_rgb_formats_d58x_tunnel;
+			sensor->n_formats = ARRAY_SIZE(ds5_rgb_formats_d58x_tunnel);
+		} else {
+			sensor->formats = ds5_rgb_formats_d58x;
+			sensor->n_formats = ARRAY_SIZE(ds5_rgb_formats_d58x);
+		}
 		break;
 	default:
 		sensor->formats = &ds5_onsemi_rgb_format;
@@ -6487,13 +6544,6 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	sensor->mux_pad = DS5_MUX_PAD_RGB;
 
 	sensor = &state->imu.sensor;
-
-	state->d58x_pixel_mode = false;
-#ifdef CONFIG_VIDEO_D4XX_SERDES
-	/* D58x on a MAX96712 deserializer runs the serdes link in PIXEL mode. */
-	state->d58x_pixel_mode = (dev_type == DS5_DEVICE_TYPE_D58X) &&
-				 (state->dser_ops == &max96712_interface);
-#endif
 
 	/* For fimware version starting from: 5.16,
 	   IMU will have 32bit axis values.

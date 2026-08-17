@@ -10,8 +10,9 @@ Signed-off-by: Dmitry Perchanov <dmitry.perchanov@intel.com>
  drivers/media/common/uvc.c   | 57 ++++++++++++++++++++++++++++
  drivers/include/linux/usb/uvc.h     | 34 +++++++++++++++++
  drivers/media/v4l2-core/v4l2-ioctl.c |  9 +++++
+ include/uapi/linux/media-bus-format.h |  3 +++
  include/uapi/linux/videodev2.h       |  9 +++++
- 4 files changed, 109 insertions(+)
+ 5 files changed, 112 insertions(+)
 
 diff --git a/drivers/media/common/uvc.c b/drivers/media/common/uvc.c
 index 9a791d8ef200..205d524128da 100644
@@ -189,6 +190,13 @@ index 9260791b8438..fd50e9c34a0e 100644
  
  /* 10bit raw packed, 32 bytes for every 25 pixels, last LSB 6 bits unused */
  #define V4L2_PIX_FMT_IPU3_SBGGR10	v4l2_fourcc('i', 'p', '3', 'b') /* IPU3 packed 10-bit BGGR bayer */
+diff --git a/include/uapi/linux/media-bus-format.h b/include/uapi/linux/media-bus-format.h
+--- a/include/uapi/linux/media-bus-format.h
++++ b/include/uapi/linux/media-bus-format.h
+@@ -162,1 +162,4 @@
++/* RealSense flat NV12 bytes carried over CSI-2 DT 0x31 (UD31) */
++#define MEDIA_BUS_FMT_RS_NV12_UD31_1X8		0x5008
++
+ /* HSV - next is	0x6002 */
 --
 2.37.1
-
