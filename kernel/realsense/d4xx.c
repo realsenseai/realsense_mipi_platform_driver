@@ -536,11 +536,8 @@ struct ds5_sensor {
 	struct {
 		const struct ds5_format *format;
 		const struct ds5_resolution *resolution;
-		/* Physical CSI record cadence used by HKR/SerDes. */
 		u16 framerate;
 	} config;
-	/* Per-stream cadence exposed through the V4L2 API. */
-	u16 logical_framerate;
 	bool streaming;
 	const struct ds5_format *formats;
 	unsigned int n_formats;
@@ -843,31 +840,6 @@ static inline bool ds5_is_d58x(struct ds5 *state)
 	return state->ds5_dev &&
 		READ_ONCE(state->ds5_dev->cached_device_type) ==
 			DS5_DEVICE_TYPE_D58X;
-}
-
-static inline bool ds5_uses_aggregate_imu_fps(struct ds5 *state,
-					       struct ds5_sensor *sensor)
-{
-	return state && sensor && state->is_imu && ds5_is_d58x(state) &&
-		sensor->mux_pad == DS5_MUX_PAD_IMU;
-}
-
-static void ds5_set_framerate(struct ds5 *state, struct ds5_sensor *sensor,
-			      u16 logical_fps)
-{
-	sensor->logical_framerate = logical_fps;
-	sensor->config.framerate = logical_fps;
-
-	/* D58x transports one accel or gyro record in each CSI frame. */
-	if (ds5_uses_aggregate_imu_fps(state, sensor))
-		sensor->config.framerate = logical_fps * 2U;
-}
-
-static u16 ds5_get_logical_framerate(const struct ds5_sensor *sensor)
-{
-	/* Preserve the legacy default before the first explicit rate request. */
-	return sensor->logical_framerate ? sensor->logical_framerate :
-		sensor->config.framerate;
 }
 
 static inline u16 ds5_rgb_ctrl_offset(struct ds5 *state, u16 d4xx_offset,
@@ -1816,11 +1788,9 @@ static void ds5_set_state_last_set(struct ds5 *state)
  */
 static void ds5_sensor_format_init(struct ds5_sensor *sensor)
 {
-	struct ds5 *state = v4l2_get_subdevdata(&sensor->sd);
 	const struct ds5_format *fmt;
 	struct v4l2_mbus_framefmt *ffmt;
 	unsigned int i;
-	u16 logical_fps;
 
 	if (sensor->config.format)
 		return;
@@ -1839,14 +1809,13 @@ static void ds5_sensor_format_init(struct ds5_sensor *sensor)
 	sensor->config.format = fmt;
 	sensor->config.resolution = fmt->resolutions;
 	/* Set default framerate to 30, or to 1st one if not supported */
-	logical_fps = fmt->resolutions->framerates[0];
 	for (i = 0; i < fmt->resolutions->n_framerates; i++) {
 		if (fmt->resolutions->framerates[i] == ds5_framerate_30 /* fps */) {
-			logical_fps = ds5_framerate_30;
-			break;
+			sensor->config.framerate = ds5_framerate_30;
+			return;
 		}
 	}
-	ds5_set_framerate(state, sensor, logical_fps);
+	sensor->config.framerate = fmt->resolutions->framerates[0];
 }
 
 /* No locking needed for enumeration methods */
@@ -2379,14 +2348,23 @@ static int ds5_configure(struct ds5 *state)
 	}
 
 	fps_value = sensor->config.framerate;
+	/*
+	 * D58x exposes accel and gyro as two logical streams, but transports
+	 * both over one VC with one legacy IMU record per CSI frame.  Keep the
+	 * V4L2 interval as the requested per-sensor rate and program HKR with
+	 * twice that rate so alternating accel/gyro records each retain the
+	 * requested cadence.  This is independent of serdes pixel/tunnel mode.
+	 * Traditional D400 devices retain their original register value.
+	 */
+	if (state->is_imu && ds5_is_d58x(state))
+		fps_value *= 2U;
 	if (sensor->cached_fps_value != fps_value) {
 		ret = ds5_write(state, fps_addr, fps_value);
 		if (ret < 0)
 			return ret;
 		dev_dbg(&state->client->dev,
-			"FW fps_addr[0x%04x] = %u (logical fps %u)\n",
-			fps_addr, fps_value,
-			ds5_get_logical_framerate(sensor));
+			"FW fps_addr[0x%04x] = %u (V4L2 fps %u)\n",
+			fps_addr, fps_value, sensor->config.framerate);
 		sensor->cached_fps_value = fps_value;
 	}
 
@@ -2427,7 +2405,7 @@ static int ds5_sensor_g_frame_interval(struct v4l2_subdev *sd,
 		return -EINVAL;
 
 	fi->interval.numerator = 1;
-	fi->interval.denominator = ds5_get_logical_framerate(sensor);
+	fi->interval.denominator = sensor->config.framerate;
 
 	dev_dbg(sd->dev, "%s(): %s %u\n", __func__, sd->name,
 			fi->interval.denominator);
@@ -2443,7 +2421,6 @@ static int ds5_sensor_s_frame_interval(struct v4l2_subdev *sd,
 		struct v4l2_subdev_frame_interval *fi)
 {
 	struct ds5_sensor *sensor = container_of(sd, struct ds5_sensor, sd);
-	struct ds5 *ds5_state = v4l2_get_subdevdata(sd);
 	u16 framerate = 1;
 
 	if (NULL == sd || NULL == fi || fi->interval.numerator == 0)
@@ -2451,12 +2428,11 @@ static int ds5_sensor_s_frame_interval(struct v4l2_subdev *sd,
 
 	framerate = fi->interval.denominator / fi->interval.numerator;
 	framerate = __ds5_probe_framerate(sensor->config.resolution, framerate);
-	ds5_set_framerate(ds5_state, sensor, framerate);
+	sensor->config.framerate = framerate;
 	fi->interval.numerator = 1;
 	fi->interval.denominator = framerate;
 
-	dev_dbg(sd->dev, "%s(): %s logical=%u transport=%u\n",
-		__func__, sd->name, framerate, sensor->config.framerate);
+	dev_dbg(sd->dev, "%s(): %s %u\n", __func__, sd->name, framerate);
 
 	return 0;
 }
@@ -5772,7 +5748,7 @@ static int ds5_mux_g_frame_interval(struct v4l2_subdev *sd,
 	sensor = ds5_state->mux.last_set;
 
 	fi->interval.numerator = 1;
-	fi->interval.denominator = ds5_get_logical_framerate(sensor);
+	fi->interval.denominator = sensor->config.framerate;
 
 	dev_dbg(sd->dev, "%s(): %s %u\n", __func__, sd->name,
 			fi->interval.denominator);
@@ -5811,12 +5787,11 @@ static int ds5_mux_s_frame_interval(struct v4l2_subdev *sd,
 
 	framerate = fi->interval.denominator / fi->interval.numerator;
 	framerate = __ds5_probe_framerate(sensor->config.resolution, framerate);
-	ds5_set_framerate(ds5_state, sensor, framerate);
+	sensor->config.framerate = framerate;
 	fi->interval.numerator = 1;
 	fi->interval.denominator = framerate;
 
-	dev_dbg(sd->dev, "%s(): %s logical=%u transport=%u\n",
-		__func__, sd->name, framerate, sensor->config.framerate);
+	dev_dbg(sd->dev, "%s(): %s %u\n", __func__, sd->name, framerate);
 
 	return 0;
 }
