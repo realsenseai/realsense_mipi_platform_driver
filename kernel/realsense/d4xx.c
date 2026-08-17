@@ -2548,6 +2548,20 @@ enum ds5_sync_mode {
 	DS5_SYNC_MODE_EXTERNAL = 2,
 };
 
+/* D5xx (D58X) sync mode values — FW register 0x2C accepts these literally;
+ * mirrors RS2_D500_INTERCAM_SYNC_PWM_MASTER / _EXTERNAL_MASTER in the SDK. */
+enum ds5_d5xx_sync_mode {
+	DS5_D5XX_SYNC_MODE_INTERNAL         = 2,
+	DS5_D5XX_SYNC_MODE_EXTERNAL_MASTER  = 3,
+};
+
+static inline bool ds5_sync_val_is_external(const struct ds5 *state, int val)
+{
+	if (state->ds5_dev->cached_device_type == DS5_DEVICE_TYPE_D58X)
+		return val == DS5_D5XX_SYNC_MODE_EXTERNAL_MASTER;
+	return val == DS5_SYNC_MODE_EXTERNAL;
+}
+
 #define DS5_CAMERA_CID_PWM			(DS5_CAMERA_CID_BASE+22)
 #define DS5_CAMERA_CID_SOC_PVT_TEMPERATURE	(DS5_CAMERA_CID_BASE+24)
 #define DS5_CAMERA_CID_PROJECTOR_TEMPERATURE	(DS5_CAMERA_CID_BASE+25)
@@ -3041,7 +3055,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	/* Re-apply ESYNC tunneling to match cached sync_mode control */
 	if (state->ctrls.sync_mode) {
 		int sync_val = state->ctrls.sync_mode->cur.val;
-		bool need_esync = (sync_val == DS5_SYNC_MODE_EXTERNAL);
+		bool need_esync = ds5_sync_val_is_external(state, sync_val);
 
 		ret = ds5_set_ser_esync_tunneling(state, need_esync);
 		if (ret)
@@ -3442,7 +3456,7 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			dev_info(&state->client->dev, "%s(): SYNC_MODE command passed to FW, addr: 0x%x, value: %d, ret: %d\n",
 				__func__, base | DS5_CAMERA_SYNC_MODE, ctrl->val, ret);
 			if (!ret) {
-				bool need_esync = (ctrl->val == DS5_SYNC_MODE_EXTERNAL);
+				bool need_esync = ds5_sync_val_is_external(state, ctrl->val);
 
 				dev_dbg(&state->client->dev,
 					"%s(): sync_mode=%d -> serializer ESYNC %s\n",
@@ -4163,6 +4177,12 @@ static const char * const sync_mode_menu[] = {
 	[DS5_SYNC_MODE_DEFAULT]  = "Default",
 	[DS5_SYNC_MODE_MASTER]   = "Master",
 	[DS5_SYNC_MODE_EXTERNAL] = "External Sync",
+};
+
+/* D5xx menu — FW register 0x2C values are 2/3, not 0-based. */
+static const char * const d5xx_sync_mode_menu[] = {
+	[DS5_D5XX_SYNC_MODE_INTERNAL]        = "Internal",
+	[DS5_D5XX_SYNC_MODE_EXTERNAL_MASTER] = "External Master",
 };
 
 static struct v4l2_ctrl_config ds5_ctrl_sync_mode = {
@@ -6921,12 +6941,23 @@ static void ds5_adjust_sync_mode_control(struct i2c_client *client, struct ds5 *
 	case DS5_DEVICE_TYPE_D41X:
 	case DS5_DEVICE_TYPE_D43X:
 	case DS5_DEVICE_TYPE_D45X:
-	case DS5_DEVICE_TYPE_D58X:
 		/* Unified 3-value public interface (RSDEV-6449): Default/Master/External */
 		__v4l2_ctrl_modify_range(state->ctrls.sync_mode,
 					 0, DS5_SYNC_MODE_EXTERNAL, 0, 0);
 		state->ctrls.sync_mode->qmenu = sync_mode_menu;
 		dev_dbg(&client->dev, "%s(): sync mode: 0-2 (Default/Master/External)\n",
+			__func__);
+		break;
+	case DS5_DEVICE_TYPE_D58X:
+		/* D5xx FW register 0x2C uses literal values 2 (Internal / PWM master) and
+		 * 3 (External master); mirrors RS2_D500_INTERCAM_SYNC_* in the SDK. */
+		__v4l2_ctrl_modify_range(state->ctrls.sync_mode,
+					 DS5_D5XX_SYNC_MODE_INTERNAL,
+					 DS5_D5XX_SYNC_MODE_EXTERNAL_MASTER,
+					 0,
+					 DS5_D5XX_SYNC_MODE_INTERNAL);
+		state->ctrls.sync_mode->qmenu = d5xx_sync_mode_menu;
+		dev_dbg(&client->dev, "%s(): sync mode: 2-3 (Internal/External Master)\n",
 			__func__);
 		break;
 	default:
