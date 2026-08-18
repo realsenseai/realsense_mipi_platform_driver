@@ -36,6 +36,8 @@ CI runs these three steps for each JetPack version (see `.github/workflows/build
 ```
 The `--one-cam`/`--dual-cam` options only apply to JetPack 5.0.2. The target version comes from the `jetpack_version` file (written by `setup_workspace.sh`), not an argv. **Non-interactive:** `apply_patches.sh` prompts via `read` when a sub-repo has local changes and, under `set -e`, aborts (rc=1) on EOF — pipe confirmations with `yes '' | ./apply_patches.sh [reset]` when running headless.
 
+The `sources_<version>` directories are generated trees tied to the current branch and patch inputs. Patch application records their fingerprint in `.rs-patch-state`, and `build_all.sh` verifies it before compiling. After a branch switch, PR checkout, rebase, or edit to a patch/shared driver input, run `./apply_patches.sh reset` followed by `./apply_patches.sh`. `build_all.sh --clean` removes build artifacts but does not replay patches, so it cannot refresh stale generated sources.
+
 ### Deploy to Jetson
 
 `scripts/deploy_kernel.sh` is the deploy path for **all** JetPack versions (there is no `deploy_kernel_6.2.sh`). It packages the modules, copies them to the target, updates `/boot/<REMOTE_BOOT_FOLDER>` and reboots:
@@ -128,6 +130,7 @@ The build system cross-compiles for ARM64. Toolchains vary by JetPack:
 
 - `master` — primary/release branch
 - `dev` — active development branch; **default target for all PRs**
+- `dev_gmsl_merge` — temporary GMSL integration baseline forked from `dev`; use it only when explicitly stacking independently reviewed GMSL changes for combined conflict detection and regression before promotion to `dev`
 - CI builds run on pushes to `master` and `dev`, and on all PRs
 
 ## V4L2 control conventions
