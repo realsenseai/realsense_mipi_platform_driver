@@ -36,6 +36,7 @@
 #include <media/v4l2-device.h>
 #include <media/v4l2-subdev.h>
 #include <media/v4l2-mediabus.h>
+#include <media/gmsl-link.h>
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 #include <media/max9295.h>
@@ -108,12 +109,6 @@ struct ser_interface {
 	const char *name;
 };
 
-#else
-#include <media/gmsl-link.h>
-#define GMSL_CSI_DT_YUV422_8 0x1E
-#define GMSL_CSI_DT_RGB_888 0x24
-#define GMSL_CSI_DT_RAW_8 0x2A
-#define GMSL_CSI_DT_EMBED 0x12
 #endif
 
 /* D40x FW CSI-PT mode selector for the OV9782 (not a MIPI wire DT). */
@@ -1675,23 +1670,6 @@ static const struct ds5_format ds5_y_formats_d58x[] = {
 	},
 };
 
-#ifndef MEDIA_BUS_FMT_RS_SGRBG10P_UDP8_1X10
-#define MEDIA_BUS_FMT_RS_SGRBG10P_UDP8_1X10	0x5002
-#endif
-
-#ifndef MEDIA_BUS_FMT_RS_SGRBG10_UDP8_1X16
-#define MEDIA_BUS_FMT_RS_SGRBG10_UDP8_1X16	0x5003
-#endif
-
-#ifndef MEDIA_BUS_FMT_RS_Y12I_UDP8_4X8
-#define MEDIA_BUS_FMT_RS_Y12I_UDP8_4X8		0x5005
-#endif
-
-#define DS5_D58X_NV12_SOURCE_DT		0x18
-#define DS5_D58X_RGB_PACKED_SOURCE_DT	0x2b
-#define DS5_D58X_CALIB_SOURCE_DT		0x2e
-#define DS5_D58X_UDP8_CARRIER_DT		0x32
-
 static const struct ds5_format ds5_y_formats_d58x_tunnel[] = {
 	{
 		/* First format: default */
@@ -1705,8 +1683,8 @@ static const struct ds5_format ds5_y_formats_d58x_tunnel[] = {
 		.n_resolutions = ARRAY_SIZE(d58x_y8_sizes),
 		.resolutions = d58x_y8_sizes,
 	}, {
-		.data_type = DS5_D58X_CALIB_SOURCE_DT,
-		.override_data_type = DS5_D58X_UDP8_CARRIER_DT,
+		.data_type = GMSL_CSI_DT_RAW_16,
+		.override_data_type = GMSL_CSI_DT_UED_U3,
 		.mbus_code = MEDIA_BUS_FMT_RS_Y12I_UDP8_4X8,
 		.n_resolutions = ARRAY_SIZE(d58x_calibration_sizes),
 		.resolutions = d58x_calibration_sizes,
@@ -1741,22 +1719,22 @@ static const struct ds5_format ds5_rgb_formats_d58x_tunnel[] = {
 		.resolutions = d58x_rgb_sizes,
 	}, {
 		/* Flat NV12 bytes use the UDP8 carrier as an opaque byte stream. */
-		.data_type = DS5_D58X_NV12_SOURCE_DT,
-		.override_data_type = DS5_D58X_UDP8_CARRIER_DT,
+		.data_type = GMSL_CSI_DT_YUV420_8,
+		.override_data_type = GMSL_CSI_DT_UED_U3,
 		.mbus_code = MEDIA_BUS_FMT_RS_NV12_UD32_1X8,
 		.n_resolutions = ARRAY_SIZE(d58x_rgb_sizes),
 		.resolutions = d58x_rgb_sizes,
 	}, {
 		/* Unpacked GRBG10 keeps one sample in each 16-bit container. */
-		.data_type = DS5_D58X_CALIB_SOURCE_DT,
-		.override_data_type = DS5_D58X_UDP8_CARRIER_DT,
+		.data_type = GMSL_CSI_DT_RAW_16,
+		.override_data_type = GMSL_CSI_DT_UED_U3,
 		.mbus_code = MEDIA_BUS_FMT_RS_SGRBG10_UDP8_1X16,
 		.n_resolutions = ARRAY_SIZE(d58x_calibration_sizes),
 		.resolutions = d58x_calibration_sizes,
 	}, {
 		/* Packed GRBG10 keeps the native HKR cache-line byte layout. */
-		.data_type = DS5_D58X_RGB_PACKED_SOURCE_DT,
-		.override_data_type = DS5_D58X_UDP8_CARRIER_DT,
+		.data_type = GMSL_CSI_DT_RAW_10,
+		.override_data_type = GMSL_CSI_DT_UED_U3,
 		.mbus_code = MEDIA_BUS_FMT_RS_SGRBG10P_UDP8_1X10,
 		.n_resolutions = ARRAY_SIZE(d58x_calibration_sizes),
 		.resolutions = d58x_calibration_sizes,

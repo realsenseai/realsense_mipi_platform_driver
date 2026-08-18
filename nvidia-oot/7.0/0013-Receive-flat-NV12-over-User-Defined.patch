@@ -1,19 +1,21 @@
-From 001448ef6f9ce920722401844281a3bf069890a2 Mon Sep 17 00:00:00 2001
+From 67004fd658deea6a9435da7dc8338d81375f3a45 Mon Sep 17 00:00:00 2001
 From: zhou <shengyong.zhou@realsenseai.com>
-Date: Tue, 18 Aug 2026 18:13:46 +0800
+Date: Tue, 18 Aug 2026 18:44:46 +0800
 Subject: [PATCH] media: tegra: receive D5x tunnel UDP8 byte surfaces
 
-Map selected User Defined packet data types to T_R8 for D5x NV12 and
-calibration tuples while preserving the existing V4L2 surface layouts.
+Map selected User Defined packet data types to T_R8 for D5x NV12 and calibration tuples while preserving the existing V4L2 surface layouts.
+
+Keep private media-bus identifiers in the patched kernel UAPI and shared CSI data types in gmsl-link.h.
 Filter private duplicate FourCC tuples by the active subdevice format.
 
 Signed-off-by: zhou <shengyong.zhou@realsenseai.com>
 ---
  .../media/platform/tegra/camera/vi/channel.c  | 14 ++++
- drivers/media/platform/tegra/camera/vi/core.c | 43 ++++++++++-
- .../media/platform/tegra/camera/vi/vi5_fops.c | 16 +++-
- .../platform/tegra/camera/vi/vi5_formats.h    | 76 +++++++++++++++++++
- 4 files changed, 146 insertions(+), 3 deletions(-)
+ drivers/media/platform/tegra/camera/vi/core.c | 31 ++++++++-
+ .../media/platform/tegra/camera/vi/vi5_fops.c | 16 ++++-
+ .../platform/tegra/camera/vi/vi5_formats.h    | 64 +++++++++++++++++++
+ include/media/gmsl-link.h                     |  3 +
+ 5 files changed, 125 insertions(+), 3 deletions(-)
 
 diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
 index da4a1c71..39cbdf76 100644
@@ -48,7 +50,7 @@ index da4a1c71..39cbdf76 100644
  		if (__builtin_umul_overflow(pix->sizeimage, 2, &pix->sizeimage)) {
  			dev_err(chan->vi->dev, "%s: update size image failed due to an overflow\n",
 diff --git a/drivers/media/platform/tegra/camera/vi/core.c b/drivers/media/platform/tegra/camera/vi/core.c
-index 30ed1307..898282fa 100644
+index 30ed1307..89b6491b 100644
 --- a/drivers/media/platform/tegra/camera/vi/core.c
 +++ b/drivers/media/platform/tegra/camera/vi/core.c
 @@ -6,6 +6,7 @@
@@ -59,22 +61,10 @@ index 30ed1307..898282fa 100644
  #include <linux/kernel.h>
  #include <linux/of.h>
  #include <linux/nospec.h>
-@@ -26,6 +27,42 @@ static const struct tegra_video_format tegra_default_format[] = {
+@@ -26,6 +27,30 @@ static const struct tegra_video_format tegra_default_format[] = {
  	},
  };
  
-+#ifndef MEDIA_BUS_FMT_RS_SGRBG10P_UDP8_1X10
-+#define MEDIA_BUS_FMT_RS_SGRBG10P_UDP8_1X10	0x5002
-+#endif
-+
-+#ifndef MEDIA_BUS_FMT_RS_SGRBG10_UDP8_1X16
-+#define MEDIA_BUS_FMT_RS_SGRBG10_UDP8_1X16	0x5003
-+#endif
-+
-+#ifndef MEDIA_BUS_FMT_RS_Y12I_UDP8_4X8
-+#define MEDIA_BUS_FMT_RS_Y12I_UDP8_4X8		0x5005
-+#endif
-+
 +static bool tegra_core_format_needs_subdev_match(u32 code)
 +{
 +	switch (code) {
@@ -102,7 +92,7 @@ index 30ed1307..898282fa 100644
  /* -----------------------------------------------------------------------------
   * Helper functions
   */
-@@ -106,7 +143,8 @@ int tegra_core_get_code_by_fourcc(struct tegra_channel *chan,
+@@ -106,7 +131,8 @@ int tegra_core_get_code_by_fourcc(struct tegra_channel *chan,
  	unsigned int i;
  
  	for (i = offset; i < chan->num_video_formats; ++i) {
@@ -112,7 +102,7 @@ index 30ed1307..898282fa 100644
  			return chan->video_formats[i]->code;
  	}
  	spec_bar();
-@@ -166,7 +204,8 @@ tegra_core_get_format_by_fourcc(struct tegra_channel *chan, u32 fourcc)
+@@ -166,7 +192,8 @@ tegra_core_get_format_by_fourcc(struct tegra_channel *chan, u32 fourcc)
  	unsigned int i;
  
  	for (i = 0; i < chan->num_video_formats; ++i) {
@@ -172,25 +162,13 @@ index 459a3d82..54dcba51 100644
  	desc->ch_cfg.pixfmt.format = format;
  
 diff --git a/drivers/media/platform/tegra/camera/vi/vi5_formats.h b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
-index ecf547ac..128760b1 100644
+index ecf547ac..ee88b378 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi5_formats.h
 +++ b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
-@@ -82,6 +82,74 @@ enum tegra_image_format {
+@@ -82,6 +82,62 @@ enum tegra_image_format {
  	TEGRA_IMAGE_FORMAT_T_DPCM_RAW20,
  };
  
-+#ifndef MEDIA_BUS_FMT_RS_SGRBG10P_UDP8_1X10
-+#define MEDIA_BUS_FMT_RS_SGRBG10P_UDP8_1X10	0x5002
-+#endif
-+
-+#ifndef MEDIA_BUS_FMT_RS_SGRBG10_UDP8_1X16
-+#define MEDIA_BUS_FMT_RS_SGRBG10_UDP8_1X16	0x5003
-+#endif
-+
-+#ifndef MEDIA_BUS_FMT_RS_Y12I_UDP8_4X8
-+#define MEDIA_BUS_FMT_RS_Y12I_UDP8_4X8		0x5005
-+#endif
-+
 +#ifndef V4L2_PIX_FMT_RS_SGRBG10P
 +#define V4L2_PIX_FMT_RS_SGRBG10P v4l2_fourcc('G', 'R', '0', 'P')
 +#endif
@@ -250,7 +228,7 @@ index ecf547ac..128760b1 100644
  static const struct tegra_video_format vi5_video_formats[] = {
  	/* RAW 6: TODO */
  
-@@ -179,6 +247,14 @@ static const struct tegra_video_format vi5_video_formats[] = {
+@@ -179,6 +235,14 @@ static const struct tegra_video_format vi5_video_formats[] = {
  				RAW16, Y16I, "Y16I 32"),
  	TEGRA_VIDEO_FORMAT(RAW16, 16, SGRBG16_1X16, 2, 1, T_R16,
  				RAW16, RW16, "RW16 16"),
@@ -265,3 +243,21 @@ index ecf547ac..128760b1 100644
  
  };
  
+diff --git a/include/media/gmsl-link.h b/include/media/gmsl-link.h
+index 48939537..4db8ea7e 100644
+--- a/include/media/gmsl-link.h
++++ b/include/media/gmsl-link.h
+@@ -37,8 +37,11 @@
+ #define GMSL_SERDES_CSI_LINK_B 0x2
+ 
+ /* Didn't find kernel defintions, for now adding here */
++#define GMSL_CSI_DT_YUV420_8 0x18
++#define GMSL_CSI_DT_RAW_10 0x2B
+ #define GMSL_CSI_DT_RAW_12 0x2C
+ #define GMSL_CSI_DT_UED_U1 0x30
++#define GMSL_CSI_DT_UED_U3 0x32
+ #define GMSL_CSI_DT_EMBED 0x12
+ #define GMSL_CSI_DT_YUV422_8 0x1E
+ #define GMSL_CSI_DT_RGB_888 0x24
+-- 
+2.34.1
