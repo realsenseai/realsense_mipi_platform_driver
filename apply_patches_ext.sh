@@ -4,9 +4,13 @@
 set -e
 
 if [[ $# < 1 || "$1" == "-h" ]]; then
-    echo "apply_patches_ext.sh [--one-cam | --dual-cam] JetPack_version [JetPack_source]"
+    echo "apply_patches_ext.sh [--one-cam | --dual-cam | --d5xx] JetPack_version [JetPack_source]"
     exit 1
 fi
+
+# D5xx-only patches touch NVIDIA code shared with D4xx, so they stay opt-in.
+USE_D5XX=0
+[[ "${RS_USE_D5XX^^}" == "ON" || "${RS_USE_D5XX}" == "1" ]] && USE_D5XX=1
 
 # Default to single camera DT for JetPack 5.0.2
 # single - jp5 [default] single cam GMSL board
@@ -18,6 +22,10 @@ if [[ "$1" == "--one-cam" ]]; then
 fi
 if [[ "$1" == "--dual-cam" ]]; then
     JP5_D4XX_DTSI="tegra194-camera-d4xx-dual.dtsi"
+    shift
+fi
+if [[ "$1" == "--d5xx" ]]; then
+    USE_D5XX=1
     shift
 fi
 
@@ -48,7 +56,16 @@ apply_external_patches() {
     cat "${PWD}/$2/$1/"* | patch --quiet -p1 --directory="${PWD}/$TARGET/$2"
 }
 
+apply_d5xx_only_patches() {
+    local dir="${PWD}/$2/$1-d5xx"
+    [[ "$USE_D5XX" == 1 && -d "$dir" ]] || return 0
+    ls -Ld "$dir"
+    ls -Lw1 "$dir"
+    cat "$dir/"* | patch --quiet -p1 --directory="${PWD}/$TARGET/$2"
+}
+
 apply_external_patches "$1" "${D4XX_SRC_DST}"
+apply_d5xx_only_patches "$1" "${D4XX_SRC_DST}"
 apply_external_patches "$1" "${KERNEL_DIR}"
 
 if [[ "$JETPACK_VERSION" == "6.x" ]]; then

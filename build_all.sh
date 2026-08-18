@@ -116,7 +116,7 @@ export KERNEL_MODULES_OUT=$TEGRA_KERNEL_OUT/modules
 [[ -n "${BUILD_NUMBER}" ]] && echo "Warning! You have BUILD_NUMBER set to ${BUILD_NUMBER}, This will affect your vermagic"
 
 # Build jp6 out-of-tree modules
-# following: 
+# following:
 # https://docs.nvidia.com/jetson/archives/r36.2/DeveloperGuide/SD/Kernel/KernelCustomization.html#building-the-jetson-linux-kernel
 if version_lt "$JETPACK_VERSION" "6.0"; then
     #JP4/5
@@ -139,7 +139,7 @@ else
         # Update the CONFIG_DYNAMIC_DEBUG and CONFIG_DEBUG_CORE flags in .config file
         scripts/config --enable DYNAMIC_DEBUG
         scripts/config --enable DYNAMIC_DEBUG_CORE
-        # Convert the .config file into defconfig 
+        # Convert the .config file into defconfig
         make savedefconfig
         # Save the new generated file as custom_defconfig
         cp defconfig ./arch/arm64/configs/custom_defconfig
@@ -165,6 +165,10 @@ else
         if [[ "$FG24" == "1" ]]; then
             cp -f "$DEVDIR/hardware/realsense/tegra234-camera-d5xx-overlay-fg24-4ch.dts" \
                   "$BUILD_SRCS/hardware/nvidia/t23x/nv-public/overlay/" 2>/dev/null || true
+            JP6_OVERLAY_MAKEFILE="$BUILD_SRCS/hardware/nvidia/t23x/nv-public/overlay/Makefile"
+            if ! grep -q '^dtbo-y += tegra234-camera-d5xx-overlay-fg24-4ch.dtbo$' "$JP6_OVERLAY_MAKEFILE"; then
+                sed -i '/^dtbo-y += tegra234-camera-d5xx-overlay.dtbo$/a dtbo-y += tegra234-camera-d5xx-overlay-fg24-4ch.dtbo' "$JP6_OVERLAY_MAKEFILE"
+            fi
         fi
         make RS_USE_D5XX=$RS_USE_D5XX RS_CSI_LANES=$RS_CSI_LANES dtbs
         cp $BUILD_SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-camera-d4xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/ 2>/dev/null || true
@@ -172,6 +176,7 @@ else
             cp $BUILD_SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-camera-d5xx-overlay*.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/ 2>/dev/null || true
         fi
         if [[ "$FG24" == "1" ]]; then
+            test -f "$BUILD_SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-camera-d5xx-overlay-fg24-4ch.dtbo"
             cp $BUILD_SRCS/nvidia-oot/device-tree/platform/generic-dts/dtbs/tegra234-camera-d5xx-overlay-fg24-4ch.dtbo $TEGRA_KERNEL_OUT/rootfs/boot/ 2>/dev/null || true
         fi
         if [[ "$FG24" == "1" ]]; then

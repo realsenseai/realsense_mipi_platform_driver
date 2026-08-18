@@ -39,7 +39,7 @@
  * @{
  */
 
-int max96724_get_available_pipe_id(struct device *dev, int vc_id);
+int max96724_get_available_pipe_id(struct device *dev, int vc_id, u32 link_id);
 int max96724_get_ser_pipe_id(struct device *dev, int dser_pipe_id, int vc_id);
 int max96724_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
 		      u8 data_type2, u32 vc_id);

@@ -46,7 +46,7 @@
 /* Deserializer interface structure for abstraction */
 struct dser_interface {
 	/* Pipeline management */
-	int (*get_available_pipe_id)(struct device *dev, int vc_id);
+	int (*get_available_pipe_id)(struct device *dev, int vc_id, u32 link_id);
 	int (*get_ser_pipe_id)(struct device *dev, int dser_pipe_id, int vc_id);
 	int (*bind_ser_to_dser_pipe)(struct device *dev, int dser_pipe_id, int ser_pipe_id, u32 vc_id);
 
@@ -178,6 +178,12 @@ MODULE_PARM_DESC(y12i_raw16_carrier,
 #define D5X_DEVICE_TYPE_D58X		9
 #define D5X_DEVICE_TYPE_UNKNOWN		0
 
+#define D5X_D585_DUAL_RGB_PID		0x0C07
+#define D5X_DUAL_RGB_MAX_OUTPUT_FPS	30
+#define D5X_GVD_RESPONSE_SIZE		1024
+/* 4-byte HWM opcode + 8-byte GVD header + skuComponent + USBVID. */
+#define D5X_GVD_USB_PID_OFFSET		0x12
+
 #define D5X_MIPI_LANE_NUMS			0x0400
 #define D5X_MIPI_LANE_DATARATE		0x0402
 #define D5X_MIPI_CONF_STATUS		0x0500
@@ -186,11 +192,13 @@ MODULE_PARM_DESC(y12i_raw16_carrier,
 #define D5X_DEPTH_STREAM_STATUS		0x1004
 #define D5X_RGB_STREAM_STATUS		0x1008
 #define D5X_IMU_STREAM_STATUS		0x100C
+#define D5X_DUALRGB_RIGHT_STREAM_STATUS		0x1010
 #define D5X_IR_STREAM_STATUS		0x1014
 
 #define D5X_STREAM_DEPTH			0x0
 #define D5X_STREAM_RGB				0x1
 #define D5X_STREAM_IMU				0x2
+#define D5X_STREAM_DUALRGB_RIGHT				0x3
 #define D5X_STREAM_IR				0x4
 #define D5X_STREAM_STOP				0x100
 #define D5X_STREAM_START			0x200
@@ -219,6 +227,14 @@ MODULE_PARM_DESC(y12i_raw16_carrier,
 #define D5X_IMU_RES_HEIGHT			0x4048
 #define D5X_IMU_FPS					0x404C
 #define D5X_IMU_CONTROL_STATUS 		0x404E
+
+#define D5X_DUALRGB_RIGHT_STREAM_DT			0x4060
+#define D5X_DUALRGB_RIGHT_STREAM_MD			0x4062
+#define D5X_DUALRGB_RIGHT_RES_WIDTH			0x4064
+#define D5X_DUALRGB_RIGHT_RES_HEIGHT			0x4068
+#define D5X_DUALRGB_RIGHT_FPS					0x406C
+#define D5X_DUALRGB_RIGHT_OVERRIDE			0x407C
+#define D5X_DUALRGB_RIGHT_CONTROL_STATUS		0x407E
 
 #define D5X_IR_STREAM_DT			0x4080
 #define D5X_IR_STREAM_MD			0x4082
@@ -264,6 +280,7 @@ MODULE_PARM_DESC(y12i_raw16_carrier,
 #define D5X_DEPTH_CONFIG_STATUS		0x4800
 #define D5X_RGB_CONFIG_STATUS		0x4802
 #define D5X_IMU_CONFIG_STATUS		0x4804
+#define D5X_DUALRGB_RIGHT_CONFIG_STATUS		0x4806
 #define D5X_IR_CONFIG_STATUS		0x4808
 
 #define D5X_STATUS_STREAMING		0x1
@@ -619,7 +636,7 @@ struct d5x {
 	struct regmap *regmap;
 	struct regulator *vcc;
 	const struct d5x_variant *variant;
-	int is_depth, is_y8, is_rgb, is_imu;
+	int is_depth, is_y8, is_rgb, is_dualrgb_right, is_imu;
 	bool metadata_enabled;
 	int aggregated;
 	int reset_ref_d5x;
@@ -813,6 +830,8 @@ struct d5x_dev {
 	* read still returns 0.
 	*/
 	u16 cached_device_type;
+	u16 product_pid;
+	bool product_pid_valid;
 
 	/* 
 	* Timestamp (jiffies) of last completed HW reset.
@@ -833,8 +852,22 @@ struct d5x_dev {
 	bool depth_streaming;
 	bool ir_streaming;
 	bool rgb_streaming;
+	bool dualrgb_right_streaming;
 	bool imu_streaming;
 };
+
+static bool d5x_is_dual_rgb_2c(const struct d5x *state)
+{
+	return state->d5x_dev &&
+		READ_ONCE(state->d5x_dev->product_pid_valid) &&
+		(READ_ONCE(state->d5x_dev->product_pid) == D5X_D585_DUAL_RGB_PID);
+}
+
+static bool d5x_is_dual_rgb_tdm_image(const struct d5x *state)
+{
+	return d5x_is_dual_rgb_2c(state) &&
+		(state->is_depth || state->is_y8 || state->is_rgb);
+}
 
 #ifdef CONFIG_VIDEO_D5XX_SERDES
 static DEFINE_MUTEX(serdes_lock__);
@@ -1002,6 +1035,8 @@ static unsigned int d5x_started_mipi_streams(struct d5x *state)
 		count++;
 	if (state->d5x_dev->rgb_streaming)
 		count++;
+	if (state->d5x_dev->dualrgb_right_streaming)
+		count++;
 	if (state->d5x_dev->ir_streaming)
 		count++;
 	if (state->d5x_dev->imu_streaming)
@@ -1020,6 +1055,8 @@ static u8 d5x_started_mipi_pipe_mask(struct d5x *state)
 		mask |= BIT(0);
 	if (state->d5x_dev->rgb_streaming)
 		mask |= BIT(1);
+	if (state->d5x_dev->dualrgb_right_streaming)
+		mask |= BIT(4);
 	if (state->d5x_dev->ir_streaming)
 		mask |= BIT(2);
 	if (state->d5x_dev->imu_streaming)
@@ -1708,12 +1745,21 @@ static const struct v4l2_mbus_framefmt d5x_mbus_framefmt_template = {
 	.xfer_func = V4L2_XFER_FUNC_DEFAULT,
 };
 
+/* DUALRGB_RIGHT sets both is_rgb and is_dualrgb_right; use this for VC1 alone. */
+static inline bool d5x_is_dualrgb_left(const struct d5x *state)
+{
+	return state->is_rgb && !state->is_dualrgb_right;
+}
+
 /* Get readable sensor name */
 static const char *d5x_get_sensor_name(struct d5x *state)
 {
 	static const char *sensor_name[] = {"unknown", "RGB", "DEPTH", "Y8", "IMU"};
 	int sensor_id = state->is_rgb * 1 + state->is_depth * 2 + \
 			state->is_y8 * 3 + state->is_imu * 4;
+
+	if (state->is_dualrgb_right)
+		return "DUALRGB_RIGHT";
 	if (sensor_id >= (sizeof(sensor_name)/sizeof(*sensor_name)))
 		sensor_id = 0;
 
@@ -1831,6 +1877,7 @@ static int d5x_sensor_enum_frame_interval(struct v4l2_subdev *sd,
 #endif
 		struct v4l2_subdev_frame_interval_enum *fie)
 {
+	struct d5x *state = v4l2_get_subdevdata(sd);
 	struct d5x_sensor *sensor = container_of(sd, struct d5x_sensor, sd);
 	const struct d5x_format *fmt;
 	const struct d5x_resolution *res;
@@ -1851,6 +1898,9 @@ static int d5x_sensor_enum_frame_interval(struct v4l2_subdev *sd,
 		return -EINVAL;
 
 	if (fie->index >= res->n_framerates)
+		return -EINVAL;
+	if (d5x_is_dual_rgb_tdm_image(state) &&
+	    res->framerates[fie->index] > D5X_DUAL_RGB_MAX_OUTPUT_FPS)
 		return -EINVAL;
 
 	fie->interval.numerator = 1;
@@ -2270,6 +2320,13 @@ static u16 d5x_csi_override_dt(const struct d5x_format *format)
 		format->csi_out_dt;
 }
 
+#ifdef CONFIG_VIDEO_D5XX_SERDES
+/* Defined below; must not be called with serdes_lock__ held. */
+static void d5x_release_serdes_pipe(struct d5x *state,
+				    struct d5x_sensor *sensor,
+				    const char *reason);
+#endif
+
 static int d5x_configure(struct d5x *state)
 {
 	struct d5x_sensor *sensor;
@@ -2298,7 +2355,17 @@ static int d5x_configure(struct d5x *state)
 		width_addr = D5X_DEPTH_RES_WIDTH;
 		height_addr = D5X_DEPTH_RES_HEIGHT;
 #endif
-	} else if (state->is_rgb) {
+	} else if (state->is_dualrgb_right) {
+		sensor = &state->rgb.sensor;
+#if !D5X_BYPASS_CAMERA_I2C
+		dt_addr = D5X_DUALRGB_RIGHT_STREAM_DT;
+		md_addr = D5X_DUALRGB_RIGHT_STREAM_MD;
+		override_addr = D5X_DUALRGB_RIGHT_OVERRIDE;
+		fps_addr = D5X_DUALRGB_RIGHT_FPS;
+		width_addr = D5X_DUALRGB_RIGHT_RES_WIDTH;
+		height_addr = D5X_DUALRGB_RIGHT_RES_HEIGHT;
+#endif
+	} else if (d5x_is_dualrgb_left(state)) {
 		sensor = &state->rgb.sensor;
 #if !D5X_BYPASS_CAMERA_I2C
 		dt_addr = D5X_RGB_STREAM_DT;
@@ -2367,11 +2434,17 @@ static int d5x_configure(struct d5x *state)
 		*/
 		mutex_lock(&serdes_lock__);
 		sensor->pipe_id =
-			state->dser_ops->get_available_pipe_id(state->dser_dev, (int)state->g_ctx.dst_vc);
+			state->dser_ops->get_available_pipe_id(
+				state->dser_dev, (int)state->g_ctx.dst_vc,
+				state->g_ctx.serdes_csi_link);
 		mutex_unlock(&serdes_lock__);
 		if (sensor->pipe_id < 0) {
-			dev_err(&state->client->dev, "No free pipe in %s\n",state->dser_ops->name);
-			return -ENOSR;
+			ret = sensor->pipe_id;
+			sensor->pipe_id = PIPE_NOT_CONFIGURED;
+			dev_err(&state->client->dev,
+				"no usable pipe for vc %u in %s (%d)\n",
+				vc_id, state->dser_ops->name, ret);
+			return ret == -ENOMEM ? -ENOSR : ret;
 		}
 		pipe_reapply_gen = d5x_dser_rearm_gen(state);
 		sensor->pipe_reapply_gen = pipe_reapply_gen;
@@ -2383,6 +2456,7 @@ static int d5x_configure(struct d5x *state)
 			dev_err(&state->client->dev,
 				"pipe %d setup FAILED (dt1=0x%x dt2=0x%x vc=%u) ret=%d\n",
 				sensor->pipe_id, data_type1, data_type2, vc_id, ret);
+			d5x_release_serdes_pipe(state, sensor, "pipe setup failure");
 			return ret;
 		}
 		dev_info(&state->client->dev,
@@ -2408,6 +2482,8 @@ static int d5x_configure(struct d5x *state)
 				"pipe %d re-apply after DES re-arm FAILED (dt1=0x%x dt2=0x%x vc=%u gen=%u->%u) ret=%d\n",
 				sensor->pipe_id, data_type1, data_type2, vc_id,
 				sensor->pipe_reapply_gen, pipe_reapply_gen, ret);
+			d5x_invalidate_sensor(state, sensor);
+			d5x_release_serdes_pipe(state, sensor, "pipe re-apply failure");
 			return ret;
 		}
 		dev_info(&state->client->dev,
@@ -2421,7 +2497,8 @@ static int d5x_configure(struct d5x *state)
 			sensor->pipe_id, pipe_reapply_gen, data_type1, data_type2, vc_id);
 	}
 #else /* Non-SERDES configuration */
-	vc_id = (state->is_depth) ? 0 : (state->is_rgb) ? 1 : (state->is_y8) ? 2 : 3;
+	vc_id = (state->is_depth) ? 0 : (state->is_dualrgb_right) ? 4 :
+		d5x_is_dualrgb_left(state) ? 1 : (state->is_y8) ? 2 : 3;
 #endif
 
 #if D5X_BYPASS_CAMERA_I2C
@@ -2515,6 +2592,7 @@ static int d5x_sensor_s_frame_interval(struct v4l2_subdev *sd,
 #endif
 		struct v4l2_subdev_frame_interval *fi)
 {
+	struct d5x *d5x_state = v4l2_get_subdevdata(sd);
 	struct d5x_sensor *sensor = container_of(sd, struct d5x_sensor, sd);
 	u16 framerate = 1;
 
@@ -2522,6 +2600,9 @@ static int d5x_sensor_s_frame_interval(struct v4l2_subdev *sd,
 		return -EINVAL;
 
 	framerate = fi->interval.denominator / fi->interval.numerator;
+	if (d5x_is_dual_rgb_tdm_image(d5x_state) &&
+	    framerate > D5X_DUAL_RGB_MAX_OUTPUT_FPS)
+		return -EINVAL;
 	framerate = __d5x_probe_framerate(sensor->config.resolution, framerate);
 	sensor->config.framerate = framerate;
 	fi->interval.numerator = 1;
@@ -2994,6 +3075,7 @@ static void d5x_reset_streaming_flags(struct d5x_dev *d5x_dev)
 	d5x_dev->depth_streaming = false;
 	d5x_dev->ir_streaming = false;
 	d5x_dev->rgb_streaming = false;
+	d5x_dev->dualrgb_right_streaming = false;
 	d5x_dev->imu_streaming = false;
 	mutex_unlock(&d5x_dev->lock);
 }
@@ -3149,6 +3231,7 @@ static int d5x_hw_reset_with_recovery(struct d5x *state)
 	struct hwm_cmd reset_cmd;
 	bool depth_streaming;
 	bool rgb_streaming;
+	bool dualrgb_right_streaming;
 	bool ir_streaming;
 	bool imu_streaming;
 	unsigned long d5x_last_reset_jiffies = READ_ONCE(state->d5x_dev->last_reset_jiffies);
@@ -3190,6 +3273,7 @@ static int d5x_hw_reset_with_recovery(struct d5x *state)
 	mutex_lock(&state->d5x_dev->lock);
 	depth_streaming = state->d5x_dev->depth_streaming;
 	rgb_streaming = state->d5x_dev->rgb_streaming;
+	dualrgb_right_streaming = state->d5x_dev->dualrgb_right_streaming;
 	ir_streaming = state->d5x_dev->ir_streaming;
 	imu_streaming = state->d5x_dev->imu_streaming;
 	mutex_unlock(&state->d5x_dev->lock);
@@ -3198,6 +3282,8 @@ static int d5x_hw_reset_with_recovery(struct d5x *state)
 		d5x_write(state, D5X_START_STOP_STREAM,	D5X_STREAM_STOP | D5X_STREAM_DEPTH);
 	if (rgb_streaming)
 		d5x_write(state, D5X_START_STOP_STREAM,	D5X_STREAM_STOP | D5X_STREAM_RGB);
+	if (dualrgb_right_streaming)
+		d5x_write(state, D5X_START_STOP_STREAM,	D5X_STREAM_STOP | D5X_STREAM_DUALRGB_RIGHT);
 	if (ir_streaming)
 		d5x_write(state, D5X_START_STOP_STREAM,	D5X_STREAM_STOP | D5X_STREAM_IR);
 	if (imu_streaming)
@@ -3861,7 +3947,7 @@ static int d5x_get_calibration_data(struct d5x *state, enum table_id id,
 	return 0;
 }
 
-static int d5x_gvd(struct d5x *state, unsigned char *data)
+static int d5x_gvd(struct d5x *state, unsigned char *data, u16 max_len)
 {
 	struct hwm_cmd cmd;
 	int ret;
@@ -3881,9 +3967,58 @@ static int d5x_gvd(struct d5x *state, unsigned char *data)
 	}
 	/* Read response length */
 	ret = d5x_raw_read(state, D5X_HWMC_RESP_LEN, &length, sizeof(length));
+	if (ret)
+		return ret;
+	if (length > max_len) {
+		dev_err(&state->client->dev,
+			"%s(): GVD response %u exceeds buffer %u\n",
+			__func__, length, max_len);
+		return -EMSGSIZE;
+	}
 	/* Read response data */
 	d5x_raw_read_with_check(state, D5X_HWMC_DATA, data, length);
 
+	return ret;
+}
+
+static int d5x_cache_product_pid(struct d5x *state)
+{
+	unsigned char *data;
+	u16 pid;
+	int ret = 0;
+
+	if (READ_ONCE(state->d5x_dev->product_pid_valid))
+		return 0;
+
+	data = kzalloc(D5X_GVD_RESPONSE_SIZE, GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
+
+	mutex_lock(&state->d5x_dev->lock);
+	if (state->d5x_dev->product_pid_valid)
+		goto unlock;
+
+	ret = d5x_gvd(state, data, D5X_GVD_RESPONSE_SIZE);
+	if (ret)
+		goto unlock;
+	if (get_unaligned_le32(data) != 0x10) {
+		ret = -EPROTO;
+		goto unlock;
+	}
+
+	pid = get_unaligned_le16(data + D5X_GVD_USB_PID_OFFSET);
+	if (!pid) {
+		ret = -ENODATA;
+		goto unlock;
+	}
+
+	state->d5x_dev->product_pid = pid;
+	state->d5x_dev->product_pid_valid = true;
+	dev_info(&state->client->dev, "D5xx GVD product PID: 0x%04x\n", pid);
+
+unlock:
+	mutex_unlock(&state->d5x_dev->lock);
+	kfree(data);
 	return ret;
 }
 
@@ -4115,7 +4250,7 @@ static int d5x_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 	}
 	case D5X_CAMERA_CID_GVD:
-		ret = d5x_gvd(state, ctrl->p_new.p_u8);
+		ret = d5x_gvd(state, ctrl->p_new.p_u8, ctrl->dims[0]);
 		break;
 	case D5X_CAMERA_CID_AE_ROI_GET:
 		if (ctrl->p_new.p_u16) {
@@ -4278,7 +4413,13 @@ static const struct v4l2_ctrl_config d5x_ctrl_gvd = {
 	.id = D5X_CAMERA_CID_GVD,
 	.name = "GVD",
 	.type = V4L2_CTRL_TYPE_U8,
-	.dims = {239},
+	/*
+	 * librealsense sizes its GVD read from this control and needs the whole
+	 * D500 struct (4B opcode header + 8B header + payload) to validate the
+	 * CRC32; a short buffer makes it fall back to the D400 one-byte product
+	 * id and reject the device. The legacy 239 covered only D4xx.
+	 */
+	.dims = {1024},
 	.elem_size = sizeof(u8),
 	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_READ_ONLY,
 	.step = 1,
@@ -4579,6 +4720,8 @@ static void d5x_init_d5x_dev(struct d5x *state, struct d5x_dev *d5x_dev)
 	mutex_lock(&d5x_dev->lock);
 	d5x_dev->d5x_primary = state;
 	d5x_dev->cached_device_type = D5X_DEVICE_TYPE_UNKNOWN;
+	d5x_dev->product_pid = 0;
+	d5x_dev->product_pid_valid = false;
 	d5x_dev->sync_mode = D5X_SYNC_MODE_DISABLED;
 	mutex_unlock(&d5x_dev->lock);
 	d5x_reset_streaming_flags(d5x_dev);
@@ -5504,6 +5647,7 @@ static int d5x_sensor_init(struct i2c_client *c, struct d5x *state,
 #endif
 	sensor->pipe_id = PIPE_NOT_CONFIGURED;
 	sensor->pipe_reapply_gen = 0;
+	d5x_config_cache_clear(sensor);
 	v4l2_i2c_subdev_init(sd, c, ops);
 	/* See tegracam_v4l2.c tegracam_v4l2subdev_register() */
 	/* Set owner to NULL so we can unload the driver module */
@@ -6007,6 +6151,9 @@ static int d5x_mux_s_frame_interval(struct v4l2_subdev *sd,
 	sensor = d5x_state->mux.last_set;
 
 	framerate = fi->interval.denominator / fi->interval.numerator;
+	if (d5x_is_dual_rgb_tdm_image(d5x_state) &&
+	    framerate > D5X_DUAL_RGB_MAX_OUTPUT_FPS)
+		return -EINVAL;
 	framerate = __d5x_probe_framerate(sensor->config.resolution, framerate);
 	sensor->config.framerate = framerate;
 	fi->interval.numerator = 1;
@@ -6030,7 +6177,9 @@ static int d5x_mux_s_stream(struct v4l2_subdev *sd, int on)
 
 	if (state->is_depth)
 		streaming_flag = &state->d5x_dev->depth_streaming;
-	else if (state->is_rgb)
+	else if (state->is_dualrgb_right)
+		streaming_flag = &state->d5x_dev->dualrgb_right_streaming;
+	else if (d5x_is_dualrgb_left(state))
 		streaming_flag = &state->d5x_dev->rgb_streaming;
 	else if (state->is_y8)
 		streaming_flag = &state->d5x_dev->ir_streaming;
@@ -6092,6 +6241,7 @@ static int d5x_mux_s_stream(struct v4l2_subdev *sd, int on)
 		if (d5x_sync_mode_uses_esync(state) &&
 		    !state->d5x_dev->depth_streaming &&
 		    !state->d5x_dev->rgb_streaming &&
+		    !state->d5x_dev->dualrgb_right_streaming &&
 		    !state->d5x_dev->ir_streaming &&
 		    !state->d5x_dev->imu_streaming)
 			d5x_set_des_fsync(state, false);
@@ -6126,7 +6276,13 @@ static int d5x_mux_s_stream(struct v4l2_subdev *sd, int on)
 		stream_id = D5X_STREAM_DEPTH;
 		vc_id = 0;
 		streaming_flag = &state->d5x_dev->depth_streaming;
-	} else if (state->is_rgb) {
+	} else if (state->is_dualrgb_right) {
+		config_status_base = D5X_DUALRGB_RIGHT_CONFIG_STATUS;
+		stream_status_base = D5X_DUALRGB_RIGHT_STREAM_STATUS;
+		stream_id = D5X_STREAM_DUALRGB_RIGHT;
+		vc_id = 4;
+		streaming_flag = &state->d5x_dev->dualrgb_right_streaming;
+	} else if (d5x_is_dualrgb_left(state)) {
 		config_status_base = D5X_RGB_CONFIG_STATUS;
 		stream_status_base = D5X_RGB_STREAM_STATUS;
 		stream_id = D5X_STREAM_RGB;
@@ -6443,6 +6599,7 @@ static int d5x_mux_s_stream(struct v4l2_subdev *sd, int on)
 		if (d5x_sync_mode_uses_esync(state) &&
 		    !state->d5x_dev->depth_streaming &&
 		    !state->d5x_dev->rgb_streaming &&
+		    !state->d5x_dev->dualrgb_right_streaming &&
 		    !state->d5x_dev->ir_streaming &&
 		    !state->d5x_dev->imu_streaming)
 			d5x_set_des_fsync(state, false);
@@ -6689,7 +6846,7 @@ static int d5x_mux_init(struct i2c_client *c, struct d5x *state)
 #endif
 		state->mux.last_set = &state->depth.sensor;
 	}
-	else if (state->is_rgb) {
+	else if (d5x_is_dualrgb_left(state)) {
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 20, 0)
 		v4l2_ctrl_add_handler(&state->ctrls.handler,
 					&state->ctrls.handler_rgb, NULL);
@@ -6699,6 +6856,8 @@ static int d5x_mux_init(struct i2c_client *c, struct d5x *state)
 #endif
 		state->mux.last_set = &state->rgb.sensor;
 	}
+	else if (state->is_dualrgb_right)
+		state->mux.last_set = &state->rgb.sensor;
 	else if (state->is_y8) {
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 20, 0)
 		v4l2_ctrl_add_handler(&state->ctrls.handler,
@@ -7693,6 +7852,7 @@ static int d5x_probe(struct i2c_client *c
 	state->is_depth = 0;
 	state->is_y8 = 0;
 	state->is_rgb = 0;
+	state->is_dualrgb_right = 0;
 	state->is_imu = 0;
 #ifdef CONFIG_OF
 	ret = of_property_read_string(c->dev.of_node, "cam-type", &str);
@@ -7706,10 +7866,18 @@ static int d5x_probe(struct i2c_client *c
 		state->control_base = D5X_DEPTH_CONTROL_BASE;
 		state->control_status_reg = D5X_DEPTH_CONTROL_STATUS;
 	}
-	if (!ret && !strncmp(str, "RGB", strlen("RGB"))) {
+	/*
+	 * "RGB" is VC1: the dedicated RGB sensor in 3C, the left eye of the
+	 * stereo pair in 2C. "DUALRGB_LEFT" is accepted as an explicit 2C
+	 * spelling of the same slot. "DUALRGB_RIGHT" is VC4 and 2C only.
+	 */
+	if (!ret && (!strncmp(str, "RGB", strlen("RGB")) ||
+		     !strncmp(str, "DUALRGB_", strlen("DUALRGB_")))) {
 		state->is_rgb = 1;
+		state->is_dualrgb_right = !strcmp(str, "DUALRGB_RIGHT");
 		state->control_base = D5X_RGB_CONTROL_BASE;
-		state->control_status_reg = D5X_RGB_CONTROL_STATUS;
+		state->control_status_reg = state->is_dualrgb_right ?
+			D5X_DUALRGB_RIGHT_CONTROL_STATUS : D5X_RGB_CONTROL_STATUS;
 	}
 	if (!ret && !strncmp(str, "IMU", strlen("IMU"))) {
 		state->is_imu = 1;
@@ -7781,6 +7949,19 @@ static int d5x_probe(struct i2c_client *c
 		/* Override I2C drvdata with state for use in remove function */
 		i2c_set_clientdata(c, state);
 		return 0;
+	}
+
+	ret = d5x_cache_product_pid(state);
+	if (ret < 0)
+		dev_warn(&c->dev, "%s(): failed to read product PID: %d\n",
+			 __func__, ret);
+	if (state->is_dualrgb_right &&
+	    (ret < 0 || !d5x_is_dual_rgb_2c(state))) {
+		dev_info(&c->dev,
+			 "%s(): RGB-right is not present on this product\n",
+			 __func__);
+		ret = -ENODEV;
+		goto e_chardev;
 	}
 #endif
 
