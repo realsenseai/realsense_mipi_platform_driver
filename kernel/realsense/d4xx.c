@@ -1675,6 +1675,44 @@ static const struct ds5_format ds5_y_formats_d58x[] = {
 	},
 };
 
+#ifndef MEDIA_BUS_FMT_RS_SGRBG10P_UDP8_1X10
+#define MEDIA_BUS_FMT_RS_SGRBG10P_UDP8_1X10	0x5002
+#endif
+
+#ifndef MEDIA_BUS_FMT_RS_SGRBG10_UDP8_1X16
+#define MEDIA_BUS_FMT_RS_SGRBG10_UDP8_1X16	0x5003
+#endif
+
+#ifndef MEDIA_BUS_FMT_RS_Y12I_UDP8_4X8
+#define MEDIA_BUS_FMT_RS_Y12I_UDP8_4X8		0x5005
+#endif
+
+#define DS5_D58X_NV12_SOURCE_DT		0x18
+#define DS5_D58X_RGB_PACKED_SOURCE_DT	0x2b
+#define DS5_D58X_CALIB_SOURCE_DT		0x2e
+#define DS5_D58X_UDP8_CARRIER_DT		0x32
+
+static const struct ds5_format ds5_y_formats_d58x_tunnel[] = {
+	{
+		/* First format: default */
+		.data_type = GMSL_CSI_DT_RAW_8,		/* Y8 */
+		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
+		.n_resolutions = ARRAY_SIZE(d58x_y8_sizes),
+		.resolutions = d58x_y8_sizes,
+	}, {
+		.data_type = GMSL_CSI_DT_YUV422_8,	/* Y8I */
+		.mbus_code = MEDIA_BUS_FMT_VYUY8_1X16,
+		.n_resolutions = ARRAY_SIZE(d58x_y8_sizes),
+		.resolutions = d58x_y8_sizes,
+	}, {
+		.data_type = DS5_D58X_CALIB_SOURCE_DT,
+		.override_data_type = DS5_D58X_UDP8_CARRIER_DT,
+		.mbus_code = MEDIA_BUS_FMT_RS_Y12I_UDP8_4X8,
+		.n_resolutions = ARRAY_SIZE(d58x_calibration_sizes),
+		.resolutions = d58x_calibration_sizes,
+	},
+};
+
 static const struct ds5_format ds5_rgb_formats_d58x[] = {
 	{
 		/* First format: default */
@@ -1693,9 +1731,6 @@ static const struct ds5_format ds5_rgb_formats_d58x[] = {
 	},
 };
 
-#define DS5_D58X_NV12_SOURCE_DT		0x18
-#define DS5_D58X_NV12_CARRIER_DT	0x32
-
 /* Keep shared YUYV and calibration entries aligned with the base table. */
 static const struct ds5_format ds5_rgb_formats_d58x_tunnel[] = {
 	{
@@ -1705,18 +1740,24 @@ static const struct ds5_format ds5_rgb_formats_d58x_tunnel[] = {
 		.n_resolutions = ARRAY_SIZE(d58x_rgb_sizes),
 		.resolutions = d58x_rgb_sizes,
 	}, {
-		/* Flat NV12 bytes use UD32 as an opaque 8-bit CSI carrier. */
+		/* Flat NV12 bytes use the UDP8 carrier as an opaque byte stream. */
 		.data_type = DS5_D58X_NV12_SOURCE_DT,
-		.override_data_type = DS5_D58X_NV12_CARRIER_DT,
+		.override_data_type = DS5_D58X_UDP8_CARRIER_DT,
 		.mbus_code = MEDIA_BUS_FMT_RS_NV12_UD32_1X8,
 		.n_resolutions = ARRAY_SIZE(d58x_rgb_sizes),
 		.resolutions = d58x_rgb_sizes,
 	}, {
-		/* RGB calibration: unpacked GRBG10, one little-endian
-		 * 10-bit sample per 16-bit container, 2 bytes/pixel.
-		 */
-		.data_type = GMSL_CSI_DT_RAW_16,
-		.mbus_code = MEDIA_BUS_FMT_SGRBG16_1X16,
+		/* Unpacked GRBG10 keeps one sample in each 16-bit container. */
+		.data_type = DS5_D58X_CALIB_SOURCE_DT,
+		.override_data_type = DS5_D58X_UDP8_CARRIER_DT,
+		.mbus_code = MEDIA_BUS_FMT_RS_SGRBG10_UDP8_1X16,
+		.n_resolutions = ARRAY_SIZE(d58x_calibration_sizes),
+		.resolutions = d58x_calibration_sizes,
+	}, {
+		/* Packed GRBG10 keeps the native HKR cache-line byte layout. */
+		.data_type = DS5_D58X_RGB_PACKED_SOURCE_DT,
+		.override_data_type = DS5_D58X_UDP8_CARRIER_DT,
+		.mbus_code = MEDIA_BUS_FMT_RS_SGRBG10P_UDP8_1X10,
 		.n_resolutions = ARRAY_SIZE(d58x_calibration_sizes),
 		.resolutions = d58x_calibration_sizes,
 	},
@@ -2367,8 +2408,9 @@ static int ds5_configure(struct ds5 *state)
 		/* D58x tunnel uses an explicit per-format carrier contract, including
 		 * zero to clear a previous override. Preserve the existing D4xx
 		 * depth/IR override values. */
-		if (state->is_rgb && ds5_is_d58x(state) &&
-		    !state->d58x_pixel_mode)
+		if (ds5_is_d58x(state) && !state->d58x_pixel_mode &&
+		    (state->is_rgb ||
+		     sensor->config.format->override_data_type))
 			dt_value = sensor->config.format->override_data_type;
 		else
 			dt_value = sensor->config.format->data_type;
@@ -5477,8 +5519,15 @@ static int ds5_mux_enum_mbus_code(struct v4l2_subdev *sd,
 	}
 
 	tmp.pad = 0;
-	if (state->is_rgb)
+	if (state->is_rgb) {
 		remote_sd = &state->rgb.sensor.sd;
+		/* The external-pad aggregation above offsets indexes after the IR
+		 * format count. D58x tunnel RGB has more entries than IR, so keep
+		 * the RGB sensor's original index to expose its final format.
+		 */
+		if (ds5_is_d58x(state) && !state->d58x_pixel_mode)
+			tmp.index = mce->index;
+	}
 	if (state->is_depth)
 		remote_sd = &state->depth.sensor.sd;
 	if (state->is_y8)
@@ -6530,8 +6579,13 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_45x);
 		break;
 	case DS5_DEVICE_TYPE_D58X:
-		sensor->formats = ds5_y_formats_d58x;
-		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_d58x);
+		if (!state->d58x_pixel_mode) {
+			sensor->formats = ds5_y_formats_d58x_tunnel;
+			sensor->n_formats = ARRAY_SIZE(ds5_y_formats_d58x_tunnel);
+		} else {
+			sensor->formats = ds5_y_formats_d58x;
+			sensor->n_formats = ARRAY_SIZE(ds5_y_formats_d58x);
+		}
 		break;
 	default:
 		sensor->formats = state->variant->formats;
