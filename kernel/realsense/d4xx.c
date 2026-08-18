@@ -303,6 +303,12 @@ enum ds5_mux_pad {
  */
 #define DFU_MANIFEST_TIMEOUT_MS 180000
 
+/* Length/status reads (0x5004, 0x4e00) can briefly return 0xFFFF/0xFF while D58x
+ * is between manifest sub-states or under I2C contention; retry a bounded number
+ * of times before declaring the poll a failure. */
+#define DFU_STATUS_RETRY_MAX	5
+#define DFU_STATUS_RETRY_MS	20
+
 #define DS5_START_POLL_TIME	10
 #define DS5_START_MAX_TIME	2000
 #define DS5_START_MAX_COUNT	(DS5_START_MAX_TIME / DS5_START_POLL_TIME)
@@ -7002,13 +7008,31 @@ static int ds5_dfu_wait_for_get_dfu_status(struct ds5 *state,
 
 		} while (status);
 
-		ds5_read_with_check(state, 0x5004, &dfu_state_len);
+		/* Retry on transient garbage: length 0xFFFF or status 0xFF happens
+		 * when the read hits the D58x manifest-reset window or an I2C glitch;
+		 * a healthy poll returns on the first read. */
+		{
+			int retries;
+
+			for (retries = 0; retries < DFU_STATUS_RETRY_MAX; retries++) {
+				if (retries)
+					msleep_range(DFU_STATUS_RETRY_MS);
+				if (ds5_read_poll(state, 0x5004, &dfu_state_len))
+					continue;
+				if (dfu_state_len != DFU_WAIT_RET_LEN)
+					continue;
+				if (regmap_raw_read(state->regmap, 0x4e00,
+						dfu_asw_buf, DFU_WAIT_RET_LEN))
+					continue;
+				if (dfu_asw_buf[0] == 0)
+					break;
+			}
+		}
 		if (dfu_state_len != DFU_WAIT_RET_LEN) {
 			dev_err(&state->client->dev,
 					"%s(): Wrong answer len (%d)\n", __func__, dfu_state_len);
 			return -EINVAL;
 		}
-		ds5_raw_read_with_check(state, 0x4e00, &dfu_asw_buf, DFU_WAIT_RET_LEN);
 		if (dfu_asw_buf[0]) {
 			dev_err(&state->client->dev,
 					"%s(): Wrong dfu_status (%d)\n", __func__, dfu_asw_buf[0]);
