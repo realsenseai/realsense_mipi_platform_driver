@@ -176,4 +176,7 @@ if [[ "$ACTION" = "apply" ]]; then
     if [[ -d "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen/kernel-dts" ]]; then
         git -C "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen/kernel-dts" commit -m "RS patched" || true
     fi
+
+    "${PWD}/scripts/patch-state.sh" record "${PWD}" "${PWD}/${BUILD_SRCS}" \
+        "${JP_INPUT_VERSION}" "${JETPACK_VERSION}" "${KERNEL_DIR}" "${D4XX_SRC_DST}"
 fi

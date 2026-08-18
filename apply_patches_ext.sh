@@ -70,3 +70,6 @@ elif [[ "$JETPACK_VERSION" == "5.x" ]]; then
     cp nvidia-oot/max96724.h "$TARGET/kernel/nvidia/include/media/"
     cp nvidia-oot/max96724.c "$TARGET/kernel/nvidia/drivers/media/i2c/"
 fi
+
+"${PWD}/scripts/patch-state.sh" record "${PWD}" "$(realpath "$TARGET")" \
+    "${JP_INPUT_VERSION}" "${JETPACK_VERSION}" "${KERNEL_DIR}" "${D4XX_SRC_DST}"
