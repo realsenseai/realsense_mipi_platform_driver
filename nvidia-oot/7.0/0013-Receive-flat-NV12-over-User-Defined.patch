@@ -1,24 +1,25 @@
-From 20605b9516690c71693022c8d427061740b5e85b Mon Sep 17 00:00:00 2001
+From 001448ef6f9ce920722401844281a3bf069890a2 Mon Sep 17 00:00:00 2001
 From: zhou <shengyong.zhou@realsenseai.com>
-Date: Tue, 18 Aug 2026 12:53:44 +0800
+Date: Tue, 18 Aug 2026 18:13:46 +0800
 Subject: [PATCH] media: tegra: receive D5x tunnel UDP8 byte surfaces
 
-Map the selected User Defined packet DT to T_R8 only for the D5x NV12 and calibration tuples. Preserve each payload byte while exposing NV12, Y16I, RW16, and GR0P through their existing V4L2 ABIs.
-Filter duplicate FourCC tuples against the active subdevice formats so D4x and Pixel Mode continue to select their standard mappings.
+Map selected User Defined packet data types to T_R8 for D5x NV12 and
+calibration tuples while preserving the existing V4L2 surface layouts.
+Filter private duplicate FourCC tuples by the active subdevice format.
 
 Signed-off-by: zhou <shengyong.zhou@realsenseai.com>
 ---
  .../media/platform/tegra/camera/vi/channel.c  | 14 ++++
- drivers/media/platform/tegra/camera/vi/core.c | 43 +++++++++-
- .../media/platform/tegra/camera/vi/vi5_fops.c | 21 +++++
- .../platform/tegra/camera/vi/vi5_formats.h    | 80 +++++++++++++++++++
- 4 files changed, 156 insertions(+), 2 deletions(-)
+ drivers/media/platform/tegra/camera/vi/core.c | 43 ++++++++++-
+ .../media/platform/tegra/camera/vi/vi5_fops.c | 16 +++-
+ .../platform/tegra/camera/vi/vi5_formats.h    | 76 +++++++++++++++++++
+ 4 files changed, 146 insertions(+), 3 deletions(-)
 
 diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
-index 88cf075b..131f4e7b 100644
+index da4a1c71..39cbdf76 100644
 --- a/drivers/media/platform/tegra/camera/vi/channel.c
 +++ b/drivers/media/platform/tegra/camera/vi/channel.c
-@@ -329,6 +329,9 @@ static void tegra_channel_update_format(struct tegra_channel *chan,
+@@ -338,6 +338,9 @@ static void tegra_channel_update_format(struct tegra_channel *chan,
  
  	if (fourcc == V4L2_PIX_FMT_NV16)
  		chan->format.sizeimage *= 2;
@@ -28,7 +29,7 @@ index 88cf075b..131f4e7b 100644
  }
  
  static void tegra_channel_fmts_bitmap_init(struct tegra_channel *chan)
-@@ -2219,6 +2222,17 @@ __tegra_channel_try_format(struct tegra_channel *chan,
+@@ -2235,6 +2238,17 @@ __tegra_channel_try_format(struct tegra_channel *chan,
  				&pix->width, &pix->height, &pix->bytesperline);
  	pix->sizeimage = get_aligned_buffer_size(chan,
  			pix->bytesperline, pix->height);
@@ -122,10 +123,10 @@ index 30ed1307..898282fa 100644
  	}
  	spec_bar();
 diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-index ee8dfd3d..9de8c061 100644
+index 459a3d82..54dcba51 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
 +++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-@@ -57,6 +57,8 @@ static const struct capture_descriptor capture_template = {
+@@ -58,6 +58,8 @@ static const struct capture_descriptor capture_template = {
  	,
  
  	.ch_cfg = {
@@ -134,7 +135,7 @@ index ee8dfd3d..9de8c061 100644
  		.pixfmt_enable = 0,		/* no output */
  		.match = {
  			.stream = 0,		/* one-hot bit encoding */
-@@ -391,6 +393,8 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+@@ -393,6 +395,8 @@ static void vi5_setup_surface(struct tegra_channel *chan,
  	u32 format = chan->fmtinfo->img_fmt;
  	u32 bpl = chan->format.bytesperline;
  	u32 data_type = chan->fmtinfo->img_dt;
@@ -143,26 +144,22 @@ index ee8dfd3d..9de8c061 100644
  	u32 nvcsi_stream = chan->port[vi_port];
  	unsigned int range = 0;
  	struct capture_descriptor_memoryinfo *desc_memoryinfo =
-@@ -419,6 +423,18 @@ static void vi5_setup_surface(struct tegra_channel *chan,
- 		}
- 	}
- 
-+	/* Y16I: one 32bpp L/R column pair per V4L2 pixel.
-+	 * However, GMSL caps at 24bpp, so we alias it to RAW16, and the de-facto
-+	 * width should be double the requested size
-+	 */
+@@ -425,8 +429,13 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+ 	 * However, GMSL caps at 24bpp, so we alias it to RAW16, and the de-facto
+ 	 * width should be double the requested size
+ 	 */
+-	if (chan->fmtinfo->fourcc == V4L2_PIX_FMT_Y16I)
 +	if (surface_override && surface_override->use_bytesperline_width)
 +		width = bpl;
 +	else if (chan->fmtinfo->fourcc == V4L2_PIX_FMT_Y16I)
-+		width *= 2;
+ 		width *= 2;
 +	if (surface_override)
 +		height = height * surface_override->height_numerator /
 +			surface_override->height_denominator;
-+
+ 
  	memcpy(desc, &capture_template, sizeof(capture_template));
  	memset(desc_memoryinfo, 0, sizeof(*desc_memoryinfo));
- 
-@@ -429,6 +445,11 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+@@ -438,6 +447,11 @@ static void vi5_setup_surface(struct tegra_channel *chan,
  	desc->ch_cfg.frame.frame_y = height;
  	desc->ch_cfg.match.datatype = data_type;
  	desc->ch_cfg.match.datatype_mask = 0x3f;
@@ -175,7 +172,7 @@ index ee8dfd3d..9de8c061 100644
  	desc->ch_cfg.pixfmt.format = format;
  
 diff --git a/drivers/media/platform/tegra/camera/vi/vi5_formats.h b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
-index 4e50e780..186fdfa5 100644
+index ecf547ac..128760b1 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi5_formats.h
 +++ b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
 @@ -82,6 +82,74 @@ enum tegra_image_format {
@@ -253,14 +250,10 @@ index 4e50e780..186fdfa5 100644
  static const struct tegra_video_format vi5_video_formats[] = {
  	/* RAW 6: TODO */
  
-@@ -165,6 +233,18 @@ static const struct tegra_video_format vi5_video_formats[] = {
- 	// R[7:3]R[3:0] | L[3:0]R[11:8] | L[11:8]L[7:4] | ALIGN[7:0]
- 	TEGRA_VIDEO_FORMAT(RGB888, 24, RGB888_1X24, 4, 1, T_A8R8G8B8,
- 				RGB888, Y12I, "Y12I 24"),
-+	TEGRA_VIDEO_FORMAT(RAW16, 16, ARGB8888_1X32, 4, 1, T_R16,
-+				RAW16, Y16I, "Y16I 32"),
-+	TEGRA_VIDEO_FORMAT(RAW16, 16, SGRBG16_1X16, 2, 1, T_R16,
-+				RAW16, RW16, "RW16 16"),
+@@ -179,6 +247,14 @@ static const struct tegra_video_format vi5_video_formats[] = {
+ 				RAW16, Y16I, "Y16I 32"),
+ 	TEGRA_VIDEO_FORMAT(RAW16, 16, SGRBG16_1X16, 2, 1, T_R16,
+ 				RAW16, RW16, "RW16 16"),
 +	TEGRA_VIDEO_FORMAT(RAW8, 8, RS_NV12_UD32_1X8, 1, 1, T_R8,
 +				USER_3, NV12, "YUV 4:2:0 NV12 UD32"),
 +	TEGRA_VIDEO_FORMAT(RAW12, 12, RS_Y12I_UDP8_4X8, 4, 1, T_R8,
@@ -272,6 +265,3 @@ index 4e50e780..186fdfa5 100644
  
  };
  
--- 
-2.34.1
-
