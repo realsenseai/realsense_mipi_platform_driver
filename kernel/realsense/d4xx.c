@@ -6208,6 +6208,8 @@ static int ds5_hw_init(struct i2c_client *c, struct ds5 *state)
 {
 	struct v4l2_subdev *sd = &state->mux.sd.subdev;
 	u16 mipi_status, n_lanes, phy, drate_min, drate_max;
+	u16 lane_rate;
+	u32 dt_lane_rate;
 	bool is_d58x = ds5_is_d58x(state);
 	int ret = ds5_read(state, DS5_MIPI_SUPPORT_LINES, &n_lanes);
 	if (!ret)
@@ -6223,6 +6225,35 @@ static int ds5_hw_init(struct i2c_client *c, struct ds5 *state)
 		dev_dbg(sd->dev, "%s(): %d: %u lanes, phy %x, data rate %u-%u\n",
 			 __func__, __LINE__, n_lanes, phy, drate_min, drate_max);
 
+	/*
+	 * Product defaults remain in-driver. A board/link overlay may request a
+	 * different input rate, but an explicit rate must match the FW-reported
+	 * capabilities so the camera and serializer cannot silently drift.
+	 */
+	lane_rate = is_d58x ? MIPI_LANE_RATE_HKR : MIPI_LANE_RATE_DS5;
+	if (sd->dev->of_node &&
+	    of_find_property(sd->dev->of_node, "mipi-lane-rate-mbps", NULL)) {
+		if (ret) {
+			dev_err(sd->dev,
+				"cannot validate DT MIPI lane rate: FW caps unavailable\n");
+			return ret;
+		}
+		ret = of_property_read_u32(sd->dev->of_node,
+					   "mipi-lane-rate-mbps", &dt_lane_rate);
+		if (ret) {
+			dev_err(sd->dev, "invalid mipi-lane-rate-mbps property\n");
+			return ret;
+		}
+		if (!dt_lane_rate || dt_lane_rate > U16_MAX ||
+		    dt_lane_rate < drate_min || dt_lane_rate > drate_max) {
+			dev_err(sd->dev,
+				"DT MIPI lane rate %u outside FW range %u-%u\n",
+				dt_lane_rate, drate_min, drate_max);
+			return -EINVAL;
+		}
+		lane_rate = dt_lane_rate;
+	}
+
 #ifdef CONFIG_TEGRA_CAMERA_PLATFORM
 	n_lanes = state->mux.sd.numlanes;
 #else
@@ -6230,13 +6261,11 @@ static int ds5_hw_init(struct i2c_client *c, struct ds5 *state)
 #endif
 
 	ret = ds5_write(state, DS5_MIPI_LANE_NUMS, n_lanes - 1);
-	if (!ret) {
-		if (is_d58x) {
-			ret = ds5_write(state, DS5_MIPI_LANE_DATARATE, MIPI_LANE_RATE_HKR);
-		} else {
-			ret = ds5_write(state, DS5_MIPI_LANE_DATARATE, MIPI_LANE_RATE_DS5);
-		}
-	}
+	if (!ret)
+		ret = ds5_write(state, DS5_MIPI_LANE_DATARATE, lane_rate);
+	if (!ret)
+		dev_info(sd->dev, "MIPI TX configured: %u lanes at %u Mbps/lane\n",
+			 n_lanes, lane_rate);
 
 	if (!ret && state->d58x_pixel_mode) {
 		/* Tell HKR FW the deserializer runs in PIXEL mode so it
