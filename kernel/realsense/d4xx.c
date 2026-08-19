@@ -2146,25 +2146,38 @@ static int serdes_get_ser_pipe_id(struct ds5 *state, int dser_pipe_id,
 static int ds5_setup_pipeline(struct ds5 *state, u8 data_type1, u8 data_type2,
 			      int pipe_id, u32 vc_id, int ser_vc_id)
 {
-	int ret = 0;
+	int ret;
 	/* ser_pipe_id depends on both the serializer and the deserializer
 	 * (see serdes_get_ser_pipe_id()). */
 	int ser_pipe_id = serdes_get_ser_pipe_id(state, pipe_id, ser_vc_id);
 
-	ret |= state->dser_ops->bind_ser_to_dser_pipe(state->dser_dev, pipe_id, ser_pipe_id,
-				state->gmsl_link);
+	ret = state->dser_ops->bind_ser_to_dser_pipe(state->dser_dev, pipe_id,
+						     ser_pipe_id, state->gmsl_link);
+	if (ret)
+		goto warn;
+
 	dev_dbg(&state->client->dev,
 			"set ser pipe %d, dser pipe %d, data_type1: 0x%x, data_type2: 0x%x, link: %u, ser_vc_id: %u, vc_id: %u\n",
 			ser_pipe_id, pipe_id, data_type1, data_type2, state->gmsl_link,
 			ser_vc_id, vc_id);
-	ret |= state->ser_ops->set_pipe(state->ser_dev, ser_pipe_id,
+	ret = state->ser_ops->set_pipe(state->ser_dev, ser_pipe_id,
 				data_type1, data_type2, ser_vc_id);
-	ret |= state->dser_ops->set_pipe(state->dser_dev, pipe_id,
-				data_type1, data_type2, state->gmsl_link, ser_vc_id);
 	if (ret)
-		dev_warn(&state->client->dev,
-			 "failed to set pipe %d, data_type1: 0x%x, data_type2: 0x%x, vc_id: %u\n",
-			 pipe_id, data_type1, data_type2, vc_id);
+		goto warn;
+
+	ret = state->dser_ops->set_pipe(state->dser_dev, pipe_id,
+				data_type1, data_type2, state->gmsl_link, ser_vc_id);
+	if (!ret)
+		return 0;
+
+	/* Keep serializer shared-VC accounting transactional with setup. */
+	if (state->ser_ops->stream_stop)
+		state->ser_ops->stream_stop(state->ser_dev, ser_vc_id);
+
+warn:
+	dev_warn(&state->client->dev,
+		 "failed to set pipe %d, data_type1: 0x%x, data_type2: 0x%x, vc_id: %u (%d)\n",
+		 pipe_id, data_type1, data_type2, vc_id, ret);
 
 	return ret;
 }
@@ -6170,6 +6183,9 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	bool ds5_config_done = !on; /* for stop, skip config */
 	bool reset_invalidated = false;
 	bool *streaming_flag = NULL;
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	bool serdes_pipe_configured = false;
+#endif
 	int cur_ds5 = atomic_read(ds5_get_reset_gen(state));
 
 	/* Lazy invalidation after HW or deserializer reset.
@@ -6333,6 +6349,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			}
 			ds5_config_done = true;
 #ifdef CONFIG_VIDEO_D4XX_SERDES
+			serdes_pipe_configured = true;
 			ds5_flush_idle_link(state);
 #endif
 		}
@@ -6415,6 +6432,9 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			} else {
 				sensor->pipe_id = PIPE_NOT_CONFIGURED;
 			}
+			if (serdes_pipe_configured && state->ser_ops->stream_stop)
+				state->ser_ops->stream_stop(state->ser_dev,
+							    vc_id % DS5_MAX_STREAMS);
 		}
 #endif
 		mutex_lock(&state->ds5_dev->lock);
