@@ -7,8 +7,9 @@ Sibling of depth_capture.py / color_capture.py for the IR stream
   --mode y8i  'Y8I' (16 bpp, two 8-bit IR images byte-interleaved L,R,L,R...)
   --mode y16i 'Y16I' (32 bpp, two 16-bit IR images pixel-interleaved
               L0,R0,L1,R1...; calibration mode, RSDSO-21787). Slots are
-              BIG-endian on the host (the Tegra RAW16 path byte-swaps 16-bit
-              samples) and only the low 12 bits carry Y12I data.
+              LITTLE-endian on the host (the per-format VI datatype override,
+              nvidia-oot 0013, captures the wire bytes as transmitted) and
+              only the low 12 bits carry Y12I data.
 
 Y8 renders as plain greyscale; Y8I/Y16I are deinterleaved into the left and
 right images and shown side-by-side. Drives V4L2 directly via ctypes+fcntl.ioctl
@@ -49,13 +50,11 @@ def render(mode, W, H, bpl, data=None, raw=None, png=None, display=False, pct=No
     rows = (len(b) // bpl) if bpl else H
     b = b[:rows * bpl].reshape(rows, bpl)
     if mode == "y16i":
-        # MSB-first: the Tegra VI T_R16 store byte-swaps 16-bit samples arriving
-        # on the CSI-2 RAW16 (DT 0x2E) carrier, so the slots are big-endian.
-        # Measured on fw-orin-5 at 1600x1300: '<u2' gives max=65280 and a
-        # left-plane mean |horizontal delta| of 802 (noise); '>u2' gives max=574
-        # and a delta of 3.1 (a real image). Same for the RGB RW16 calib
-        # surface -- see color_capture.py:_render_rw16.
-        p = b.view(">u2")                           # rows x (bpl/2) BE 16-bit pixels
+        # LITTLE-endian: the per-format VI datatype override (nvidia-oot
+        # 0013) captures the RAW16 payload byte-for-byte as the camera
+        # transmits it (LSB first), same as the RGB GR16 calib surface.
+        # (Pre-0013 drivers byte-swapped via the stock RAW16 rule -> '>u2'.)
+        p = b.view("<u2")                           # rows x (bpl/2) LE 16-bit pixels
         left, right = p[:, 0::2], p[:, 1::2]        # two HxW 16-bit images
         g = np.concatenate([left, right], axis=1)   # side-by-side: Hx(2W)
         desc = "y16i %dx%d 16bpp (left|right deinterleaved, each %dx%d)" % (g.shape[1], rows, left.shape[1], rows)

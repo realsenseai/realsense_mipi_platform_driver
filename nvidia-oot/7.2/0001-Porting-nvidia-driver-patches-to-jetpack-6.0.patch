@@ -969,21 +969,7 @@ diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/p
 index 69d76521..e23df865 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
 +++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-@@ -419,6 +419,13 @@ static void vi5_setup_surface(struct tegra_channel *chan,
- 		}
- 	}
- 
-+	/* Y16I: one 32bpp L/R column pair per V4L2 pixel.
-+	 * However, GMSL caps at 24bpp, so we alias it to RAW16, and the de-facto
-+	 * width should be double the requested size
-+	 */
-+	if (chan->fmtinfo->fourcc == V4L2_PIX_FMT_Y16I)
-+		width *= 2;
-+
- 	memcpy(desc, &capture_template, sizeof(capture_template));
- 	memset(desc_memoryinfo, 0, sizeof(*desc_memoryinfo));
- 
-@@ -463,6 +470,39 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+@@ -463,6 +463,39 @@ static void vi5_setup_surface(struct tegra_channel *chan,
  		chan->capture_descr_sequence += 1;
  }
  
@@ -1023,7 +1009,7 @@ index 69d76521..e23df865 100644
  static void vi5_release_buffer(struct tegra_channel *chan,
  	struct tegra_channel_buffer *buf)
  {
-@@ -478,6 +518,9 @@ static void vi5_release_buffer(struct tegra_channel *chan,
+@@ -478,6 +511,9 @@ static void vi5_release_buffer(struct tegra_channel *chan,
  	vb2_set_plane_payload(&vbuf->vb2_buf, 0, chan->format.sizeimage);
  
  	vb2_buffer_done(&vbuf->vb2_buf, buf->vb2_state);
@@ -1077,7 +1063,7 @@ index d0403936..c04ca61f 100644
  	TEGRA_VIDEO_FORMAT(YUV422, 16, UYVY8_2X8, 2, 1, T_U8_Y8__V8_Y8,
  				YUV422_8, UYVY, "YUV 4:2:2 UYVY"),
  	TEGRA_VIDEO_FORMAT(YUV422, 16, VYUY8_2X8, 2, 1, T_V8_Y8__U8_Y8,
-@@ -162,6 +164,22 @@ static const struct tegra_video_format vi5_video_formats[] = {
+@@ -162,6 +164,18 @@ static const struct tegra_video_format vi5_video_formats[] = {
  				YUV422_8, YUYV, "YUV 4:2:2 YUYV"),
  	TEGRA_VIDEO_FORMAT(YUV422, 16, YVYU8_2X8, 2, 1, T_Y8_V8__Y8_U8,
  				YUV422_8, YVYU, "YUV 4:2:2 YVYU"),
@@ -1092,10 +1078,6 @@ index d0403936..c04ca61f 100644
 +	// R[7:3]R[3:0] | L[3:0]R[11:8] | L[11:8]L[7:4] | ALIGN[7:0]
 +	TEGRA_VIDEO_FORMAT(RGB888, 24, RGB888_1X24, 4, 1, T_A8R8G8B8,
 +				RGB888, Y12I, "Y12I 24"),
-+	TEGRA_VIDEO_FORMAT(RAW16, 16, ARGB8888_1X32, 4, 1, T_R16,
-+				RAW16, Y16I, "Y16I 32"),
-+	TEGRA_VIDEO_FORMAT(RAW16, 16, SGRBG16_1X16, 2, 1, T_R16,
-+				RAW16, RW16, "RW16 16"),
 +
  };
  
