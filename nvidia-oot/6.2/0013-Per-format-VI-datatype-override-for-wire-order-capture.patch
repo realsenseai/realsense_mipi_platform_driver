@@ -1,0 +1,194 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ejgoldik <ehud.joseph.goldik@realsenseai.com>
+Date: Wed, 19 Aug 2026 11:00:00 +0300
+Subject: [PATCH] media: tegra: per-format VI datatype override for wire-order
+ capture
+
+Let a format-table row declare a datatype override and a transport
+geometry: the VI substitutes the row's dt_override for the incoming
+pixel datatype (matching must be disabled - dt_enable never matches a
+frame otherwise), pairs it with an explicit memory writer, and scales
+frame_x/frame_y and sizeimage by the row's wire-geometry fractions
+(frame_y_scale also grows the buffer, for flat transports whose
+transport rows exceed the V4L2 height).
+
+The D58x calibration streams (RGB GRBG10 as V4L2_PIX_FMT_SGRBG16
+'GR16', IR Y16I) transmit LSB-first RAW16, which the NVCSI RAW16 rule
+byte-swaps (CSI-2 defines RAW16 MSB-first); both rows override to
+YUV422-8 + T_Y8_U8__Y8_V8 for byte-identical little-endian capture, and
+Y16I declares frame_x_scale = 2/1 (32bpp L/R pair on a 16bpp wire),
+replacing the fourcc-gated width doubling formerly in the 0001 patches.
+The override fields are plain values so a row may pass 0 for "none".
+
+HW-verified (JP6.2, fw-orin-5, D585): GR16 30/30 clean frames, Y16I
+5/5, LE payload on both, coexists with concurrent embedded-metadata
+capture.
+
+Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
+---
+ drivers/media/platform/tegra/camera/vi/channel.c   | 13 +++++++++
+ drivers/media/platform/tegra/camera/vi/vi5_fops.c  | 27 ++++++++++++++++++
+ .../media/platform/tegra/camera/vi/vi5_formats.h   | 12 ++++++++
+ include/media/tegra_camera_core.h                  | 33 ++++++++++++++++++++++
+ 4 files changed, 85 insertions(+)
+
+diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
+index ac5e0e9..ebcde50 100644
+--- a/drivers/media/platform/tegra/camera/vi/channel.c
++++ b/drivers/media/platform/tegra/camera/vi/channel.c
+@@ -295,6 +295,13 @@ static void tegra_channel_update_format(struct tegra_channel *chan,
+ 
+ 	if (fourcc == V4L2_PIX_FMT_NV16)
+ 		chan->format.sizeimage *= 2;
++
++	/* Transport rows may exceed V4L2 rows (tegra_camera_core.h). */
++	if (chan->fmtinfo->frame_y_scale.numerator &&
++	    chan->fmtinfo->frame_y_scale.denominator)
++		chan->format.sizeimage = chan->format.sizeimage *
++			chan->fmtinfo->frame_y_scale.numerator /
++			chan->fmtinfo->frame_y_scale.denominator;
+ }
+ 
+ static void tegra_channel_fmts_bitmap_init(struct tegra_channel *chan)
+@@ -2129,6 +2136,12 @@ __tegra_channel_try_format(struct tegra_channel *chan,
+ 	if (chan->fmtinfo->fourcc == V4L2_PIX_FMT_NV16)
+ 		pix->sizeimage *= 2;
+ 
++	/* Transport rows may exceed V4L2 rows (tegra_camera_core.h). */
++	if (vfmt->frame_y_scale.numerator && vfmt->frame_y_scale.denominator)
++		pix->sizeimage = pix->sizeimage *
++			vfmt->frame_y_scale.numerator /
++			vfmt->frame_y_scale.denominator;
++
+ 	return ret;
+ }
+ 
+diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+index 487ea19..926939d 100644
+--- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
++++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+@@ -407,6 +407,19 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+ 		offset = buf->addr + chan->buffer_offset[1 - vi_port];
+ 	}
+ 
++	/* Rows may scale the transport geometry (tegra_camera_core.h):
++	 * frame_x/frame_y count wire pixels/rows, which can differ from the
++	 * V4L2 geometry (e.g. Y16I: 32bpp pixels on a 16bpp RAW16 wire).
++	 */
++	if (chan->fmtinfo->frame_x_scale.numerator &&
++	    chan->fmtinfo->frame_x_scale.denominator)
++		width = width * chan->fmtinfo->frame_x_scale.numerator /
++			chan->fmtinfo->frame_x_scale.denominator;
++	if (chan->fmtinfo->frame_y_scale.numerator &&
++	    chan->fmtinfo->frame_y_scale.denominator)
++		height = height * chan->fmtinfo->frame_y_scale.numerator /
++			chan->fmtinfo->frame_y_scale.denominator;
++
+ 	memcpy(desc, &capture_template, sizeof(capture_template));
+ 	memset(desc_memoryinfo, 0, sizeof(*desc_memoryinfo));
+ 
+@@ -420,6 +433,20 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+ 	desc->ch_cfg.pixfmt_enable = 1;
+ 	desc->ch_cfg.pixfmt.format = format;
+ 
++	/* Formats may declare a datatype override (tegra_camera_core.h) to
++	 * substitute the parsing rule for the incoming pixel packets.
++	 * DT matching must be disabled: dt_enable never matches a frame
++	 * with matching left on.
++	 */
++	if (chan->fmtinfo->dt_override) {
++		desc->ch_cfg.match.datatype = 0;
++		desc->ch_cfg.match.datatype_mask = 0;
++		desc->ch_cfg.dt_enable = 1;
++		desc->ch_cfg.dt_override = chan->fmtinfo->dt_override;
++		if (chan->fmtinfo->pixfmt_override)
++			desc->ch_cfg.pixfmt.format = chan->fmtinfo->pixfmt_override;
++	}
++
+ 	desc_memoryinfo->surface[0].base_address = offset;
+ 	desc_memoryinfo->surface[0].size = chan->format.bytesperline * height;
+ 	desc->ch_cfg.atomp.surface_stride[0] = bpl;
+diff --git a/drivers/media/platform/tegra/camera/vi/vi5_formats.h b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
+index 73c1d84..ee9dff6 100644
+--- a/drivers/media/platform/tegra/camera/vi/vi5_formats.h
++++ b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
+@@ -149,6 +149,18 @@ static const struct tegra_video_format vi5_video_formats[] = {
+ 	// R[7:3]R[3:0] | L[3:0]R[11:8] | L[11:8]L[7:4] | ALIGN[7:0]
+ 	TEGRA_VIDEO_FORMAT(RGB888, 24, RGB888_1X24, 4, 1, T_A8R8G8B8,
+ 				RGB888, Y12I, "Y12I 24"),
++	// D58x calib surfaces: LE 16-bit samples over RAW16, captured in wire
++	// byte order — the DT override bypasses the RAW16 rule's CSI-2
++	// MSB-first byte swap. Y16I is a 32bpp L/R pair riding a 16bpp wire,
++	// so its frame_x scale is 2 wire pixels per V4L2 pixel.
++	TEGRA_VIDEO_FORMAT_OVERRIDE(RAW16, 16, ARGB8888_1X32, 4, 1, T_R16,
++				RAW16, Y16I, "Y16I 32 LE",
++				TEGRA_IMAGE_DT_YUV422_8,
++				TEGRA_IMAGE_FORMAT_T_Y8_U8__Y8_V8, 2, 1, 1, 1),
++	TEGRA_VIDEO_FORMAT_OVERRIDE(RAW16, 16, SGRBG16_1X16, 2, 1, T_R16,
++				RAW16, SGRBG16, "GRBG16 16 LE",
++				TEGRA_IMAGE_DT_YUV422_8,
++				TEGRA_IMAGE_FORMAT_T_Y8_U8__Y8_V8, 1, 1, 1, 1),
+ 
+ };
+ 
+diff --git a/include/media/tegra_camera_core.h b/include/media/tegra_camera_core.h
+index a4c6978..a7394b7 100644
+--- a/include/media/tegra_camera_core.h
++++ b/include/media/tegra_camera_core.h
+@@ -102,6 +102,16 @@ struct tegra_frac {
+  * @img_dt: image data type
+  * @fourcc: V4L2 pixel format FCC identifier
+  * @description: format description, suitable for userspace
++ * @dt_override: if nonzero, capture with CSI DT matching disabled and this
++ *		datatype substituted for the incoming pixel datatype
++ * @pixfmt_override: VI memory format paired with @dt_override (0 = keep
++ *		@img_fmt)
++ * @frame_x_scale: wire pixels per V4L2 pixel as a fraction; scales the
++ *		capture descriptor frame_x (zero numerator or denominator =
++ *		no scaling)
++ * @frame_y_scale: transport rows per V4L2 row as a fraction; scales the
++ *		capture descriptor frame_y and surface size (zero numerator
++ *		or denominator = no scaling)
+  */
+ struct tegra_video_format {
+ 	enum tegra_vf_code vf_code;
+@@ -112,6 +122,10 @@ struct tegra_video_format {
+ 	enum tegra_image_dt img_dt;
+ 	u32 fourcc;
+ 	__u8 description[32];
++	u8 dt_override;
++	u8 pixfmt_override;
++	struct tegra_frac frame_x_scale;
++	struct tegra_frac frame_y_scale;
+ };
+ 
+ #define	TEGRA_VIDEO_FORMAT(VF_CODE, BPP, MBUS_CODE, FRAC_BPP_NUM,	\
+@@ -127,6 +141,25 @@ struct tegra_video_format {
+ 	DESCRIPTION,							\
+ }
+ 
++#define	TEGRA_VIDEO_FORMAT_OVERRIDE(VF_CODE, BPP, MBUS_CODE,		\
++	FRAC_BPP_NUM, FRAC_BPP_DEN, FORMAT, DATA_TYPE, FOURCC,		\
++	DESCRIPTION, DT_OVERRIDE, PIXFMT_OVERRIDE,			\
++	FRAME_X_NUM, FRAME_X_DEN, FRAME_Y_NUM, FRAME_Y_DEN)		\
++{									\
++	TEGRA_VF_##VF_CODE,						\
++	BPP,								\
++	MEDIA_BUS_FMT_##MBUS_CODE,					\
++	{FRAC_BPP_NUM, FRAC_BPP_DEN},					\
++	TEGRA_IMAGE_FORMAT_##FORMAT,					\
++	TEGRA_IMAGE_DT_##DATA_TYPE,					\
++	V4L2_PIX_FMT_##FOURCC,						\
++	DESCRIPTION,							\
++	DT_OVERRIDE,							\
++	PIXFMT_OVERRIDE,						\
++	{FRAME_X_NUM, FRAME_X_DEN},					\
++	{FRAME_Y_NUM, FRAME_Y_DEN},					\
++}
++
+ u32 tegra_core_get_word_count(unsigned int frame_width,
+ 		const struct tegra_video_format *fmt);
+ u32 tegra_core_bytes_per_line(unsigned int width, unsigned int align,
+-- 
+2.43.0
+
