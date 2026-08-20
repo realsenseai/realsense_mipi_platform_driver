@@ -1086,7 +1086,7 @@ diff --git a/include/media/gmsl-link.h b/include/media/gmsl-link.h
 index ad902d0a..7dce2356 100644
 --- a/include/media/gmsl-link.h
 +++ b/include/media/gmsl-link.h
-@@ -40,6 +40,10 @@
+@@ -40,6 +40,11 @@
  #define GMSL_CSI_DT_RAW_12 0x2C
  #define GMSL_CSI_DT_UED_U1 0x30
  #define GMSL_CSI_DT_EMBED 0x12
@@ -1094,6 +1094,7 @@ index ad902d0a..7dce2356 100644
 +#define GMSL_CSI_DT_RGB_888 0x24
 +#define GMSL_CSI_DT_RAW_8 0x2A
 +#define GMSL_CSI_DT_RAW_16 0x2E
++#define GMSL_CSI_DT_YUV420_8 0x18
  
  #define GMSL_ST_ID_UNUSED 0xFF
  

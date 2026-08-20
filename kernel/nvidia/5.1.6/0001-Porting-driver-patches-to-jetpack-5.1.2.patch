@@ -17,12 +17,12 @@ Signed-off-by: Dmitry Perchanov <dmitry.perchanov@intel.com>
  .../media/platform/tegra/camera/vi/vi5_fops.c | 132 +-
  .../platform/tegra/camera/vi/vi5_formats.h    |  28 -
  .../tegra/camera/tegra_camera_platform.c      |   5 +
- include/media/gmsl-link.h                     |   3 +
+ include/media/gmsl-link.h                     |   4 ++
  include/media/max9295.h                       |   4 +
  include/media/max9296.h                       |   8 +
  include/media/mc_common.h                     |  23 +
  include/media/tegra_camera_core.h             |   8 +
- 17 files changed, 1065 insertions(+), 29 deletions(-)
+ 17 files changed, 1066 insertions(+), 29 deletions(-)
 
 diff --git a/drivers/media/i2c/Kconfig b/drivers/media/i2c/Kconfig
 index 5ec3c683c..7f288faf7 100644
@@ -1402,7 +1402,7 @@ diff --git a/include/media/gmsl-link.h b/include/media/gmsl-link.h
 index 1eab7bac9..533f31eb8 100644
 --- a/include/media/gmsl-link.h
 +++ b/include/media/gmsl-link.h
-@@ -53,6 +53,10 @@
+@@ -53,6 +53,11 @@
  #define GMSL_CSI_DT_RAW_12 0x2C
  #define GMSL_CSI_DT_UED_U1 0x30
  #define GMSL_CSI_DT_EMBED 0x12
@@ -1410,6 +1410,7 @@ index 1eab7bac9..533f31eb8 100644
 +#define GMSL_CSI_DT_RGB_888 0x24
 +#define GMSL_CSI_DT_RAW_8 0x2A
 +#define GMSL_CSI_DT_RAW_16 0x2E
++#define GMSL_CSI_DT_YUV420_8 0x18
  
  #define GMSL_ST_ID_UNUSED 0xFF
  
