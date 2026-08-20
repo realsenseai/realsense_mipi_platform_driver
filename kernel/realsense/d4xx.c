@@ -2724,7 +2724,7 @@ static int ds5_hwmc_send(struct ds5 *state,
 }
 
 /* Caller must hold state->ds5_dev->lock. */
-static bool d5xx_camera_is_idle_locked(struct ds5 *state)
+static bool d500_camera_is_idle_locked(struct ds5 *state)
 {
 	return !state->ds5_dev->depth_streaming &&
 	       !state->ds5_dev->rgb_streaming &&
@@ -2732,7 +2732,7 @@ static bool d5xx_camera_is_idle_locked(struct ds5 *state)
 	       !state->ds5_dev->imu_streaming;
 }
 
-static int d5xx_get_device_mode(struct ds5 *state, u32 *mode)
+static int d500_get_device_mode(struct ds5 *state, u32 *mode)
 {
 	u8 value;
 	int ret;
@@ -2751,7 +2751,7 @@ static int d5xx_get_device_mode(struct ds5 *state, u32 *mode)
 	return 0;
 }
 
-static int d5xx_set_device_mode(struct ds5 *state, u32 mode)
+static int d500_set_device_mode(struct ds5 *state, u32 mode)
 {
 	u8 value;
 	int ret;
@@ -2761,7 +2761,7 @@ static int d5xx_set_device_mode(struct ds5 *state, u32 mode)
 	value = mode;
 
 	mutex_lock(&state->ds5_dev->lock);
-	if (!d5xx_camera_is_idle_locked(state)) {
+	if (!d500_camera_is_idle_locked(state)) {
 		ret = -EBUSY;
 	} else {
 		ret = ds5_raw_write(state, D500_DEVICE_MODE_XU_BASE,
@@ -2774,7 +2774,7 @@ static int d5xx_set_device_mode(struct ds5 *state, u32 mode)
 	return ret;
 }
 
-static int d5xx_get_ae_policy(struct ds5 *state, u32 *policy)
+static int d500_get_ae_policy(struct ds5 *state, u32 *policy)
 {
 	u8 value;
 	int ret;
@@ -2801,7 +2801,7 @@ static int d5xx_get_ae_policy(struct ds5 *state, u32 *policy)
 	return 0;
 }
 
-static int d5xx_set_ae_policy(struct ds5 *state, u32 policy)
+static int d500_set_ae_policy(struct ds5 *state, u32 policy)
 {
 	u8 value;
 	int ret;
@@ -2814,7 +2814,7 @@ static int d5xx_set_ae_policy(struct ds5 *state, u32 policy)
 	ret = (!state->ds5_dev->device_mode_valid ||
 	       state->ds5_dev->active_device_mode != D500_DEVICE_MODE_2C) ?
 		-EOPNOTSUPP : 0;
-	if (!ret && !d5xx_camera_is_idle_locked(state))
+	if (!ret && !d500_camera_is_idle_locked(state))
 		ret = -EBUSY;
 	if (!ret)
 		ret = ds5_raw_write(state, D500_DUAL_RGB_AE_XU_BASE,
@@ -2824,12 +2824,12 @@ static int d5xx_set_ae_policy(struct ds5 *state, u32 policy)
 	return ret;
 }
 
-static int d5xx_refresh_device_mode(struct ds5 *state, bool boot_mode)
+static int d500_refresh_device_mode(struct ds5 *state, bool boot_mode)
 {
 	u32 mode;
 	int ret;
 
-	ret = d5xx_get_device_mode(state, &mode);
+	ret = d500_get_device_mode(state, &mode);
 	mutex_lock(&state->ds5_dev->lock);
 	if (!ret) {
 		state->ds5_dev->configured_device_mode = mode;
@@ -3206,7 +3206,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 			state->ds5_dev->ds5_primary : state;
 		int mode_ret;
 
-		mode_ret = d5xx_refresh_device_mode(owner, true);
+		mode_ret = d500_refresh_device_mode(owner, true);
 		if (mode_ret)
 			dev_warn(&state->client->dev,
 				 "%s(): D58x device-mode refresh after HW reset failed (%d)\n",
@@ -3619,13 +3619,13 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 		if (state->is_depth &&
 		    READ_ONCE(state->ds5_dev->cached_device_type) ==
 			    DS5_DEVICE_TYPE_D58X)
-			ret = d5xx_set_device_mode(state, ctrl->val);
+			ret = d500_set_device_mode(state, ctrl->val);
 		break;
 	case DS5_CAMERA_CID_DUAL_RGB_AE_POLICY:
 		if (state->is_depth &&
 		    READ_ONCE(state->ds5_dev->cached_device_type) ==
 			    DS5_DEVICE_TYPE_D58X)
-			ret = d5xx_set_ae_policy(state, ctrl->val);
+			ret = d500_set_ae_policy(state, ctrl->val);
 		break;
 	case DS5_CAMERA_CID_PWM:
 		if (state->is_depth)
@@ -4078,7 +4078,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			    DS5_DEVICE_TYPE_D58X) {
 			u32 mode;
 
-			ret = d5xx_get_device_mode(state, &mode);
+			ret = d500_get_device_mode(state, &mode);
 			if (!ret) {
 				*ctrl->p_new.p_s32 = mode;
 				mutex_lock(&state->ds5_dev->lock);
@@ -4093,7 +4093,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			    DS5_DEVICE_TYPE_D58X) {
 			u32 policy;
 
-			ret = d5xx_get_ae_policy(state, &policy);
+			ret = d500_get_ae_policy(state, &policy);
 			if (!ret)
 				*ctrl->p_new.p_s32 = policy;
 		}
@@ -7216,7 +7216,7 @@ static void ds5_adjust_sync_mode_control(struct i2c_client *client, struct ds5 *
 	}
 }
 
-static void d5xx_adjust_device_mode_controls(struct i2c_client *client,
+static void d500_adjust_device_mode_controls(struct i2c_client *client,
 					     struct ds5 *state)
 {
 	int ret;
@@ -7226,7 +7226,7 @@ static void d5xx_adjust_device_mode_controls(struct i2c_client *client,
 		    DS5_DEVICE_TYPE_D58X)
 		return;
 
-	ret = d5xx_refresh_device_mode(state, true);
+	ret = d500_refresh_device_mode(state, true);
 	if (ret)
 		dev_warn(&client->dev,
 			 "%s(): failed to read D58x device mode; 2C AE Policy remains inactive (%d)\n",
@@ -7295,7 +7295,7 @@ static int ds5_v4l_init(struct i2c_client *c, struct ds5 *state)
 	/* Adjust sync_mode control range based on device type - must be done
 	 * after ds5_mux_init() creates the control */
 	ds5_adjust_sync_mode_control(c, state);
-	d5xx_adjust_device_mode_controls(c, state);
+	d500_adjust_device_mode_controls(c, state);
 
 	/* Adjust RGB ISP controls per SKU (e.g. hide AE Priority on D40X) -
 	 * must be done after ds5_mux_init() registered them. */
