@@ -500,6 +500,8 @@ struct ds5_ctrls {
 		struct v4l2_ctrl *query_sub_stream;
 		struct v4l2_ctrl *set_sub_stream;
 		struct v4l2_ctrl *sync_mode;
+		struct v4l2_ctrl *device_mode;
+		struct v4l2_ctrl *dual_rgb_ae_policy;
 		/* RGB-only ISP controls. Only ae_priority needs a stored
 		 * pointer because it must be disabled per-SKU after probe
 		 * (D40X/D401 does not support it). The remaining controls
@@ -665,6 +667,9 @@ struct ds5_dev {
 	/* Pointer to the primary DS5 struct */
 	struct ds5 *ds5_primary;
 	bool serdes_setup_complete;
+	int configured_device_mode;
+	int active_device_mode;
+	bool device_mode_valid;
 
 	bool depth_streaming;
 	bool ir_streaming;
@@ -2567,6 +2572,23 @@ enum ds5_sync_mode {
 
 /* Depth AE mode: single R/W control, maps to librealsense XU selector 0x11 */
 #define DS5_CAMERA_CID_AE_MODE		(DS5_CAMERA_CID_BASE+35)
+#define DS5_CAMERA_CID_DEVICE_MODE	(DS5_CAMERA_CID_BASE + 36)
+#define DS5_CAMERA_CID_DUAL_RGB_AE_POLICY (DS5_CAMERA_CID_BASE + 37)
+
+enum d500_device_mode {
+	D500_DEVICE_MODE_3C = 0,
+	D500_DEVICE_MODE_2C = 1,
+};
+
+enum d500_2c_ae_mode {
+	D500_2C_AE_POLICY_AUTO = 0,
+	D500_2C_AE_POLICY_DEPTH_MASTER = 1,
+	D500_2C_AE_POLICY_RGB_MASTER = 2,
+	D500_2C_AE_POLICY_HYBRID = 3,
+};
+
+#define D500_DEVICE_MODE_XU_BASE		0x4528
+#define D500_DUAL_RGB_AE_XU_BASE	0x4530
 
 /* Auto-exposure algorithm types — mirrors FW ETAeType */
 enum ds5_ae_type {
@@ -2699,6 +2721,133 @@ static int ds5_hwmc_send(struct ds5 *state,
 	ds5_write_with_check(state, DS5_HWMC_EXEC, 0x01); /* execute cmd */
 
 	return 0;
+}
+
+/* Caller must hold state->ds5_dev->lock. */
+static bool d5xx_camera_is_idle_locked(struct ds5 *state)
+{
+	return !state->ds5_dev->depth_streaming &&
+	       !state->ds5_dev->rgb_streaming &&
+	       !state->ds5_dev->ir_streaming &&
+	       !state->ds5_dev->imu_streaming;
+}
+
+static int d5xx_get_device_mode(struct ds5 *state, u32 *mode)
+{
+	u8 value;
+	int ret;
+
+	if (!mode)
+		return -EINVAL;
+
+	ret = ds5_raw_read(state, D500_DEVICE_MODE_XU_BASE,
+			   &value, sizeof(value));
+	if (ret)
+		return ret;
+	if (value > D500_DEVICE_MODE_2C)
+		return -EBADMSG;
+
+	*mode = value;
+	return 0;
+}
+
+static int d5xx_set_device_mode(struct ds5 *state, u32 mode)
+{
+	u8 value;
+	int ret;
+
+	if (mode > D500_DEVICE_MODE_2C)
+		return -EINVAL;
+	value = mode;
+
+	mutex_lock(&state->ds5_dev->lock);
+	if (!d5xx_camera_is_idle_locked(state)) {
+		ret = -EBUSY;
+	} else {
+		ret = ds5_raw_write(state, D500_DEVICE_MODE_XU_BASE,
+				    &value, sizeof(value));
+		if (!ret)
+			state->ds5_dev->configured_device_mode = mode;
+	}
+	mutex_unlock(&state->ds5_dev->lock);
+
+	return ret;
+}
+
+static int d5xx_get_ae_policy(struct ds5 *state, u32 *policy)
+{
+	u8 value;
+	int ret;
+
+	if (!policy)
+		return -EINVAL;
+
+	mutex_lock(&state->ds5_dev->lock);
+	ret = (!state->ds5_dev->device_mode_valid ||
+	       state->ds5_dev->active_device_mode != D500_DEVICE_MODE_2C) ?
+		-EOPNOTSUPP : 0;
+	mutex_unlock(&state->ds5_dev->lock);
+	if (ret)
+		return ret;
+
+	ret = ds5_raw_read(state, D500_DUAL_RGB_AE_XU_BASE,
+			   &value, sizeof(value));
+	if (ret)
+		return ret;
+	if (value > D500_2C_AE_POLICY_HYBRID)
+		return -EBADMSG;
+
+	*policy = value;
+	return 0;
+}
+
+static int d5xx_set_ae_policy(struct ds5 *state, u32 policy)
+{
+	u8 value;
+	int ret;
+
+	if (policy > D500_2C_AE_POLICY_HYBRID)
+		return -EINVAL;
+	value = policy;
+
+	mutex_lock(&state->ds5_dev->lock);
+	ret = (!state->ds5_dev->device_mode_valid ||
+	       state->ds5_dev->active_device_mode != D500_DEVICE_MODE_2C) ?
+		-EOPNOTSUPP : 0;
+	if (!ret && !d5xx_camera_is_idle_locked(state))
+		ret = -EBUSY;
+	if (!ret)
+		ret = ds5_raw_write(state, D500_DUAL_RGB_AE_XU_BASE,
+				    &value, sizeof(value));
+	mutex_unlock(&state->ds5_dev->lock);
+
+	return ret;
+}
+
+static int d5xx_refresh_device_mode(struct ds5 *state, bool boot_mode)
+{
+	u32 mode;
+	int ret;
+
+	ret = d5xx_get_device_mode(state, &mode);
+	mutex_lock(&state->ds5_dev->lock);
+	if (!ret) {
+		state->ds5_dev->configured_device_mode = mode;
+		if (boot_mode)
+			state->ds5_dev->active_device_mode = mode;
+		state->ds5_dev->device_mode_valid = true;
+	} else if (boot_mode) {
+		state->ds5_dev->device_mode_valid = false;
+	}
+	mutex_unlock(&state->ds5_dev->lock);
+
+	if (state->ctrls.dual_rgb_ae_policy) {
+		const bool active = !ret && mode == D500_DEVICE_MODE_2C;
+
+		v4l2_ctrl_activate(state->ctrls.dual_rgb_ae_policy, active);
+	}
+
+	return ret;
 }
 
 static int ds5_set_calibration_data(struct ds5 *state,
@@ -3050,6 +3199,18 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 			dev_warn(&state->client->dev,
 				"%s(): serializer ESYNC %s after HW reset failed (%d)\n",
 				__func__, need_esync ? "enable" : "disable", ret);
+	}
+
+	if (dev_type == DS5_DEVICE_TYPE_D58X) {
+		struct ds5 *owner = state->ds5_dev->ds5_primary ?
+			state->ds5_dev->ds5_primary : state;
+		int mode_ret;
+
+		mode_ret = d5xx_refresh_device_mode(owner, true);
+		if (mode_ret)
+			dev_warn(&state->client->dev,
+				 "%s(): D58x device-mode refresh after HW reset failed (%d)\n",
+				 __func__, mode_ret);
 	}
 
 	WRITE_ONCE(state->ds5_dev->last_reset_jiffies, jiffies);
@@ -3453,6 +3614,18 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 				ret = ds5_set_ser_esync_tunneling(state, need_esync);
 			}
 		}
+		break;
+	case DS5_CAMERA_CID_DEVICE_MODE:
+		if (state->is_depth &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X)
+			ret = d5xx_set_device_mode(state, ctrl->val);
+		break;
+	case DS5_CAMERA_CID_DUAL_RGB_AE_POLICY:
+		if (state->is_depth &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X)
+			ret = d5xx_set_ae_policy(state, ctrl->val);
 		break;
 	case DS5_CAMERA_CID_PWM:
 		if (state->is_depth)
@@ -3899,6 +4072,32 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		if (state->is_depth)
 			ds5_read(state, base | DS5_CAMERA_SYNC_MODE, ctrl->p_new.p_u16);
 		break;
+	case DS5_CAMERA_CID_DEVICE_MODE:
+		if (state->is_depth && ctrl->p_new.p_s32 &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X) {
+			u32 mode;
+
+			ret = d5xx_get_device_mode(state, &mode);
+			if (!ret) {
+				*ctrl->p_new.p_s32 = mode;
+				mutex_lock(&state->ds5_dev->lock);
+				state->ds5_dev->configured_device_mode = mode;
+				mutex_unlock(&state->ds5_dev->lock);
+			}
+		}
+		break;
+	case DS5_CAMERA_CID_DUAL_RGB_AE_POLICY:
+		if (state->is_depth && ctrl->p_new.p_s32 &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X) {
+			u32 policy;
+
+			ret = d5xx_get_ae_policy(state, &policy);
+			if (!ret)
+				*ctrl->p_new.p_s32 = policy;
+		}
+		break;
 	case DS5_CAMERA_CID_PWM:
 		if (state->is_depth)
 			ds5_read(state, base | DS5_PWM_FREQUENCY, ctrl->p_new.p_u16);
@@ -4251,6 +4450,42 @@ static const struct v4l2_ctrl_config ds5_ctrl_error_code = {
 	.flags = DS5_READ_ONLY_TELEMETRY_FLAGS,
 };
 
+static const char * const d58x_device_mode_menu[] = {
+	[D500_DEVICE_MODE_3C] = "3C",
+	[D500_DEVICE_MODE_2C] = "2C",
+};
+
+static const struct v4l2_ctrl_config ds5_ctrl_device_mode_d58x = {
+	.ops = &ds5_ctrl_ops,
+	.id = DS5_CAMERA_CID_DEVICE_MODE,
+	.name = "Device Mode",
+	.type = V4L2_CTRL_TYPE_MENU,
+	.min = D500_DEVICE_MODE_3C,
+	.max = D500_DEVICE_MODE_2C,
+	.def = D500_DEVICE_MODE_3C,
+	.qmenu = d58x_device_mode_menu,
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
+static const char * const d58x_ae_policy_menu[] = {
+	[D500_2C_AE_POLICY_AUTO] = "Auto",
+	[D500_2C_AE_POLICY_DEPTH_MASTER] = "Depth Master",
+	[D500_2C_AE_POLICY_RGB_MASTER] = "RGB Master",
+	[D500_2C_AE_POLICY_HYBRID] = "Hybrid",
+};
+
+static const struct v4l2_ctrl_config ds5_ctrl_dual_rgb_ae_policy_d58x = {
+	.ops = &ds5_ctrl_ops,
+	.id = DS5_CAMERA_CID_DUAL_RGB_AE_POLICY,
+	.name = "2C AE Policy",
+	.type = V4L2_CTRL_TYPE_MENU,
+	.min = D500_2C_AE_POLICY_AUTO,
+	.max = D500_2C_AE_POLICY_HYBRID,
+	.def = D500_2C_AE_POLICY_DEPTH_MASTER,
+	.qmenu = d58x_ae_policy_menu,
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
 static const struct v4l2_ctrl_config ds5_ctrl_pwm = {
 	.ops = &ds5_ctrl_ops,
 	.id = DS5_CAMERA_CID_PWM,
@@ -4317,6 +4552,9 @@ static void ds5_init_ds5_dev(struct ds5 *state, struct ds5_dev *ds5_dev)
 	ds5_dev->ds5_primary = state;
 	ds5_dev->serdes_setup_complete = false;
 	ds5_dev->cached_device_type = DS5_DEVICE_TYPE_UNKNOWN;
+	ds5_dev->configured_device_mode = D500_DEVICE_MODE_3C;
+	ds5_dev->active_device_mode = D500_DEVICE_MODE_3C;
+	ds5_dev->device_mode_valid = false;
 	mutex_unlock(&ds5_dev->lock);
 	ds5_reset_streaming_flags(ds5_dev);
 }
@@ -5222,6 +5460,15 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 	if (sid == DEPTH_SID) {
 		ctrls->sync_mode = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_sync_mode, sensor);
 		if (is_d58x) {
+			ctrls->device_mode =
+				v4l2_ctrl_new_custom(hdl, &ds5_ctrl_device_mode_d58x,
+						     sensor);
+			ctrls->dual_rgb_ae_policy =
+				v4l2_ctrl_new_custom(hdl,
+						     &ds5_ctrl_dual_rgb_ae_policy_d58x,
+						     sensor);
+			if (ctrls->dual_rgb_ae_policy)
+				v4l2_ctrl_activate(ctrls->dual_rgb_ae_policy, false);
 			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_visual_preset, sensor);
 			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_soc_pvt_temperature,
 					     sensor);
@@ -6969,6 +7216,23 @@ static void ds5_adjust_sync_mode_control(struct i2c_client *client, struct ds5 *
 	}
 }
 
+static void d5xx_adjust_device_mode_controls(struct i2c_client *client,
+					     struct ds5 *state)
+{
+	int ret;
+
+	if (!state->ctrls.device_mode ||
+	    READ_ONCE(state->ds5_dev->cached_device_type) !=
+		    DS5_DEVICE_TYPE_D58X)
+		return;
+
+	ret = d5xx_refresh_device_mode(state, true);
+	if (ret)
+		dev_warn(&client->dev,
+			 "%s(): failed to read D58x device mode; 2C AE Policy remains inactive (%d)\n",
+			 __func__, ret);
+}
+
 /* Per-SKU adjustment of the RGB ISP controls registered in ds5_ctrl_init().
  * Must be called after ds5_mux_init() so DS5_DEVICE_TYPE is populated. The
  * controls themselves are registered unconditionally so callers do not race
@@ -7031,6 +7295,7 @@ static int ds5_v4l_init(struct i2c_client *c, struct ds5 *state)
 	/* Adjust sync_mode control range based on device type - must be done
 	 * after ds5_mux_init() creates the control */
 	ds5_adjust_sync_mode_control(c, state);
+	d5xx_adjust_device_mode_controls(c, state);
 
 	/* Adjust RGB ISP controls per SKU (e.g. hide AE Priority on D40X) -
 	 * must be done after ds5_mux_init() registered them. */
