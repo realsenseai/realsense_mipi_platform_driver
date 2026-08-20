@@ -8,29 +8,30 @@ Let a format-table row declare a datatype override and a transport
 geometry: the VI substitutes the row's dt_override for the incoming
 pixel datatype (matching must be disabled - dt_enable never matches a
 frame otherwise), pairs it with an explicit memory writer, and scales
-frame_x/frame_y and sizeimage by the row's wire-geometry fractions
-(frame_y_scale also grows the buffer, for flat transports whose
-transport rows exceed the V4L2 height).
+frame_x/frame_y and sizeimage by the row's wire-geometry fractions.
 
-The D58x calibration streams (RGB GRBG10 as V4L2_PIX_FMT_SGRBG16
-'GR16', IR Y16I) transmit LSB-first RAW16, which the NVCSI RAW16 rule
-byte-swaps (CSI-2 defines RAW16 MSB-first); both rows override to
-YUV422-8 + T_Y8_U8__Y8_V8 for byte-identical little-endian capture, and
-Y16I declares frame_x_scale = 2/1 (32bpp L/R pair on a 16bpp wire),
-replacing the fourcc-gated width doubling formerly in the 0001 patches.
-The override fields are plain values so a row may pass 0 for "none".
+Three rows use it. The D58x calibration streams (RGB GRBG10 as
+V4L2_PIX_FMT_SGRBG16 'GR16', IR Y16I) transmit LSB-first RAW16, which
+the NVCSI RAW16 rule byte-swaps (CSI-2 defines RAW16 MSB-first); both
+override to YUV422-8 + T_Y8_U8__Y8_V8 for byte-identical little-endian
+capture, and Y16I declares frame_x_scale = 2/1 (32bpp L/R pair on a
+16bpp wire), replacing the fourcc-gated width doubling formerly in the
+0001 patches. Flat NV12 rides a RAW8 wire carrier with native matching (a
+geometry-only row; the MAX96717 pixel pipe forwards standard 8-bit DTs but drops user-defined ones) and
+frame_y_scale = 3/2 transport rows, replacing the per-format special
+cases of the earlier flat-NV12 receive path.
 
 HW-verified (JP6.2, fw-orin-5, D585): GR16 30/30 clean frames, Y16I
 5/5, LE payload on both, coexists with concurrent embedded-metadata
-capture.
+capture; NV12 10/10 @640x360 and 5/5 @1280x720, exact 1.5*bpl*H frames.
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
  drivers/media/platform/tegra/camera/vi/channel.c   | 13 +++++++++
  drivers/media/platform/tegra/camera/vi/vi5_fops.c  | 27 ++++++++++++++++++
- .../media/platform/tegra/camera/vi/vi5_formats.h   | 12 ++++++++
+ .../media/platform/tegra/camera/vi/vi5_formats.h   | 17 +++++++++++
  include/media/tegra_camera_core.h                  | 33 ++++++++++++++++++++++
- 4 files changed, 85 insertions(+)
+ 4 files changed, 90 insertions(+)
 
 diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
 index da4a1c7..6c85c27 100644
@@ -109,10 +110,10 @@ index e59a1c5..9c00f7c 100644
  	desc_memoryinfo->surface[0].size = chan->format.bytesperline * height;
  	desc->ch_cfg.atomp.surface_stride[0] = bpl;
 diff --git a/drivers/media/platform/tegra/camera/vi/vi5_formats.h b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
-index bcd612f..53f0f07 100644
+index bcd612f..e0a73a7 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi5_formats.h
 +++ b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
-@@ -175,6 +175,18 @@ static const struct tegra_video_format vi5_video_formats[] = {
+@@ -175,6 +175,23 @@ static const struct tegra_video_format vi5_video_formats[] = {
  	// R[7:3]R[3:0] | L[3:0]R[11:8] | L[11:8]L[7:4] | ALIGN[7:0]
  	TEGRA_VIDEO_FORMAT(RGB888, 24, RGB888_1X24, 4, 1, T_A8R8G8B8,
  				RGB888, Y12I, "Y12I 24"),
@@ -128,6 +129,11 @@ index bcd612f..53f0f07 100644
 +				RAW16, SGRBG16, "GRBG16 16 LE",
 +				TEGRA_IMAGE_DT_YUV422_8,
 +				TEGRA_IMAGE_FORMAT_T_Y8_U8__Y8_V8, 1, 1, 1, 1),
++	// Flat NV12 bytes over a RAW8 wire carrier: native match and byte
++	// rule, one byte per wire pixel. Transport rows = H * 3/2.
++	TEGRA_VIDEO_FORMAT_OVERRIDE(RAW8, 8, RS_NV12_FLAT_1X8, 1, 1, T_R8,
++				RAW8, NV12, "NV12 flat over RAW8",
++				0, 0, 1, 1, 3, 2),
  
  };
  

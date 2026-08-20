@@ -2,15 +2,14 @@
 """Pure-Python V4L2 MMAP capture for a D4XX CSI color video node.
 
 Sibling of depth_capture.py / ir_capture.py for the VC1 color stream. Three modes:
-  --mode nv12  'NV12' (16 bpp on the wire) produced by, e.g.:
-                   csitest -f nv12 -o yuyv -W 1280 -H 720 --fps 30 --vc 1 -n 60
-               The camera's source pattern is NV12 but it is emitted as YUYV on
-               the CSI bus, so the node carries YUYV 4:2:2 (16 bpp, 2560 B/line
-               at 1280 wide) and is decoded as YUYV->RGB (BT.601). NOTE the
-               D58x *product* color node does not advertise NV12 - use --mode
-               yuyv there.
-  --mode yuyv  'YUYV' 4:2:2 as advertised by the product color node; same
-               decode path as nv12.
+  --mode nv12  'NV12' (12 bpp, bi-planar Y + interleaved UV) as delivered by
+               the D58x product color node: HKR emits the flat NV12 bytes over
+               a RAW8 CSI carrier and the per-format VI row (nvidia-oot 0013,
+               frame_y_scale = 3/2) captures them byte-identical. The buffer is
+               W x 1.5H bytes (Y plane, then the half-height UV plane); decoded
+               NV12 -> RGB (BT.601). (The legacy csitest VPG "NV12" node
+               carried YUYV bytes and used the YUYV decode - not this mode.)
+  --mode yuyv  'YUYV' 4:2:2 as advertised by the product color node.
   --mode gr16  'GR16' (V4L2_PIX_FMT_SGRBG16) RGB *calibration* surface,
                RSDSO-21787. HKR ISYS emits unpacked GRBG10: one little-endian
                10-bit Bayer sample per 16-bit container, carried over CSI-2
@@ -30,7 +29,7 @@ script only adds the color pixel formats and their render paths.
 
 Examples
 --------
-  ./color_capture.py --mode nv12 --dev /dev/video-rs-color-0 -W 1280 -H 720 --display
+  ./color_capture.py --mode nv12 -W 1280 -H 720 --png c.png        # D58x product NV12
   ./color_capture.py --mode yuyv -W 1280 -H 720 --png c.png       # D58x product color
 
   ./color_capture.py --mode gr16 -W 1600 -H 1300 --png calib.png   # D58x RGB calib (LE)
@@ -41,11 +40,36 @@ import argparse, sys
 
 from v4l2_capture import capture, show, fourcc
 
-PIX_FMT_NV12 = fourcc(b"NV12")   # csitest color node: 16 bpp, YUYV bytes on the wire
+PIX_FMT_NV12 = fourcc(b"NV12")   # product color node: 12 bpp bi-planar, flat over RAW8
 PIX_FMT_YUYV = fourcc(b"YUYV")   # product color node: YUYV 4:2:2, 16 bpp
 PIX_FMT_GR16 = fourcc(b"GR16")   # RGB calib: 16 bpp, GRBG10 in LE 16-bit words
 MODES = {"nv12": PIX_FMT_NV12, "yuyv": PIX_FMT_YUYV, "gr16": PIX_FMT_GR16}
-BPP = {"nv12": 2, "yuyv": 2, "gr16": 2}          # bytes per V4L2 pixel
+BPP = {"nv12": 1, "yuyv": 2, "gr16": 2}          # bytes per line / width
+ROWS_SCALE = {"nv12": (3, 2)}                    # buffer rows per V4L2 row
+
+
+def _render_nv12(rows, b, png):
+    """Decode a bi-planar NV12 frame (rows = 1.5 * H) to RGB (BT.601).
+
+    b is (1.5H, W) bytes: H rows of Y, then H/2 rows of interleaved U,V.
+    Chroma is upsampled 2x2 to full resolution."""
+    import numpy as np
+    from PIL import Image
+    H = rows * 2 // 3
+    W = b.shape[1]
+    Y = b[:H].astype(np.float32)
+    uv = b[H:H + H // 2]
+    U = np.repeat(np.repeat(uv[:, 0::2], 2, axis=0), 2, axis=1)[:H, :W].astype(np.float32) - 128
+    V = np.repeat(np.repeat(uv[:, 1::2], 2, axis=0), 2, axis=1)[:H, :W].astype(np.float32) - 128
+    R = Y + 1.402 * V
+    G = Y - 0.344136 * U - 0.714136 * V
+    B = Y + 1.772 * U
+    rgb = np.clip(np.stack([R, G, B], axis=-1), 0, 255).astype(np.uint8)
+    drows = [r for r in range(rows) if b[r].any()]
+    print("nv12->rgb %dx%d (Y %d rows + UV %d rows) data_rows=%d (%s..%s)%s"
+          % (W, H, H, H // 2, len(drows), drows[0] if drows else "-",
+             drows[-1] if drows else "-", (" -> " + png) if png else ""))
+    return rgb, Image.fromarray(rgb, "RGB"), W, H
 
 
 def _render_yuyv(rows, b, png):
@@ -120,6 +144,8 @@ def render(mode, rows, bpl, data=None, raw=None, png=None, display=False, pct=No
     b = b[:rows * bpl].reshape(rows, bpl)
     if mode == "gr16":
         rgb, img, w, h = _render_gr16(rows, b, png, pct)
+    elif mode == "nv12":
+        rgb, img, w, h = _render_nv12(rows, b, png)
     else:
         rgb, img, w, h = _render_yuyv(rows, b, png)
     if png:
@@ -133,9 +159,9 @@ def main():
         description="Pure-Python V4L2 capture + render (color node: NV12/YUYV or GR16 RGB calib)")
     ap.add_argument("--dev", default="/dev/video-rs-color-0")
     ap.add_argument("--mode", choices=("nv12", "yuyv", "gr16"), default="nv12",
-                    help="nv12=csitest NV12 node carrying YUYV 16bpp, yuyv=product color "
-                         "node YUYV 4:2:2, gr16=GR16 GRBG10-in-16-bit RGB calibration "
-                         "surface, little-endian (default nv12)")
+                    help="nv12=bi-planar NV12 12bpp (flat over RAW8), yuyv=YUYV 4:2:2, "
+                         "gr16=GR16 GRBG10-in-16-bit RGB calibration surface, "
+                         "little-endian (default nv12)")
     ap.add_argument("-W", "--width", type=int, default=1280)
     ap.add_argument("-H", "--height", type=int, default=720)
     ap.add_argument("--frames", type=int, default=90, help="max frames to dequeue while waiting for data (~3s @30fps)")
@@ -152,9 +178,9 @@ def main():
     if a.render_only:
         if not a.raw or not (a.png or a.display):
             sys.exit("--render-only needs --raw (input) and at least one of --png / --display")
-        # both modes are 16 bpp: pixel width == --width, bytesperline == width*2
-        render(a.mode, a.height, a.width * BPP[a.mode], raw=a.raw, png=a.png,
-               display=a.display, pct=a.pct)
+        n, d = ROWS_SCALE.get(a.mode, (1, 1))
+        render(a.mode, a.height * n // d, a.width * BPP[a.mode], raw=a.raw,
+               png=a.png, display=a.display, pct=a.pct)
         return
     W, H, bpl, size, frame = capture(a.dev, a.width, a.height, MODES[a.mode], a.frames, a.save_index, a.raw)
     # render using the negotiated geometry
