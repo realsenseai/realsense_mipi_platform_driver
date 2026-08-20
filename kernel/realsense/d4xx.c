@@ -2572,8 +2572,8 @@ enum ds5_sync_mode {
 
 /* Depth AE mode: single R/W control, maps to librealsense XU selector 0x11 */
 #define DS5_CAMERA_CID_AE_MODE		(DS5_CAMERA_CID_BASE+35)
-#define DS5_CAMERA_CID_DEVICE_MODE	(DS5_CAMERA_CID_BASE + 36)
-#define DS5_CAMERA_CID_DUAL_RGB_AE_POLICY (DS5_CAMERA_CID_BASE + 37)
+#define D500_CAMERA_CID_DEVICE_MODE	(DS5_CAMERA_CID_BASE + 36)
+#define D500_CAMERA_CID_DUAL_RGB_AE_POLICY (DS5_CAMERA_CID_BASE + 37)
 
 enum d500_device_mode {
 	D500_DEVICE_MODE_3C = 0,
@@ -3615,13 +3615,13 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			}
 		}
 		break;
-	case DS5_CAMERA_CID_DEVICE_MODE:
+	case D500_CAMERA_CID_DEVICE_MODE:
 		if (state->is_depth &&
 		    READ_ONCE(state->ds5_dev->cached_device_type) ==
 			    DS5_DEVICE_TYPE_D58X)
 			ret = d500_set_device_mode(state, ctrl->val);
 		break;
-	case DS5_CAMERA_CID_DUAL_RGB_AE_POLICY:
+	case D500_CAMERA_CID_DUAL_RGB_AE_POLICY:
 		if (state->is_depth &&
 		    READ_ONCE(state->ds5_dev->cached_device_type) ==
 			    DS5_DEVICE_TYPE_D58X)
@@ -4072,7 +4072,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		if (state->is_depth)
 			ds5_read(state, base | DS5_CAMERA_SYNC_MODE, ctrl->p_new.p_u16);
 		break;
-	case DS5_CAMERA_CID_DEVICE_MODE:
+	case D500_CAMERA_CID_DEVICE_MODE:
 		if (state->is_depth && ctrl->p_new.p_s32 &&
 		    READ_ONCE(state->ds5_dev->cached_device_type) ==
 			    DS5_DEVICE_TYPE_D58X) {
@@ -4087,7 +4087,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			}
 		}
 		break;
-	case DS5_CAMERA_CID_DUAL_RGB_AE_POLICY:
+	case D500_CAMERA_CID_DUAL_RGB_AE_POLICY:
 		if (state->is_depth && ctrl->p_new.p_s32 &&
 		    READ_ONCE(state->ds5_dev->cached_device_type) ==
 			    DS5_DEVICE_TYPE_D58X) {
@@ -4457,7 +4457,7 @@ static const char * const d58x_device_mode_menu[] = {
 
 static const struct v4l2_ctrl_config ds5_ctrl_device_mode_d58x = {
 	.ops = &ds5_ctrl_ops,
-	.id = DS5_CAMERA_CID_DEVICE_MODE,
+	.id = D500_CAMERA_CID_DEVICE_MODE,
 	.name = "Device Mode",
 	.type = V4L2_CTRL_TYPE_MENU,
 	.min = D500_DEVICE_MODE_3C,
@@ -4476,7 +4476,7 @@ static const char * const d58x_ae_policy_menu[] = {
 
 static const struct v4l2_ctrl_config ds5_ctrl_dual_rgb_ae_policy_d58x = {
 	.ops = &ds5_ctrl_ops,
-	.id = DS5_CAMERA_CID_DUAL_RGB_AE_POLICY,
+	.id = D500_CAMERA_CID_DUAL_RGB_AE_POLICY,
 	.name = "2C AE Policy",
 	.type = V4L2_CTRL_TYPE_MENU,
 	.min = D500_2C_AE_POLICY_AUTO,
