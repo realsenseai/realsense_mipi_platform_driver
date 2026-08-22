@@ -94,6 +94,8 @@
 							vc-id = <1>;
 							port-index = <2>;
 							bus-width = <4>;
+							realsense,d5xx-vc-mux-source-id = <2>;
+							realsense,d5xx-vc-mux-owner-channel = <1>;
 							remote-endpoint = <&d5xx_csi_out1>;
 						};
 					};
@@ -133,6 +135,8 @@
 							vc-id = <1>;
 							port-index = <2>;
 							bus-width = <4>;
+							realsense,d5xx-vc-mux-source-id = <4>;
+							realsense,d5xx-vc-mux-owner-channel = <1>;
 							remote-endpoint = <&d5xx_csi_out4>;
 						};
 					};
