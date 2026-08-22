@@ -143,6 +143,10 @@ struct ser_interface {
 /* GVD response payload size per product line */
 #define DS5_GVD_LEN_D4XX		276
 #define DS5_GVD_LEN_D5XX		606
+#define D585_DUAL_RGB_PID		0x0C07
+#define D5XX_DUAL_RGB_MAX_OUTPUT_FPS	30
+/* 4-byte HWM opcode + 8-byte GVD header + skuComponent + USBVID. */
+#define D5XX_GVD_USB_PID_OFFSET		0x12
 
 #define DS5_MIPI_LANE_NUMS		0x0400
 #define DS5_MIPI_LANE_DATARATE		0x0402
@@ -153,11 +157,13 @@ struct ser_interface {
 #define DS5_DEPTH_STREAM_STATUS		0x1004
 #define DS5_RGB_STREAM_STATUS		0x1008
 #define DS5_IMU_STREAM_STATUS		0x100C
+#define D5XX_DUALRGB_RIGHT_STREAM_STATUS	0x1010
 #define DS5_IR_STREAM_STATUS		0x1014
 
 #define DS5_STREAM_DEPTH		0x0
 #define DS5_STREAM_RGB			0x1
 #define DS5_STREAM_IMU			0x2
+#define D5XX_STREAM_DUALRGB_RIGHT	0x3
 #define DS5_STREAM_IR			0x4
 #define DS5_STREAM_STOP			0x100
 #define DS5_STREAM_START		0x200
@@ -179,6 +185,14 @@ struct ser_interface {
 #define DS5_RGB_FPS				0x402C
 #define DS5_RGB_CONTROL_STATUS 	0x402E
 #define DS5_RGB_OVERRIDE		0x403C
+
+#define D5XX_DUALRGB_RIGHT_STREAM_DT	0x4060
+#define D5XX_DUALRGB_RIGHT_STREAM_MD	0x4062
+#define D5XX_DUALRGB_RIGHT_RES_WIDTH	0x4064
+#define D5XX_DUALRGB_RIGHT_RES_HEIGHT	0x4068
+#define D5XX_DUALRGB_RIGHT_FPS		0x406C
+#define D5XX_DUALRGB_RIGHT_OVERRIDE	0x407C
+#define D5XX_DUALRGB_RIGHT_CONTROL_STATUS	0x407E
 
 /* SerDes startup I2C readiness polling (defer probe if not responsive) */
 #define DS5_SERDES_STARTUP_TIMEOUT_MS 2000
@@ -254,6 +268,7 @@ struct ser_interface {
 #define DS5_DEPTH_CONFIG_STATUS		0x4800
 #define DS5_RGB_CONFIG_STATUS		0x4802
 #define DS5_IMU_CONFIG_STATUS		0x4804
+#define D5XX_DUALRGB_RIGHT_CONFIG_STATUS	0x4806
 #define DS5_IR_CONFIG_STATUS		0x4808
 
 #define DS5_STATUS_STREAMING		0x1
@@ -599,7 +614,7 @@ struct ds5 {
 	struct regmap *regmap;
 	struct regulator *vcc;
 	const struct ds5_variant *variant;
-	int is_depth, is_y8, is_rgb, is_imu;
+	int is_depth, is_y8, is_rgb, is_dualrgb_right, is_imu;
 	bool metadata_enabled;
 	int aggregated;
 	int reset_ref_ds5;
@@ -645,6 +660,8 @@ struct ds5_dev {
 	* read still returns 0.
 	*/
 	u16 cached_device_type;
+	u16 product_pid;
+	bool product_pid_valid;
 
 	/* Timestamp (jiffies) of last completed HW reset.
 	* Used to enforce DS5_HW_RESET_COOLDOWN_MS between consecutive resets
@@ -669,8 +686,27 @@ struct ds5_dev {
 	bool depth_streaming;
 	bool ir_streaming;
 	bool rgb_streaming;
+	bool dualrgb_right_streaming;
 	bool imu_streaming;
 };
+
+static bool d5xx_is_dual_rgb_2c(const struct ds5 *state)
+{
+	return state->ds5_dev &&
+		READ_ONCE(state->ds5_dev->product_pid_valid) &&
+		READ_ONCE(state->ds5_dev->product_pid) == D585_DUAL_RGB_PID;
+}
+
+static bool d5xx_is_dual_rgb_tdm_image(const struct ds5 *state)
+{
+	return d5xx_is_dual_rgb_2c(state) &&
+		(state->is_depth || state->is_y8 || state->is_rgb);
+}
+
+static bool d5xx_is_dualrgb_left(const struct ds5 *state)
+{
+	return state->is_rgb && !state->is_dualrgb_right;
+}
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 static DEFINE_MUTEX(serdes_lock__);
@@ -748,6 +784,7 @@ static const struct dser_interface max96712_interface = {
 
 static const struct dser_interface max96724_interface = {
 	.get_available_pipe_id = max96724_get_available_pipe_id,
+	.get_multi_vc_pipe_id = max96724_get_multi_vc_pipe_id,
 	.bind_ser_to_dser_pipe = max96724_bind_ser_to_dser_pipe,
 	.set_pipe = max96724_set_pipe,
 	.release_pipe = max96724_release_pipe,
@@ -1766,6 +1803,9 @@ static const char *ds5_get_sensor_name(struct ds5 *state)
 	static const char *sensor_name[] = {"unknown", "RGB", "DEPTH", "Y8", "IMU"};
 	int sensor_id = state->is_rgb * 1 + state->is_depth * 2 + \
 			state->is_y8 * 3 + state->is_imu * 4;
+
+	if (state->is_dualrgb_right)
+		return "DUALRGB_RIGHT";
 	if (sensor_id >= (sizeof(sensor_name)/sizeof(*sensor_name)))
 		sensor_id = 0;
 
@@ -1886,6 +1926,7 @@ static int ds5_sensor_enum_frame_interval(struct v4l2_subdev *sd,
 #endif
 		struct v4l2_subdev_frame_interval_enum *fie)
 {
+	struct ds5 *ds5_state = v4l2_get_subdevdata(sd);
 	struct ds5_sensor *sensor = container_of(sd, struct ds5_sensor, sd);
 	const struct ds5_format *fmt;
 	const struct ds5_resolution *res;
@@ -1906,6 +1947,9 @@ static int ds5_sensor_enum_frame_interval(struct v4l2_subdev *sd,
 		return -EINVAL;
 
 	if (fie->index >= res->n_framerates)
+		return -EINVAL;
+	if (d5xx_is_dual_rgb_tdm_image(ds5_state) &&
+	    res->framerates[fie->index] > D5XX_DUAL_RGB_MAX_OUTPUT_FPS)
 		return -EINVAL;
 
 	fie->interval.numerator = 1;
@@ -2201,6 +2245,14 @@ static int ds5_configure(struct ds5 *state)
 		fps_addr = DS5_DEPTH_FPS;
 		width_addr = DS5_DEPTH_RES_WIDTH;
 		height_addr = DS5_DEPTH_RES_HEIGHT;
+	} else if (state->is_dualrgb_right) {
+		sensor = &state->rgb.sensor;
+		dt_addr = D5XX_DUALRGB_RIGHT_STREAM_DT;
+		md_addr = D5XX_DUALRGB_RIGHT_STREAM_MD;
+		override_addr = D5XX_DUALRGB_RIGHT_OVERRIDE;
+		fps_addr = D5XX_DUALRGB_RIGHT_FPS;
+		width_addr = D5XX_DUALRGB_RIGHT_RES_WIDTH;
+		height_addr = D5XX_DUALRGB_RIGHT_RES_HEIGHT;
 	} else if (state->is_rgb) {
 		sensor = &state->rgb.sensor;
 		dt_addr = DS5_RGB_STREAM_DT;
@@ -2296,7 +2348,8 @@ static int ds5_configure(struct ds5 *state)
 				sensor->pipe_id, data_type1, data_type2, vc_id);
 	}
 #else /* Non-SERDES configuration */
-	vc_id = (state->is_depth) ? 0 : (state->is_rgb) ? 1 : (state->is_y8) ? 2 : 3;
+	vc_id = state->is_depth ? 0 : state->is_dualrgb_right ? 4 :
+		state->is_rgb ? 1 : state->is_y8 ? 2 : 3;
 #endif
 
 	/* Determine desired data-type (special cases for depth/IR), then write
@@ -2404,6 +2457,7 @@ static int ds5_sensor_s_frame_interval(struct v4l2_subdev *sd,
 #endif
 		struct v4l2_subdev_frame_interval *fi)
 {
+	struct ds5 *ds5_state = v4l2_get_subdevdata(sd);
 	struct ds5_sensor *sensor = container_of(sd, struct ds5_sensor, sd);
 	u16 framerate = 1;
 
@@ -2411,6 +2465,9 @@ static int ds5_sensor_s_frame_interval(struct v4l2_subdev *sd,
 		return -EINVAL;
 
 	framerate = fi->interval.denominator / fi->interval.numerator;
+	if (d5xx_is_dual_rgb_tdm_image(ds5_state) &&
+	    framerate > D5XX_DUAL_RGB_MAX_OUTPUT_FPS)
+		return -EINVAL;
 	framerate = __ds5_probe_framerate(sensor->config.resolution, framerate);
 	sensor->config.framerate = framerate;
 	fi->interval.numerator = 1;
@@ -2779,6 +2836,7 @@ static void ds5_reset_streaming_flags(struct ds5_dev *ds5_dev)
 	ds5_dev->depth_streaming = false;
 	ds5_dev->ir_streaming = false;
 	ds5_dev->rgb_streaming = false;
+	ds5_dev->dualrgb_right_streaming = false;
 	ds5_dev->imu_streaming = false;
 	mutex_unlock(&ds5_dev->lock);
 }
@@ -2851,6 +2909,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	struct hwm_cmd reset_cmd;
 	bool depth_streaming;
 	bool rgb_streaming;
+	bool dualrgb_right_streaming;
 	bool ir_streaming;
 	bool imu_streaming;
 	unsigned long ds5_last_reset_jiffies = READ_ONCE(state->ds5_dev->last_reset_jiffies);
@@ -2892,6 +2951,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	mutex_lock(&state->ds5_dev->lock);
 	depth_streaming = state->ds5_dev->depth_streaming;
 	rgb_streaming = state->ds5_dev->rgb_streaming;
+	dualrgb_right_streaming = state->ds5_dev->dualrgb_right_streaming;
 	ir_streaming = state->ds5_dev->ir_streaming;
 	imu_streaming = state->ds5_dev->imu_streaming;
 	mutex_unlock(&state->ds5_dev->lock);
@@ -2900,6 +2960,9 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 		ds5_write(state, DS5_START_STOP_STREAM,	DS5_STREAM_STOP | DS5_STREAM_DEPTH);
 	if (rgb_streaming)
 		ds5_write(state, DS5_START_STOP_STREAM,	DS5_STREAM_STOP | DS5_STREAM_RGB);
+	if (dualrgb_right_streaming)
+		ds5_write(state, DS5_START_STOP_STREAM,
+			  DS5_STREAM_STOP | D5XX_STREAM_DUALRGB_RIGHT);
 	if (ir_streaming)
 		ds5_write(state, DS5_START_STOP_STREAM,	DS5_STREAM_STOP | DS5_STREAM_IR);
 	if (imu_streaming)
@@ -3565,6 +3628,48 @@ static int ds5_gvd(struct ds5 *state, unsigned char *data, u32 buf_len)
 	ds5_raw_read_with_check(state, DS5_HWMC_DATA, data, length); /* Read response data */
 
 	return 0;
+}
+
+static int d5xx_cache_product_pid(struct ds5 *state)
+{
+	unsigned char *data;
+	u16 pid;
+	int ret = 0;
+
+	if (READ_ONCE(state->ds5_dev->product_pid_valid))
+		return 0;
+
+	data = kzalloc(DS5_GVD_LEN_D5XX, GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
+
+	mutex_lock(&state->ds5_dev->lock);
+	if (state->ds5_dev->product_pid_valid)
+		goto unlock;
+
+	ret = ds5_gvd(state, data, DS5_GVD_LEN_D5XX);
+	if (ret)
+		goto unlock;
+	if (data[0] != 0x10 || data[1] || data[2] || data[3]) {
+		ret = -EPROTO;
+		goto unlock;
+	}
+
+	pid = data[D5XX_GVD_USB_PID_OFFSET] |
+		((u16)data[D5XX_GVD_USB_PID_OFFSET + 1] << 8);
+	if (!pid) {
+		ret = -ENODATA;
+		goto unlock;
+	}
+
+	state->ds5_dev->product_pid = pid;
+	state->ds5_dev->product_pid_valid = true;
+	dev_info(&state->client->dev, "D5xx GVD product PID: 0x%04x\n", pid);
+
+unlock:
+	mutex_unlock(&state->ds5_dev->lock);
+	kfree(data);
+	return ret;
 }
 
 static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
@@ -4317,6 +4422,8 @@ static void ds5_init_ds5_dev(struct ds5 *state, struct ds5_dev *ds5_dev)
 	ds5_dev->ds5_primary = state;
 	ds5_dev->serdes_setup_complete = false;
 	ds5_dev->cached_device_type = DS5_DEVICE_TYPE_UNKNOWN;
+	ds5_dev->product_pid = 0;
+	ds5_dev->product_pid_valid = false;
 	mutex_unlock(&ds5_dev->lock);
 	ds5_reset_streaming_flags(ds5_dev);
 }
@@ -5288,6 +5395,7 @@ static int ds5_sensor_init(struct i2c_client *c, struct ds5 *state,
 	char suffix = dpdata->suffix;
 #endif
 	sensor->pipe_id = PIPE_NOT_CONFIGURED;
+	ds5_config_cache_clear(sensor);
 	v4l2_i2c_subdev_init(sd, c, ops);
 	// See tegracam_v4l2.c tegracam_v4l2subdev_register()
 	// Set owner to NULL so we can unload the driver module
@@ -5770,6 +5878,9 @@ static int ds5_mux_s_frame_interval(struct v4l2_subdev *sd,
 	sensor = ds5_state->mux.last_set;
 
 	framerate = fi->interval.denominator / fi->interval.numerator;
+	if (d5xx_is_dual_rgb_tdm_image(ds5_state) &&
+	    framerate > D5XX_DUAL_RGB_MAX_OUTPUT_FPS)
+		return -EINVAL;
 	framerate = __ds5_probe_framerate(sensor->config.resolution, framerate);
 	sensor->config.framerate = framerate;
 	fi->interval.numerator = 1;
@@ -5840,6 +5951,12 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		stream_id = DS5_STREAM_DEPTH;
 		vc_id = 0;
 		streaming_flag = &state->ds5_dev->depth_streaming;
+	} else if (state->is_dualrgb_right) {
+		config_status_base = D5XX_DUALRGB_RIGHT_CONFIG_STATUS;
+		stream_status_base = D5XX_DUALRGB_RIGHT_STREAM_STATUS;
+		stream_id = D5XX_STREAM_DUALRGB_RIGHT;
+		vc_id = 4;
+		streaming_flag = &state->ds5_dev->dualrgb_right_streaming;
 	} else if (state->is_rgb) {
 		config_status_base = DS5_RGB_CONFIG_STATUS;
 		stream_status_base = DS5_RGB_STREAM_STATUS;
@@ -5950,6 +6067,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	 * so the flush cannot truncate a sibling's in-flight frames. */
 	if (on && !(state->ds5_dev->depth_streaming ||
 		    state->ds5_dev->rgb_streaming ||
+		    state->ds5_dev->dualrgb_right_streaming ||
 		    state->ds5_dev->ir_streaming ||
 		    state->ds5_dev->imu_streaming))
 		state->ds5_dev->link_flush_pending = true;
@@ -6359,8 +6477,7 @@ static int ds5_mux_init(struct i2c_client *c, struct ds5 *state)
 					&state->ctrls.handler_depth, NULL, true);
 #endif
 		state->mux.last_set = &state->depth.sensor;
-	}
-	else if (state->is_rgb) {
+	} else if (d5xx_is_dualrgb_left(state)) {
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 20, 0)
 		v4l2_ctrl_add_handler(&state->ctrls.handler,
 					&state->ctrls.handler_rgb, NULL);
@@ -6369,8 +6486,9 @@ static int ds5_mux_init(struct i2c_client *c, struct ds5 *state)
 					&state->ctrls.handler_rgb, NULL, true);
 #endif
 		state->mux.last_set = &state->rgb.sensor;
-	}
-	else if (state->is_y8) {
+	} else if (state->is_dualrgb_right) {
+		state->mux.last_set = &state->rgb.sensor;
+	} else if (state->is_y8) {
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 20, 0)
 		v4l2_ctrl_add_handler(&state->ctrls.handler,
 					&state->ctrls.handler_y8, NULL);
@@ -6379,9 +6497,9 @@ static int ds5_mux_init(struct i2c_client *c, struct ds5 *state)
 					&state->ctrls.handler_y8, NULL, true);
 #endif
 		state->mux.last_set = &state->ir.sensor;
-	}
-	else
+	} else {
 		state->mux.last_set = &state->imu.sensor;
+	}
 
 	state->mux.sd.dev = &c->dev;
 	ret = camera_common_initialize(&state->mux.sd, "d4xx");
@@ -7414,6 +7532,7 @@ static int ds5_probe(struct i2c_client *c
 	state->is_depth = 0;
 	state->is_y8 = 0;
 	state->is_rgb = 0;
+	state->is_dualrgb_right = 0;
 	state->is_imu = 0;
 #ifdef CONFIG_OF
 	ret = of_property_read_string(c->dev.of_node, "cam-type", &str);
@@ -7427,10 +7546,13 @@ static int ds5_probe(struct i2c_client *c
 		state->control_base = DS5_DEPTH_CONTROL_BASE;
 		state->control_status_reg = DS5_DEPTH_CONTROL_STATUS;
 	}
-	if (!ret && !strncmp(str, "RGB", strlen("RGB"))) {
+	if (!ret && (!strncmp(str, "RGB", strlen("RGB")) ||
+		     !strncmp(str, "DUALRGB_", strlen("DUALRGB_")))) {
 		state->is_rgb = 1;
+		state->is_dualrgb_right = !strcmp(str, "DUALRGB_RIGHT");
 		state->control_base = DS5_RGB_CONTROL_BASE;
-		state->control_status_reg = DS5_RGB_CONTROL_STATUS;
+		state->control_status_reg = state->is_dualrgb_right ?
+			D5XX_DUALRGB_RIGHT_CONTROL_STATUS : DS5_RGB_CONTROL_STATUS;
 	}
 	if (!ret && !strncmp(str, "IMU", strlen("IMU"))) {
 		state->is_imu = 1;
@@ -7497,6 +7619,20 @@ static int ds5_probe(struct i2c_client *c
 		dev_err(&c->dev,
 			"%s(): device type is not valid: %d (last val 0x%x)\n",
 			__func__, ret, rec_state);
+		goto e_chardev;
+	}
+
+	if (rec_state == DS5_DEVICE_TYPE_D58X) {
+		ret = d5xx_cache_product_pid(state);
+		if (ret < 0)
+			dev_warn(&c->dev, "%s(): failed to read product PID: %d\n",
+				 __func__, ret);
+	}
+	if (state->is_dualrgb_right &&
+	    (ret < 0 || !d5xx_is_dual_rgb_2c(state))) {
+		dev_info(&c->dev, "%s(): RGB-right is not present on this product\n",
+			 __func__);
+		ret = -ENODEV;
 		goto e_chardev;
 	}
 

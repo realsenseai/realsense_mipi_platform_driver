@@ -973,6 +973,23 @@ int max96724_get_available_pipe_id(struct device *dev, int vc_id)
 }
 EXPORT_SYMBOL(max96724_get_available_pipe_id);
 
+int max96724_get_multi_vc_pipe_id(struct device *dev, int vc_id)
+{
+	struct max96724 *priv = dev_get_drvdata(dev);
+
+	if (vc_id < 0 || vc_id >= 8)
+		return -EINVAL;
+
+	/* This driver exposes the single Link-A tunnel used by D5x. The tunnel
+	 * preserves every VC in one packet stream, so logical VCs share PIPE_X. */
+	mutex_lock(&priv->lock);
+	priv->pipe[MAX96724_PIPE_X].st_count++;
+	mutex_unlock(&priv->lock);
+
+	return MAX96724_PIPE_X;
+}
+EXPORT_SYMBOL(max96724_get_multi_vc_pipe_id);
+
 int max96724_release_pipe(struct device *dev, int pipe_id)
 {
 	struct max96724 *priv = dev_get_drvdata(dev);
@@ -982,7 +999,15 @@ int max96724_release_pipe(struct device *dev, int pipe_id)
 		return -EINVAL;
 
 	mutex_lock(&priv->lock);
-	priv->pipe[pipe_id].st_count = 0;
+	if (!priv->pipe[pipe_id].st_count) {
+		mutex_unlock(&priv->lock);
+		return -EINVAL;
+	}
+	priv->pipe[pipe_id].st_count--;
+	if (priv->pipe[pipe_id].st_count) {
+		mutex_unlock(&priv->lock);
+		return 0;
+	}
 	priv->retriggered_pipe_mask &= ~BIT(pipe_id);
 	for (i = 0; i < MAX96724_MAX_PIPES; i++) {
 		if (priv->pipe[i].st_count)
@@ -1145,16 +1170,6 @@ void max96724_retrigger_datapath(struct device *dev)
 		msleep(20);
 	}
 
-	for (i = 0; i < MAX96724_MAX_PIPES; i++) {
-		struct pipe_ctx *pipe = &priv->pipe[i];
-
-		if (!(retrigger_mask & BIT(i)) || !pipe->st_count ||
-		    !pipe->map_configured)
-			continue;
-		err |= __max96724_set_pipe(dev, i, pipe->dt_type,
-					   pipe->dt_type2, pipe->vc_id);
-	}
-
 	if (!err) {
 		if (full_retrigger)
 			err = max96724_write_reg(dev, MAX96724_PIPE_EN_ADDR,
@@ -1206,7 +1221,7 @@ EXPORT_SYMBOL(max96724_init_settings);
 int max96724_bind_ser_to_dser_pipe(struct device *dev, int dser_pipe_id,
 				   int ser_pipe_id, u32 vc_id)
 {
-	/* In Tunnel Mode, pipe mapping is 1:1 (each camera → one pipe) */
+	/* Tunnel mode forwards the complete CSI packet stream unchanged. */
 	return 0;
 }
 EXPORT_SYMBOL(max96724_bind_ser_to_dser_pipe);
@@ -1214,11 +1229,7 @@ EXPORT_SYMBOL(max96724_bind_ser_to_dser_pipe);
 int max96724_set_pipe(struct device *dev, int pipe_id,
 		      u8 data_type1, u8 data_type2, u32 vc_id)
 {
-	struct max96724 *priv = dev_get_drvdata(dev);
-	int err = 0;
-
-	if (pipe_id < 0 || pipe_id >= MAX96724_MAX_PIPES ||
-	    vc_id >= MAX96724_MAX_PIPES) {
+	if (pipe_id < 0 || pipe_id >= MAX96724_MAX_PIPES) {
 		dev_info(dev, "%s: input pipe_id: %d exceeds max96724 max pipes\n",
 			 __func__, pipe_id);
 		return -EINVAL;
@@ -1226,14 +1237,7 @@ int max96724_set_pipe(struct device *dev, int pipe_id,
 
 	dev_dbg(dev, "%s pipe_id %d, data_type1 %u, data_type2 %u, vc_id %u\n",
 		__func__, pipe_id, data_type1, data_type2, vc_id);
-
-	mutex_lock(&priv->lock);
-
-	err = __max96724_set_pipe(dev, pipe_id, data_type1, data_type2, vc_id);
-
-	mutex_unlock(&priv->lock);
-
-	return err;
+	return 0;
 }
 EXPORT_SYMBOL(max96724_set_pipe);
 
