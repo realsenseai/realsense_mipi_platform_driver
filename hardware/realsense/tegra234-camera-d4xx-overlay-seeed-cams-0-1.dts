@@ -442,12 +442,16 @@
 						link-mask = <0x3>;
 						channel = "a";
 						force_clk0;
+						/* <serializer-vc deserializer-vc> */
+						maxim,link0-vc-remap = <0 0>, <1 1>, <2 2>, <3 3>;
+						maxim,link1-vc-remap = <0 4>, <1 5>, <2 6>, <3 7>;
 					};
 
 					ser_a: max9295_a@40 {
 						status = "okay";
 						compatible = "maxim,max9295";
 						reg = <0x40>;
+						maxim,gmsl-link-id = <0>;
 						maxim,gmsl-dser-device = <&dser>;
 						external_addr_reassign;
 					};
@@ -456,6 +460,7 @@
 						status = "okay";
 						compatible = "maxim,max9295";
 						reg = <0x41>;
+						maxim,gmsl-link-id = <1>;
 						maxim,gmsl-dser-device = <&dser>;
 						external_addr_reassign;
 					};

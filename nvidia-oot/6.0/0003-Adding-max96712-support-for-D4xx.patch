@@ -1,20 +1,20 @@
-From ede2412e2c450275116a819838363a628c560f61 Mon Sep 17 00:00:00 2001
+From 9b1affb389a3679b6cfe4e9200bde75393a0ce4c Mon Sep 17 00:00:00 2001
 From: ejgoldik <ehud.joseph.goldik@realsenseai.com>
-Date: Wed, 5 Aug 2026 08:21:23 +0300
+Date: Mon, 24 Aug 2026 09:25:37 +0300
 Subject: [PATCH] Adding max96712 support for D4xx
 
 Add MAX96712 deserializer driver support for D4XX/D5XX cameras.
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- drivers/media/i2c/max96712.c | 940 +++++++++++++++++++++++++++++++++--
- 1 file changed, 905 insertions(+), 35 deletions(-)
+ drivers/media/i2c/max96712.c | 1135 ++++++++++++++++++++++++++++++++--
+ 1 file changed, 1100 insertions(+), 35 deletions(-)
 
 diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
-index 8e237eef..12729a1e 100644
+index 8e237eef..3b6a5103 100644
 --- a/drivers/media/i2c/max96712.c
 +++ b/drivers/media/i2c/max96712.c
-@@ -16,32 +16,162 @@
+@@ -16,32 +16,182 @@
  #include <linux/gpio.h>
  #include <linux/of.h>
  #include <linux/of_gpio.h>
@@ -65,6 +65,7 @@ index 8e237eef..12729a1e 100644
 +#define MAX96712_MIPI_TX_EXT12_ADDR 0x80c
 +#define MAX96712_MIPI_TX_EXT13_ADDR 0x80d
 +#define MAX96712_MIPI_TX_EXT14_ADDR 0x80e
++#define MAX96712_MIPI_TX_EXT15_ADDR 0x80f
 +
 +#define MAX96712_MIPI_PHY0_ADDR 0x8A0
 +#define MAX96712_MIPI_PHY2_ADDR 0x8A2
@@ -133,7 +134,22 @@ index 8e237eef..12729a1e 100644
 +/* data defines */
 +#define MAX96712_MAX_LINKS 4
 +#define MAX96712_MAX_PIPES 8
-+#define MAX9295_MAX_STREAMS 4
++/* Extended CSI VC: two low bits live in the SRC/DST map regs, three high bits
++ * in MIPI_TX_EXT<n> - DST at bits 4:2, SRC at bits 7:5. */
++#define MAX96712_MAX_VCS 32
++#define MAX96712_EXT_VC_DST_SHIFT 2
++#define MAX96712_EXT_VC_SRC_SHIFT 5
++/* Serializer VCs a link may present, i.e. the streams one camera can carry. */
++#define MAX96712_MAX_SER_VCS 8
++#define MAX96712_VC_UNMAPPED 0xFF
++#define MAX96712_VC_REMAP_CELLS 2
++
++/* MIPI_TX_EXT<n>: high bits of the source and destination virtual channels. */
++static inline u8 max96712_ext_vc(u32 src_vc, u32 dst_vc)
++{
++	return ((src_vc >> 2) << MAX96712_EXT_VC_SRC_SHIFT) |
++	       ((dst_vc >> 2) << MAX96712_EXT_VC_DST_SHIFT);
++}
  
  struct max96712 {
  	struct i2c_client *i2c_client;
@@ -155,6 +171,10 @@ index 8e237eef..12729a1e 100644
 +	 */
 +	int link_multi_vc_pipe[MAX96712_MAX_LINKS];
 +	bool multi_vc_configured[MAX96712_MAX_PIPES];
++	/* Serializer VC -> deserializer VC, or MAX96712_VC_UNMAPPED. A link with
++	 * no maxim,linkN-vc-remap gets a unity map; one with a table gets only
++	 * the VCs that table declares. */
++	u8 vc_remap[MAX96712_MAX_LINKS][MAX96712_MAX_SER_VCS];
 +	bool force_clk0;
 +	int lane_cnt;
 +	bool fangzhu_fg12_reverse_lane_polarity;
@@ -182,7 +202,7 @@ index 8e237eef..12729a1e 100644
  	i2c_client = global_priv[channel]->i2c_client;
  	bak = i2c_client->addr;
  
-@@ -53,7 +183,6 @@ int max96712_write_reg_Dser(int slaveAddr, int channel,
+@@ -53,7 +203,6 @@ int max96712_write_reg_Dser(int slaveAddr, int channel,
  		dev_err(&i2c_client->dev, "%s: addr = 0x%x, val = 0x%x\n",
  				__func__, addr, val);
  	}
@@ -190,7 +210,7 @@ index 8e237eef..12729a1e 100644
  	return err;
  }
  EXPORT_SYMBOL(max96712_write_reg_Dser);
-@@ -68,8 +197,6 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
+@@ -68,8 +217,6 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
  
  	if (channel > 3 || channel < 0 || global_priv[channel] == NULL)
  		return -1;
@@ -199,7 +219,7 @@ index 8e237eef..12729a1e 100644
  	i2c_client = global_priv[channel]->i2c_client;
  	bak = i2c_client->addr;
  	i2c_client->addr = slaveAddr / 2;
-@@ -80,11 +207,56 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
+@@ -80,11 +227,56 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
  		dev_err(&i2c_client->dev, "%s: addr = 0x%x, val = 0x%x\n",
  				__func__, addr, *val);
  	}
@@ -257,7 +277,7 @@ index 8e237eef..12729a1e 100644
  static int max96712_read_reg(struct max96712 *priv,
  			u16 addr, unsigned int *val)
  {
-@@ -99,6 +271,20 @@ static int max96712_read_reg(struct max96712 *priv,
+@@ -99,6 +291,20 @@ static int max96712_read_reg(struct max96712 *priv,
  	return err;
  }
  
@@ -278,7 +298,7 @@ index 8e237eef..12729a1e 100644
  
  static int max96712_stats_show(struct seq_file *s, void *data)
  {
-@@ -153,24 +339,6 @@ static const struct file_operations max96712_debugfs_fops = {
+@@ -153,24 +359,6 @@ static const struct file_operations max96712_debugfs_fops = {
  	.release = single_release,
  };
  
@@ -303,7 +323,7 @@ index 8e237eef..12729a1e 100644
  static int max96712_debugfs_init(const char *dir_name,
  				struct dentry **d_entry,
  				struct dentry **f_entry,
-@@ -225,7 +393,8 @@ static int max96712_debugfs_init(const char *dir_name,
+@@ -225,9 +413,106 @@ static int max96712_debugfs_init(const char *dir_name,
  static  struct regmap_config max96712_regmap_config = {
  	.reg_bits = 16,
  	.val_bits = 8,
@@ -312,8 +332,106 @@ index 8e237eef..12729a1e 100644
 +	.cache_type = REGCACHE_NONE,
  };
  
++/*
++ * Parse the optional per-link "maxim,linkN-vc-remap" tables, each a list of
++ * <serializer-vc deserializer-vc> pairs. A link with no table keeps the unity
++ * map; a link with one, maps exactly the VCs it lists and leaves the rest
++ * unmapped, so every link of a multi-link deserializer has to declare a table.
++ */
++static int max96712_parse_vc_remap(struct max96712 *priv, struct device_node *np)
++{
++	struct device *dev = &priv->i2c_client->dev;
++	unsigned int link;
++	u32 dser_vc_seen_mask = 0;
++	int map_elems, err, i;
++
++	/* Default unity mapping table */
++	for (link = 0; link < MAX96712_MAX_LINKS; link++) {
++		for (i = 0; i < MAX96712_MAX_SER_VCS; i++) {
++			priv->vc_remap[link][i] = i;
++		}
++	}
++
++	if (!np) {
++		return 0;
++	}
++
++	for (link = 0; link < MAX96712_MAX_LINKS; link++) {
++		char link_map_prop[32];
++		u32 src, dst;
++
++		snprintf(link_map_prop, sizeof(link_map_prop), "maxim,link%u-vc-remap", link);
++
++		map_elems = of_property_count_u32_elems(np, link_map_prop);
++		/* -EINVAL means absent; anything else negative is malformed. */
++		if (map_elems == -EINVAL)
++			continue;
++		if (map_elems < 0) {
++			dev_err(dev, "%s: unreadable (%d)\n", link_map_prop, map_elems);
++			return map_elems;
++		}
++		if (!(priv->link_mask & (1 << link))) {
++			dev_err(dev, "%s: link not enabled by link-mask 0x%x\n",
++				link_map_prop, priv->link_mask);
++			return -EINVAL;
++		}
++		if (map_elems % MAX96712_VC_REMAP_CELLS ||
++		    map_elems > MAX96712_MAX_SER_VCS * MAX96712_VC_REMAP_CELLS) {
++			dev_err(dev, "%s: %d cells, expected up to %d <ser dser> pairs\n",
++				link_map_prop, map_elems, MAX96712_MAX_SER_VCS);
++			return -EINVAL;
++		}
++
++		/* An explicit table replaces the unity default outright: VCs it
++		 * does not list stay unmapped. */
++		for (i = 0; i < MAX96712_MAX_SER_VCS; i++) {
++			priv->vc_remap[link][i] = MAX96712_VC_UNMAPPED;
++		}
++
++		/* Start filling the map */
++		for (i = 0; i < map_elems; i += MAX96712_VC_REMAP_CELLS) {
++			err = of_property_read_u32_index(np, link_map_prop, i, &src);
++			if (!err)
++				err = of_property_read_u32_index(np, link_map_prop, i + 1, &dst);
++			if (err) {
++				dev_err(dev, "%s: read failed (%d)\n", link_map_prop, err);
++				return err;
++			}
++			if (src >= MAX96712_MAX_SER_VCS || dst >= MAX96712_MAX_VCS) {
++				dev_err(dev, "%s: illegal pair <%u %u>\n", link_map_prop, src, dst);
++				return -EINVAL;
++			}
++			priv->vc_remap[link][src] = dst;
++		}
++	}
++
++	/* Validation loop - Making sure there are no dst vc collisions */
++	for (link = 0; link < MAX96712_MAX_LINKS; link++) {
++		if (!(priv->link_mask & (1 << link)))
++			continue;
++		for (i = 0; i < MAX96712_MAX_SER_VCS; i++) {
++			u8 vc = priv->vc_remap[link][i];
++
++			if (vc == MAX96712_VC_UNMAPPED)
++				continue;
++			if (dser_vc_seen_mask & (1u << vc)) {
++				dev_err(dev,
++					"dser VC %u mapped more than once, output VCs must be unique\n",
++					vc);
++				return -EINVAL;
++			}
++			dser_vc_seen_mask |= 1u << vc;
++			dev_dbg(dev, "link %u src_vc: %u dst_vc: %u\n", link, i, priv->vc_remap[link][i]);
++		}
++	}
++
++	return 0;
++}
++
  #if defined(NV_I2C_DRIVER_STRUCT_PROBE_WITHOUT_I2C_DEVICE_ID_ARG) /* Linux 6.3 */
-@@ -237,10 +406,16 @@ static int max96712_probe(struct i2c_client *client,
+ static int max96712_probe(struct i2c_client *client)
+ #else
+@@ -237,10 +522,16 @@ static int max96712_probe(struct i2c_client *client,
  {
  	struct max96712 *priv;
  	int err = 0;
@@ -330,7 +448,7 @@ index 8e237eef..12729a1e 100644
  	priv->i2c_client = client;
  	priv->regmap = devm_regmap_init_i2c(priv->i2c_client,
  				&max96712_regmap_config);
-@@ -249,15 +424,55 @@ static int max96712_probe(struct i2c_client *client,
+@@ -249,15 +540,59 @@ static int max96712_probe(struct i2c_client *client,
  			"regmap init failed: %ld\n", PTR_ERR(priv->regmap));
  		return -ENODEV;
  	}
@@ -386,12 +504,16 @@ index 8e237eef..12729a1e 100644
 +			of_property_read_bool(np, "fangzhu,fg12-poc-enable");
  	}
  
++	err = max96712_parse_vc_remap(priv, np);
++	if (err)
++		return err;
++
 +	dev_set_drvdata(&client->dev, priv);
 +
  	err = max96712_debugfs_init(NULL, NULL, NULL, priv);
  	if (err)
  		return err;
-@@ -274,8 +489,11 @@ static int max96712_remove(struct i2c_client *client)
+@@ -274,8 +609,11 @@ static int max96712_remove(struct i2c_client *client)
  static void max96712_remove(struct i2c_client *client)
  #endif
  {
@@ -404,7 +526,7 @@ index 8e237eef..12729a1e 100644
  		i2c_unregister_device(client);
  		client = NULL;
  	}
-@@ -284,13 +502,664 @@ static void max96712_remove(struct i2c_client *client)
+@@ -284,13 +622,739 @@ static void max96712_remove(struct i2c_client *client)
  #endif
  }
  
@@ -497,20 +619,19 @@ index 8e237eef..12729a1e 100644
 +}
 +
 +/*
-+ * Allocate (or return the already-allocated) multi-VC pipe for the link that
-+ * owns vc_id. Used for MAX96717 serializers, which route all of a camera's
++ * Allocate (or return the already-allocated) multi-VC pipe for a link. Used
++ * for MAX96717 serializers, which route all of a camera's
 + * virtual channels through a single serializer pipe. The pipe is dedicated to
 + * the link for the driver's lifetime: every stream of that camera reuses it and
 + * max96712_release_pipe() never frees it.
 + */
-+int max96712_get_multi_vc_pipe_id(struct device *dev, int vc_id)
++int max96712_get_multi_vc_pipe_id(struct device *dev, u32 link)
 +{
 +	struct max96712 *priv = dev_get_drvdata(dev);
-+	int link = vc_id / MAX9295_MAX_STREAMS;
 +	int pipe_id = -ENOSR;
 +	int i;
 +
-+	if (link < 0 || link >= MAX96712_MAX_LINKS)
++	if (link >= MAX96712_MAX_LINKS)
 +		return -EINVAL;
 +
 +	mutex_lock(&priv->lock);
@@ -537,11 +658,11 @@ index 8e237eef..12729a1e 100644
 +}
 +EXPORT_SYMBOL(max96712_get_multi_vc_pipe_id);
 +
-+static int __max96712_bind_ser_to_dser_pipe(struct device *dev, int dser_pipe_id, int ser_pipe_id, u32 vc_id)
++static int __max96712_bind_ser_to_dser_pipe(struct device *dev, int dser_pipe_id,
++					    int ser_pipe_id, u32 link_id)
 +{
 +	struct max96712 *priv = dev_get_drvdata(dev);
 +	unsigned int pipe_sel_val = 0;
-+	u32 link_id = vc_id / MAX9295_MAX_STREAMS;
 +	int err = 0;
 +
 +	/* dser_pipe_id will be connected to ser_pipe_id of link_id */
@@ -567,6 +688,28 @@ index 8e237eef..12729a1e 100644
 +
 +	return err;
 +}
++
++/*
++ * Reverse the link's VC map: which serializer VC arrives as dser_vc.
++ * vc_remap is written once at probe, so this needs no lock.
++ */
++int max96712_get_ser_vc_id(struct device *dev, u32 link, u32 dser_vc)
++{
++	struct max96712 *priv = dev_get_drvdata(dev);
++	int i;
++
++	if (link >= MAX96712_MAX_LINKS)
++		return -EINVAL;
++
++	for (i = 0; i < MAX96712_MAX_SER_VCS; i++)
++		if (priv->vc_remap[link][i] != MAX96712_VC_UNMAPPED &&
++		    priv->vc_remap[link][i] == dser_vc)
++			return i;
++
++	dev_err(dev, "link %u has no serializer VC mapped to dser VC %u\n", link, dser_vc);
++	return -EINVAL;
++}
++EXPORT_SYMBOL(max96712_get_ser_vc_id);
 +
 +int max96712_release_pipe(struct device *dev, int pipe_id)
 +{
@@ -622,12 +765,16 @@ index 8e237eef..12729a1e 100644
 +}
 +EXPORT_SYMBOL(max96712_reset_oneshot);
 +
-+/* RSDEV-12608: one-shot flush of the link carrying vc_id (link = vc_id / MAX9295_MAX_STREAMS).
-+ * Called from d4xx HW-reset recovery to drop the stale post-reset partial frame. */
-+void max96712_reset_oneshot_link(struct device *dev, u32 vc_id)
++/* RSDEV-12608: one-shot flush of a single link's pixel line buffer. Called from
++ * d4xx HW-reset recovery to drop the stale post-reset partial frame. */
++void max96712_reset_oneshot_link(struct device *dev, u32 link_id)
 +{
 +	struct max96712 *priv = dev_get_drvdata(dev);
-+	unsigned int link_id = vc_id / MAX9295_MAX_STREAMS;
++
++	if (link_id >= MAX96712_MAX_LINKS) {
++		dev_err(dev, "%s: illegal link %u\n", __func__, link_id);
++		return;
++	}
 +
 +	dev_info(dev, "RSDEV-12608: link %u line-buffer flush (post-HW-reset)\n", link_id);
 +	max96712_reset_oneshot_link_mask(priv, 1 << link_id);
@@ -635,37 +782,41 @@ index 8e237eef..12729a1e 100644
 +EXPORT_SYMBOL(max96712_reset_oneshot_link);
 +
 +static int __max96712_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
-+			      u8 data_type2, u32 vc_id)
++			      u8 data_type2, u32 link, u32 vc_id)
 +{
 +	int err = 0;
 +	struct max96712 *priv = dev_get_drvdata(dev);
-+	int vc_id_lsb = vc_id & 0x3;
-+	int vc_id_msb = vc_id >> 2;
++	u32 dser_vc = priv->vc_remap[link][vc_id];
++	/* SRC is the VC arriving from the serializer, DST the VC leaving on CSI;
++	 * they diverge whenever the link's remap table is not the identity. */
++	int src_vc_lsb = vc_id & 0x3;
++	int dst_vc_lsb = dser_vc & 0x3;
++	u8 ext_vc = max96712_ext_vc(vc_id, dser_vc);
 +	unsigned int pipe_en_val = 0;
 +
 +	struct reg_pair map_pipe_control[] = {
 +		// Enable 3/4 mappings for video pipe (4 if metadata enabled)
 +		{MAX96712_MIPI_TX11_ADDR + (0x40 * pipe_id), (data_type2 == 0) ? 0x07 : 0x0F},
 +		// Map data_type1 on vc_id
-+		{MAX96712_MIPI_TX13_SRC_0_MAP_ADDR + (0x40 * pipe_id), (vc_id_lsb << 6) | data_type1},
-+		{MAX96712_MIPI_TX14_DST_0_MAP_ADDR + (0x40 * pipe_id), (vc_id_lsb << 6) | data_type1},
++		{MAX96712_MIPI_TX13_SRC_0_MAP_ADDR + (0x40 * pipe_id), (src_vc_lsb << 6) | data_type1},
++		{MAX96712_MIPI_TX14_DST_0_MAP_ADDR + (0x40 * pipe_id), (dst_vc_lsb << 6) | data_type1},
 +		// Map frame_start on vc_id
-+		{MAX96712_MIPI_TX15_SRC_1_MAP_ADDR + (0x40 * pipe_id), (vc_id_lsb << 6) | 0x00},
-+		{MAX96712_MIPI_TX16_DST_1_MAP_ADDR + (0x40 * pipe_id), (vc_id_lsb << 6) | 0x00},
++		{MAX96712_MIPI_TX15_SRC_1_MAP_ADDR + (0x40 * pipe_id), (src_vc_lsb << 6) | 0x00},
++		{MAX96712_MIPI_TX16_DST_1_MAP_ADDR + (0x40 * pipe_id), (dst_vc_lsb << 6) | 0x00},
 +		// Map frame end on vc_id
-+		{MAX96712_MIPI_TX17_SRC_2_MAP_ADDR + (0x40 * pipe_id), (vc_id_lsb << 6) | 0x01},
-+		{MAX96712_MIPI_TX18_DST_2_MAP_ADDR + (0x40 * pipe_id), (vc_id_lsb << 6) | 0x01},
++		{MAX96712_MIPI_TX17_SRC_2_MAP_ADDR + (0x40 * pipe_id), (src_vc_lsb << 6) | 0x01},
++		{MAX96712_MIPI_TX18_DST_2_MAP_ADDR + (0x40 * pipe_id), (dst_vc_lsb << 6) | 0x01},
 +		// Map data_type2 on vc_id
-+		{MAX96712_MIPI_TX19_SRC_3_MAP_ADDR + (0x40 * pipe_id), (vc_id_lsb << 6) | data_type2},
-+		{MAX96712_MIPI_TX20_DST_3_MAP_ADDR + (0x40 * pipe_id), (vc_id_lsb << 6) | data_type2},
++		{MAX96712_MIPI_TX19_SRC_3_MAP_ADDR + (0x40 * pipe_id), (src_vc_lsb << 6) | data_type2},
++		{MAX96712_MIPI_TX20_DST_3_MAP_ADDR + (0x40 * pipe_id), (dst_vc_lsb << 6) | data_type2},
 +		// Extended dst vc_id mapping 0
-+		{MAX96712_MIPI_TX_EXT0_ADDR + (0x10 * pipe_id), vc_id_msb << 2},
++		{MAX96712_MIPI_TX_EXT0_ADDR + (0x10 * pipe_id), ext_vc},
 +		// Extended dst vc_id mapping 1
-+		{MAX96712_MIPI_TX_EXT1_ADDR + (0x10 * pipe_id), vc_id_msb << 2},
++		{MAX96712_MIPI_TX_EXT1_ADDR + (0x10 * pipe_id), ext_vc},
 +		// Extended dst vc_id mapping 2
-+		{MAX96712_MIPI_TX_EXT2_ADDR + (0x10 * pipe_id), vc_id_msb << 2},
++		{MAX96712_MIPI_TX_EXT2_ADDR + (0x10 * pipe_id), ext_vc},
 +		// Extended dst vc_id mapping 3
-+		{MAX96712_MIPI_TX_EXT3_ADDR + (0x10 * pipe_id), vc_id_msb << 2},
++		{MAX96712_MIPI_TX_EXT3_ADDR + (0x10 * pipe_id), ext_vc},
 +		// All mappings to PHY1 (master for port A)
 +		{MAX96712_MIPI_TX45_MAP_DPHY_DEST_ADDR + (0x40 * pipe_id), 0x55},
 +		// SEQ_MISS_EN: Disabled / DIS_PKT_DET: Disabled
@@ -691,63 +842,92 @@ index 8e237eef..12729a1e 100644
 +
 +/*
 + * Configure a multi-VC pipe (MAX96717) in one shot. Unlike __max96712_set_pipe(),
-+ * which dedicates a pipe to a single VC, this maps all four local virtual
++ * which dedicates a pipe to a single VC, this maps all four serializer virtual
 + * channels of the link (depth/RGB/IR/IMU) through one deserializer pipe, matching
 + * the way a MAX96717 funnels a camera's streams through a single serializer pipe.
 + * Called with priv->lock held.
 + */
-+static int __max96712_set_multi_vc_pipe(struct device *dev, int pipe_id, u32 vc_id)
++static int __max96712_set_multi_vc_pipe(struct device *dev, int pipe_id, u32 link)
 +{
 +	int err = 0;
-+	int iter;
++	int vc;
 +	struct max96712 *priv = dev_get_drvdata(dev);
-+	int link_id = vc_id / MAX9295_MAX_STREAMS;
 +	uint32_t map_pipe_offs = 0x40 * pipe_id;
 +	uint32_t ext_vc_offs = 0x10 * pipe_id;
++	/* SRC is the serializer VC arriving on the link, DST the remapped VC
++	 * leaving on CSI; EXT carries the high bits of both. */
++	u8 src_vc0 = 0 << 6;
++	u8 src_vc1 = 1 << 6;
++	u8 src_vc2 = 2 << 6;
++	u8 src_vc3 = 3 << 6;
++	u8 dst_vc0 = (priv->vc_remap[link][0] & 0x3) << 6;
++	u8 dst_vc1 = (priv->vc_remap[link][1] & 0x3) << 6;
++	u8 dst_vc2 = (priv->vc_remap[link][2] & 0x3) << 6;
++	u8 dst_vc3 = (priv->vc_remap[link][3] & 0x3) << 6;
++	u8 ext_vc0 = max96712_ext_vc(0, priv->vc_remap[link][0]);
++	u8 ext_vc1 = max96712_ext_vc(1, priv->vc_remap[link][1]);
++	u8 ext_vc2 = max96712_ext_vc(2, priv->vc_remap[link][2]);
++	u8 ext_vc3 = max96712_ext_vc(3, priv->vc_remap[link][3]);
 +
 +	struct reg_pair map_pipe_control[] = {
 +		// Enable all static mappings
 +		{MAX96712_MIPI_TX11_ADDR + map_pipe_offs, 0xFF},
 +		{MAX96712_MIPI_TX12_ADDR + map_pipe_offs, 0xFF},
 +		// Map vc_id 0 formats (depth)
-+		{MAX96712_MIPI_TX13_SRC_0_MAP_ADDR + map_pipe_offs, GMSL_CSI_DT_YUV422_8},
-+		{MAX96712_MIPI_TX14_DST_0_MAP_ADDR + map_pipe_offs, GMSL_CSI_DT_YUV422_8},
-+		{MAX96712_MIPI_TX15_SRC_1_MAP_ADDR + map_pipe_offs, 0x00},
-+		{MAX96712_MIPI_TX16_DST_1_MAP_ADDR + map_pipe_offs, 0x00},
-+		{MAX96712_MIPI_TX17_SRC_2_MAP_ADDR + map_pipe_offs, 0x01},
-+		{MAX96712_MIPI_TX18_DST_2_MAP_ADDR + map_pipe_offs, 0x01},
-+		{MAX96712_MIPI_TX19_SRC_3_MAP_ADDR + map_pipe_offs, GMSL_CSI_DT_EMBED},
-+		{MAX96712_MIPI_TX20_DST_3_MAP_ADDR + map_pipe_offs, GMSL_CSI_DT_EMBED},
++		{MAX96712_MIPI_TX13_SRC_0_MAP_ADDR + map_pipe_offs, src_vc0 | GMSL_CSI_DT_YUV422_8},
++		{MAX96712_MIPI_TX14_DST_0_MAP_ADDR + map_pipe_offs, dst_vc0 | GMSL_CSI_DT_YUV422_8},
++		{MAX96712_MIPI_TX_EXT0_ADDR + ext_vc_offs, ext_vc0},
++		{MAX96712_MIPI_TX15_SRC_1_MAP_ADDR + map_pipe_offs, src_vc0 | 0x00},
++		{MAX96712_MIPI_TX16_DST_1_MAP_ADDR + map_pipe_offs, dst_vc0 | 0x00},
++		{MAX96712_MIPI_TX_EXT1_ADDR + ext_vc_offs, ext_vc0},
++		{MAX96712_MIPI_TX17_SRC_2_MAP_ADDR + map_pipe_offs, src_vc0 | 0x01},
++		{MAX96712_MIPI_TX18_DST_2_MAP_ADDR + map_pipe_offs, dst_vc0 | 0x01},
++		{MAX96712_MIPI_TX_EXT2_ADDR + ext_vc_offs, ext_vc0},
++		{MAX96712_MIPI_TX19_SRC_3_MAP_ADDR + map_pipe_offs, src_vc0 | GMSL_CSI_DT_EMBED},
++		{MAX96712_MIPI_TX20_DST_3_MAP_ADDR + map_pipe_offs, dst_vc0 | GMSL_CSI_DT_EMBED},
++		{MAX96712_MIPI_TX_EXT3_ADDR + ext_vc_offs, ext_vc0},
 +
 +		// Map vc_id 1 formats (RGB)
-+		{MAX96712_MIPI_TX21_SRC_4_MAP_ADDR + map_pipe_offs, (1 << 6) | GMSL_CSI_DT_YUV422_8},
-+		{MAX96712_MIPI_TX22_DST_4_MAP_ADDR + map_pipe_offs, (1 << 6) | GMSL_CSI_DT_YUV422_8},
-+		{MAX96712_MIPI_TX23_SRC_5_MAP_ADDR + map_pipe_offs, (1 << 6) | 0x00},
-+		{MAX96712_MIPI_TX24_DST_5_MAP_ADDR + map_pipe_offs, (1 << 6) | 0x00},
-+		{MAX96712_MIPI_TX25_SRC_6_MAP_ADDR + map_pipe_offs, (1 << 6) | 0x01},
-+		{MAX96712_MIPI_TX26_DST_6_MAP_ADDR + map_pipe_offs, (1 << 6) | 0x01},
-+		{MAX96712_MIPI_TX27_SRC_7_MAP_ADDR + map_pipe_offs, (1 << 6) | GMSL_CSI_DT_EMBED},
-+		{MAX96712_MIPI_TX28_DST_7_MAP_ADDR + map_pipe_offs, (1 << 6) | GMSL_CSI_DT_EMBED},
++		{MAX96712_MIPI_TX21_SRC_4_MAP_ADDR + map_pipe_offs, src_vc1 | GMSL_CSI_DT_YUV422_8},
++		{MAX96712_MIPI_TX22_DST_4_MAP_ADDR + map_pipe_offs, dst_vc1 | GMSL_CSI_DT_YUV422_8},
++		{MAX96712_MIPI_TX_EXT4_ADDR + ext_vc_offs, ext_vc1},
++		{MAX96712_MIPI_TX23_SRC_5_MAP_ADDR + map_pipe_offs, src_vc1 | 0x00},
++		{MAX96712_MIPI_TX24_DST_5_MAP_ADDR + map_pipe_offs, dst_vc1 | 0x00},
++		{MAX96712_MIPI_TX_EXT5_ADDR + ext_vc_offs, ext_vc1},
++		{MAX96712_MIPI_TX25_SRC_6_MAP_ADDR + map_pipe_offs, src_vc1 | 0x01},
++		{MAX96712_MIPI_TX26_DST_6_MAP_ADDR + map_pipe_offs, dst_vc1 | 0x01},
++		{MAX96712_MIPI_TX_EXT6_ADDR + ext_vc_offs, ext_vc1},
++		{MAX96712_MIPI_TX27_SRC_7_MAP_ADDR + map_pipe_offs, src_vc1 | GMSL_CSI_DT_EMBED},
++		{MAX96712_MIPI_TX28_DST_7_MAP_ADDR + map_pipe_offs, dst_vc1 | GMSL_CSI_DT_EMBED},
++		{MAX96712_MIPI_TX_EXT7_ADDR + ext_vc_offs, ext_vc1},
 +
 +		// Map vc_id 2 formats (IR)
-+		{MAX96712_MIPI_TX29_SRC_8_MAP_ADDR + map_pipe_offs, (2 << 6) | GMSL_CSI_DT_YUV422_8},
-+		{MAX96712_MIPI_TX30_DST_8_MAP_ADDR + map_pipe_offs, (2 << 6) | GMSL_CSI_DT_YUV422_8},
-+		{MAX96712_MIPI_TX31_SRC_9_MAP_ADDR + map_pipe_offs, (2 << 6) | 0x00},
-+		{MAX96712_MIPI_TX32_DST_9_MAP_ADDR + map_pipe_offs, (2 << 6) | 0x00},
-+		{MAX96712_MIPI_TX33_SRC_10_MAP_ADDR + map_pipe_offs, (2 << 6) | 0x01},
-+		{MAX96712_MIPI_TX34_DST_10_MAP_ADDR + map_pipe_offs, (2 << 6) | 0x01},
-+		{MAX96712_MIPI_TX35_SRC_11_MAP_ADDR + map_pipe_offs, (2 << 6) | GMSL_CSI_DT_EMBED},
-+		{MAX96712_MIPI_TX36_DST_11_MAP_ADDR + map_pipe_offs, (2 << 6) | GMSL_CSI_DT_EMBED},
-+		{MAX96712_MIPI_TX37_SRC_12_MAP_ADDR + map_pipe_offs, (2 << 6) | GMSL_CSI_DT_RAW_16},
-+		{MAX96712_MIPI_TX38_DST_12_MAP_ADDR + map_pipe_offs, (2 << 6) | GMSL_CSI_DT_RAW_16},
++		{MAX96712_MIPI_TX29_SRC_8_MAP_ADDR + map_pipe_offs, src_vc2 | GMSL_CSI_DT_YUV422_8},
++		{MAX96712_MIPI_TX30_DST_8_MAP_ADDR + map_pipe_offs, dst_vc2 | GMSL_CSI_DT_YUV422_8},
++		{MAX96712_MIPI_TX_EXT8_ADDR + ext_vc_offs, ext_vc2},
++		{MAX96712_MIPI_TX31_SRC_9_MAP_ADDR + map_pipe_offs, src_vc2 | 0x00},
++		{MAX96712_MIPI_TX32_DST_9_MAP_ADDR + map_pipe_offs, dst_vc2 | 0x00},
++		{MAX96712_MIPI_TX_EXT9_ADDR + ext_vc_offs, ext_vc2},
++		{MAX96712_MIPI_TX33_SRC_10_MAP_ADDR + map_pipe_offs, src_vc2 | 0x01},
++		{MAX96712_MIPI_TX34_DST_10_MAP_ADDR + map_pipe_offs, dst_vc2 | 0x01},
++		{MAX96712_MIPI_TX_EXT10_ADDR + ext_vc_offs, ext_vc2},
++		{MAX96712_MIPI_TX35_SRC_11_MAP_ADDR + map_pipe_offs, src_vc2 | GMSL_CSI_DT_EMBED},
++		{MAX96712_MIPI_TX36_DST_11_MAP_ADDR + map_pipe_offs, dst_vc2 | GMSL_CSI_DT_EMBED},
++		{MAX96712_MIPI_TX_EXT11_ADDR + ext_vc_offs, ext_vc2},
++		{MAX96712_MIPI_TX37_SRC_12_MAP_ADDR + map_pipe_offs, src_vc2 | GMSL_CSI_DT_RAW_16},
++		{MAX96712_MIPI_TX38_DST_12_MAP_ADDR + map_pipe_offs, dst_vc2 | GMSL_CSI_DT_RAW_16},
++		{MAX96712_MIPI_TX_EXT12_ADDR + ext_vc_offs, ext_vc2},
 +
 +		// Map vc_id 3 formats (IMU)
-+		{MAX96712_MIPI_TX39_SRC_13_MAP_ADDR + map_pipe_offs, (3 << 6) | GMSL_CSI_DT_RAW_8},
-+		{MAX96712_MIPI_TX40_DST_13_MAP_ADDR + map_pipe_offs, (3 << 6) | GMSL_CSI_DT_RAW_8},
-+		{MAX96712_MIPI_TX41_SRC_14_MAP_ADDR + map_pipe_offs, (3 << 6) | 0x00},
-+		{MAX96712_MIPI_TX42_DST_14_MAP_ADDR + map_pipe_offs, (3 << 6) | 0x00},
-+		{MAX96712_MIPI_TX43_SRC_15_MAP_ADDR + map_pipe_offs, (3 << 6) | 0x01},
-+		{MAX96712_MIPI_TX44_DST_15_MAP_ADDR + map_pipe_offs, (3 << 6) | 0x01},
++		{MAX96712_MIPI_TX39_SRC_13_MAP_ADDR + map_pipe_offs, src_vc3 | GMSL_CSI_DT_RAW_8},
++		{MAX96712_MIPI_TX40_DST_13_MAP_ADDR + map_pipe_offs, dst_vc3 | GMSL_CSI_DT_RAW_8},
++		{MAX96712_MIPI_TX_EXT13_ADDR + ext_vc_offs, ext_vc3},
++		{MAX96712_MIPI_TX41_SRC_14_MAP_ADDR + map_pipe_offs, src_vc3 | 0x00},
++		{MAX96712_MIPI_TX42_DST_14_MAP_ADDR + map_pipe_offs, dst_vc3 | 0x00},
++		{MAX96712_MIPI_TX_EXT14_ADDR + ext_vc_offs, ext_vc3},
++		{MAX96712_MIPI_TX43_SRC_15_MAP_ADDR + map_pipe_offs, src_vc3 | 0x01},
++		{MAX96712_MIPI_TX44_DST_15_MAP_ADDR + map_pipe_offs, dst_vc3 | 0x01},
++		{MAX96712_MIPI_TX_EXT15_ADDR + ext_vc_offs, ext_vc3},
 +
 +		// All mappings to PHY1 (master for port A)
 +		{MAX96712_MIPI_TX45_MAP_DPHY_DEST_ADDR + map_pipe_offs, 0x55},
@@ -760,13 +940,18 @@ index 8e237eef..12729a1e 100644
 +		{MAX96712_VIDEO_RX0_ADDR + (0x12 * pipe_id) + ((pipe_id >= 5) ? 6 : 0), 0x23},
 +	};
 +
++	/* This table maps all four of the camera's VCs in one shot, so the link
++	 * must declare a deserializer VC for every one of them. */
++	for (vc = 0; vc < 4; vc++) {
++		if (priv->vc_remap[link][vc] == MAX96712_VC_UNMAPPED) {
++			dev_err(dev, "%s: link %u serializer vc %d unmapped\n",
++				__func__, link, vc);
++			return -EINVAL;
++		}
++	}
++
 +	err |= max96712_set_registers(priv, map_pipe_control,
 +					ARRAY_SIZE(map_pipe_control));
-+
-+	/* Configuring the mapping's extended VC */
-+	for (iter = 0; iter < 16; iter++) {
-+		err |= max96712_write_reg(priv, MAX96712_MIPI_TX_EXT0_ADDR + iter + ext_vc_offs, link_id << 2);
-+	}
 +
 +	if (err) {
 +		return err;
@@ -778,7 +963,8 @@ index 8e237eef..12729a1e 100644
 +}
 +
 +/* Update mapping table entries that can change in runtime */
-+static int __max96712_update_multi_vc_pipe(struct device *dev, int pipe_id, u32 vc_id, u8 data_type1)
++static int __max96712_update_multi_vc_pipe(struct device *dev, int pipe_id,
++					  u32 link, u32 vc_id, u8 data_type1)
 +{
 +	int err = 0;
 +
@@ -786,17 +972,19 @@ index 8e237eef..12729a1e 100644
 +	if (vc_id == 1) {
 +		struct max96712 *priv = dev_get_drvdata(dev);
 +		uint32_t map_pipe_offs = 0x40 * pipe_id;
++		u8 src_vc = vc_id << 6;
++		u8 dst_vc = (priv->vc_remap[link][vc_id] & 0x3) << 6;
 +
 +		struct reg_pair map_pipe_control[] = {
 +			// Update vc_id 1 formats (RGB)
-+			{MAX96712_MIPI_TX21_SRC_4_MAP_ADDR + map_pipe_offs, (vc_id << 6) | data_type1},
-+			{MAX96712_MIPI_TX22_DST_4_MAP_ADDR + map_pipe_offs, (vc_id << 6) | data_type1},
++			{MAX96712_MIPI_TX21_SRC_4_MAP_ADDR + map_pipe_offs, src_vc | data_type1},
++			{MAX96712_MIPI_TX22_DST_4_MAP_ADDR + map_pipe_offs, dst_vc | data_type1},
 +		};
 +		dev_dbg(dev, "%s: Updating vc_id %u on pipe %u to data type 0x%x\n",
 +				__func__, vc_id, pipe_id, data_type1);
 +		err |= max96712_set_registers(priv, map_pipe_control,
 +						ARRAY_SIZE(map_pipe_control));
-+	
++
 +		if (err) {
 +			return err;
 +		}
@@ -871,14 +1059,15 @@ index 8e237eef..12729a1e 100644
 +}
 +EXPORT_SYMBOL(max96712_init_settings);
 +
-+int max96712_bind_ser_to_dser_pipe(struct device *dev, int dser_pipe_id, int ser_pipe_id, u32 vc_id)
++int max96712_bind_ser_to_dser_pipe(struct device *dev, int dser_pipe_id,
++				   int ser_pipe_id, u32 link)
 +{
 +	struct max96712 *priv = dev_get_drvdata(dev);
 +	int err = 0;
 +
 +	mutex_lock(&priv->lock);
 +
-+	err = __max96712_bind_ser_to_dser_pipe(dev, dser_pipe_id, ser_pipe_id, vc_id);
++	err = __max96712_bind_ser_to_dser_pipe(dev, dser_pipe_id, ser_pipe_id, link);
 +
 +	mutex_unlock(&priv->lock);
 +
@@ -887,7 +1076,7 @@ index 8e237eef..12729a1e 100644
 +EXPORT_SYMBOL(max96712_bind_ser_to_dser_pipe);
 +
 +int max96712_set_pipe(struct device *dev, int pipe_id,
-+		     u8 data_type1, u8 data_type2, u32 vc_id)
++		     u8 data_type1, u8 data_type2, u32 link, u32 vc_id)
 +{
 +	struct max96712 *priv = dev_get_drvdata(dev);
 +	int err = 0;
@@ -898,8 +1087,16 @@ index 8e237eef..12729a1e 100644
 +		return -EINVAL;
 +	}
 +
-+	dev_dbg(dev, "%s pipe_id %d, data_type1 %u, data_type2 %u, vc_id %u\n",
-+		__func__, pipe_id, data_type1, data_type2, vc_id);
++	if (link >= MAX96712_MAX_LINKS || vc_id >= MAX96712_MAX_SER_VCS ||
++	    priv->vc_remap[link][vc_id] == MAX96712_VC_UNMAPPED) {
++		dev_err(dev, "%s: link %u serializer vc %u has no deserializer VC\n",
++			__func__, link, vc_id);
++		return -EINVAL;
++	}
++
++	dev_dbg(dev, "%s pipe_id %d, data_type1 %u, data_type2 %u, link %u, vc_id %u -> dser vc %u\n",
++		__func__, pipe_id, data_type1, data_type2, link, vc_id,
++		priv->vc_remap[link][vc_id]);
 +
 +	mutex_lock(&priv->lock);
 +
@@ -910,14 +1107,14 @@ index 8e237eef..12729a1e 100644
 +		 * config-retry loop) reuse the existing mapping unchanged.
 +		 */
 +		if (!priv->multi_vc_configured[pipe_id]) {
-+			err = __max96712_set_multi_vc_pipe(dev, pipe_id, vc_id);
++			err = __max96712_set_multi_vc_pipe(dev, pipe_id, link);
 +			if (!err)
 +				priv->multi_vc_configured[pipe_id] = true;
 +		}
 +		if (!err)
-+			err = __max96712_update_multi_vc_pipe(dev, pipe_id, vc_id, data_type1);
++			err = __max96712_update_multi_vc_pipe(dev, pipe_id, link, vc_id, data_type1);
 +	} else {
-+		err = __max96712_set_pipe(dev, pipe_id, data_type1, data_type2, vc_id);
++		err = __max96712_set_pipe(dev, pipe_id, data_type1, data_type2, link, vc_id);
 +	}
 +
 +	mutex_unlock(&priv->lock);
@@ -1070,7 +1267,7 @@ index 8e237eef..12729a1e 100644
  	{ },
  };
  
-@@ -300,6 +1169,7 @@ static struct i2c_driver max96712_i2c_driver = {
+@@ -300,6 +1364,7 @@ static struct i2c_driver max96712_i2c_driver = {
  	.driver = {
  		.name = "max96712",
  		.owner = THIS_MODULE,

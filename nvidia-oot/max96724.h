@@ -42,7 +42,7 @@
 
 int max96724_get_available_pipe_id(struct device *dev, int vc_id);
 int max96724_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
-		      u8 data_type2, u32 vc_id);
+		      u8 data_type2, u32 link, u32 vc_id);
 int max96724_release_pipe(struct device *dev, int pipe_id);
 void max96724_reset_oneshot(struct device *dev);
 void max96724_retrigger_datapath(struct device *dev);
@@ -161,12 +161,12 @@ int max96724_disable_fsync(struct device *dev);
  * @param  [in]  dev             The deserializer device handle.
  * @param  [in]  dser_pipe_id    Deserializer pipe ID.
  * @param  [in]  ser_pipe_id     Serializer pipe ID.
- * @param  [in]  vc_id           VC ID associated with this pipe.
+ * @param  [in]  link            GMSL link the serializer pipe lives on.
  *
  * @return  0 for success, or negative error code.
  */
 int max96724_bind_ser_to_dser_pipe(struct device *dev, int dser_pipe_id,
-				   int ser_pipe_id, u32 vc_id);
+				   int ser_pipe_id, u32 link);
 
 /** @} */
 
