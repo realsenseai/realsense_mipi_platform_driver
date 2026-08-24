@@ -7,8 +7,8 @@ Add MAX96712 deserializer driver support for D4XX cameras.
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- drivers/media/i2c/max96712.c | 1215 ++++++++++++++++++++++++++++++++--
- 1 file changed, 1175 insertions(+), 40 deletions(-)
+ drivers/media/i2c/max96712.c | 1267 ++++++++++++++++++++++++++++++++--
+ 1 file changed, 1227 insertions(+), 40 deletions(-)
 
 diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
 index 329a10d..c8bde22 100644
@@ -562,7 +562,7 @@ index 329a10d..c8bde22 100644
  		i2c_unregister_device(client);
  		client = NULL;
  	}
-@@ -285,13 +639,793 @@ max96712_remove(struct i2c_client *client)
+@@ -285,13 +639,845 @@ max96712_remove(struct i2c_client *client)
  	return 0;
  }
  
@@ -794,10 +794,14 @@ index 329a10d..c8bde22 100644
 +}
 +EXPORT_SYMBOL(max96712_get_ser_pipe_id);
 +
-+static void max96712_reset_oneshot_link_mask(struct max96712 *priv, uint8_t link_mask)
++static int max96712_reset_oneshot_link_mask(struct max96712 *priv, uint8_t link_mask)
 +{
-+	max96712_write_reg(priv, MAX96712_CTRL1_ADDR, link_mask);
++	int err = max96712_write_reg(priv, MAX96712_CTRL1_ADDR, link_mask);
++
++	if (err)
++		return err;
 +	msleep(100);
++	return 0;
 +}
 +
 +void max96712_reset_oneshot(struct device *dev)
@@ -1260,6 +1264,54 @@ index 329a10d..c8bde22 100644
 +}
 +EXPORT_SYMBOL(max96712_setup_link);
 +
++int max96712_recover_link(struct device *dev, struct device *ser_dev, u32 link_id)
++{
++	struct max96712 *priv = dev_get_drvdata(dev);
++	struct i2c_client *ser_client = to_i2c_client(ser_dev);
++	u8 target_addr;
++	int restore_err;
++	int err;
++
++	target_addr = ser_client->addr;
++	if (link_id >= MAX96712_MAX_LINKS ||
++	    !(priv->link_mask & BIT(link_id)))
++		return -EINVAL;
++
++	mutex_lock(&priv->lock);
++
++	/* Isolate the requested link so a serializer at the default address
++	 * cannot collide with a serializer on another camera module.
++	 */
++	err = max96712_write_reg(priv, MAX96712_REG6_ADDR,
++				   0xF0 | BIT(link_id));
++	if (!err) {
++		msleep(20);
++		err = max96712_reset_oneshot_link_mask(priv, BIT(link_id));
++	}
++
++	if (!err)
++		err = max96712_wait_for_link_lock_mask(dev, BIT(link_id));
++
++	/* A prototype serializer restarts at the default address. Once the
++	 * deserializer reports link lock, restore the assigned non-zero alias.
++	 */
++	if (!err && target_addr != MAX9295_DEFAULT_ADDR) {
++		err = max96712_write_slave_reg(priv, MAX9295_DEFAULT_ADDR, 0,
++					       target_addr << 1);
++		if (!err)
++			msleep(20);
++	}
++
++	restore_err = max96712_write_reg(priv, MAX96712_REG6_ADDR,
++					     0xF0 | priv->link_mask);
++	if (!err)
++		err = restore_err;
++
++	mutex_unlock(&priv->lock);
++	return err;
++}
++EXPORT_SYMBOL(max96712_recover_link);
++
 +int max96712_setup_control(struct device *dev, struct device *s_dev)
 +{
 +	struct max96712 *priv = dev_get_drvdata(dev);
@@ -1357,7 +1409,7 @@ index 329a10d..c8bde22 100644
  	{ },
  };
  
-@@ -301,6 +1435,7 @@ static struct i2c_driver max96712_i2c_driver = {
+@@ -301,6 +1487,7 @@ static struct i2c_driver max96712_i2c_driver = {
  	.driver = {
  		.name = "max96712",
  		.owner = THIS_MODULE,
@@ -1367,4 +1419,3 @@ index 329a10d..c8bde22 100644
  	.remove = max96712_remove,
 -- 
 2.43.0
-
