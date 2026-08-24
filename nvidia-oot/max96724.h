@@ -81,6 +81,20 @@ int max96724_setup_control(struct device *dev, struct device *s_dev);
 int max96724_reset_control(struct device *dev, struct device *s_dev);
 
 /**
+ * @brief  Restores one serializer link after a remote power cycle.
+ *
+ * The target link is selected from the serializer's assigned I2C address.
+ * Other enabled links are briefly gated for address isolation, then restored;
+ * the shared deserializer is not reset or fully reconfigured.
+ *
+ * @param  [in]  dev          The deserializer device handle.
+ * @param  [in]  ser_dev      The serializer device handle.
+ *
+ * @return  0 for success, or negative error code.
+ */
+int max96724_recover_link(struct device *dev, struct device *ser_dev, u32 link);
+
+/**
  * @brief  Registers a source sensor device with the deserializer.
  *
  * @param  [in]  dev          The deserializer device handle.
