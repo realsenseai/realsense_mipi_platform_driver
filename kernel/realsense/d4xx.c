@@ -727,7 +727,7 @@ struct ds5_reenum_entry {
 };
 
 #define DS5_REENUM_MAX_DEVICES (MAX_DS5_NUM * DS5_REENUM_ROLE_COUNT)
-#define DS5_REENUM_DELAY_MS 1000
+#define DS5_REENUM_DELAY_MS 5000
 #define DS5_REENUM_ATTACH_RETRIES 3
 #define DS5_REENUM_ATTACH_RETRY_MS 500
 
@@ -735,6 +735,9 @@ static DEFINE_MUTEX(ds5_reenum_lock);
 static struct delayed_work ds5_reenum_work;
 static struct ds5_reenum_entry ds5_reenum_entries[DS5_REENUM_MAX_DEVICES];
 static unsigned int ds5_reenum_num_entries;
+static struct device *ds5_reenum_dser_dev;
+static struct device *ds5_reenum_ser_devs[MAX_DS5_NUM];
+static unsigned int ds5_reenum_num_ser_devs;
 static bool ds5_reenum_pending;
 
 static void ds5_reenum_work_fn(struct work_struct *work);
@@ -811,7 +814,6 @@ static const struct dser_interface max96724_interface = {
 	.reset_oneshot = max96724_reset_oneshot,
 	.retrigger_datapath = max96724_retrigger_datapath,
 	.setup_link = max96724_setup_link,
-	.recover_link = max96724_recover_link,
 	.setup_control = max96724_setup_control,
 	.reset_control = max96724_reset_control,
 	.setup_fsync = max96724_setup_fsync,
@@ -964,16 +966,21 @@ static void ds5_reenum_work_fn(struct work_struct *work)
 {
 	bool group_ready[MAX_DS5_NUM] = { false };
 	unsigned int num_entries;
+	unsigned int num_ser_devs;
+	struct device *dser_dev;
+	int ret;
 	int role;
 	int pass;
 	int i;
 
 	mutex_lock(&ds5_reenum_lock);
 	num_entries = ds5_reenum_num_entries;
+	num_ser_devs = ds5_reenum_num_ser_devs;
+	dser_dev = ds5_reenum_dser_dev;
 	mutex_unlock(&ds5_reenum_lock);
 
-	pr_warn("d4xx: D500 recovery rebinding %u I2C functions\n",
-		num_entries);
+	pr_warn("d4xx: D500 recovery rebinding deserializer, %u serializers and %u I2C functions\n",
+		num_ser_devs, num_entries);
 
 	/* Match a complete module removal: remove peers before the function
 	 * which owns the serializer/deserializer registration.
@@ -988,13 +995,35 @@ static void ds5_reenum_work_fn(struct work_struct *work)
 		}
 	}
 
+	/* modprobe -r also drops now-unused SerDes dependencies.  Reproduce
+	 * that lifecycle so their devm state and cached link_setup/poc_enabled
+	 * flags cannot survive the remote power loss.
+	 */
+	for (i = (int)num_ser_devs - 1; i >= 0; i--)
+		device_release_driver(ds5_reenum_ser_devs[i]);
+	device_release_driver(dser_dev);
+
+	ret = ds5_reenum_attach_device(dser_dev);
+	if (ret) {
+		dev_err(dser_dev,
+			"D500 recovery failed to reattach deserializer (%d)\n", ret);
+		goto put_refs;
+	}
+
+	for (i = 0; i < num_ser_devs; i++) {
+		ret = ds5_reenum_attach_device(ds5_reenum_ser_devs[i]);
+		if (ret)
+			dev_err(ds5_reenum_ser_devs[i],
+				"D500 recovery failed to reattach serializer (%d)\n",
+				ret);
+	}
+
 	/* Depth must claim each camera slot first.  Its probe performs the full
 	 * serializer address assignment and, for the first camera, deserializer
 	 * power/setup.  Only then may the peer functions share that setup.
 	 */
 	for (i = 0; i < num_entries; i++) {
 		struct ds5_reenum_entry *entry = &ds5_reenum_entries[i];
-		int ret;
 
 		if (entry->role != DS5_REENUM_DEPTH)
 			continue;
@@ -1011,7 +1040,6 @@ static void ds5_reenum_work_fn(struct work_struct *work)
 	for (role = DS5_REENUM_RGB; role < DS5_REENUM_ROLE_COUNT; role++) {
 		for (i = 0; i < num_entries; i++) {
 			struct ds5_reenum_entry *entry = &ds5_reenum_entries[i];
-			int ret;
 
 			if (entry->role != role || !group_ready[entry->group])
 				continue;
@@ -1024,12 +1052,20 @@ static void ds5_reenum_work_fn(struct work_struct *work)
 		}
 	}
 
+put_refs:
 	mutex_lock(&ds5_reenum_lock);
 	for (i = 0; i < ds5_reenum_num_entries; i++) {
 		put_device(ds5_reenum_entries[i].dev);
 		ds5_reenum_entries[i].dev = NULL;
 	}
 	ds5_reenum_num_entries = 0;
+	for (i = 0; i < ds5_reenum_num_ser_devs; i++) {
+		put_device(ds5_reenum_ser_devs[i]);
+		ds5_reenum_ser_devs[i] = NULL;
+	}
+	ds5_reenum_num_ser_devs = 0;
+	put_device(ds5_reenum_dser_dev);
+	ds5_reenum_dser_dev = NULL;
 	ds5_reenum_pending = false;
 	mutex_unlock(&ds5_reenum_lock);
 
@@ -1040,6 +1076,7 @@ static int ds5_schedule_reenumeration(struct ds5 *state)
 {
 	struct dser_control *target_dser;
 	unsigned int count = 0;
+	unsigned int ser_count = 0;
 	bool have_depth = false;
 	int i;
 	int role;
@@ -1066,6 +1103,16 @@ static int ds5_schedule_reenumeration(struct ds5 *state)
 			continue;
 		}
 
+		if (ds5_inited[i].ds5_primary &&
+		    ds5_inited[i].ds5_primary->ser_dev &&
+		    ser_count < MAX_DS5_NUM) {
+			struct device *ser_dev =
+				ds5_inited[i].ds5_primary->ser_dev;
+
+			if (get_device(ser_dev))
+				ds5_reenum_ser_devs[ser_count++] = ser_dev;
+		}
+
 		for (role = 0; role < DS5_REENUM_ROLE_COUNT; role++) {
 			struct device *dev = ds5_inited[i].reenum_members[role];
 
@@ -1088,21 +1135,26 @@ static int ds5_schedule_reenumeration(struct ds5 *state)
 		mutex_unlock(&ds5_inited[i].lock);
 	}
 
-	if (!count || !have_depth) {
+	if (!count || !have_depth || !ser_count ||
+	    !get_device(state->dser_dev)) {
 		while (count)
 			put_device(ds5_reenum_entries[--count].dev);
+		while (ser_count)
+			put_device(ds5_reenum_ser_devs[--ser_count]);
 		mutex_unlock(&ds5_reenum_lock);
 		return -ENODEV;
 	}
 
 	ds5_reenum_num_entries = count;
+	ds5_reenum_num_ser_devs = ser_count;
+	ds5_reenum_dser_dev = state->dser_dev;
 	ds5_reenum_pending = true;
 	schedule_delayed_work(&ds5_reenum_work,
 		msecs_to_jiffies(DS5_REENUM_DELAY_MS));
 	mutex_unlock(&ds5_reenum_lock);
 
 	dev_warn(&state->client->dev,
-		"D500 serializer power loss: scheduled driver-core re-enumeration of %u I2C functions\n",
+		"D500 serializer power loss: scheduled full SerDes and %u-function re-enumeration\n",
 		count);
 	return 0;
 }
@@ -1144,6 +1196,15 @@ static void ds5_cancel_reenumeration(void)
 		ds5_reenum_entries[i].dev = NULL;
 	}
 	ds5_reenum_num_entries = 0;
+	for (i = 0; i < ds5_reenum_num_ser_devs; i++) {
+		put_device(ds5_reenum_ser_devs[i]);
+		ds5_reenum_ser_devs[i] = NULL;
+	}
+	ds5_reenum_num_ser_devs = 0;
+	if (ds5_reenum_dser_dev) {
+		put_device(ds5_reenum_dser_dev);
+		ds5_reenum_dser_dev = NULL;
+	}
 	ds5_reenum_pending = false;
 	mutex_unlock(&ds5_reenum_lock);
 }
@@ -3138,97 +3199,6 @@ static int ds5_set_ser_esync_tunneling(struct ds5 *state, bool enable)
 #endif
 }
 
-#ifdef CONFIG_VIDEO_D4XX_SERDES
-#define DS5_D500_SERDES_RECOVERY_RETRIES 2
-
-/*
- * D500 HW reset also removes serializer power. Rebuild only the remote link
- * and serializer state; the deserializer stays powered and must not be globally
- * reset because it may be shared with other cameras.
- */
-static int ds5_d500_serdes_recover(struct ds5 *state)
-{
-	struct ds5 *primary;
-	int attempt;
-	int ret = -ENODEV;
-
-	mutex_lock(&state->ds5_dev->lock);
-	primary = state->ds5_dev->ds5_primary;
-	mutex_unlock(&state->ds5_dev->lock);
-
-	if (!primary || !primary->ser_dev || !primary->dser_dev ||
-	    !primary->ser_ops || !primary->dser_ops) {
-		dev_err(&state->client->dev,
-			"%s(): missing primary SERDES context\n", __func__);
-		return -ENODEV;
-	}
-
-	if (!primary->dser_ops->recover_link) {
-		dev_err(&state->client->dev,
-			"%s(): %s has no serializer power-cycle recovery\n",
-			__func__, primary->dser_ops->name);
-		return -EOPNOTSUPP;
-	}
-
-	/*
-	 * Exclude stream pipe programming while the serializer is temporarily at
-	 * its default address and the deserializer is in exclusive-link mode.
-	 */
-	mutex_lock(&serdes_lock__);
-	for (attempt = 1; attempt <= DS5_D500_SERDES_RECOVERY_RETRIES;
-	     attempt++) {
-		dev_info(&state->client->dev,
-			 "%s(): D500 cold SERDES recovery attempt %d/%d\n",
-			 __func__, attempt, DS5_D500_SERDES_RECOVERY_RETRIES);
-
-		ret = primary->dser_ops->recover_link(primary->dser_dev,
-						     &primary->client->dev);
-		if (ret) {
-			dev_warn(&state->client->dev,
-				 "%s(): %s link recovery failed (%d)\n",
-				 __func__, primary->dser_ops->name, ret);
-			goto retry;
-		}
-
-		/*
-		 * Serializer power loss clears both the camera I2C alias and all
-		 * MIPI/tunnel registers. Restore them in the same order as probe.
-		 */
-		ret = primary->ser_ops->setup_control(primary->ser_dev);
-		if (ret) {
-			dev_warn(&state->client->dev,
-				 "%s(): %s I2C alias restore failed (%d)\n",
-				 __func__, primary->ser_ops->name, ret);
-			goto retry;
-		}
-
-		ret = primary->ser_ops->init_settings(primary->ser_dev);
-		if (!ret)
-			break;
-
-		dev_warn(&state->client->dev,
-			 "%s(): %s settings restore failed (%d)\n",
-			 __func__, primary->ser_ops->name, ret);
-
-retry:
-		if (attempt < DS5_D500_SERDES_RECOVERY_RETRIES)
-			msleep(100);
-	}
-	mutex_unlock(&serdes_lock__);
-
-	if (ret)
-		dev_err(&state->client->dev,
-			"%s(): D500 cold SERDES recovery failed (%d)\n",
-			__func__, ret);
-	else
-		dev_info(&state->client->dev,
-			 "%s(): D500 serializer link and I2C alias restored\n",
-			 __func__);
-
-	return ret;
-}
-#endif
-
 /*
  * ds5_hw_reset_with_recovery - Perform hardware reset with readiness polling
  * @state: Driver state structure
@@ -3369,16 +3339,15 @@ static int __ds5_hw_reset_with_recovery(struct ds5 *state)
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	if (d500_serdes_cold_reset) {
-		ret = ds5_d500_serdes_recover(state);
+		ret = ds5_schedule_reenumeration(state);
 		if (ret)
-			return ds5_reenumerate_after_reset_failure(state,
-				d500_serdes_cold_reset, ret);
+			return ret;
 
-		/*
-		 * Camera I2C was unreachable until the alias was restored. Give the
-		 * normal FW-readiness handshake its full timeout from this point.
+		/* Do not touch the recovering GMSL link from this ioctl context.
+		 * The delayed worker gives HKR and the serializer a quiet boot window,
+		 * then reproduces the complete module remove/probe lifecycle.
 		 */
-		ts = jiffies;
+		return 0;
 	}
 #endif
 
