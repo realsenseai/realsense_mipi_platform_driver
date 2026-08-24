@@ -109,6 +109,23 @@ Streaming depth frames from video0:
 ssh <USERNAME>@<TARGET> "timeout 15 v4l2-ctl -d /dev/video0 --stream-mmap --stream-count=30"
 ```
 
+> **CSI-PT / dual-RGB RAW (BA81, 1612x808) nodes on a REGRESSED `dev` build are a special
+> case — this is NOT a fundamental v4l2-ctl or format limitation.** On `dev` as of
+> ~2026-08-24 (commit `16fe5a3`, v1.0.6.6), plain `--stream-mmap` never receives a frame on
+> this format (Tegra VI channel spins in `uncorr_err`/`err_rec` resets indefinitely), and
+> even `--stream-poll` (fixed ~2s timeout) times out with zero data — because the CSI-PT
+> data path itself is broken on `dev` right now (empty/all-zero frames, confirmed via raw
+> byte inspection). **Confirmed by downgrading to `v1.0.5.20` (the original PR#459 tag,
+> `445d084`)**: bare `v4l2-ctl --stream-mmap --stream-count=60` there delivers 60/60 frames
+> at 30.03fps with zero VI resets — no `--stream-poll`, no patient reader, no workaround
+> needed at all. So: if you hit the timeout/reset symptom above, first check whether this
+> `dev`-branch regression is still present (compare against v1.0.5.20) before assuming
+> v4l2-ctl can't do this — it can, on a working driver build. `TimestampedV4l2Capture`'s
+> patient `select()` retry is a useful diagnostic to distinguish "regression present, zero
+> data either way" from "format works fine," but is not a general substitute for
+> `v4l2-ctl` on this format. (Investigated 2026-08-23/24, RSDSO-21854 — see that ticket's
+> `.triage/` in `perc_hw_fw-rs400` for the regression-hunt status.)
+
 wait for 3 seconds between each stream test to avoid overwhelming the device.
 
 Streaming color frames from video2:
@@ -177,6 +194,11 @@ media-ctl -p  # Check media controller topology
 - MIPI CSI-2 configuration issues
 - Sensor not responding
 - SerDes link problems
+- **Node is a CSI-PT/RAW-passthrough format (BA81, 1612x808)** — a v4l2-ctl timeout here
+  is a known symptom of the `dev`-branch regression documented in the CSI-PT note under
+  Step 6 above, not proof v4l2-ctl itself can't do this (v1.0.5.20 streams it fine with
+  plain `v4l2-ctl`). Check whether the regression is present (compare against v1.0.5.20 or
+  check RSDSO-21854's status) before concluding the format/tool is broken in general.
 
 **Debug**:
 ```bash

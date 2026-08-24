@@ -115,4 +115,22 @@ Native builds on aarch64 skip toolchain setup. Cross-compilation toolchains are 
 - **Patches fail to apply**: Run `./apply_patches.sh $VERSION reset` first, then re-apply.
 - **Missing git identity**: Set `git config user.name` and `git config user.email` before `apply_patches.sh`.
 - **Workspace not set up**: Run `./setup_workspace.sh $VERSION` first (downloads NVIDIA sources + toolchain).
+- **Building a different tag/branch in a git worktree** (e.g. testing an older release): `sources_$VERSION/` and
+  `l4t-gcc/` are large, gitignored directories that live in whichever directory you ran `setup_workspace.sh`
+  from — they are **not** shared across worktrees by git, and **`git worktree remove` deletes them** if they
+  were created inside that worktree. Symlinking `sources_$VERSION` alone is not enough; the toolchain
+  (`l4t-gcc/`) is separate and the build fails with `compiler ... not found` (`defconfig` step) without it.
+  Cheapest fix: symlink both from the main checkout instead of re-running `setup_workspace.sh`
+  (`ln -s <main-repo>/sources_$VERSION sources_$VERSION && ln -s <main-repo>/l4t-gcc l4t-gcc`) — but note
+  `apply_patches.sh reset` on a *shared* `sources_$VERSION` mutates it for every worktree pointing at it, so
+  don't build two different driver versions from the same symlinked tree concurrently. If you do remove a
+  worktree that had its own real (non-symlinked) `sources_$VERSION`/`l4t-gcc`, re-running `setup_workspace.sh`
+  is normally fast if a local NVIDIA sources cache tarball exists on this machine — check before assuming a
+  full re-clone is needed.
+- **`apply_patches.sh reset` is interactive** (`read -p "...Continue (Y/n)?"`) — it silently does **not**
+  perform the actual `git reset --hard` when run non-interactively (background job, no TTY, piped/redirected
+  stdin), since the prompt reads EOF. Patches then fail to apply on top of the *previous* version's still-applied
+  changes, producing confusing `patch does not apply` errors that look like source-tree corruption but aren't.
+  Either run it interactively, or pipe an explicit `Y` (`yes | ./apply_patches.sh $VERSION reset` — same
+  pattern needed for `setup_workspace.sh`'s NVIDIA license prompt).
 - **BUILD_NUMBER set**: If `BUILD_NUMBER` env var is set (common in CI), it changes the kernel vermagic string.

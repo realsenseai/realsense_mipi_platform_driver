@@ -29,6 +29,36 @@ Common V4L2 and media framework errors encountered during D4XX camera testing.
 - **Cause**: Another process streaming from same device
 - **Action**: Check for other applications accessing /dev/video*, close them
 
+### `v4l2-ctl` "select timeout" on CSI-PT / dual-RGB RAW nodes (BA81, 1612x808) — a `dev`-branch regression, NOT a v4l2-ctl/format limitation
+
+**Correction (2026-08-24)**: earlier guidance here claimed v4l2-ctl "cannot reliably
+capture" this format at all. That was wrong — it was diagnosing a *regression*, not a tool
+limitation. Confirmed by downgrading to driver `v1.0.5.20` (original PR#459 tag,
+`445d084`): plain `v4l2-ctl --stream-mmap --stream-count=60` there delivers 60/60 frames at
+30.03fps, zero VI resets, no `--stream-poll` or patient reader needed. The symptoms below
+are specific to `dev` as of ~2026-08-24 (commit `16fe5a3`, v1.0.6.6), where the CSI-PT data
+path itself is broken (confirmed empty/all-zero frame content via raw byte inspection,
+independent of which capture tool is used).
+
+- **On regressed `dev`, without `--stream-poll`**: no output, dmesg fills with
+  `tegra-camrtc-capture-vi: uncorr_err: request timed out after 2500 ms` /
+  `err_rec: attempting to reset the capture channel` in an endless loop until the caller's
+  own timeout kills `v4l2-ctl`. Default `--stream-mmap` blocks on `DQBUF` with no
+  `select()`, and on the regressed driver this format's VI channel never wakes a blocking
+  reader (frames genuinely never arrive).
+- **On regressed `dev`, with `--stream-poll --stream-mmap=4`**: clean `select timeout`,
+  exit 0, zero frames. v4l2-ctl's poll-mode `select()` uses a fixed ~2s timeout (not
+  configurable via any flag) and aborts on the first miss — but on the regressed driver
+  there's nothing to wait for anyway (data path produces empty frames), so this isn't
+  really "arming latency exceeding the timeout," it's "no data, ever."
+- **First step when you see this: check whether the regression is still present**
+  (compare against v1.0.5.20, or check RSDSO-21854's status in `perc_hw_fw-rs400`'s
+  `.triage/`) before concluding v4l2-ctl or the format itself has a limitation.
+  `framework.streaming.TimestampedV4l2Capture` remains useful as a *diagnostic* (its
+  patient `select()` retry across a held-open session distinguishes "genuinely no data" —
+  regression present — from "just needs to wait longer" — regression absent), but is not a
+  required workaround on a non-regressed driver. (Investigated 2026-08-23/24, RSDSO-21854.)
+
 ### VIDIOC_STREAMOFF failures
 
 **Error**: `VIDIOC_STREAMOFF timeout`
