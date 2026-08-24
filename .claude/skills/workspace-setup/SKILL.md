@@ -53,6 +53,13 @@ Ask the user for their name and email. Set these in the repo root — `apply_pat
 
 ## Step 4: Download NVIDIA Sources and Toolchain
 
+**Check first whether `sources_$VERSION`/`l4t-gcc` already exist — this step is expensive
+and skippable if they do.** Check each path individually (`[ -d sources_$VERSION ] && echo
+present`), not `ls -la sources_$VERSION l4t-gcc | head -N`: GNU `ls` prints multi-directory
+output sections in **alphabetical order of the names, not command-line order** — `l4t-gcc`
+sorts before `sources_*`, so a `head` truncation can cut off the `sources_$VERSION` section
+entirely and make a present, healthy directory look missing.
+
 ```bash
 ./setup_workspace.sh $VERSION
 ```
