@@ -67,6 +67,7 @@ struct dser_interface {
 	int (*setup_link)(struct device *dev, struct device *s_dev);
 	int (*setup_control)(struct device *dev, struct device *s_dev);
 	int (*reset_control)(struct device *dev, struct device *s_dev);
+	int (*recover_link)(struct device *dev, struct device *ser_dev);
 	int (*setup_fsync)(struct device *dev, u32 fps);
 	int (*disable_fsync)(struct device *dev);
 	
@@ -149,6 +150,9 @@ struct ser_interface {
 /* GVD response payload size per product line */
 #define DS5_GVD_LEN_D4XX		276
 #define DS5_GVD_LEN_D5XX		606
+#define D585_GVD_PID_OFFSET		18
+#define D585_2C_PROTO_PID		0x0C07
+#define D585_3C_PROTO_PID		0x0C08
 
 #define DS5_MIPI_LANE_NUMS		0x0400
 #define DS5_MIPI_LANE_DATARATE		0x0402
@@ -661,6 +665,7 @@ struct ds5_dev {
 	* read still returns 0.
 	*/
 	u16 cached_device_type;
+	u16 d585_product_id;
 
 	/* Timestamp (jiffies) of last completed HW reset.
 	* Used to enforce DS5_HW_RESET_COOLDOWN_MS between consecutive resets
@@ -757,6 +762,7 @@ static const struct dser_interface max96712_interface = {
 	.setup_link = max96712_setup_link,
 	.setup_control = max96712_setup_control,
 	.reset_control = max96712_reset_control,
+	.recover_link = max96712_recover_link,
 	.sdev_register = max96712_sdev_register,
 	.sdev_unregister = max96712_sdev_unregister,
 	.power_on = max96712_power_on,
@@ -775,6 +781,7 @@ static const struct dser_interface max96724_interface = {
 	.setup_link = max96724_setup_link,
 	.setup_control = max96724_setup_control,
 	.reset_control = max96724_reset_control,
+	.recover_link = max96724_recover_link,
 	.setup_fsync = max96724_setup_fsync,
 	.disable_fsync = max96724_disable_fsync,
 	.sdev_register = max96724_sdev_register,
@@ -856,6 +863,8 @@ static inline bool ds5_is_d58x(struct ds5 *state)
 		READ_ONCE(state->ds5_dev->cached_device_type) ==
 			DS5_DEVICE_TYPE_D58X;
 }
+
+static int ds5_hw_init(struct i2c_client *c, struct ds5 *state);
 
 static inline u16 ds5_rgb_ctrl_offset(struct ds5 *state, u16 d4xx_offset,
 				      u16 d58x_offset)
@@ -3016,6 +3025,9 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	bool rgb_streaming;
 	bool ir_streaming;
 	bool imu_streaming;
+	u16 d585_product_id = READ_ONCE(state->ds5_dev->d585_product_id);
+	bool d585_proto_reset = d585_product_id == D585_2C_PROTO_PID ||
+				 d585_product_id == D585_3C_PROTO_PID;
 	unsigned long ds5_last_reset_jiffies = READ_ONCE(state->ds5_dev->last_reset_jiffies);
 	unsigned long ts, timeout;
 
@@ -3084,7 +3096,9 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	 *    has long finished its init (matching v1.0.1.33 behavior).
 	 */
 	atomic_inc(ds5_get_reset_gen(state));
-	WRITE_ONCE(state->ds5_dev->cached_device_type, DS5_DEVICE_TYPE_UNKNOWN);
+	if (!d585_proto_reset)
+		WRITE_ONCE(state->ds5_dev->cached_device_type,
+			   DS5_DEVICE_TYPE_UNKNOWN);
 	ds5_reset_streaming_flags(state->ds5_dev);
 
 	/* 3. Scratch one control-status register before reset.
@@ -3117,6 +3131,32 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	/* 5. Delay to allow reset to complete */
 	ts = jiffies;
 	msleep(DS5_HW_RESET_INITIAL_DELAY_MS);
+
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	if (d585_proto_reset) {
+		struct ds5 *primary = state->ds5_dev->ds5_primary;
+
+		if (!primary || !primary->dser_ops->recover_link)
+			return -ENODEV;
+
+		mutex_lock(&serdes_lock__);
+		ret = primary->ser_ops->reset_control(primary->ser_dev);
+		if (!ret)
+			ret = primary->dser_ops->recover_link(primary->dser_dev,
+						      primary->ser_dev);
+		if (!ret)
+			ret = primary->ser_ops->setup_control(primary->ser_dev);
+		if (!ret)
+			ret = primary->ser_ops->init_settings(primary->ser_dev);
+		mutex_unlock(&serdes_lock__);
+		if (ret) {
+			dev_err(&state->client->dev,
+				"%s(): D585 prototype SerDes recovery failed (%d)\n",
+				__func__, ret);
+			return ret;
+		}
+	}
+#endif
 
 	/* 6. Poll for control-status defaults to confirm reset completion. */
 	for (retry = 0, timeout = ts + msecs_to_jiffies(DS5_HW_RESET_TIMEOUT_MS);
@@ -3189,6 +3229,13 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 		dev_err(&state->client->dev,
 			"%s(): Failed to read firmware build: %d\n", __func__, ret);
 		return ret;
+	}
+
+	/* HKR reboot drops its MIPI TX runtime configuration. */
+	if (d585_proto_reset) {
+		ret = ds5_hw_init(state->client, state);
+		if (ret)
+			return ret;
 	}
 
 	dev_info(&state->client->dev,
@@ -3570,6 +3617,16 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 		if (ctrl->p_new.p_u8) {
 			u16 size = 0;
 			struct hwm_cmd *cmd = (struct hwm_cmd *)ctrl->p_new.p_u8;
+
+			u16 pid = READ_ONCE(state->ds5_dev->d585_product_id);
+
+			if (cmd->opcode == 0x20 &&
+			    (pid == D585_2C_PROTO_PID ||
+			     pid == D585_3C_PROTO_PID)) {
+				ret = ds5_hw_reset_with_recovery(state);
+				break;
+			}
+
 			size = *((u8 *)ctrl->p_new.p_u8 + 1) << 8;
 			size |= *((u8 *)ctrl->p_new.p_u8 + 0);
 			ret = ds5_hwmc_send(state, size + 4, cmd);
@@ -4566,6 +4623,7 @@ static void ds5_init_ds5_dev(struct ds5 *state, struct ds5_dev *ds5_dev)
 	ds5_dev->ds5_primary = state;
 	ds5_dev->serdes_setup_complete = false;
 	ds5_dev->cached_device_type = DS5_DEVICE_TYPE_UNKNOWN;
+	ds5_dev->d585_product_id = 0;
 	ds5_dev->configured_device_mode = D500_DEVICE_MODE_3C;
 	ds5_dev->active_device_mode = D500_DEVICE_MODE_3C;
 	ds5_dev->device_mode_valid = false;
@@ -7843,6 +7901,28 @@ static int ds5_probe(struct i2c_client *c
 			"%s(): device type is not valid: %d (last val 0x%x)\n",
 			__func__, ret, rec_state);
 		goto e_chardev;
+	}
+
+	if (rec_state == DS5_DEVICE_TYPE_D58X &&
+	    !READ_ONCE(state->ds5_dev->d585_product_id)) {
+		unsigned char *gvd_data = kzalloc(DS5_GVD_LEN_D5XX, GFP_KERNEL);
+
+		if (gvd_data) {
+			ret = ds5_gvd(state, gvd_data, DS5_GVD_LEN_D5XX);
+			if (ret) {
+				dev_warn(&c->dev,
+					 "%s(): cannot cache D585 PID from GVD (%d)\n",
+					 __func__, ret);
+			} else {
+				u16 pid = gvd_data[D585_GVD_PID_OFFSET] |
+					  (gvd_data[D585_GVD_PID_OFFSET + 1] << 8);
+
+				WRITE_ONCE(state->ds5_dev->d585_product_id, pid);
+				dev_info(&c->dev, "%s(): D585 PID 0x%04x\n",
+					 __func__, pid);
+			}
+			kfree(gvd_data);
+		}
 	}
 
 	ds5_read_with_check(state, DS5_FW_VERSION, &state->fw_version);

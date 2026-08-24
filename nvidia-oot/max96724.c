@@ -699,6 +699,69 @@ static int max96724_assign_serializer_addresses(struct device *dev)
 	return err;
 }
 
+int max96724_recover_link(struct device *dev, struct device *ser_dev)
+{
+	struct i2c_client *ser_client;
+	struct max96724 *priv;
+	unsigned int reg_val = 0;
+	unsigned int link;
+	u16 dev_reg = MAX96717_DEV_ADDR;
+	u8 target_addr;
+	int restore_err;
+	int err;
+
+	if (!dev || !ser_dev)
+		return -EINVAL;
+
+	priv = dev_get_drvdata(dev);
+	if (!priv)
+		return -ENODEV;
+	ser_client = to_i2c_client(ser_dev);
+
+	target_addr = ser_client->addr;
+	if (target_addr < MAX96717_DEFAULT_ADDR ||
+	    target_addr >= MAX96717_DEFAULT_ADDR + MAX96724_MAX_LINKS)
+		return -EINVAL;
+
+	link = target_addr - MAX96717_DEFAULT_ADDR;
+	if (!(priv->link_mask & BIT(link)))
+		return -EINVAL;
+
+	mutex_lock(&priv->lock);
+
+	/*
+	 * Select only the reset camera's link while its serializer is back at
+	 * the default address, then retrain that link without resetting the
+	 * shared deserializer. Other enabled links are briefly gated and restored
+	 * before this function returns.
+	 */
+	err = max96724_enable_links(dev, BIT(link), true);
+	if (!err)
+		err = max96724_wait_link_lock(dev, link);
+	if (!err) {
+		err = max96724_read_slave_reg(priv, target_addr, dev_reg, &reg_val);
+		if (err || reg_val != target_addr << 1) {
+			err = max96724_write_slave_reg(priv, MAX96717_DEFAULT_ADDR,
+						       dev_reg,
+						       target_addr << 1);
+			if (!err) {
+				msleep(20);
+				err = max96724_read_slave_reg(priv, target_addr, dev_reg, &reg_val);
+				if (!err && reg_val != target_addr << 1)
+					err = -ENODEV;
+			}
+		}
+	}
+
+	restore_err = max96724_enable_links(dev, priv->link_mask, false);
+	if (!err)
+		err = restore_err;
+
+	mutex_unlock(&priv->lock);
+	return err;
+}
+EXPORT_SYMBOL(max96724_recover_link);
+
 int max96724_setup_link(struct device *dev, struct device *s_dev)
 {
 	struct max96724 *priv = dev_get_drvdata(dev);

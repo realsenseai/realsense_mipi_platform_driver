@@ -58,6 +58,7 @@ void max96712_reset_oneshot(struct device *dev);
  * called per-link from d4xx's ds5_hw_reset_with_recovery(). */
 void max96712_reset_oneshot_link(struct device *dev, u32 vc_id);
 int max96712_setup_link(struct device *dev, struct device *s_dev);
+int max96712_recover_link(struct device *dev, struct device *ser_dev);
 int max96712_setup_control(struct device *dev, struct device *s_dev);
 int max96712_reset_control(struct device *dev, struct device *s_dev);
 int max96712_sdev_register(struct device *dev, struct gmsl_link_ctx *g_ctx);
