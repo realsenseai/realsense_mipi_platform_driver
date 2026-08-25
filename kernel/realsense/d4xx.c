@@ -2586,11 +2586,25 @@ enum ds5_ae_type {
 #define D500_CAMERA_CID_MINZ_DISPARITY_SHIFT	(DS5_CAMERA_CID_BASE + 46)
 #define D500_CAMERA_CID_MINZ_THRESHOLD		(DS5_CAMERA_CID_BASE + 47)
 #define D500_CAMERA_CID_MINZ_THRESHOLD_MODE	(DS5_CAMERA_CID_BASE + 48)
+#define D500_CAMERA_CID_DECIMATION_ENABLE	(DS5_CAMERA_CID_BASE + 49)
+#define D500_CAMERA_CID_DECIMATION_MAGNITUDE	(DS5_CAMERA_CID_BASE + 50)
+#define D500_CAMERA_CID_TEMPORAL_ENABLE		(DS5_CAMERA_CID_BASE + 51)
+#define D500_CAMERA_CID_TEMPORAL_ALPHA		(DS5_CAMERA_CID_BASE + 52)
+#define D500_CAMERA_CID_TEMPORAL_DELTA		(DS5_CAMERA_CID_BASE + 53)
+#define D500_CAMERA_CID_TEMPORAL_PERSISTENCY	(DS5_CAMERA_CID_BASE + 54)
 
 #define D500_MINZ_XU_BASE		0x4500
+#define D500_DECIMATION_XU_BASE		0x4540
+#define D500_TEMPORAL_XU_BASE		0x4568
 #define D500_DPP_XU_VERSION		1
+#define D500_DPP_XU_DECIMATION_CONTROL_ID	BIT(0)
+#define D500_DPP_XU_TEMPORAL_CONTROL_ID		BIT(1)
 #define D500_DPP_XU_MINZ_CONTROL_ID	BIT(2)
+#define D500_DPP_XU_DECIMATION_PARAM_COUNT	2
+#define D500_DPP_XU_TEMPORAL_PARAM_COUNT	4
 #define D500_DPP_XU_MINZ_PARAM_COUNT	5
+#define D500_DPP_XU_INTEGER_PARAMS	0
+#define D500_DPP_XU_TEMPORAL_PARAM_TYPE	BIT(1)
 
 struct d500_dpp_xu_header {
 	u8 version;
@@ -2605,46 +2619,116 @@ struct d500_dpp_xu_control {
 	__le32 params[8];
 } __packed;
 
-static int d500_minz_xu_read(struct ds5 *state,
-			    struct d500_dpp_xu_control *control)
+struct d500_dpp_ctrl_desc {
+	u16 base;
+	u16 control_id;
+	u8 param_count;
+	u8 param_type;
+	u8 param_index;
+	bool idle_only;
+};
+
+static int d500_dpp_xu_read(struct ds5 *state,
+			   const struct d500_dpp_ctrl_desc *desc,
+			   struct d500_dpp_xu_control *control)
 {
 	int ret;
 
-	ret = ds5_raw_read(state, D500_MINZ_XU_BASE, control,
+	ret = ds5_raw_read(state, desc->base, control,
 			   sizeof(*control));
 	if (ret)
 		return ret;
 	if (control->header.version != D500_DPP_XU_VERSION ||
 	    le16_to_cpu(control->header.control_id) !=
-		D500_DPP_XU_MINZ_CONTROL_ID ||
-	    control->param_count != D500_DPP_XU_MINZ_PARAM_COUNT)
+		desc->control_id ||
+	    control->param_count != desc->param_count ||
+	    control->param_type != desc->param_type)
 		return -EBADMSG;
 	return 0;
 }
 
-static int d500_minz_xu_write(struct ds5 *state,
-			     const struct d500_dpp_xu_control *control)
+static int d500_dpp_xu_write(struct ds5 *state,
+			    const struct d500_dpp_ctrl_desc *desc,
+			    const struct d500_dpp_xu_control *control)
 {
-	return ds5_raw_write(state, D500_MINZ_XU_BASE, control,
+	return ds5_raw_write(state, desc->base, control,
 			     sizeof(*control));
 }
 
-static int d500_minz_ctrl_index(u32 ctrl_id)
+static int d500_dpp_ctrl_desc(u32 ctrl_id,
+			     struct d500_dpp_ctrl_desc *desc)
 {
+	memset(desc, 0, sizeof(*desc));
 	switch (ctrl_id) {
 	case D500_CAMERA_CID_MINZ_ENABLE:
-		return 0;
+		desc->param_index = 0;
+		break;
 	case D500_CAMERA_CID_MINZ_RATIO:
-		return 1;
+		desc->param_index = 1;
+		break;
 	case D500_CAMERA_CID_MINZ_DISPARITY_SHIFT:
-		return 2;
+		desc->param_index = 2;
+		break;
 	case D500_CAMERA_CID_MINZ_THRESHOLD:
-		return 3;
+		desc->param_index = 3;
+		break;
 	case D500_CAMERA_CID_MINZ_THRESHOLD_MODE:
-		return 4;
+		desc->param_index = 4;
+		break;
+	case D500_CAMERA_CID_DECIMATION_ENABLE:
+		desc->base = D500_DECIMATION_XU_BASE;
+		desc->control_id = D500_DPP_XU_DECIMATION_CONTROL_ID;
+		desc->param_count = D500_DPP_XU_DECIMATION_PARAM_COUNT;
+		desc->param_type = D500_DPP_XU_INTEGER_PARAMS;
+		desc->param_index = 0;
+		desc->idle_only = true;
+		return 0;
+	case D500_CAMERA_CID_DECIMATION_MAGNITUDE:
+		desc->base = D500_DECIMATION_XU_BASE;
+		desc->control_id = D500_DPP_XU_DECIMATION_CONTROL_ID;
+		desc->param_count = D500_DPP_XU_DECIMATION_PARAM_COUNT;
+		desc->param_type = D500_DPP_XU_INTEGER_PARAMS;
+		desc->param_index = 1;
+		desc->idle_only = true;
+		return 0;
+	case D500_CAMERA_CID_TEMPORAL_ENABLE:
+		desc->base = D500_TEMPORAL_XU_BASE;
+		desc->control_id = D500_DPP_XU_TEMPORAL_CONTROL_ID;
+		desc->param_count = D500_DPP_XU_TEMPORAL_PARAM_COUNT;
+		desc->param_type = D500_DPP_XU_TEMPORAL_PARAM_TYPE;
+		desc->param_index = 0;
+		return 0;
+	case D500_CAMERA_CID_TEMPORAL_ALPHA:
+		desc->base = D500_TEMPORAL_XU_BASE;
+		desc->control_id = D500_DPP_XU_TEMPORAL_CONTROL_ID;
+		desc->param_count = D500_DPP_XU_TEMPORAL_PARAM_COUNT;
+		desc->param_type = D500_DPP_XU_TEMPORAL_PARAM_TYPE;
+		desc->param_index = 1;
+		return 0;
+	case D500_CAMERA_CID_TEMPORAL_DELTA:
+		desc->base = D500_TEMPORAL_XU_BASE;
+		desc->control_id = D500_DPP_XU_TEMPORAL_CONTROL_ID;
+		desc->param_count = D500_DPP_XU_TEMPORAL_PARAM_COUNT;
+		desc->param_type = D500_DPP_XU_TEMPORAL_PARAM_TYPE;
+		desc->param_index = 2;
+		return 0;
+	case D500_CAMERA_CID_TEMPORAL_PERSISTENCY:
+		desc->base = D500_TEMPORAL_XU_BASE;
+		desc->control_id = D500_DPP_XU_TEMPORAL_CONTROL_ID;
+		desc->param_count = D500_DPP_XU_TEMPORAL_PARAM_COUNT;
+		desc->param_type = D500_DPP_XU_TEMPORAL_PARAM_TYPE;
+		desc->param_index = 3;
+		return 0;
 	default:
 		return -ENOENT;
 	}
+
+	desc->base = D500_MINZ_XU_BASE;
+	desc->control_id = D500_DPP_XU_MINZ_CONTROL_ID;
+	desc->param_count = D500_DPP_XU_MINZ_PARAM_COUNT;
+	desc->param_type = D500_DPP_XU_INTEGER_PARAMS;
+	desc->idle_only = true;
+	return 0;
 }
 
 #define DS5_HWMC_DATA			0x4900
@@ -3138,7 +3222,7 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 					 ctrls.handler);
 	struct v4l2_subdev *sd = &state->mux.sd.subdev;
 	struct ds5_sensor *sensor = (struct ds5_sensor *)ctrl->priv;
-	int minz_index;
+	struct d500_dpp_ctrl_desc dpp_desc;
 	int ret = -EINVAL;
 	u16 base;
 
@@ -3167,11 +3251,10 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 		__func__, ds5_get_sensor_name(state), ctrl->name, ctrl->val);
 
 	mutex_lock(&state->lock);
-	minz_index = d500_minz_ctrl_index(ctrl->id);
-	if (minz_index >= 0) {
+	if (d500_dpp_ctrl_desc(ctrl->id, &dpp_desc) == 0) {
 		struct d500_dpp_xu_control control;
 
-		if (sensor && sensor->streaming) {
+		if (dpp_desc.idle_only && sensor && sensor->streaming) {
 			ret = -EBUSY;
 			goto unlock;
 		}
@@ -3180,10 +3263,11 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			ret = -EINVAL;
 			goto unlock;
 		}
-		ret = d500_minz_xu_read(state, &control);
+		ret = d500_dpp_xu_read(state, &dpp_desc, &control);
 		if (!ret) {
-			control.params[minz_index] = cpu_to_le32(ctrl->val);
-			ret = d500_minz_xu_write(state, &control);
+			control.params[dpp_desc.param_index] =
+				cpu_to_le32(ctrl->val);
+			ret = d500_dpp_xu_write(state, &dpp_desc, &control);
 		}
 		goto unlock;
 	}
@@ -3668,7 +3752,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			ctrls.handler);
 			
 	u32 data;
-	int minz_index;
+	struct d500_dpp_ctrl_desc dpp_desc;
 	int ret = 0;
 	struct ds5_sensor *sensor = (struct ds5_sensor *)ctrl->priv;
 	u16 base;
@@ -3697,13 +3781,13 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 	dev_dbg(&state->client->dev, "%s(): %s - ctrl: %s \n",
 		__func__, ds5_get_sensor_name(state), ctrl->name);
 
-	minz_index = d500_minz_ctrl_index(ctrl->id);
-	if (minz_index >= 0) {
+	if (d500_dpp_ctrl_desc(ctrl->id, &dpp_desc) == 0) {
 		struct d500_dpp_xu_control control;
 
-		ret = d500_minz_xu_read(state, &control);
+		ret = d500_dpp_xu_read(state, &dpp_desc, &control);
 		if (!ret)
-			ctrl->val = le32_to_cpu(control.params[minz_index]);
+			ctrl->val =
+				le32_to_cpu(control.params[dpp_desc.param_index]);
 		return ret;
 	}
 
@@ -5064,7 +5148,7 @@ enum state_sid {
 	MUX_SID = -1
 };
 
-static struct v4l2_ctrl *d500_new_minz_ctrl(
+static struct v4l2_ctrl *d500_new_dpp_ctrl(
 		struct v4l2_ctrl_handler *handler, u32 id, const char *name,
 		s32 min, s32 max, s32 step, s32 def, struct ds5_sensor *sensor)
 {
@@ -5356,21 +5440,40 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_projector_temperature,
 					     sensor);
 			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_error_code, sensor);
-			ctrls->minz.enable = d500_new_minz_ctrl(hdl,
+			ctrls->minz.enable = d500_new_dpp_ctrl(hdl,
 				D500_CAMERA_CID_MINZ_ENABLE, "MinZ Enable",
 				0, 1, 1, 0, sensor);
-			ctrls->minz.ratio = d500_new_minz_ctrl(hdl,
+			ctrls->minz.ratio = d500_new_dpp_ctrl(hdl,
 				D500_CAMERA_CID_MINZ_RATIO, "MinZ Downscale Ratio",
 				1, 4, 1, 2, sensor);
-			ctrls->minz.disparity_shift = d500_new_minz_ctrl(hdl,
+			ctrls->minz.disparity_shift = d500_new_dpp_ctrl(hdl,
 				D500_CAMERA_CID_MINZ_DISPARITY_SHIFT,
 				"MinZ Disparity Shift", 0, 512, 1, 0, sensor);
-			ctrls->minz.threshold = d500_new_minz_ctrl(hdl,
+			ctrls->minz.threshold = d500_new_dpp_ctrl(hdl,
 				D500_CAMERA_CID_MINZ_THRESHOLD, "MinZ Threshold",
 				0, 65535, 1, 550, sensor);
-			ctrls->minz.threshold_mode = d500_new_minz_ctrl(hdl,
+			ctrls->minz.threshold_mode = d500_new_dpp_ctrl(hdl,
 				D500_CAMERA_CID_MINZ_THRESHOLD_MODE,
 				"MinZ Threshold Mode", 0, 1, 1, 0, sensor);
+			d500_new_dpp_ctrl(hdl,
+				D500_CAMERA_CID_DECIMATION_ENABLE,
+				"D500 Decimation Enable", 0, 1, 1, 0, sensor);
+			d500_new_dpp_ctrl(hdl,
+				D500_CAMERA_CID_DECIMATION_MAGNITUDE,
+				"D500 Decimation Magnitude", 2, 4, 1, 4, sensor);
+			d500_new_dpp_ctrl(hdl,
+				D500_CAMERA_CID_TEMPORAL_ENABLE,
+				"D500 Temporal Enable", 0, 1, 1, 0, sensor);
+			d500_new_dpp_ctrl(hdl,
+				D500_CAMERA_CID_TEMPORAL_ALPHA,
+				"D500 Temporal Alpha x1000",
+				0, 1000, 10, 400, sensor);
+			d500_new_dpp_ctrl(hdl,
+				D500_CAMERA_CID_TEMPORAL_DELTA,
+				"D500 Temporal Delta", 1, 100, 1, 20, sensor);
+			d500_new_dpp_ctrl(hdl,
+				D500_CAMERA_CID_TEMPORAL_PERSISTENCY,
+				"D500 Temporal Persistency", 0, 8, 1, 3, sensor);
 		} else {
 			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_readout_shaping,
 					     sensor);
