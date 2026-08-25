@@ -1,20 +1,20 @@
-From 9b1affb389a3679b6cfe4e9200bde75393a0ce4c Mon Sep 17 00:00:00 2001
+From 3a451c585715f4a27d01a63ac36943fde3668333 Mon Sep 17 00:00:00 2001
 From: ejgoldik <ehud.joseph.goldik@realsenseai.com>
-Date: Mon, 24 Aug 2026 09:25:37 +0300
+Date: Tue, 25 Aug 2026 15:52:11 +0300
 Subject: [PATCH] Adding max96712 support for D4xx
 
 Add MAX96712 deserializer driver support for D4XX/D5XX cameras.
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- drivers/media/i2c/max96712.c | 1135 ++++++++++++++++++++++++++++++++--
- 1 file changed, 1100 insertions(+), 35 deletions(-)
+ drivers/media/i2c/max96712.c | 1199 +++++++++++++++++++++++++++++++++-
+ 1 file changed, 1164 insertions(+), 35 deletions(-)
 
 diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
-index 8e237eef..3b6a5103 100644
+index 8e237ee..c1e57e2 100644
 --- a/drivers/media/i2c/max96712.c
 +++ b/drivers/media/i2c/max96712.c
-@@ -16,32 +16,182 @@
+@@ -16,32 +16,191 @@
  #include <linux/gpio.h>
  #include <linux/of.h>
  #include <linux/of_gpio.h>
@@ -44,6 +44,12 @@ index 8e237eef..3b6a5103 100644
 +#define MAX96712_PWR1_ADDR 0x13
 +#define MAX96712_PWR1_RESET_ALL_VAL 0x40
 +#define MAX96712_CTRL1_ADDR 0x18
++
++#define MAX96712_LINK_A_LOCK_ADDR	0x001A
++#define MAX96712_LINK_B_LOCK_ADDR	0x000A
++#define MAX96712_LINK_C_LOCK_ADDR	0x000B
++#define MAX96712_LINK_D_LOCK_ADDR	0x000C
++#define MAX96712_LINK_LOCKED		0x08
 +
 +#define MAX96712_BACKTOP25_ADDR 0x418
 +#define MAX96712_BACKTOP25_PHY1_SW_OVRR_OFFS 0x5
@@ -131,6 +137,9 @@ index 8e237eef..3b6a5103 100644
 +
 +#define MAX9295_DEFAULT_ADDR 0x40
 +
++#define MAX96712_LINK_UP_MAX_RETRIES 100
++#define MAX96712_LINK_UP_RETRY_DELAY_MS 100
++
 +/* data defines */
 +#define MAX96712_MAX_LINKS 4
 +#define MAX96712_MAX_PIPES 8
@@ -202,7 +211,7 @@ index 8e237eef..3b6a5103 100644
  	i2c_client = global_priv[channel]->i2c_client;
  	bak = i2c_client->addr;
  
-@@ -53,7 +203,6 @@ int max96712_write_reg_Dser(int slaveAddr, int channel,
+@@ -53,7 +212,6 @@ int max96712_write_reg_Dser(int slaveAddr, int channel,
  		dev_err(&i2c_client->dev, "%s: addr = 0x%x, val = 0x%x\n",
  				__func__, addr, val);
  	}
@@ -210,7 +219,7 @@ index 8e237eef..3b6a5103 100644
  	return err;
  }
  EXPORT_SYMBOL(max96712_write_reg_Dser);
-@@ -68,8 +217,6 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
+@@ -68,8 +226,6 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
  
  	if (channel > 3 || channel < 0 || global_priv[channel] == NULL)
  		return -1;
@@ -219,7 +228,7 @@ index 8e237eef..3b6a5103 100644
  	i2c_client = global_priv[channel]->i2c_client;
  	bak = i2c_client->addr;
  	i2c_client->addr = slaveAddr / 2;
-@@ -80,11 +227,56 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
+@@ -80,11 +236,56 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
  		dev_err(&i2c_client->dev, "%s: addr = 0x%x, val = 0x%x\n",
  				__func__, addr, *val);
  	}
@@ -277,7 +286,7 @@ index 8e237eef..3b6a5103 100644
  static int max96712_read_reg(struct max96712 *priv,
  			u16 addr, unsigned int *val)
  {
-@@ -99,6 +291,20 @@ static int max96712_read_reg(struct max96712 *priv,
+@@ -99,6 +300,20 @@ static int max96712_read_reg(struct max96712 *priv,
  	return err;
  }
  
@@ -298,7 +307,7 @@ index 8e237eef..3b6a5103 100644
  
  static int max96712_stats_show(struct seq_file *s, void *data)
  {
-@@ -153,24 +359,6 @@ static const struct file_operations max96712_debugfs_fops = {
+@@ -153,24 +368,6 @@ static const struct file_operations max96712_debugfs_fops = {
  	.release = single_release,
  };
  
@@ -323,7 +332,7 @@ index 8e237eef..3b6a5103 100644
  static int max96712_debugfs_init(const char *dir_name,
  				struct dentry **d_entry,
  				struct dentry **f_entry,
-@@ -225,9 +413,106 @@ static int max96712_debugfs_init(const char *dir_name,
+@@ -225,9 +422,106 @@ static int max96712_debugfs_init(const char *dir_name,
  static  struct regmap_config max96712_regmap_config = {
  	.reg_bits = 16,
  	.val_bits = 8,
@@ -431,7 +440,7 @@ index 8e237eef..3b6a5103 100644
  #if defined(NV_I2C_DRIVER_STRUCT_PROBE_WITHOUT_I2C_DEVICE_ID_ARG) /* Linux 6.3 */
  static int max96712_probe(struct i2c_client *client)
  #else
-@@ -237,10 +522,16 @@ static int max96712_probe(struct i2c_client *client,
+@@ -237,10 +531,16 @@ static int max96712_probe(struct i2c_client *client,
  {
  	struct max96712 *priv;
  	int err = 0;
@@ -448,7 +457,7 @@ index 8e237eef..3b6a5103 100644
  	priv->i2c_client = client;
  	priv->regmap = devm_regmap_init_i2c(priv->i2c_client,
  				&max96712_regmap_config);
-@@ -249,15 +540,59 @@ static int max96712_probe(struct i2c_client *client,
+@@ -249,15 +549,59 @@ static int max96712_probe(struct i2c_client *client,
  			"regmap init failed: %ld\n", PTR_ERR(priv->regmap));
  		return -ENODEV;
  	}
@@ -513,7 +522,7 @@ index 8e237eef..3b6a5103 100644
  	err = max96712_debugfs_init(NULL, NULL, NULL, priv);
  	if (err)
  		return err;
-@@ -274,8 +609,11 @@ static int max96712_remove(struct i2c_client *client)
+@@ -274,8 +618,11 @@ static int max96712_remove(struct i2c_client *client)
  static void max96712_remove(struct i2c_client *client)
  #endif
  {
@@ -526,7 +535,7 @@ index 8e237eef..3b6a5103 100644
  		i2c_unregister_device(client);
  		client = NULL;
  	}
-@@ -284,13 +622,739 @@ static void max96712_remove(struct i2c_client *client)
+@@ -284,13 +631,794 @@ static void max96712_remove(struct i2c_client *client)
  #endif
  }
  
@@ -868,6 +877,7 @@ index 8e237eef..3b6a5103 100644
 +	u8 ext_vc1 = max96712_ext_vc(1, priv->vc_remap[link][1]);
 +	u8 ext_vc2 = max96712_ext_vc(2, priv->vc_remap[link][2]);
 +	u8 ext_vc3 = max96712_ext_vc(3, priv->vc_remap[link][3]);
++	unsigned int pipe_en_val = 0;
 +
 +	struct reg_pair map_pipe_control[] = {
 +		// Enable all static mappings
@@ -957,7 +967,11 @@ index 8e237eef..3b6a5103 100644
 +		return err;
 +	}
 +
-+	max96712_write_reg(priv, MAX96712_VIDEO_PIPE_EN_ADDR, 1 << pipe_id);
++	err = max96712_read_reg(priv, MAX96712_VIDEO_PIPE_EN_ADDR, &pipe_en_val);
++	if (err == 0) {
++		pipe_en_val |= (1 << pipe_id);
++		err |= max96712_write_reg(priv, MAX96712_VIDEO_PIPE_EN_ADDR, pipe_en_val);
++	}
 +
 +	return err;
 +}
@@ -1123,6 +1137,43 @@ index 8e237eef..3b6a5103 100644
 +}
 +EXPORT_SYMBOL(max96712_set_pipe);
 +
++static int max96712_wait_for_link_lock_mask(struct device *dev, uint8_t link_mask)
++{
++	struct max96712 *priv = dev_get_drvdata(dev);
++	unsigned int reg_val = 0;
++	int err = 0;
++	int i;
++	int retry = 0;
++	int ready_link_mask = 0;
++
++	const u16 link_lock_reg_addr[MAX96712_MAX_LINKS] = {
++		MAX96712_LINK_A_LOCK_ADDR,
++		MAX96712_LINK_B_LOCK_ADDR,
++		MAX96712_LINK_C_LOCK_ADDR,
++		MAX96712_LINK_D_LOCK_ADDR
++	};
++
++	do {
++		if (retry != 0) {
++			msleep(MAX96712_LINK_UP_RETRY_DELAY_MS);
++		}
++		for (i = 0; i < MAX96712_MAX_LINKS; i++) {
++			if ((link_mask & (0x1 << i)) && !(ready_link_mask & (0x1 << i))) {
++				err = max96712_read_reg(priv, link_lock_reg_addr[i], &reg_val);
++				if (!err && (reg_val & MAX96712_LINK_LOCKED)) {
++					ready_link_mask |= 0x1 << i;
++				}
++			}
++		}
++		retry++;
++	} while (retry < MAX96712_LINK_UP_MAX_RETRIES && (ready_link_mask != link_mask));
++
++	if (ready_link_mask != link_mask) {
++		err = -ETIMEDOUT;
++	}
++	return err;
++}
++
 +int max96712_setup_link(struct device *dev, struct device *s_dev)
 +{
 +	struct max96712 *priv = dev_get_drvdata(dev);
@@ -1132,6 +1183,19 @@ index 8e237eef..3b6a5103 100644
 +	uint8_t link_id_iter = 0;
 +	unsigned default_ser_addr = MAX9295_DEFAULT_ADDR;
 +	int err = 0;
++
++	/* Enable requested link mask to wait for link locks */
++	err = max96712_write_reg(priv, MAX96712_REG6_ADDR, dser_empty_link_mask_reg | link_mask);
++	if (err) {
++		dev_err(dev, "%s: Deserializer inaccessible\n", __func__);
++		return err;
++	}
++
++	err = max96712_wait_for_link_lock_mask(dev, link_mask);
++	if (err) {
++		dev_err(dev, "%s: Timeout wait for link lock\n", __func__);
++		return err;
++	}
 +
 +	/* Iterating over the links and assigning unique serializer i2c addresses */
 +	for (link_id_iter = 0; link_id_iter < MAX96712_MAX_LINKS ; link_id_iter++)
@@ -1267,7 +1331,7 @@ index 8e237eef..3b6a5103 100644
  	{ },
  };
  
-@@ -300,6 +1364,7 @@ static struct i2c_driver max96712_i2c_driver = {
+@@ -300,6 +1428,7 @@ static struct i2c_driver max96712_i2c_driver = {
  	.driver = {
  		.name = "max96712",
  		.owner = THIS_MODULE,
