@@ -2490,6 +2490,18 @@ static const struct v4l2_subdev_ops ds5_subdev_ops = {
 
 /* InfraRed stream Y8/Y16 */
 
+/*
+ * CSI-PT disables the RGB ISP (RegCamCameraControl.IspDataSelect = 0), so
+ * DS5_RGB_CONTROL_BASE's gain/exposure registers never reach the imager;
+ * only the shared imager's depth-side registers do (RSDSO-21895).
+ */
+static bool ds5_rgb_shares_imager(const struct ds5 *state)
+{
+	const struct ds5_format *fmt = state->rgb.sensor.config.format;
+
+	return state->is_rgb && fmt && fmt->data_type == DS5_FW_CSI_PT;
+}
+
 static int ds5_hw_set_auto_exposure(struct ds5 *state, u32 base, s32 val)
 {
 	if (val != V4L2_EXPOSURE_APERTURE_PRIORITY &&
@@ -2520,16 +2532,23 @@ static int ds5_hw_set_auto_exposure(struct ds5 *state, u32 base, s32 val)
  * Manual exposure in us
  * Depth/Y8: between 100 and 200000 (200ms)
  * Color: between 100 and 1000000 (1s)
+ *
+ * depth_style selects the register's native unit (1 us) instead of the
+ * RGB ISP register's (100 us); callers writing the shared-imager depth
+ * base for a CSI-PT RGB control (RSDSO-21895) must pass true and convert
+ * val to 1 us units first.
  */
-static int ds5_hw_set_exposure(struct ds5 *state, u32 base, s32 val)
+static int ds5_hw_set_exposure(struct ds5 *state, u32 base, s32 val,
+				bool depth_style)
 {
 	int ret = -1;
 
 	if (val < 1)
 		val = 1;
-	if ((state->is_depth || state->is_y8) && val > MAX_DEPTH_EXP)
+	if ((state->is_depth || state->is_y8 || depth_style) &&
+	    val > MAX_DEPTH_EXP)
 		val = MAX_DEPTH_EXP;
-	if (state->is_rgb && val > MAX_RGB_EXP)
+	if (state->is_rgb && !depth_style && val > MAX_RGB_EXP)
 		val = MAX_RGB_EXP;
 
 	/*
@@ -3282,7 +3301,11 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 
 	switch (ctrl->id) {
 	case V4L2_CID_ANALOGUE_GAIN:
-		ret = ds5_write(state, base | DS5_MANUAL_GAIN, ctrl->val);
+		if (ds5_rgb_shares_imager(state))
+			ret = ds5_write(state, DS5_DEPTH_CONTROL_BASE |
+					DS5_MANUAL_GAIN, ctrl->val);
+		else
+			ret = ds5_write(state, base | DS5_MANUAL_GAIN, ctrl->val);
 		break;
 
 	case V4L2_CID_EXPOSURE_AUTO:
@@ -3290,7 +3313,11 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 
 	case V4L2_CID_EXPOSURE_ABSOLUTE:
-		ret = ds5_hw_set_exposure(state, base, ctrl->val);
+		if (ds5_rgb_shares_imager(state))
+			ret = ds5_hw_set_exposure(state, DS5_DEPTH_CONTROL_BASE,
+					ctrl->val * 100, true);
+		else
+			ret = ds5_hw_set_exposure(state, base, ctrl->val, false);
 		break;
 	case V4L2_CID_BRIGHTNESS:
 		if (state->is_rgb)
@@ -3804,7 +3831,11 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 	case V4L2_CID_ANALOGUE_GAIN:
 		if (state->is_imu)
 			return -EINVAL;
-		ret = ds5_read(state, base | DS5_MANUAL_GAIN, ctrl->p_new.p_u16);
+		if (ds5_rgb_shares_imager(state))
+			ret = ds5_read(state, DS5_DEPTH_CONTROL_BASE |
+					DS5_MANUAL_GAIN, ctrl->p_new.p_u16);
+		else
+			ret = ds5_read(state, base | DS5_MANUAL_GAIN, ctrl->p_new.p_u16);
 		break;
 
 	case V4L2_CID_EXPOSURE_AUTO:
@@ -3829,11 +3860,21 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		if (state->is_imu)
 			return -EINVAL;
 		/* see ds5_hw_set_exposure */
-		ds5_read(state, base | DS5_MANUAL_EXPOSURE_MSB, &reg);
-		data = ((u32)reg << 16) & 0xffff0000;
-		ds5_read(state, base | DS5_MANUAL_EXPOSURE_LSB, &reg);
-		data |= reg;
-		*ctrl->p_new.p_u32 = data;
+		if (ds5_rgb_shares_imager(state)) {
+			ds5_read(state, DS5_DEPTH_CONTROL_BASE |
+					DS5_MANUAL_EXPOSURE_MSB, &reg);
+			data = ((u32)reg << 16) & 0xffff0000;
+			ds5_read(state, DS5_DEPTH_CONTROL_BASE |
+					DS5_MANUAL_EXPOSURE_LSB, &reg);
+			data |= reg;
+			*ctrl->p_new.p_u32 = data / 100;
+		} else {
+			ds5_read(state, base | DS5_MANUAL_EXPOSURE_MSB, &reg);
+			data = ((u32)reg << 16) & 0xffff0000;
+			ds5_read(state, base | DS5_MANUAL_EXPOSURE_LSB, &reg);
+			data |= reg;
+			*ctrl->p_new.p_u32 = data;
+		}
 		break;
 
 	case V4L2_CID_BRIGHTNESS:
