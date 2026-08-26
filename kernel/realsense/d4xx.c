@@ -2285,8 +2285,12 @@ static int ds5_configure(struct ds5 *state)
 		 * actually changed, i.e. on a mode switch. The link carries stale
 		 * framing across that change, so flush it every time, not just Y12I.
 		 */
-		if (state->dser_ops->reset_oneshot)
+		if (state->dser_ops->reset_oneshot) {
+			dev_info(&state->client->dev,
+				"RSDSO-21854: link flush on pipe reconfig (dt1=0x%x dt2=0x%x vc=%u)\n",
+				data_type1, data_type2, vc_id);
 			state->dser_ops->reset_oneshot(state->dser_dev);
+		}
 		mutex_unlock(&serdes_lock__);
 		if (ret < 0)
 			return ret;
