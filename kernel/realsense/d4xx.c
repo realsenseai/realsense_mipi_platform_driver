@@ -2188,7 +2188,6 @@ static int ds5_configure(struct ds5 *state)
 	u16 md_fmt, vc_id;
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	u16 data_type1, data_type2;
-	bool is_calib = 0;
 #endif
 	u16 dt_addr, md_addr, override_addr, fps_addr, width_addr, height_addr;
 	u16 dt_value = 0;
@@ -2239,7 +2238,6 @@ static int ds5_configure(struct ds5 *state)
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	data_type1 = ds5_wire_data_type(sensor->config.format);
 	data_type2 = md_fmt;
-	is_calib = (state->is_y8 && (data_type1 == GMSL_CSI_DT_RGB_888));
 
 	vc_id = state->g_ctx.dst_vc;
     if (PIPE_NOT_CONFIGURED == sensor->pipe_id ||
@@ -2283,8 +2281,11 @@ static int ds5_configure(struct ds5 *state)
 		mutex_lock(&serdes_lock__);
 		ret = ds5_setup_pipeline(state, data_type1, data_type2,
 					 sensor->pipe_id, vc_id);
-		// reset data path when switching to Y12I
-		if (is_calib)
+		/* RSDSO-21854: this branch runs only when the pipe's datatype or VC
+		 * actually changed, i.e. on a mode switch. The link carries stale
+		 * framing across that change, so flush it every time, not just Y12I.
+		 */
+		if (state->dser_ops->reset_oneshot)
 			state->dser_ops->reset_oneshot(state->dser_dev);
 		mutex_unlock(&serdes_lock__);
 		if (ret < 0)
