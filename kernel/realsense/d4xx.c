@@ -46,21 +46,26 @@
 
 /* Deserializer interface structure for abstraction */
 struct dser_interface {
-	/* Pipeline management */
+	/* Pipeline management. */
 	int (*get_available_pipe_id)(struct device *dev, int vc_id);
-	/* Allocate/return a sticky multi-VC pipe for the vc_id's link. Used for
-	 * MAX96717 serializers, which funnel all of a camera's VCs through one
-	 * pipe. Optional - NULL if the deserializer has no multi-VC support. */
-	int (*get_multi_vc_pipe_id)(struct device *dev, int vc_id);
-	int (*bind_ser_to_dser_pipe)(struct device *dev, int dser_pipe_id, int ser_pipe_id, u32 vc_id);
+	/* Reverse the link's VC map: Optional - NULL on
+	 * deserializers that do not remap */
+	int (*get_ser_vc_id)(struct device *dev, u32 link, u32 dser_vc);
+	/* Allocate/return a sticky multi-VC pipe for a link. Used for MAX96717
+	 * serializers, which funnel all of a camera's VCs through one pipe.
+	 * Optional - NULL if the deserializer has no multi-VC support. */
+	int (*get_multi_vc_pipe_id)(struct device *dev, u32 link);
+	int (*bind_ser_to_dser_pipe)(struct device *dev, int dser_pipe_id, int ser_pipe_id,
+				     u32 link);
 
-	int (*set_pipe)(struct device *dev, int pipe_id, u8 data_type1, u8 data_type2, u32 vc_id);
+	int (*set_pipe)(struct device *dev, int pipe_id, u8 data_type1, u8 data_type2,
+			u32 link, u32 vc_id);
 	int (*release_pipe)(struct device *dev, int pipe_id);
 	void (*reset_oneshot)(struct device *dev);
 	/* Flush one link's pixel line buffer, after a camera HW reset and on
 	 * link cold bring-up; NULL if the deser leaves no stale buffer
 	 * (max9296). Must not be called while the link has live streams. */
-	void (*reset_oneshot_link)(struct device *dev, u32 vc_id);
+	void (*reset_oneshot_link)(struct device *dev, u32 link);
 	void (*retrigger_datapath)(struct device *dev);
 
 	/* Setup and control */
@@ -281,6 +286,9 @@ enum ds5_mux_pad {
 #define DS5_N_CONTROLS			8
 
 #define DS5_MAX_STREAMS	4
+#define DS5_MAX_GMSL_LINKS	4
+/* No "maxim,gmsl-link-id" on the serializer node: derive it the old way. */
+#define DS5_GMSL_LINK_UNSET	0xFFFFFFFFu
 
 #define PIPE_NOT_CONFIGURED	-1
 
@@ -500,6 +508,8 @@ struct ds5_ctrls {
 		struct v4l2_ctrl *query_sub_stream;
 		struct v4l2_ctrl *set_sub_stream;
 		struct v4l2_ctrl *sync_mode;
+		struct v4l2_ctrl *device_mode;
+		struct v4l2_ctrl *dual_rgb_ae_policy;
 		/* RGB-only ISP controls. Only ae_priority needs a stored
 		 * pointer because it must be disabled per-SKU after probe
 		 * (D40X/D401 does not support it). The remaining controls
@@ -612,6 +622,10 @@ struct ds5 {
 	u16 control_status_reg;
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	struct gmsl_link_ctx g_ctx;
+	/* GMSL link this camera is wired to. From the serializer node's
+	 * "maxim,gmsl-link-id"; no longer derivable from dst_vc once a
+	 * deserializer remaps virtual channels. */
+	u32 gmsl_link;
 	struct device *ser_dev;
 	struct device *dser_dev;
 	struct i2c_client *ser_i2c;
@@ -665,6 +679,9 @@ struct ds5_dev {
 	/* Pointer to the primary DS5 struct */
 	struct ds5 *ds5_primary;
 	bool serdes_setup_complete;
+	int configured_device_mode;
+	int active_device_mode;
+	bool device_mode_valid;
 
 	bool depth_streaming;
 	bool ir_streaming;
@@ -729,6 +746,7 @@ static const struct dser_interface max9296_interface = {
 /* MAX96712 deserializer interface implementation */
 static const struct dser_interface max96712_interface = {
 	.get_available_pipe_id = max96712_get_available_pipe_id,
+	.get_ser_vc_id = max96712_get_ser_vc_id,
 	.get_multi_vc_pipe_id = max96712_get_multi_vc_pipe_id,
 	.bind_ser_to_dser_pipe = max96712_bind_ser_to_dser_pipe,
 	.set_pipe = max96712_set_pipe,
@@ -2117,27 +2135,23 @@ static int serdes_get_ser_pipe_id(struct ds5 *state, int dser_pipe_id,
 }
 
 static int ds5_setup_pipeline(struct ds5 *state, u8 data_type1, u8 data_type2,
-			      int pipe_id, u32 vc_id)
+			      int pipe_id, u32 vc_id, int ser_vc_id)
 {
 	int ret = 0;
-	/* While some deserializers can support up to 8 pipes, the serializer currently
-	 * only supports four vc_ids (0 - 3).
-	 * To use multiple cameras under this restriction, a second camera connected
-	 * to a deserializer will have its vc_id 0 - 3 mapped to outside vc_id 4 - 7 etc.
-	 * The ser_pipe_id mapping depends on both the serializer and the
-	 * deserializer (see serdes_get_ser_pipe_id()).
-	 */
-	int ser_vc_id = vc_id % DS5_MAX_STREAMS;
+	/* ser_pipe_id depends on both the serializer and the deserializer
+	 * (see serdes_get_ser_pipe_id()). */
 	int ser_pipe_id = serdes_get_ser_pipe_id(state, pipe_id, ser_vc_id);
 
-	ret |= state->dser_ops->bind_ser_to_dser_pipe(state->dser_dev, pipe_id, ser_pipe_id, vc_id);
+	ret |= state->dser_ops->bind_ser_to_dser_pipe(state->dser_dev, pipe_id, ser_pipe_id,
+				state->gmsl_link);
 	dev_dbg(&state->client->dev,
-			"set ser pipe %d, dser pipe %d, data_type1: 0x%x, data_type2: 0x%x, ser_vc_id: %u, vc_id: %u\n",
-			ser_pipe_id, pipe_id, data_type1, data_type2, ser_vc_id, vc_id);
+			"set ser pipe %d, dser pipe %d, data_type1: 0x%x, data_type2: 0x%x, link: %u, ser_vc_id: %u, vc_id: %u\n",
+			ser_pipe_id, pipe_id, data_type1, data_type2, state->gmsl_link,
+			ser_vc_id, vc_id);
 	ret |= state->ser_ops->set_pipe(state->ser_dev, ser_pipe_id,
 				data_type1, data_type2, ser_vc_id);
 	ret |= state->dser_ops->set_pipe(state->dser_dev, pipe_id,
-				data_type1, data_type2, vc_id);
+				data_type1, data_type2, state->gmsl_link, ser_vc_id);
 	if (ret)
 		dev_warn(&state->client->dev,
 			 "failed to set pipe %d, data_type1: 0x%x, data_type2: 0x%x, vc_id: %u\n",
@@ -2184,7 +2198,9 @@ static int ds5_configure(struct ds5 *state)
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	u16 data_type1, data_type2;
 	bool is_calib = 0;
+	int ser_vc_id;
 #endif
+	u16 md_vc = 0;
 	u16 dt_addr, md_addr, override_addr, fps_addr, width_addr, height_addr;
 	u16 dt_value = 0;
 	u16 md_value = 0;
@@ -2237,6 +2253,18 @@ static int ds5_configure(struct ds5 *state)
 	is_calib = (state->is_y8 && (data_type1 == GMSL_CSI_DT_RGB_888));
 
 	vc_id = state->g_ctx.dst_vc;
+	/* vc_id is the deserializer-side VC, from DT and used by the VI graph.
+	 * The serializer and the camera's own registers speak the serializer VC,
+	 * which only the deserializer's remap table can resolve. */
+	ser_vc_id = state->dser_ops->get_ser_vc_id ?
+		state->dser_ops->get_ser_vc_id(state->dser_dev, state->gmsl_link, vc_id) :
+		(int)vc_id;
+	if (ser_vc_id < 0) {
+		dev_err(&state->client->dev, "no serializer VC for link %u dser vc %u\n",
+			state->gmsl_link, vc_id);
+		return ser_vc_id;
+	}
+	md_vc = ser_vc_id;
     if (PIPE_NOT_CONFIGURED == sensor->pipe_id ||
 			sensor->pipe_data_type1 != data_type1 ||
 			sensor->pipe_data_type2 != data_type2 ||
@@ -2266,10 +2294,11 @@ static int ds5_configure(struct ds5 *state)
 		if (state->ser_ops == &max96717_interface &&
 		    state->dser_ops->get_multi_vc_pipe_id)
 			sensor->pipe_id =
-				state->dser_ops->get_multi_vc_pipe_id(state->dser_dev, (int)state->g_ctx.dst_vc);
+				state->dser_ops->get_multi_vc_pipe_id(state->dser_dev,
+								      state->gmsl_link);
 		else
 			sensor->pipe_id =
-				state->dser_ops->get_available_pipe_id(state->dser_dev, (int)state->g_ctx.dst_vc);
+				state->dser_ops->get_available_pipe_id(state->dser_dev, (int)vc_id);
 		mutex_unlock(&serdes_lock__);
 		if (sensor->pipe_id < 0) {
 			dev_err(&state->client->dev, "No free pipe in %s\n",state->dser_ops->name);
@@ -2277,7 +2306,7 @@ static int ds5_configure(struct ds5 *state)
 		}
 		mutex_lock(&serdes_lock__);
 		ret = ds5_setup_pipeline(state, data_type1, data_type2,
-					 sensor->pipe_id, vc_id);
+					 sensor->pipe_id, vc_id, ser_vc_id);
 		// reset data path when switching to Y12I
 		if (is_calib)
 			state->dser_ops->reset_oneshot(state->dser_dev);
@@ -2297,6 +2326,7 @@ static int ds5_configure(struct ds5 *state)
 	}
 #else /* Non-SERDES configuration */
 	vc_id = (state->is_depth) ? 0 : (state->is_rgb) ? 1 : (state->is_y8) ? 2 : 3;
+	md_vc = vc_id;
 #endif
 
 	/* Determine desired data-type (special cases for depth/IR), then write
@@ -2322,7 +2352,7 @@ static int ds5_configure(struct ds5 *state)
 		sensor->cached_dt_value = dt_value;
 	}
 
-	md_value = (vc_id << 8) | md_fmt;
+	md_value = (md_vc << 8) | md_fmt;
 	if (sensor->cached_md_value != md_value) {
 		ret = ds5_write(state, md_addr, md_value);
 		if (ret < 0)
@@ -2567,6 +2597,23 @@ enum ds5_sync_mode {
 
 /* Depth AE mode: single R/W control, maps to librealsense XU selector 0x11 */
 #define DS5_CAMERA_CID_AE_MODE		(DS5_CAMERA_CID_BASE+35)
+#define D500_CAMERA_CID_DEVICE_MODE	(DS5_CAMERA_CID_BASE + 36)
+#define D500_CAMERA_CID_DUAL_RGB_AE_POLICY (DS5_CAMERA_CID_BASE + 37)
+
+enum d500_device_mode {
+	D500_DEVICE_MODE_3C = 0,
+	D500_DEVICE_MODE_2C = 1,
+};
+
+enum d500_2c_ae_mode {
+	D500_2C_AE_POLICY_AUTO = 0,
+	D500_2C_AE_POLICY_DEPTH_MASTER = 1,
+	D500_2C_AE_POLICY_RGB_MASTER = 2,
+	D500_2C_AE_POLICY_HYBRID = 3,
+};
+
+#define D500_DEVICE_MODE_XU_BASE		0x4528
+#define D500_DUAL_RGB_AE_XU_BASE	0x4530
 
 /* Auto-exposure algorithm types — mirrors FW ETAeType */
 enum ds5_ae_type {
@@ -2699,6 +2746,133 @@ static int ds5_hwmc_send(struct ds5 *state,
 	ds5_write_with_check(state, DS5_HWMC_EXEC, 0x01); /* execute cmd */
 
 	return 0;
+}
+
+/* Caller must hold state->ds5_dev->lock. */
+static bool d500_camera_is_idle_locked(struct ds5 *state)
+{
+	return !state->ds5_dev->depth_streaming &&
+	       !state->ds5_dev->rgb_streaming &&
+	       !state->ds5_dev->ir_streaming &&
+	       !state->ds5_dev->imu_streaming;
+}
+
+static int d500_get_device_mode(struct ds5 *state, u32 *mode)
+{
+	u8 value;
+	int ret;
+
+	if (!mode)
+		return -EINVAL;
+
+	ret = ds5_raw_read(state, D500_DEVICE_MODE_XU_BASE,
+			   &value, sizeof(value));
+	if (ret)
+		return ret;
+	if (value > D500_DEVICE_MODE_2C)
+		return -EBADMSG;
+
+	*mode = value;
+	return 0;
+}
+
+static int d500_set_device_mode(struct ds5 *state, u32 mode)
+{
+	u8 value;
+	int ret;
+
+	if (mode > D500_DEVICE_MODE_2C)
+		return -EINVAL;
+	value = mode;
+
+	mutex_lock(&state->ds5_dev->lock);
+	if (!d500_camera_is_idle_locked(state)) {
+		ret = -EBUSY;
+	} else {
+		ret = ds5_raw_write(state, D500_DEVICE_MODE_XU_BASE,
+				    &value, sizeof(value));
+		if (!ret)
+			state->ds5_dev->configured_device_mode = mode;
+	}
+	mutex_unlock(&state->ds5_dev->lock);
+
+	return ret;
+}
+
+static int d500_get_ae_policy(struct ds5 *state, u32 *policy)
+{
+	u8 value;
+	int ret;
+
+	if (!policy)
+		return -EINVAL;
+
+	mutex_lock(&state->ds5_dev->lock);
+	ret = (!state->ds5_dev->device_mode_valid ||
+	       state->ds5_dev->active_device_mode != D500_DEVICE_MODE_2C) ?
+		-EOPNOTSUPP : 0;
+	mutex_unlock(&state->ds5_dev->lock);
+	if (ret)
+		return ret;
+
+	ret = ds5_raw_read(state, D500_DUAL_RGB_AE_XU_BASE,
+			   &value, sizeof(value));
+	if (ret)
+		return ret;
+	if (value > D500_2C_AE_POLICY_HYBRID)
+		return -EBADMSG;
+
+	*policy = value;
+	return 0;
+}
+
+static int d500_set_ae_policy(struct ds5 *state, u32 policy)
+{
+	u8 value;
+	int ret;
+
+	if (policy > D500_2C_AE_POLICY_HYBRID)
+		return -EINVAL;
+	value = policy;
+
+	mutex_lock(&state->ds5_dev->lock);
+	ret = (!state->ds5_dev->device_mode_valid ||
+	       state->ds5_dev->active_device_mode != D500_DEVICE_MODE_2C) ?
+		-EOPNOTSUPP : 0;
+	if (!ret && !d500_camera_is_idle_locked(state))
+		ret = -EBUSY;
+	if (!ret)
+		ret = ds5_raw_write(state, D500_DUAL_RGB_AE_XU_BASE,
+				    &value, sizeof(value));
+	mutex_unlock(&state->ds5_dev->lock);
+
+	return ret;
+}
+
+static int d500_refresh_device_mode(struct ds5 *state, bool boot_mode)
+{
+	u32 mode;
+	int ret;
+
+	ret = d500_get_device_mode(state, &mode);
+	mutex_lock(&state->ds5_dev->lock);
+	if (!ret) {
+		state->ds5_dev->configured_device_mode = mode;
+		if (boot_mode)
+			state->ds5_dev->active_device_mode = mode;
+		state->ds5_dev->device_mode_valid = true;
+	} else if (boot_mode) {
+		state->ds5_dev->device_mode_valid = false;
+	}
+	mutex_unlock(&state->ds5_dev->lock);
+
+	if (state->ctrls.dual_rgb_ae_policy) {
+		const bool active = !ret && mode == D500_DEVICE_MODE_2C;
+
+		v4l2_ctrl_activate(state->ctrls.dual_rgb_ae_policy, active);
+	}
+
+	return ret;
 }
 
 static int ds5_set_calibration_data(struct ds5 *state,
@@ -3038,7 +3212,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	/* RSDEV-12608: drop the stale partial frame a mid-stream camera reset leaves
 	 * in this link's line buffer (NULL-safe; max9296 leaves none). */
 	if (state->dser_ops->reset_oneshot_link)
-		state->dser_ops->reset_oneshot_link(state->dser_dev, state->g_ctx.dst_vc);
+		state->dser_ops->reset_oneshot_link(state->dser_dev, state->gmsl_link);
 
 	/* Re-apply ESYNC tunneling to match cached sync_mode control */
 	if (state->ctrls.sync_mode) {
@@ -3050,6 +3224,18 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 			dev_warn(&state->client->dev,
 				"%s(): serializer ESYNC %s after HW reset failed (%d)\n",
 				__func__, need_esync ? "enable" : "disable", ret);
+	}
+
+	if (dev_type == DS5_DEVICE_TYPE_D58X) {
+		struct ds5 *owner = state->ds5_dev->ds5_primary ?
+			state->ds5_dev->ds5_primary : state;
+		int mode_ret;
+
+		mode_ret = d500_refresh_device_mode(owner, true);
+		if (mode_ret)
+			dev_warn(&state->client->dev,
+				 "%s(): D58x device-mode refresh after HW reset failed (%d)\n",
+				 __func__, mode_ret);
 	}
 
 	WRITE_ONCE(state->ds5_dev->last_reset_jiffies, jiffies);
@@ -3453,6 +3639,18 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 				ret = ds5_set_ser_esync_tunneling(state, need_esync);
 			}
 		}
+		break;
+	case D500_CAMERA_CID_DEVICE_MODE:
+		if (state->is_depth &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X)
+			ret = d500_set_device_mode(state, ctrl->val);
+		break;
+	case D500_CAMERA_CID_DUAL_RGB_AE_POLICY:
+		if (state->is_depth &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X)
+			ret = d500_set_ae_policy(state, ctrl->val);
 		break;
 	case DS5_CAMERA_CID_PWM:
 		if (state->is_depth)
@@ -3899,6 +4097,32 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		if (state->is_depth)
 			ds5_read(state, base | DS5_CAMERA_SYNC_MODE, ctrl->p_new.p_u16);
 		break;
+	case D500_CAMERA_CID_DEVICE_MODE:
+		if (state->is_depth && ctrl->p_new.p_s32 &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X) {
+			u32 mode;
+
+			ret = d500_get_device_mode(state, &mode);
+			if (!ret) {
+				*ctrl->p_new.p_s32 = mode;
+				mutex_lock(&state->ds5_dev->lock);
+				state->ds5_dev->configured_device_mode = mode;
+				mutex_unlock(&state->ds5_dev->lock);
+			}
+		}
+		break;
+	case D500_CAMERA_CID_DUAL_RGB_AE_POLICY:
+		if (state->is_depth && ctrl->p_new.p_s32 &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X) {
+			u32 policy;
+
+			ret = d500_get_ae_policy(state, &policy);
+			if (!ret)
+				*ctrl->p_new.p_s32 = policy;
+		}
+		break;
 	case DS5_CAMERA_CID_PWM:
 		if (state->is_depth)
 			ds5_read(state, base | DS5_PWM_FREQUENCY, ctrl->p_new.p_u16);
@@ -4251,6 +4475,42 @@ static const struct v4l2_ctrl_config ds5_ctrl_error_code = {
 	.flags = DS5_READ_ONLY_TELEMETRY_FLAGS,
 };
 
+static const char * const d58x_device_mode_menu[] = {
+	[D500_DEVICE_MODE_3C] = "3C",
+	[D500_DEVICE_MODE_2C] = "2C",
+};
+
+static const struct v4l2_ctrl_config ds5_ctrl_device_mode_d58x = {
+	.ops = &ds5_ctrl_ops,
+	.id = D500_CAMERA_CID_DEVICE_MODE,
+	.name = "Device Mode",
+	.type = V4L2_CTRL_TYPE_MENU,
+	.min = D500_DEVICE_MODE_3C,
+	.max = D500_DEVICE_MODE_2C,
+	.def = D500_DEVICE_MODE_3C,
+	.qmenu = d58x_device_mode_menu,
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
+static const char * const d58x_ae_policy_menu[] = {
+	[D500_2C_AE_POLICY_AUTO] = "Auto",
+	[D500_2C_AE_POLICY_DEPTH_MASTER] = "Depth Master",
+	[D500_2C_AE_POLICY_RGB_MASTER] = "RGB Master",
+	[D500_2C_AE_POLICY_HYBRID] = "Hybrid",
+};
+
+static const struct v4l2_ctrl_config ds5_ctrl_dual_rgb_ae_policy_d58x = {
+	.ops = &ds5_ctrl_ops,
+	.id = D500_CAMERA_CID_DUAL_RGB_AE_POLICY,
+	.name = "2C AE Policy",
+	.type = V4L2_CTRL_TYPE_MENU,
+	.min = D500_2C_AE_POLICY_AUTO,
+	.max = D500_2C_AE_POLICY_HYBRID,
+	.def = D500_2C_AE_POLICY_DEPTH_MASTER,
+	.qmenu = d58x_ae_policy_menu,
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
 static const struct v4l2_ctrl_config ds5_ctrl_pwm = {
 	.ops = &ds5_ctrl_ops,
 	.id = DS5_CAMERA_CID_PWM,
@@ -4317,6 +4577,9 @@ static void ds5_init_ds5_dev(struct ds5 *state, struct ds5_dev *ds5_dev)
 	ds5_dev->ds5_primary = state;
 	ds5_dev->serdes_setup_complete = false;
 	ds5_dev->cached_device_type = DS5_DEVICE_TYPE_UNKNOWN;
+	ds5_dev->configured_device_mode = D500_DEVICE_MODE_3C;
+	ds5_dev->active_device_mode = D500_DEVICE_MODE_3C;
+	ds5_dev->device_mode_valid = false;
 	mutex_unlock(&ds5_dev->lock);
 	ds5_reset_streaming_flags(ds5_dev);
 }
@@ -4499,6 +4762,7 @@ static int ds5_board_setup(struct ds5 *state)
 		ser_node = of_parse_phandle(node, "nvidia,gmsl-ser-device", 0);
 		if (ser_node == NULL) {
 			dev_err(dev, "missing %s handle\n", "[maxim|nvidia],gmsl-ser-device");
+			err = -EINVAL;
 			goto error;
 		}
 	}
@@ -4506,6 +4770,15 @@ static int ds5_board_setup(struct ds5 *state)
 	dev_dbg(dev,  "serializer reg: 0x%x\n", state->g_ctx.ser_reg);
 	if (err < 0) {
 		dev_err(dev, "serializer reg not found\n");
+		goto error;
+	}
+
+	/* The GMSL link is a static board fact stated on the serializer node. */
+	if (of_property_read_u32(ser_node, "maxim,gmsl-link-id", &state->gmsl_link))
+		state->gmsl_link = DS5_GMSL_LINK_UNSET;
+	else if (state->gmsl_link >= DS5_MAX_GMSL_LINKS) {
+		dev_err(dev, "illegal maxim,gmsl-link-id %u\n", state->gmsl_link);
+		err = -EINVAL;
 		goto error;
 	}
 
@@ -4518,6 +4791,7 @@ static int ds5_board_setup(struct ds5 *state)
 	}
 	if (ser_i2c->dev.driver == NULL) {
 		dev_err(dev, "missing serializer driver\n");
+		err = -EPROBE_DEFER;
 		goto error;
 	}
 
@@ -4540,6 +4814,7 @@ static int ds5_board_setup(struct ds5 *state)
 		dser_node = of_parse_phandle(node, "nvidia,gmsl-dser-device", 0);
 		if (dser_node == NULL) {
 			dev_err(dev, "missing %s handle\n", "[maxim|nvidia],gmsl-dser-device");
+			err = -EINVAL;
 			goto error;
 		}
 	}
@@ -4552,6 +4827,7 @@ static int ds5_board_setup(struct ds5 *state)
 	}
 	if (dser_i2c->dev.driver == NULL) {
 		dev_err(dev, "missing deserializer driver\n");
+		err = -EPROBE_DEFER;
 		goto error;
 	}
 
@@ -4569,6 +4845,7 @@ static int ds5_board_setup(struct ds5 *state)
 		dev_err(dev, "%s: Unsupported deserializer = %s\n", __func__, dser_node->name);
 		/* Should not be used, this is just to make sure we don't have NULL pointers */
 		state->dser_ops = &max9296_interface;
+		err = -ENODEV;
 		goto error;
 	}
 	dev_info(dev, "Using deserializer %s\n", state->dser_ops->name);
@@ -4614,6 +4891,7 @@ static int ds5_board_setup(struct ds5 *state)
 		state->g_ctx.csi_mode = GMSL_CSI_2X2_MODE;
 	} else {
 		dev_err(dev, "invalid csi mode\n");
+		err = -EINVAL;
 		goto error;
 	}
 
@@ -4639,6 +4917,13 @@ static int ds5_board_setup(struct ds5 *state)
 		goto error;
 	}
 	state->g_ctx.dst_vc = value;
+
+	/* Overlays predating maxim,gmsl-link-id encode the link in vc-id. */
+	if (state->gmsl_link == DS5_GMSL_LINK_UNSET) {
+		state->gmsl_link = state->g_ctx.dst_vc / DS5_MAX_STREAMS;
+		dev_warn(dev, "no maxim,gmsl-link-id, using link %u from vc-id %u\n",
+			 state->gmsl_link, state->g_ctx.dst_vc);
+	}
 
 	err = of_property_read_u32(gmsl, "num-lanes", &value);
 	if (err < 0) {
@@ -4791,6 +5076,7 @@ static int ds5_board_setup(struct ds5 *state)
 	}
 	state->g_ctx.st_vc = 0;
 	state->g_ctx.dst_vc = 0;
+	state->gmsl_link = 0;
 
 	state->g_ctx.num_csi_lanes = 2;
 	state->g_ctx.s_dev = dev;
@@ -5222,6 +5508,15 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 	if (sid == DEPTH_SID) {
 		ctrls->sync_mode = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_sync_mode, sensor);
 		if (is_d58x) {
+			ctrls->device_mode =
+				v4l2_ctrl_new_custom(hdl, &ds5_ctrl_device_mode_d58x,
+						     sensor);
+			ctrls->dual_rgb_ae_policy =
+				v4l2_ctrl_new_custom(hdl,
+						     &ds5_ctrl_dual_rgb_ae_policy_d58x,
+						     sensor);
+			if (ctrls->dual_rgb_ae_policy)
+				v4l2_ctrl_activate(ctrls->dual_rgb_ae_policy, false);
 			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_visual_preset, sensor);
 			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_soc_pvt_temperature,
 					     sensor);
@@ -5797,8 +6092,7 @@ static void ds5_flush_idle_link(struct ds5 *state)
 	mutex_unlock(&state->ds5_dev->lock);
 
 	if (flush)
-		state->dser_ops->reset_oneshot_link(state->dser_dev,
-						    state->g_ctx.dst_vc);
+		state->dser_ops->reset_oneshot_link(state->dser_dev, state->gmsl_link);
 }
 #endif
 
@@ -6086,11 +6380,16 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		mutex_unlock(&serdes_lock__);
 		/* Tell the serializer this stream stopped. On the last stream it
 		 * re-arms the MIPI RX PHY (idle) so the next stream re-locks
-		 * cleanly instead of wedging the shared pipe. vc_id % DS5_MAX_STREAMS
-		 * matches the ser_vc_id passed to set_pipe in ds5_setup_pipeline(). */
-		if (state->ser_ops->stream_stop)
-			state->ser_ops->stream_stop(state->ser_dev,
-						    vc_id % DS5_MAX_STREAMS);
+		 * cleanly instead of wedging the shared pipe. */
+		if (state->ser_ops->stream_stop) {
+			int ser_vc_id = state->dser_ops->get_ser_vc_id ?
+				state->dser_ops->get_ser_vc_id(state->dser_dev,
+							       state->gmsl_link, vc_id) :
+				(int)vc_id;
+
+			if (ser_vc_id >= 0)
+				state->ser_ops->stream_stop(state->ser_dev, ser_vc_id);
+		}
 		msleep_range(100);
 #endif
 	}
@@ -6969,6 +7268,23 @@ static void ds5_adjust_sync_mode_control(struct i2c_client *client, struct ds5 *
 	}
 }
 
+static void d500_adjust_device_mode_controls(struct i2c_client *client,
+					     struct ds5 *state)
+{
+	int ret;
+
+	if (!state->ctrls.device_mode ||
+	    READ_ONCE(state->ds5_dev->cached_device_type) !=
+		    DS5_DEVICE_TYPE_D58X)
+		return;
+
+	ret = d500_refresh_device_mode(state, true);
+	if (ret)
+		dev_warn(&client->dev,
+			 "%s(): failed to read D58x device mode; 2C AE Policy remains inactive (%d)\n",
+			 __func__, ret);
+}
+
 /* Per-SKU adjustment of the RGB ISP controls registered in ds5_ctrl_init().
  * Must be called after ds5_mux_init() so DS5_DEVICE_TYPE is populated. The
  * controls themselves are registered unconditionally so callers do not race
@@ -7031,6 +7347,7 @@ static int ds5_v4l_init(struct i2c_client *c, struct ds5 *state)
 	/* Adjust sync_mode control range based on device type - must be done
 	 * after ds5_mux_init() creates the control */
 	ds5_adjust_sync_mode_control(c, state);
+	d500_adjust_device_mode_controls(c, state);
 
 	/* Adjust RGB ISP controls per SKU (e.g. hide AE Priority on D40X) -
 	 * must be done after ds5_mux_init() registered them. */
@@ -7650,4 +7967,4 @@ MODULE_AUTHOR("Guennadi Liakhovetski <guennadi.liakhovetski@intel.com>,\n\
 				Shikun Ding <shikun.ding@intel.com>,\n\
 				Dmitry Perchanov <dmitry.perchanov@intel.com>");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("1.0.6.6");
+MODULE_VERSION("1.0.6.8");

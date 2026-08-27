@@ -1204,7 +1204,7 @@ int max96724_init_settings(struct device *dev)
 EXPORT_SYMBOL(max96724_init_settings);
 
 int max96724_bind_ser_to_dser_pipe(struct device *dev, int dser_pipe_id,
-				   int ser_pipe_id, u32 vc_id)
+				   int ser_pipe_id, u32 link)
 {
 	/* In Tunnel Mode, pipe mapping is 1:1 (each camera → one pipe) */
 	return 0;
@@ -1212,7 +1212,7 @@ int max96724_bind_ser_to_dser_pipe(struct device *dev, int dser_pipe_id,
 EXPORT_SYMBOL(max96724_bind_ser_to_dser_pipe);
 
 int max96724_set_pipe(struct device *dev, int pipe_id,
-		      u8 data_type1, u8 data_type2, u32 vc_id)
+		      u8 data_type1, u8 data_type2, u32 link, u32 vc_id)
 {
 	struct max96724 *priv = dev_get_drvdata(dev);
 	int err = 0;
