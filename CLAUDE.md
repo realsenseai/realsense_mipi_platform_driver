@@ -130,6 +130,13 @@ The build system cross-compiles for ARM64. Toolchains vary by JetPack:
 - `dev` — active development branch; **default target for all PRs**
 - CI builds run on pushes to `master` and `dev`, and on all PRs
 
+## Ownership / escalation
+
+- **Evgeni — firmware architect.** Open technical questions about `perc_hw_fw-rs400` (interlocks, ISR behaviour, imager/sensor sequencing, metadata contracts) go to him.
+- **Uzi — decides on recommendations.** When work ends with "recommend A over B", name Uzi as the decision owner rather than leaving the choice unassigned.
+
+Keep the two separate in Jira: technical questions to Evgeni, the decision to Uzi.
+
 ## V4L2 control conventions
 
 - A control that librealsense reaches through a **USB depth XU selector** must be a **single read/write V4L2 control**, not a split get/set pair. The MIPI backend's `xu_to_cid()` maps one selector to one CID, and both `get_xu()` and `set_xu()` use that same CID — so a read-only "get" CID plus a separate "set" CID cannot be reached by a single selector. Expose one control with flags `V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE` (do **not** set `READ_ONLY`): `VOLATILE` routes each read to `ds5_g_volatile_ctrl`, `EXECUTE_ON_WRITE` routes each write to `ds5_s_ctrl`. `DS5_CAMERA_CID_AE_MODE` (depth AE regular/accelerated, HWMC SETAETYPE 0x87 / GETAETYPE 0x88, XU selector 0x11) is the reference example.
