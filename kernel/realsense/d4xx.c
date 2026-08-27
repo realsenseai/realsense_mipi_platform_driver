@@ -4584,13 +4584,20 @@ static void ds5_init_ds5_dev(struct ds5 *state, struct ds5_dev *ds5_dev)
 	ds5_reset_streaming_flags(ds5_dev);
 }
 
-/* Caller must hold serdes_lock__. */
-static bool ds5_release_slot(struct ds5 *state)
+/* Caller must hold serdes_lock__. *dser_last_user, if non-NULL, is set to true
+ * iff this call released the last camera sharing state's deserializer -- the
+ * only time a deserializer-level teardown (e.g. power_off()) is correct, since
+ * power_on()/setup_link()/init_settings() run exactly once per deserializer
+ * (gated on dser_primary) rather than once per camera. */
+static bool ds5_release_slot(struct ds5 *state, bool *dser_last_user)
 {
 	struct dser_control *dser_control;
 	bool has_other_users = false;
 	bool released = false;
 	int i;
+
+	if (dser_last_user)
+		*dser_last_user = false;
 
 	if (!state->ds5_dev)
 		return false;
@@ -4635,6 +4642,8 @@ static bool ds5_release_slot(struct ds5 *state)
 	}
 
 	mutex_unlock(&serdes_lock__);
+	if (dser_last_user)
+		*dser_last_user = !has_other_users;
 	return released;
 }
 
@@ -5225,7 +5234,7 @@ serdes_setup_end:
 		state->ser_ops->sdev_unpair(state->ser_dev, state->g_ctx.s_dev);
 		state->dser_ops->sdev_unregister(state->dser_dev, state->g_ctx.s_dev);
 		if (state->ser_primary)
-			ds5_release_slot(state);
+			ds5_release_slot(state, NULL);
 	} else if (state->ser_primary) {
 		mutex_lock(&state->ds5_dev->lock);
 		if (state->ds5_dev->ds5_primary == state)
@@ -7871,8 +7880,9 @@ static void ds5_remove(struct i2c_client *c)
 	if (state->ser_primary) {
 		int ret;
 		bool do_cleanup = false;
+		bool dser_last_user = false;
 
-		do_cleanup = ds5_release_slot(state);
+		do_cleanup = ds5_release_slot(state, &dser_last_user);
 
 		if (do_cleanup) {
 			ret = state->ser_ops->reset_control(state->ser_dev);
@@ -7893,7 +7903,14 @@ static void ds5_remove(struct i2c_client *c)
 			if (ret)
 				dev_warn(&c->dev,
 					"failed to %s unregister sdev\n", state->dser_ops->name);
-			state->dser_ops->power_off(state->dser_dev);
+			/* power_off() is deserializer-scoped, not per-camera: on an
+			 * aggregated link it must fire once, matching the single
+			 * power_on() gated on dser_primary during probe -- not once
+			 * per camera, which powers down a shared deserializer while
+			 * siblings are still tearing down and leaves it net-imbalanced.
+			 */
+			if (dser_last_user)
+				state->dser_ops->power_off(state->dser_dev);
 		}
 	}
 #ifndef CONFIG_OF
