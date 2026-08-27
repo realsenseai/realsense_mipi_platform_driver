@@ -2472,7 +2472,8 @@ static bool ds5_rgb_shares_imager(const struct ds5 *state)
 	return state->is_rgb && fmt && fmt->data_type == DS5_FW_CSI_PT;
 }
 
-static int ds5_hw_set_auto_exposure(struct ds5 *state, u32 base, s32 val)
+static int ds5_hw_set_auto_exposure(struct ds5 *state, u32 base, s32 val,
+				    bool depth_style)
 {
 	if (val != V4L2_EXPOSURE_APERTURE_PRIORITY &&
 		val != V4L2_EXPOSURE_MANUAL)
@@ -2482,13 +2483,14 @@ static int ds5_hw_set_auto_exposure(struct ds5 *state, u32 base, s32 val)
 	 * In firmware color auto exposure setting follow the uvc_menu_info
 	 * exposure_auto_controls numbers, in drivers/media/usb/uvc/uvc_ctrl.c.
 	 */
-	if (state->is_rgb && val == V4L2_EXPOSURE_APERTURE_PRIORITY)
+	if (state->is_rgb && !depth_style &&
+	    val == V4L2_EXPOSURE_APERTURE_PRIORITY)
 		val = 8;
 
 	/*
 	 * In firmware depth auto exposure on: 1, off: 0.
 	 */
-	if (!state->is_rgb) {
+	if (!state->is_rgb || depth_style) {
 		if (val == V4L2_EXPOSURE_APERTURE_PRIORITY)
 			val = 1;
 		else if (val == V4L2_EXPOSURE_MANUAL)
@@ -3123,7 +3125,15 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 
 	case V4L2_CID_EXPOSURE_AUTO:
-		ret = ds5_hw_set_auto_exposure(state, base, ctrl->val);
+		/* FW rejects manual exposure/gain while depth AE is on
+		 * (uvcControlDepthAECheck -> CRC_WRONG_STATE_ERR), so under
+		 * CSI-PT the mode selector must reach the depth AE register. */
+		if (ds5_rgb_shares_imager(state))
+			ret = ds5_hw_set_auto_exposure(state,
+					DS5_DEPTH_CONTROL_BASE, ctrl->val, true);
+		else
+			ret = ds5_hw_set_auto_exposure(state, base, ctrl->val,
+					false);
 		break;
 
 	case V4L2_CID_EXPOSURE_ABSOLUTE:
@@ -3643,6 +3653,14 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 	case V4L2_CID_EXPOSURE_AUTO:
 		if (state->is_imu)
 			return -EINVAL;
+		if (ds5_rgb_shares_imager(state)) {
+			ds5_read(state, DS5_DEPTH_CONTROL_BASE |
+					DS5_AUTO_EXPOSURE_MODE, &reg);
+			*ctrl->p_new.p_u16 = reg ?
+					V4L2_EXPOSURE_APERTURE_PRIORITY :
+					V4L2_EXPOSURE_MANUAL;
+			break;
+		}
 		ds5_read(state, base | DS5_AUTO_EXPOSURE_MODE, &reg);
 		*ctrl->p_new.p_u16 = reg;
 		/* see ds5_hw_set_auto_exposure */
