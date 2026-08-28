@@ -26,7 +26,7 @@ Defaults: USERNAME=`administrator`, REMOTE_PATH='git.USER.NAME', REMOTE_BOOT_FOL
 `REMOTE_BOOT_FOLDER` selects which `/boot/<folder>` receives the kernel `Image`; rigs whose `extlinux.conf` boots a non-default folder need it set explicitly. Known-good example:
 
 ```bash
-./scripts/deploy_kernel.sh 6.2 fw-orin-3 nvidia drgb_poc dev
+./scripts/deploy_kernel.sh 6.2 <RIG_HOST> nvidia drgb_poc dev
 ```
 
 This script is the **only** supported way to deploy a driver build — it replaces the whole `/lib/modules/$(uname -r)` tree, so every module stays ABI-consistent. Never hand-copy individual `.ko` files: `tegra-camera.ko` exports `camera_common_*` to `d4xx.ko` and `tegra_csi_*`/`csi5_fops` to `nvhost-nvcsi*`, so a partial copy strands the other consumers ("disagrees about version of symbol"), NVCSI fails to load, and no `/dev/video*` are created at all.

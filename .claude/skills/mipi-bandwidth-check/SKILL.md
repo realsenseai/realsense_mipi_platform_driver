@@ -21,7 +21,7 @@ each stream's readout span, how the streams nest in time, and the true peak aggr
 ## The model it confirmed (D401 dual-RGB, reference data)
 
 Inputs are the same stereo sensors; **outputs differ**. RAW (EP3/EP4) is the full 808-line sensor
-scan; depth (EP2) is only the rectification/crop window. Measured on fw-orin-3, FW 5.17.3.153,
+scan; depth (EP2) is only the rectification/crop window. Measured on a D401 GMSL test rig, FW 5.17.3.153,
 depth 1280×720 + 2× RAW 1612×808 BA81 @30 fps (period 33.31 ms):
 
 ```
@@ -61,7 +61,7 @@ it must sustain the overlap peak. Reference: 196 MB/s overlap = clean; small-res
 the RAW pair crammed into a 12.9 ms span (~201 MB/s pair alone), i.e. a short sensor-HTS, not the
 depth resolution.
 
-### Measured resolution sweep (fw-orin-3, v153, sensor HTS 0x930, 3-stream, all CLEAN)
+### Measured resolution sweep (a D401 GMSL test rig, v153, sensor HTS 0x930, 3-stream, all CLEAN)
 | depth res | depth span | depth rate | RAW span ×2 | overlap PEAK | HTS_min @ceiling 196 |
 |---|---|---|---|---|---|
 | 1280×720 | 21.10 ms | 87.4 | 24.02 → 108.5 | **196 MB/s** | 0x930 (at limit) |

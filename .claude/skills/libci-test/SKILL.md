@@ -11,7 +11,7 @@ Run librealsense CI unit tests on a remote Jetson, collect all logs, and analyze
 
 | Parameter | Default | Notes |
 |-----------|---------|-------|
-| SSH host | `fw-orin-1` | Override if user specifies different host |
+| SSH host | `<RIG_HOST>` | Override if user specifies different host |
 | SSH user | `nvidia` | Override if user specifies different user |
 | Test runner path | `~/dev/librealsense/unit-tests` | The `run-unit-tests.py` script location |
 | Test log output dir | `~/dev/librealsense/build/Release/unit-tests` | Where individual `.log` files land on Jetson |
@@ -24,7 +24,7 @@ Run librealsense CI unit tests on a remote Jetson, collect all logs, and analyze
 
 Confirm or override defaults based on user request:
 
-- **Host/user**: Use defaults (`nvidia@fw-orin-1`) unless user specifies otherwise
+- **Host/user**: Use defaults (`nvidia@<RIG_HOST>`) unless user specifies otherwise
 - **Test filter**: If user names specific tests, use `-r <regex>` (e.g., `-r live-metadata-alive`)
 - **Repeat mode**: If user wants repeated runs, add `--repeat N --hw-reset-delay 1 --fail-fast`
 - **Local log filename**: Generate from date: `libCI-DD-MM[-suffix].txt` where suffix is optional user label (branch name, commit hash, test filter, etc.)
