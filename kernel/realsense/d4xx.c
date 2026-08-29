@@ -692,6 +692,11 @@ struct ds5_dev {
 	bool ir_streaming;
 	bool rgb_streaming;
 	bool imu_streaming;
+
+	/* RSDSO-21854: source DT of the last colour stream that actually ran, 0 if none.
+	 * The camera cannot switch its colour path between ISP YUV422 and raw pass-through.
+	 */
+	u8 rgb_last_streamed_dt;
 };
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
@@ -6222,6 +6227,45 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	dev_dbg(&state->client->dev, "s_stream for stream %s, vc:%d, SENSOR=%s on = %d\n",
 			sensor->sd.name, vc_id, ds5_get_sensor_name(state), on);
 
+	/* RSDSO-21854: a colour source-DT change needs a camera reset - no firmware-reachable
+	 * reset recovers the other mode. Gated on idle: a reset would kill a live sibling.
+	 */
+	if (on && state->is_rgb && sensor->config.format) {
+		u8 dt = sensor->config.format->data_type;
+		bool switched, idle;
+
+		mutex_lock(&state->ds5_dev->lock);
+		switched = state->ds5_dev->rgb_last_streamed_dt &&
+			   state->ds5_dev->rgb_last_streamed_dt != dt;
+		idle = d500_camera_is_idle_locked(state);
+		mutex_unlock(&state->ds5_dev->lock);
+
+		if (switched && idle) {
+			dev_info(&state->client->dev,
+				 "%s(): colour source DT 0x%02x -> 0x%02x, resetting camera\n",
+				 __func__, state->ds5_dev->rgb_last_streamed_dt, dt);
+			ret = ds5_hw_reset_with_recovery(state);
+			if (ret < 0)
+				dev_warn(&state->client->dev,
+					 "%s(): reset on colour DT change failed: %d\n",
+					 __func__, ret);
+			ret = 0;
+
+			/* Repeat the lazy invalidation: it already ran above for this call,
+			 * so without this the start below uses pipe state the reset discarded.
+			 */
+			ds5_invalidate_sensor(state, sensor);
+			sensor->streaming = false;
+			reset_invalidated = true;
+			state->reset_ref_ds5 = atomic_read(ds5_get_reset_gen(state));
+		} else if (switched) {
+			dev_warn(&state->client->dev,
+				 "%s(): colour source DT 0x%02x -> 0x%02x while other streams are "
+				 "live - cannot reset, this stream will not deliver frames\n",
+				 __func__, state->ds5_dev->rgb_last_streamed_dt, dt);
+		}
+	}
+
 	if (on) {
 		stream_cmd = (DS5_STREAM_START | stream_id);
 		expected_streaming_state = DS5_STREAM_STREAMING;
@@ -6456,6 +6500,15 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	if (on && ret >= 0 && state->dser_ops->retrigger_datapath)
 		state->dser_ops->retrigger_datapath(state->dser_dev);
 #endif
+	/* Only a start that succeeded put the camera into this mode, so only that arms the
+	 * switch detection for the next start.
+	 */
+	if (on && ret >= 0 && state->is_rgb && sensor->config.format) {
+		mutex_lock(&state->ds5_dev->lock);
+		state->ds5_dev->rgb_last_streamed_dt = sensor->config.format->data_type;
+		mutex_unlock(&state->ds5_dev->lock);
+	}
+
 	return ret;
 }
 
