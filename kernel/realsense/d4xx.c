@@ -122,6 +122,11 @@ struct ser_interface {
 #define GMSL_CSI_DT_EMBED 0x12
 #endif
 
+/* Older NVIDIA GMSL headers do not define the CSI-2 RAW16 data type. */
+#ifndef GMSL_CSI_DT_RAW_16
+#define GMSL_CSI_DT_RAW_16 0x2E
+#endif
+
 /* D40x FW CSI-PT mode selector for the OV9782 (not a MIPI wire DT). */
 #define DS5_FW_CSI_PT	0x2E
 
@@ -2384,10 +2389,23 @@ static int ds5_configure(struct ds5 *state)
 	}
 
 	fps_value = sensor->config.framerate;
+	/*
+	 * D58x exposes accel and gyro as two logical streams, but transports
+	 * both over one VC with one legacy IMU record per CSI frame.  Keep the
+	 * V4L2 interval as the requested per-sensor rate and program HKR with
+	 * twice that rate so alternating accel/gyro records each retain the
+	 * requested cadence.  This is independent of serdes pixel/tunnel mode.
+	 * Traditional D400 devices retain their original register value.
+	 */
+	if (state->is_imu && ds5_is_d58x(state))
+		fps_value *= 2U;
 	if (sensor->cached_fps_value != fps_value) {
 		ret = ds5_write(state, fps_addr, fps_value);
 		if (ret < 0)
 			return ret;
+		dev_dbg(&state->client->dev,
+			"FW fps_addr[0x%04x] = %u (V4L2 fps %u)\n",
+			fps_addr, fps_value, sensor->config.framerate);
 		sensor->cached_fps_value = fps_value;
 	}
 
