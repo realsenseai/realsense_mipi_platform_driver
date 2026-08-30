@@ -17,6 +17,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <linux/bitops.h>
 #include <linux/delay.h>
 #include <linux/gpio.h>
 #include <linux/i2c.h>
@@ -566,6 +567,7 @@ struct ds5_sensor {
 
 #ifdef CONFIG_TEGRA_CAMERA_PLATFORM
 #include <media/camera_common.h>
+#include <media/mc_common.h>
 #define ds5_mux_subdev camera_common_data
 #else
 struct ds5_mux_subdev {
@@ -684,6 +686,10 @@ struct ds5_dev {
 
 	/* Pointer to the primary DS5 struct */
 	struct ds5 *ds5_primary;
+
+	/* The is_rgb probe instance: it owns the RGB mux subdev and VI channel,
+	 * which the other three instances cannot reach any other way. */
+	struct ds5 *ds5_rgb;
 	bool serdes_setup_complete;
 	int configured_device_mode;
 	int active_device_mode;
@@ -1706,6 +1712,32 @@ static const struct ds5_format ds5_y_formats_d58x[] = {
 };
 
 static const struct ds5_format ds5_rgb_formats_d58x[] = {
+	{
+		/* First format: default */
+		.data_type = GMSL_CSI_DT_YUV422_8,	/* UYVY */
+		.mbus_code = MEDIA_BUS_FMT_YUYV8_1X16,
+		.n_resolutions = ARRAY_SIZE(d58x_rgb_sizes),
+		.resolutions = d58x_rgb_sizes,
+	}, {
+		/* Flat NV12 bytes use RAW8 as an opaque 8-bit CSI carrier. */
+		.data_type = GMSL_CSI_DT_YUV420_8,
+		.override_data_type = GMSL_CSI_DT_RAW_8,
+		.mbus_code = MEDIA_BUS_FMT_RS_NV12_FLAT_1X8,
+		.n_resolutions = ARRAY_SIZE(d58x_rgb_sizes),
+		.resolutions = d58x_rgb_sizes,
+	}, {
+		/* RGB calibration: unpacked GRBG10, one little-endian
+		 * 10-bit sample per 16-bit container, 2 bytes/pixel.
+		 */
+		.data_type = GMSL_CSI_DT_RAW_16,
+		.mbus_code = MEDIA_BUS_FMT_SGRBG16_1X16,
+		.n_resolutions = ARRAY_SIZE(d58x_calibration_sizes),
+		.resolutions = d58x_calibration_sizes,
+	},
+};
+
+/* TODO: add the 2C specific format when available */
+static const struct ds5_format ds5_rgb_2c_formats_d58x[] = {
 	{
 		/* First format: default */
 		.data_type = GMSL_CSI_DT_YUV422_8,	/* UYVY */
@@ -3014,6 +3046,24 @@ static int d500_set_ae_policy(struct ds5 *state, u32 policy)
 	return ret;
 }
 
+/* DISABLED has no framework toggle. Mirror v4l2_ctrl_activate()'s lock-free bit
+ * twiddling: callers may already hold the handler lock via ds5_s_ctrl().
+ */
+static void v4l2_ctrl_set_disabled(struct v4l2_ctrl *ctrl, bool disabled)
+{
+	if (!ctrl)
+		return;
+
+	/* V4L2_CTRL_FLAG_DISABLED == 0x0001 */
+	if (disabled)
+		set_bit(0, &ctrl->flags);
+	else
+		clear_bit(0, &ctrl->flags);
+}
+
+/* Cache-only: touches no V4L2 controls, so it may run before ds5_ctrl_init().
+ * boot_mode latches the mode the FW actually came up in
+ */
 static int d500_refresh_device_mode(struct ds5 *state, bool boot_mode)
 {
 	u32 mode;
@@ -3031,13 +3081,112 @@ static int d500_refresh_device_mode(struct ds5 *state, bool boot_mode)
 	}
 	mutex_unlock(&state->ds5_dev->lock);
 
-	if (state->ctrls.dual_rgb_ae_policy) {
-		const bool active = !ret && mode == D500_DEVICE_MODE_2C;
+	return ret;
+}
 
-		v4l2_ctrl_activate(state->ctrls.dual_rgb_ae_policy, active);
+/* Gate on the active mode, matching what d500_get/set_ae_policy() enforce: a
+ * newly configured mode only takes effect on the next boot.
+ */
+static void d500_sync_device_mode_ctrls(struct ds5 *state)
+{
+	bool active;
+
+	if (!state->ctrls.dual_rgb_ae_policy)
+		return;
+
+	mutex_lock(&state->ds5_dev->lock);
+	active = state->ds5_dev->device_mode_valid &&
+		 state->ds5_dev->active_device_mode == D500_DEVICE_MODE_2C;
+	mutex_unlock(&state->ds5_dev->lock);
+
+	v4l2_ctrl_set_disabled(state->ctrls.dual_rgb_ae_policy, !active);
+}
+
+#ifdef CONFIG_TEGRA_CAMERA_PLATFORM
+/* The VI channel snapshots the subdev's format list at bind time, so a table
+ * swap after probe reaches /dev/videoN only via an explicit re-enumeration.
+ */
+static void ds5_refresh_channel_fmts(struct ds5 *state)
+{
+	struct v4l2_subdev *sd = &state->mux.sd.subdev;
+	struct tegra_channel *chan = v4l2_get_subdev_hostdata(sd);
+	int ret;
+
+	if (!chan) {
+		dev_warn(&state->client->dev, "%s(): %s has no VI channel\n",
+			 __func__, sd->name);
+		return;
 	}
 
-	return ret;
+	ret = tegra_channel_refresh_fmts(chan);
+	if (ret)
+		dev_warn(&state->client->dev, "%s(): %s format list not refreshed (%d)\n",
+			 __func__, sd->name, ret);
+}
+#else
+static inline void ds5_refresh_channel_fmts(struct ds5 *state) { }
+#endif
+
+/* D58x 2C mode drops the NV12 and calibration RGB formats. */
+static void d500_set_rgb_formats(struct ds5 *state, struct ds5_sensor *sensor)
+{
+	if (state->ds5_dev->active_device_mode == D500_DEVICE_MODE_2C) {
+		sensor->formats = ds5_rgb_2c_formats_d58x;
+		sensor->n_formats = ARRAY_SIZE(ds5_rgb_2c_formats_d58x);
+	} else {
+		sensor->formats = ds5_rgb_formats_d58x;
+		sensor->n_formats = ARRAY_SIZE(ds5_rgb_formats_d58x);
+	}
+}
+
+/* A HW reset can bring the camera up in the other device mode, which selects a
+ * different RGB format table. The RGB stream is a separate probe instance, so
+ * the reset instance has to reach across to it.
+ * Called with @state->lock held (ds5_s_ctrl). rgb->lock and the channel's
+ * video_lock are never held at the same time here: an ioctl on the RGB node
+ * takes them in the opposite order.
+ */
+static void d500_refresh_rgb_formats(struct ds5 *state)
+{
+	const struct ds5_format *old;
+	struct ds5_sensor *sensor;
+	struct ds5 *rgb;
+	bool changed;
+
+	if (READ_ONCE(state->ds5_dev->cached_device_type) != DS5_DEVICE_TYPE_D58X)
+		return;
+
+	mutex_lock(&state->ds5_dev->lock);
+	rgb = state->ds5_dev->ds5_rgb;
+	mutex_unlock(&state->ds5_dev->lock);
+	if (!rgb)
+		return;
+
+	sensor = &rgb->rgb.sensor;
+	/* A reset on the RGB node itself already holds this instance's lock. */
+	if (rgb != state)
+		mutex_lock(&rgb->lock);
+	old = sensor->formats;
+	d500_set_rgb_formats(rgb, sensor);
+	changed = sensor->formats != old;
+	if (changed) {
+		/* config.format points into the old table, and
+		 * ds5_sensor_format_init() early-returns unless it is cleared. */
+		sensor->config.format = NULL;
+		ds5_sensor_format_init(sensor);
+	}
+	if (rgb != state)
+		mutex_unlock(&rgb->lock);
+
+	if (!changed)
+		return;
+
+	/* That same reset also holds the RGB channel's video_lock. */
+	if (rgb == state)
+		dev_warn(&state->client->dev,
+			 "%s(): RGB format list left stale\n", __func__);
+	else
+		ds5_refresh_channel_fmts(rgb);
 }
 
 static int ds5_set_calibration_data(struct ds5 *state,
@@ -3440,6 +3589,8 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 			dev_warn(&state->client->dev,
 				 "%s(): D58x device-mode refresh after HW reset failed (%d)\n",
 				 __func__, mode_ret);
+		d500_sync_device_mode_ctrls(owner);
+		d500_refresh_rgb_formats(state);
 	}
 
 	WRITE_ONCE(state->ds5_dev->last_reset_jiffies, jiffies);
@@ -4852,6 +5003,7 @@ static void ds5_init_ds5_dev(struct ds5 *state, struct ds5_dev *ds5_dev)
 	mutex_lock(&ds5_dev->lock);
 	ds5_dev->ds5_primary = state;
 	ds5_dev->serdes_setup_complete = false;
+	ds5_dev->ds5_rgb = NULL;
 	ds5_dev->cached_device_type = DS5_DEVICE_TYPE_UNKNOWN;
 	ds5_dev->d585_product_id = 0;
 	ds5_dev->configured_device_mode = D500_DEVICE_MODE_3C;
@@ -4879,6 +5031,7 @@ static bool ds5_release_slot(struct ds5 *state)
 		dser_control = state->ds5_dev->dser_control;
 		state->ds5_dev->ds5_primary = NULL;
 		state->ds5_dev->serdes_setup_complete = false;
+		state->ds5_dev->ds5_rgb = NULL;
 		state->ds5_dev->dser_control = NULL;
 		released = true;
 	} else {
@@ -5828,8 +5981,7 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 				v4l2_ctrl_new_custom(hdl,
 						     &ds5_ctrl_dual_rgb_ae_policy_d58x,
 						     sensor);
-			if (ctrls->dual_rgb_ae_policy)
-				v4l2_ctrl_activate(ctrls->dual_rgb_ae_policy, false);
+			v4l2_ctrl_set_disabled(ctrls->dual_rgb_ae_policy, true);
 			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_visual_preset, sensor);
 			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_soc_pvt_temperature,
 					     sensor);
@@ -7068,6 +7220,17 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 
 	sensor = &state->depth.sensor;
 	dev_type = ds5_dev_type(state, dev_type);
+
+	/* The D58x format tables below depend on the booted device mode, so
+	 * latch it here - controls do not exist yet at this point. */
+	if (dev_type == DS5_DEVICE_TYPE_D58X) {
+		ret = d500_refresh_device_mode(state, true);
+		if (ret)
+			dev_warn(&client->dev,
+				 "%s(): failed to read D58x device mode (%d)\n",
+				 __func__, ret);
+	}
+
 	switch (dev_type) {
 	case DS5_DEVICE_TYPE_D41X:
 		sensor->formats = ds5_depth_formats_d41x;
@@ -7136,8 +7299,7 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
 		break;
 	case DS5_DEVICE_TYPE_D58X:
-		sensor->formats = ds5_rgb_formats_d58x;
-		sensor->n_formats = ARRAY_SIZE(ds5_rgb_formats_d58x);
+		d500_set_rgb_formats(state, sensor);
 		break;
 	default:
 		sensor->formats = &ds5_onsemi_rgb_format;
@@ -7600,18 +7762,22 @@ static void ds5_adjust_sync_mode_control(struct i2c_client *client, struct ds5 *
 static void d500_adjust_device_mode_controls(struct i2c_client *client,
 					     struct ds5 *state)
 {
-	int ret;
+	bool valid;
 
 	if (!state->ctrls.device_mode ||
 	    READ_ONCE(state->ds5_dev->cached_device_type) !=
 		    DS5_DEVICE_TYPE_D58X)
 		return;
 
-	ret = d500_refresh_device_mode(state, true);
-	if (ret)
+	mutex_lock(&state->ds5_dev->lock);
+	valid = state->ds5_dev->device_mode_valid;
+	mutex_unlock(&state->ds5_dev->lock);
+	if (!valid)
 		dev_warn(&client->dev,
-			 "%s(): failed to read D58x device mode; 2C AE Policy remains inactive (%d)\n",
-			 __func__, ret);
+			 "%s(): D58x device mode unknown; 2C AE Policy remains inactive\n",
+			 __func__);
+
+	d500_sync_device_mode_ctrls(state);
 }
 
 /* Per-SKU adjustment of the RGB ISP controls registered in ds5_ctrl_init().
@@ -8180,6 +8346,12 @@ static int ds5_probe(struct i2c_client *c
 	if (ret < 0)
 		goto e_chardev;
 
+	if (state->is_rgb) {
+		mutex_lock(&state->ds5_dev->lock);
+		state->ds5_dev->ds5_rgb = state;
+		mutex_unlock(&state->ds5_dev->lock);
+	}
+
 	dev_info(&c->dev, "%s: driver version: %s\n", __func__,
 		THIS_MODULE->version ? THIS_MODULE->version : "N/A");
 
@@ -8216,6 +8388,13 @@ static void ds5_remove(struct i2c_client *c)
 	struct ds5 *state = container_of(i2c_get_clientdata(c), struct ds5, mux.sd.subdev);
 	if (state && !state->mux.sd.subdev.v4l2_dev) {
 		state = i2c_get_clientdata(c);
+	}
+
+	if (state->is_rgb && state->ds5_dev) {
+		mutex_lock(&state->ds5_dev->lock);
+		if (state->ds5_dev->ds5_rgb == state)
+			state->ds5_dev->ds5_rgb = NULL;
+		mutex_unlock(&state->ds5_dev->lock);
 	}
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
