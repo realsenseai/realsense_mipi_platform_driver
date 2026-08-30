@@ -130,10 +130,19 @@ The build system cross-compiles for ARM64. Toolchains vary by JetPack:
 - `dev` — active development branch; **default target for all PRs**
 - CI builds run on pushes to `master` and `dev`, and on all PRs
 
+## Ownership / escalation
+
+- **Evgeni — firmware architect.** Open technical questions about `perc_hw_fw-rs400` (interlocks, ISR behaviour, imager/sensor sequencing, metadata contracts) go to him.
+- **Uzi — decides on recommendations.** When work ends with "recommend A over B", name Uzi as the decision owner rather than leaving the choice unassigned.
+
+Keep the two separate in Jira: technical questions to Evgeni, the decision to Uzi.
+
 ## V4L2 control conventions
 
 - A control that librealsense reaches through a **USB depth XU selector** must be a **single read/write V4L2 control**, not a split get/set pair. The MIPI backend's `xu_to_cid()` maps one selector to one CID, and both `get_xu()` and `set_xu()` use that same CID — so a read-only "get" CID plus a separate "set" CID cannot be reached by a single selector. Expose one control with flags `V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE` (do **not** set `READ_ONLY`): `VOLATILE` routes each read to `ds5_g_volatile_ctrl`, `EXECUTE_ON_WRITE` routes each write to `ds5_s_ctrl`. `DS5_CAMERA_CID_AE_MODE` (depth AE regular/accelerated, HWMC SETAETYPE 0x87 / GETAETYPE 0x88, XU selector 0x11) is the reference example.
 - Split get/set CID pairs (e.g. `ae_roi_get/set`, `ae_setpoint_get/set`) are only appropriate for controls librealsense drives via the HWMC blob passthrough (`RS_HWMONITOR → RS_CAMERA_CID_HWMC`), never via a direct XU selector. Adding a matching `case` in librealsense's `xu_to_cid()` is still required for the selector to resolve.
+- **Do not re-point control bases per mode in the driver — ISP-vs-imager routing is firmware's job.** The FW maps each `REG_BASE_CAMn_CONTROLS` offset to a UVC unit (`I2cSlaveHostIf.c` `s_hostCtrlTable`): the depth base reaches the imager units, the RGB base reaches the ISP units. Under D401 CSI-PT the ISP is powered off, so RGB-base writes reach `IspControlSet()`, do nothing, and return `ERR_HWNotReady` — which `uvcControlFuncCall()` then converts to success, so the host sees an accepted write and a correct read-back while the image never changes. The fix belongs at that firmware choke point, not in the driver: the colour node keeps writing the RGB base in **every** mode, and firmware dispatches to the imager when the ISP is bypassed. That reuses the host-visible ranges, the control shadow, the read-back path, and the existing exposure policy (`s_rltExposurePolicy` already carries the 100 us -> 1 us scale and a frame-period clamp) instead of re-implementing them driver-side (RSDSO-21895).
+- A driver-side redirect was tried first and rejected: it needed unit and encoding conversion duplicated in the driver, added mode-dependent behaviour to `ds5_s_ctrl()`, and leaked a side effect where setting the colour node to manual flipped the depth node's AE state. If you find yourself gating a control on the active format, the routing probably belongs in firmware.
 
 ## MIPI lane configuration (hybrid 2-lane camera / 4-lane deserializer)
 
@@ -254,6 +263,14 @@ After every confirmed code patch, review `CLAUDE.md` against the final net diff,
 ## Comment style
 
 Keep comments concise and high-signal — both in-code and external (Jira/PR/status updates). Lead with the finding or the "why", in the fewest lines that stay correct; cut restated context and prose. Jira/PR comments especially: a few skimmable lines or bullets, not walls of text.
+
+**One point per sentence.** Do not pack several claims into one sentence joined by dashes and semicolons — split them. "Firmware side is still blocking. Only the first mid-stream write takes effect. Later writes are dropped until the stream restarts." reads faster than the same content as one clause chain.
+
+**Jira comments: link every reference, mention properly, and post via REST.** Anything a reader might want to open is a link, not a bare identifier — PRs, commits, branches, builds, CI runs, log artifacts, Confluence pages, external docs. Wiki syntax is `[text|url]`, e.g. `[PR #618|https://github.com/.../pull/618]` or `[9a93638|https://github.com/.../commit/9a93638]`. Bare Jira keys (`RSDSO-21895`) are the exception — Jira auto-links those. If you cite something you cannot link, say where it lives instead of leaving the reader to hunt.
+
+Address people with `[~user@realsenseai.com]`, and name the decision owner explicitly instead of leaving a "needs a decision" paragraph unassigned.
+
+The `jira-rw` MCP runs bodies through a markdown→wiki conversion that **strips mention brackets, kills links, and turns underscores in URLs into `*`** — so post with `RSJIRA_PAT` from `~/.rs_pat_env` straight to `rest/api/2/issue/<KEY>/comment`, where the body is taken as raw wiki markup. Re-fetch the comment afterwards and confirm the mention, links and underscored tokens survived; a 200 is not proof.
 
 **In-code comments: 2–3 lines maximum.** State the *why* — never narrate what the code plainly does. If one comment cannot cover it, do **not** grow the block: split it into two short comments, each placed at the spot it explains (e.g. one at the constant/`#define`, one at the use site) rather than one paragraph parked above the function. Long rationale, HW evidence and cross-site invariants belong in the commit message, the PR description, or this file — not in a wall of `*` lines.
 
