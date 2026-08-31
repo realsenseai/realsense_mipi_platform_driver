@@ -13,7 +13,7 @@ buffers when mux-specific start fails, preserving the videobuf2 contract.
 Signed-off-by: Shengyong Zhou <shengyong.zhou@realsenseai.com>
 
 diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
-index b5c9771c1df4d6a8dc6ad22b61bb31950f1bb254..9dd525f22f2ca6f4088bb97e5541af48fc60e020 100644
+index bd576606190a2ae9afb605ffb6eb3493ea1dd7f4..ce169f356c2fd44b2cb256dd1c08f28571f9c2cc 100644
 --- a/drivers/media/platform/tegra/camera/vi/channel.c
 +++ b/drivers/media/platform/tegra/camera/vi/channel.c
 @@ -10,6 +10,7 @@
@@ -32,7 +32,7 @@ index b5c9771c1df4d6a8dc6ad22b61bb31950f1bb254..9dd525f22f2ca6f4088bb97e5541af48
  
  #define TPG_CSI_GROUP_ID	10
  #define HDMI_IN_RATE 550000000
-@@ -1002,20 +1004,202 @@ int tegra_channel_set_power(struct tegra_channel *chan, bool on)
+@@ -1006,20 +1008,250 @@ int tegra_channel_set_power(struct tegra_channel *chan, bool on)
  }
  EXPORT_SYMBOL(tegra_channel_set_power);
  
@@ -114,6 +114,7 @@ index b5c9771c1df4d6a8dc6ad22b61bb31950f1bb254..9dd525f22f2ca6f4088bb97e5541af48
  	struct tegra_channel *chan = vb2_get_drv_priv(vq);
  	struct tegra_mc_vi *vi = chan->vi;
 +	bool dma_acquired = false;
++	bool standalone_start = false;
 +
 +	if (chan->d5xx_vc_mux.enabled && !chan->d5xx_vc_mux.owner) {
 +		struct tegra_channel *owner = chan->d5xx_vc_mux.owner_chan;
@@ -128,26 +129,43 @@ index b5c9771c1df4d6a8dc6ad22b61bb31950f1bb254..9dd525f22f2ca6f4088bb97e5541af48
 +			return d5xx_vc_mux_start_error(chan, -EPIPE);
 +		}
 +		chan->d5xx_vc_mux.stream_requested = true;
-+		/*
-+		 * The secondary source shares the owner's physical VC capture.
-+		 * Arm it when userspace starts this node, but do not tell the
-+		 * sensor to transmit until the owner VI is consuming that VC.
-+		 */
 +		if (!atomic_read(&owner->is_streaming)) {
-+			mutex_unlock(&owner->d5xx_vc_mux.copy_lock);
-+			return 0;
++			if (!owner->d5xx_vc_mux.stream_requested) {
++				mutex_unlock(&owner->d5xx_vc_mux.copy_lock);
++				usleep_range(2000, 3000);
++				mutex_lock(&owner->d5xx_vc_mux.copy_lock);
++			}
++			if (owner->d5xx_vc_mux.owner_stopping) {
++				chan->d5xx_vc_mux.stream_requested = false;
++				mutex_unlock(&owner->d5xx_vc_mux.copy_lock);
++				return d5xx_vc_mux_start_error(chan, -EPIPE);
++			}
++			/*
++			 * A single secondary node owns VI directly; a paired start
++			 * remains armed for the shared physical owner.
++			 */
++			if (!owner->d5xx_vc_mux.stream_requested) {
++				chan->d5xx_vc_mux.standalone = true;
++				standalone_start = true;
++				mutex_unlock(&owner->d5xx_vc_mux.copy_lock);
++			} else {
++				mutex_unlock(&owner->d5xx_vc_mux.copy_lock);
++				return 0;
++			}
 +		}
 +
-+		if (!d5xx_vc_mux_formats_match(owner, chan))
-+			ret = -EINVAL;
-+		else
-+			ret = d5xx_vc_mux_start_secondary_locked(owner);
-+		if (ret)
-+			chan->d5xx_vc_mux.stream_requested = false;
-+		mutex_unlock(&owner->d5xx_vc_mux.copy_lock);
-+		if (ret)
-+			return d5xx_vc_mux_start_error(chan, ret);
-+		return ret;
++		if (!standalone_start) {
++			if (!d5xx_vc_mux_formats_match(owner, chan))
++				ret = -EINVAL;
++			else
++				ret = d5xx_vc_mux_start_secondary_locked(owner);
++			if (ret)
++				chan->d5xx_vc_mux.stream_requested = false;
++			mutex_unlock(&owner->d5xx_vc_mux.copy_lock);
++			if (ret)
++				return d5xx_vc_mux_start_error(chan, ret);
++			return ret;
++		}
 +	}
 +
 +	if (chan->d5xx_vc_mux.owner) {
@@ -156,15 +174,24 @@ index b5c9771c1df4d6a8dc6ad22b61bb31950f1bb254..9dd525f22f2ca6f4088bb97e5541af48
 +		if (!chan->d5xx_vc_mux.secondary_chan)
 +			return d5xx_vc_mux_start_error(chan, -ENODEV);
 +		mutex_lock(&chan->d5xx_vc_mux.copy_lock);
++		if (chan->d5xx_vc_mux.secondary_chan->d5xx_vc_mux.standalone) {
++			mutex_unlock(&chan->d5xx_vc_mux.copy_lock);
++			return d5xx_vc_mux_start_error(chan, -EBUSY);
++		}
 +		chan->d5xx_vc_mux.owner_stopping = false;
++		chan->d5xx_vc_mux.stream_requested = true;
 +		mutex_unlock(&chan->d5xx_vc_mux.copy_lock);
 +
 +		dma_cap_zero(mask);
 +		dma_cap_set(DMA_MEMCPY, mask);
 +		chan->d5xx_vc_mux.dma_chan =
 +			dma_request_channel(mask, NULL, NULL);
-+		if (!chan->d5xx_vc_mux.dma_chan)
++		if (!chan->d5xx_vc_mux.dma_chan) {
++			mutex_lock(&chan->d5xx_vc_mux.copy_lock);
++			chan->d5xx_vc_mux.stream_requested = false;
++			mutex_unlock(&chan->d5xx_vc_mux.copy_lock);
 +			return d5xx_vc_mux_start_error(chan, -ENODEV);
++		}
 +		/*
 +		 * GPCDMA supports transfers up to 1 GiB.  Advertise that limit to
 +		 * the DMA API so the exported vb2 buffer is mapped as one IOVA
@@ -174,6 +201,9 @@ index b5c9771c1df4d6a8dc6ad22b61bb31950f1bb254..9dd525f22f2ca6f4088bb97e5541af48
 +			    chan->d5xx_vc_mux.dma_chan->device->dev, SZ_1G)) {
 +			dma_release_channel(chan->d5xx_vc_mux.dma_chan);
 +			chan->d5xx_vc_mux.dma_chan = NULL;
++			mutex_lock(&chan->d5xx_vc_mux.copy_lock);
++			chan->d5xx_vc_mux.stream_requested = false;
++			mutex_unlock(&chan->d5xx_vc_mux.copy_lock);
 +			return d5xx_vc_mux_start_error(chan, -ENODEV);
 +		}
 +
@@ -193,9 +223,18 @@ index b5c9771c1df4d6a8dc6ad22b61bb31950f1bb254..9dd525f22f2ca6f4088bb97e5541af48
  		ret = vi->fops->vi_power_on(chan);
 -		if (ret < 0)
 +		if (ret < 0) {
++			if (standalone_start) {
++				mutex_lock(&chan->d5xx_vc_mux.owner_chan->d5xx_vc_mux.copy_lock);
++				chan->d5xx_vc_mux.standalone = false;
++				chan->d5xx_vc_mux.stream_requested = false;
++				mutex_unlock(&chan->d5xx_vc_mux.owner_chan->d5xx_vc_mux.copy_lock);
++			}
 +			if (dma_acquired) {
 +				dma_release_channel(chan->d5xx_vc_mux.dma_chan);
 +				chan->d5xx_vc_mux.dma_chan = NULL;
++				mutex_lock(&chan->d5xx_vc_mux.copy_lock);
++				chan->d5xx_vc_mux.stream_requested = false;
++				mutex_unlock(&chan->d5xx_vc_mux.copy_lock);
 +				return d5xx_vc_mux_start_error(chan, ret);
 +			}
  			return ret;
@@ -203,9 +242,18 @@ index b5c9771c1df4d6a8dc6ad22b61bb31950f1bb254..9dd525f22f2ca6f4088bb97e5541af48
  
 -		return vi->fops->vi_start_streaming(vq, count);
 +		ret = vi->fops->vi_start_streaming(vq, count);
++		if (ret < 0 && standalone_start) {
++			mutex_lock(&chan->d5xx_vc_mux.owner_chan->d5xx_vc_mux.copy_lock);
++			chan->d5xx_vc_mux.standalone = false;
++			chan->d5xx_vc_mux.stream_requested = false;
++			mutex_unlock(&chan->d5xx_vc_mux.owner_chan->d5xx_vc_mux.copy_lock);
++		}
 +		if (ret < 0 && dma_acquired) {
 +			dma_release_channel(chan->d5xx_vc_mux.dma_chan);
 +			chan->d5xx_vc_mux.dma_chan = NULL;
++			mutex_lock(&chan->d5xx_vc_mux.copy_lock);
++			chan->d5xx_vc_mux.stream_requested = false;
++			mutex_unlock(&chan->d5xx_vc_mux.copy_lock);
 +		}
 +		if (!ret && chan->d5xx_vc_mux.owner) {
 +			struct tegra_channel *secondary =
@@ -237,11 +285,12 @@ index b5c9771c1df4d6a8dc6ad22b61bb31950f1bb254..9dd525f22f2ca6f4088bb97e5541af48
  	}
  	return 0;
  }
-@@ -1025,12 +1209,76 @@ static void tegra_channel_stop_streaming(struct vb2_queue *vq)
+@@ -1029,12 +1261,86 @@ static void tegra_channel_stop_streaming(struct vb2_queue *vq)
  	struct tegra_channel *chan = vb2_get_drv_priv(vq);
  	struct tegra_mc_vi *vi = chan->vi;
  
-+	if (chan->d5xx_vc_mux.enabled && !chan->d5xx_vc_mux.owner) {
++	if (chan->d5xx_vc_mux.enabled && !chan->d5xx_vc_mux.owner &&
++	    !chan->d5xx_vc_mux.standalone) {
 +		struct tegra_channel *owner = chan->d5xx_vc_mux.owner_chan;
 +
 +		if (owner)
@@ -256,6 +305,14 @@ index b5c9771c1df4d6a8dc6ad22b61bb31950f1bb254..9dd525f22f2ca6f4088bb97e5541af48
 +		if (owner)
 +			mutex_unlock(&owner->d5xx_vc_mux.copy_lock);
 +		return;
++	}
++	if (chan->d5xx_vc_mux.enabled && chan->d5xx_vc_mux.standalone) {
++		struct tegra_channel *owner = chan->d5xx_vc_mux.owner_chan;
++
++		mutex_lock(&owner->d5xx_vc_mux.copy_lock);
++		chan->d5xx_vc_mux.standalone = false;
++		chan->d5xx_vc_mux.stream_requested = false;
++		mutex_unlock(&owner->d5xx_vc_mux.copy_lock);
 +	}
 +
 +	if (chan->d5xx_vc_mux.owner) {
@@ -289,6 +346,7 @@ index b5c9771c1df4d6a8dc6ad22b61bb31950f1bb254..9dd525f22f2ca6f4088bb97e5541af48
 +	if (chan->d5xx_vc_mux.owner) {
 +		mutex_lock(&chan->d5xx_vc_mux.copy_lock);
 +		chan->d5xx_vc_mux.owner_stopping = false;
++		chan->d5xx_vc_mux.stream_requested = false;
 +		mutex_unlock(&chan->d5xx_vc_mux.copy_lock);
 +	}
 +
@@ -314,7 +372,7 @@ index b5c9771c1df4d6a8dc6ad22b61bb31950f1bb254..9dd525f22f2ca6f4088bb97e5541af48
  	/* Clean-up recorded videobuf2 queue initial timestamp */
  	queue_init_ts = 0;
  }
-@@ -2559,6 +2807,32 @@ int tegra_vi_get_port_info(struct tegra_channel *chan,
+@@ -2563,6 +2869,32 @@ int tegra_vi_get_port_info(struct tegra_channel *chan,
  				dev_err(chan->vi->dev, "num lanes error\n");
  			chan->numlanes = value;
  
@@ -347,7 +405,7 @@ index b5c9771c1df4d6a8dc6ad22b61bb31950f1bb254..9dd525f22f2ca6f4088bb97e5541af48
  			if (value > 12) {
  				dev_err(chan->vi->dev, "num lanes >12!\n");
  				return -EINVAL;
-@@ -3079,6 +3353,7 @@ int tegra_channel_init(struct tegra_channel *chan)
+@@ -3083,6 +3415,7 @@ int tegra_channel_init(struct tegra_channel *chan)
  	init_waitqueue_head(&chan->dequeue_wait);
  	spin_lock_init(&chan->dequeue_lock);
  	mutex_init(&chan->stop_kthread_lock);
@@ -355,7 +413,7 @@ index b5c9771c1df4d6a8dc6ad22b61bb31950f1bb254..9dd525f22f2ca6f4088bb97e5541af48
  	init_rwsem(&chan->reset_lock);
  	atomic_set(&chan->is_streaming, DISABLE);
  	spin_lock_init(&chan->capture_state_lock);
-@@ -3227,6 +3502,44 @@ int tegra_vi_channels_init(struct tegra_mc_vi *vi)
+@@ -3231,6 +3564,44 @@ int tegra_vi_channels_init(struct tegra_mc_vi *vi)
  		return ret;
  	}
  
@@ -401,7 +459,7 @@ index b5c9771c1df4d6a8dc6ad22b61bb31950f1bb254..9dd525f22f2ca6f4088bb97e5541af48
  }
  EXPORT_SYMBOL(tegra_vi_channels_init);
 diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-index 02a1837f02b417eafabce82b1b158adc5414c171..a066e29282b460fecc15a54c4c96f102b268fac5 100644
+index b078c6126f19e5ac590f5f0b7e4b4a28993988d3..b8fdd33e70e51ec2e93cf909cf1cfdeb1770132f 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
 +++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
 @@ -12,6 +12,9 @@
@@ -428,7 +486,7 @@ index 02a1837f02b417eafabce82b1b158adc5414c171..a066e29282b460fecc15a54c4c96f102
  
  static const struct vi_capture_setup default_setup = {
  	.channel_flags = 0
-@@ -472,27 +482,46 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+@@ -478,27 +488,46 @@ static void vi5_setup_surface(struct tegra_channel *chan,
  		chan->capture_descr_sequence += 1;
  }
  
@@ -489,7 +547,7 @@ index 02a1837f02b417eafabce82b1b158adc5414c171..a066e29282b460fecc15a54c4c96f102
  
  	if (!evb)
  		return;
-@@ -503,17 +532,12 @@ static void vi5_release_metadata_buffer(struct tegra_channel *chan,
+@@ -509,17 +538,12 @@ static void vi5_release_metadata_buffer(struct tegra_channel *chan,
  		return;
  	}
  
@@ -509,7 +567,7 @@ index 02a1837f02b417eafabce82b1b158adc5414c171..a066e29282b460fecc15a54c4c96f102
  	memcpy(frm_buffer, metadata_addr, D4XX_META_BUFSIZE);
  	evbuf = to_vb2_v4l2_buffer(evb);
  	evbuf->sequence = vbuf->sequence;
-@@ -522,17 +546,275 @@ static void vi5_release_metadata_buffer(struct tegra_channel *chan,
+@@ -528,17 +552,275 @@ static void vi5_release_metadata_buffer(struct tegra_channel *chan,
  	vb2_buffer_done(evb, VB2_BUF_STATE_DONE);
  }
  
@@ -801,7 +859,7 @@ index 761a7cc4bdb9b5e23133443be9d634e4b48468fc..8ace6706707d8b36bab40fbe53f649a4
  
  #endif
 diff --git a/include/media/mc_common.h b/include/media/mc_common.h
-index cea3ca26bcab7e3f6113e82e16a94d84909cd66f..180ec74ee2a1aa7b7d5925ed9641e88b2806a623 100644
+index cea3ca26bcab7e3f6113e82e16a94d84909cd66f..b2a20ffd6c490a66c757f7da07065a726e8c4480 100644
 --- a/include/media/mc_common.h
 +++ b/include/media/mc_common.h
 @@ -35,6 +35,9 @@
@@ -828,7 +886,7 @@ index cea3ca26bcab7e3f6113e82e16a94d84909cd66f..180ec74ee2a1aa7b7d5925ed9641e88b
  #define to_tegra_channel_buffer(vb) \
  	container_of(vb, struct tegra_channel_buffer, buf)
  
-@@ -297,6 +307,27 @@ struct tegra_channel {
+@@ -297,6 +307,28 @@ struct tegra_channel {
  	void *emb_buf_addr;
  	unsigned int emb_buf_stride;
  	unsigned int emb_buf_size;
@@ -843,6 +901,7 @@ index cea3ca26bcab7e3f6113e82e16a94d84909cd66f..180ec74ee2a1aa7b7d5925ed9641e88b
 +		struct dma_chan *dma_chan;
 +		struct mutex copy_lock;
 +		bool stream_requested;
++		bool standalone;
 +		bool owner_stopping;
 +		struct d5xx_vc_mux_dma_map source_maps[VB2_MAX_FRAME];
 +		struct d5xx_vc_mux_dma_map secondary_maps[VB2_MAX_FRAME];
