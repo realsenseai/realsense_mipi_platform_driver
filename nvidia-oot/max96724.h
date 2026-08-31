@@ -41,6 +41,7 @@
  */
 
 int max96724_get_available_pipe_id(struct device *dev, int vc_id);
+int max96724_get_multi_vc_pipe_id(struct device *dev, u32 vc_id);
 int max96724_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
 		      u8 data_type2, u32 link, u32 vc_id);
 int max96724_release_pipe(struct device *dev, int pipe_id);

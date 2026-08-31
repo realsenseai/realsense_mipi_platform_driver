@@ -195,6 +195,20 @@ index 0e8acb1..edc16a5 100644
  u32 tegra_core_get_word_count(unsigned int frame_width,
  		const struct tegra_video_format *fmt);
  u32 tegra_core_bytes_per_line(unsigned int width, unsigned int align,
+diff --git a/include/media/gmsl-link.h b/include/media/gmsl-link.h
+index 48939537..868865ab 100644
+--- a/include/media/gmsl-link.h
++++ b/include/media/gmsl-link.h
+@@ -38,8 +38,10 @@
+ 
+ /* Didn't find kernel defintions, for now adding here */
+ #define GMSL_CSI_DT_RAW_12 0x2C
++#define GMSL_CSI_DT_RAW_10 0x2B
+ #define GMSL_CSI_DT_UED_U1 0x30
++#define GMSL_CSI_DT_UED_U3 0x32
+ #define GMSL_CSI_DT_EMBED 0x12
+ #define GMSL_CSI_DT_YUV422_8 0x1E
+ #define GMSL_CSI_DT_RGB_888 0x24
+ #define GMSL_CSI_DT_RAW_8 0x2A
 -- 
 2.43.0
-
