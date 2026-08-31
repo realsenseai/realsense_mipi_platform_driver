@@ -10,9 +10,9 @@ Signed-off-by: Dmitry Perchanov <dmitry.perchanov@intel.com>
  drivers/media/usb/uvc/uvc_driver.c   | 57 ++++++++++++++++++++++++++++
  drivers/media/usb/uvc/uvcvideo.h     | 34 +++++++++++++++++
  drivers/media/v4l2-core/v4l2-ioctl.c |  9 +++++
- include/uapi/linux/media-bus-format.h |  3 +++
+ include/uapi/linux/media-bus-format.h |  7 +++++++
  include/uapi/linux/videodev2.h       |  9 +++++
- 5 files changed, 112 insertions(+)
+ 5 files changed, 116 insertions(+)
 
 diff --git a/drivers/media/usb/uvc/uvc_driver.c b/drivers/media/usb/uvc/uvc_driver.c
 index 9a791d8ef200..205d524128da 100644
@@ -197,9 +197,13 @@ index 9260791b8438..fd50e9c34a0e 100644
 diff --git a/include/uapi/linux/media-bus-format.h b/include/uapi/linux/media-bus-format.h
 --- a/include/uapi/linux/media-bus-format.h
 +++ b/include/uapi/linux/media-bus-format.h
-@@ -162,1 +162,4 @@
+@@ -162,1 +162,8 @@
 +/* RealSense flat NV12 bytes over an opaque 8-bit CSI carrier */
 +#define MEDIA_BUS_FMT_RS_NV12_FLAT_1X8		0x5008
++
++/* RealSense packed 10-bit BGGR, dword-aligned lines, over an opaque
++ * 8-bit CSI carrier */
++#define MEDIA_BUS_FMT_RS_SBGGR10P_1X8		0x5009
 +
  /* HSV - next is	0x6002 */
 -- 

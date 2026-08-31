@@ -1408,8 +1408,8 @@ static const struct ds5_resolution d45x_calibration_sizes[] = {
 	},
 };
 
-static const struct ds5_resolution raw8_1612x808_sizes[] = {
-	DS5_RES(1612, 808, ds5_raw8_framerate_to_60)
+static const struct ds5_resolution raw10p_1288x808_sizes[] = {
+	DS5_RES(1288, 808, ds5_raw8_framerate_to_60)
 };
 
 static const struct ds5_resolution ds5_size_imu[] = {
@@ -1552,9 +1552,9 @@ static const struct ds5_format ds5_y_formats_40x[] = {
 	}, {
 		.data_type = DS5_FW_CSI_PT,		/* EP3 left OV9782: activates FW CSI-PT mode */
 		.override_data_type = GMSL_CSI_DT_RAW_8, /* FW remaps wire DT to RAW8 */
-		.mbus_code = MEDIA_BUS_FMT_SBGGR8_1X8,
-		.n_resolutions = ARRAY_SIZE(raw8_1612x808_sizes),
-		.resolutions = raw8_1612x808_sizes,
+		.mbus_code = MEDIA_BUS_FMT_RS_SBGGR10P_1X8,
+		.n_resolutions = ARRAY_SIZE(raw10p_1288x808_sizes),
+		.resolutions = raw10p_1288x808_sizes,
 	},
 };
 
@@ -1614,9 +1614,9 @@ static const struct ds5_format ds5_40x_rgb_formats[] = {
 	}, {
 		.data_type = DS5_FW_CSI_PT,	/* activates FW CSI-PT mode */
 		.override_data_type = GMSL_CSI_DT_RAW_8, /* FW remaps wire DT to RAW8 */
-		.mbus_code = MEDIA_BUS_FMT_SBGGR8_1X8,
-		.n_resolutions = ARRAY_SIZE(raw8_1612x808_sizes),
-		.resolutions = raw8_1612x808_sizes,
+		.mbus_code = MEDIA_BUS_FMT_RS_SBGGR10P_1X8,
+		.n_resolutions = ARRAY_SIZE(raw10p_1288x808_sizes),
+		.resolutions = raw10p_1288x808_sizes,
 	},
 };
 
@@ -2392,12 +2392,6 @@ static int ds5_configure(struct ds5 *state)
 	}
 
 	width_value = sensor->config.resolution->width;
-	/* RAW8 CSI passthrough: V4L2 width=1612 (VDF byte-count/line, needed for correct
-	 * DMA surface stride), but the FW width register (DS5_RGB_RES_WIDTH for EP4,
-	 * DS5_IR_RES_WIDTH for EP3) expects the OV9782 physical pixel count. Clamp to 1288.
-	 */
-	if (sensor->config.format->mbus_code == MEDIA_BUS_FMT_SBGGR8_1X8 && width_value == 1612)
-		width_value = 1288;
 	if (sensor->cached_width_value != width_value) {
 		ret = ds5_write(state, width_addr, width_value);
 		if (ret < 0)
