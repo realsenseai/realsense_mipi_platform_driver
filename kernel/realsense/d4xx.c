@@ -614,6 +614,7 @@ struct ds5 {
 	struct regulator *vcc;
 	const struct ds5_variant *variant;
 	int is_depth, is_y8, is_rgb, is_imu;
+	bool is_dualrgb_right;
 	bool metadata_enabled;
 	int aggregated;
 	int reset_ref_ds5;
@@ -4743,6 +4744,10 @@ static int ds5_setup_and_link(struct ds5 *state)
 		}
 	}
 	if (NULL == state->ds5_dev) {
+		if (state->is_dualrgb_right) {
+			err = -EPROBE_DEFER;
+			goto out_unlock;
+		}
 	/* First stream instance for this camera, setup and link new DS5. */
 		for (i = 0; i < MAX_DS5_NUM; i++) {
 			bool free_slot;
@@ -7811,6 +7816,7 @@ static int ds5_probe(struct i2c_client *c
 	state->is_y8 = 0;
 	state->is_rgb = 0;
 	state->is_imu = 0;
+	state->is_dualrgb_right = false;
 #ifdef CONFIG_OF
 	ret = of_property_read_string(c->dev.of_node, "cam-type", &str);
 	if (!ret && !strncmp(str, "Depth", strlen("Depth"))) {
@@ -7826,6 +7832,7 @@ static int ds5_probe(struct i2c_client *c
 	if (!ret && (!strncmp(str, "RGB", strlen("RGB")) ||
 		     !strcmp(str, "DUALRGB_RIGHT"))) {
 		state->is_rgb = 1;
+		state->is_dualrgb_right = !strcmp(str, "DUALRGB_RIGHT");
 		state->control_base = DS5_RGB_CONTROL_BASE;
 		state->control_status_reg = DS5_RGB_CONTROL_STATUS;
 	}
