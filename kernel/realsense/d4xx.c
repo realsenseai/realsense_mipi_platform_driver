@@ -7823,7 +7823,8 @@ static int ds5_probe(struct i2c_client *c
 		state->control_base = DS5_DEPTH_CONTROL_BASE;
 		state->control_status_reg = DS5_DEPTH_CONTROL_STATUS;
 	}
-	if (!ret && !strncmp(str, "RGB", strlen("RGB"))) {
+	if (!ret && (!strncmp(str, "RGB", strlen("RGB")) ||
+		     !strcmp(str, "DUALRGB_RIGHT"))) {
 		state->is_rgb = 1;
 		state->control_base = DS5_RGB_CONTROL_BASE;
 		state->control_status_reg = DS5_RGB_CONTROL_STATUS;
