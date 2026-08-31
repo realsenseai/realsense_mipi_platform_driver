@@ -26,10 +26,10 @@ Signed-off-by: Xin Zhang <xin.x.zhang@intel.com>
  drivers/media/i2c/max9295.c                   | 145 ++++++++----------
  drivers/media/i2c/max9296.c                   | 145 ++++++++----------
  .../media/platform/tegra/camera/vi/channel.c  |  21 ---
- include/media/gmsl-link.h                     |  10 +-
+ include/media/gmsl-link.h                     |  11 ++-
  include/media/max9295.h                       |   3 +-
  include/media/max9296.h                       |   3 +-
- 6 files changed, 133 insertions(+), 194 deletions(-)
+ 6 files changed, 134 insertions(+), 194 deletions(-)
 
 diff --git a/drivers/media/i2c/max9295.c b/drivers/media/i2c/max9295.c
 index 4de304360..d295df745 100644
@@ -569,7 +569,7 @@ diff --git a/include/media/gmsl-link.h b/include/media/gmsl-link.h
 index 9cfd907bd..533f31eb8 100644
 --- a/include/media/gmsl-link.h
 +++ b/include/media/gmsl-link.h
-@@ -53,16 +53,13 @@
+@@ -53,16 +53,14 @@
  #define GMSL_CSI_DT_RAW_12 0x2C
  #define GMSL_CSI_DT_UED_U1 0x30
  #define GMSL_CSI_DT_EMBED 0x12
@@ -577,6 +577,7 @@ index 9cfd907bd..533f31eb8 100644
 +#define GMSL_CSI_DT_RGB_888 0x24
 +#define GMSL_CSI_DT_RAW_8 0x2A
 +#define GMSL_CSI_DT_RAW_16 0x2E
++#define GMSL_CSI_DT_YUV420_8 0x18
  
  #define GMSL_ST_ID_UNUSED 0xFF
  

@@ -270,12 +270,15 @@
 								lane_cnt = <4>;
 								channel = "a";
 								pwdn-gpios = <&gpio CAM0_PWDN GPIO_ACTIVE_HIGH>;
+								/* <serializer-vc deserializer-vc> */
+								maxim,link0-vc-remap = <0 0>, <1 1>, <2 2>, <3 3>;
 							};
 
 							ser_a: max96717@40 {
 								status = "okay";
 								compatible = "maxim,max96717";
 								reg = <0x40>;
+								maxim,gmsl-link-id = <0>;
 								maxim,gmsl-dser-device = <&dser>;
 							};
 

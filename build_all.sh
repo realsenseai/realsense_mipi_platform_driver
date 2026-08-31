@@ -38,15 +38,6 @@ if [[ -n "$2" ]]; then
     BUILD_SRCS=$(realpath $2)
 fi
 
-if version_lt "$JETPACK_VERSION" "6.0"; then
-    D4XX_SRC_DST=kernel/nvidia
-else
-    D4XX_SRC_DST=nvidia-oot
-fi
-
-"$DEVDIR/scripts/patch-state.sh" verify "$DEVDIR" "$BUILD_SRCS" \
-    "$JP_INPUT_VERSION" "$JETPACK_VERSION" "$KERNEL_DIR" "$D4XX_SRC_DST"
-
 if [[ $(uname -m) == aarch64 ]]; then
     echo
     echo Native build

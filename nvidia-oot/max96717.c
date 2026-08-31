@@ -65,6 +65,8 @@
 /* GPIO_B: PULL_UPDN_SEL=None, TX_ID=0 */
 #define MAX96717_GPIO_B_NO_PULL		0x00
 
+#define MAX96717_MAX_VC 16
+
 struct max96717_client_ctx {
 	struct gmsl_link_ctx *g_ctx;
 	bool st_done;
@@ -78,7 +80,7 @@ struct max96717 {
 	bool pixel_mode;
 	/* bit[ser_vc_id] set while that pipe is streaming (set in set_pipe,
 	 * cleared in stream_stop). When it drops to 0 the MIPI RX is re-armed. */
-	u8 active_vc_mask;
+	u16 active_vc_mask;
 };
 
 static int max96717_write_reg(struct device *dev, u16 addr, u8 val)
@@ -359,7 +361,7 @@ int max96717_init_settings(struct device *dev)
 		{MAX96717_VIDEO_TX0_ADDR, 0x60}, /* 0x110 - VIDEO_TX0 AUTO_BPP=0 ENC_MODE=10 */
 		{MAX96717_VIDEO_TX1_ADDR, 0x10}, /* 0x111 - VIDEO_TX1 BPP=16 forced (matches DT) */
 		{MAX96717_FRONTTOP_10_ADDR, 0x4}, /* 0x312 - Fronttop_10 double 8bit */
-		{MAX96717_MIPI_RX1_ADDR, 0x30}, /* 0x331 - MIPI_RX1: 4-lane */
+		{MAX96717_MIPI_RX1_ADDR, 0xb0}, /* 0x331 - MIPI_RX1: 4-lane && enable ext VC */
 	};
 	struct reg_pair ser_cfg_post[] = {
 		{MAX96717_MIPI_RX8_ADDR, 0x22}, /* 0x338 - MIPI_RX8 settle=0x22 (t_hs[5:4]/t_clk[1:0]) */
@@ -429,12 +431,12 @@ int max96717_set_pipe(struct device *dev, int pipe_id,
 	struct max96717 *priv = dev_get_drvdata(dev);
 	int err = 0;
 
-	if (vc_id >= 8)
+	if (vc_id >= MAX96717_MAX_VC)
 		return -EINVAL;
 
 	mutex_lock(&priv->lock);
 
-	priv->active_vc_mask |= (u8)BIT(vc_id);
+	priv->active_vc_mask |= (u16)BIT(vc_id);
 	mutex_unlock(&priv->lock);
 
 	return err;
@@ -446,11 +448,11 @@ int max96717_stream_stop(struct device *dev, u32 vc_id)
 	struct max96717 *priv = dev_get_drvdata(dev);
 	int err = 0;
 
-	if (vc_id >= 8)
+	if (vc_id >= MAX96717_MAX_VC)
 		return -EINVAL;
 
 	mutex_lock(&priv->lock);
-	priv->active_vc_mask &= (u8)~BIT(vc_id);
+	priv->active_vc_mask &= (u16)~BIT(vc_id);
 
 	if (priv->pixel_mode && priv->active_vc_mask == 0) {
 		/*
