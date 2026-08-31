@@ -67,7 +67,7 @@
 		target-path = "/";
 		__overlay__ {
 			tegra-capture-vi {
-				num-channels = <4>;
+				num-channels = <5>;
 				ports {
 					#address-cells = <1>;
 					#size-cells = <0>;
@@ -201,13 +201,22 @@
 							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/cam_i2cmux/i2c@1/d5xx@1d";
 						};
 					};
+					cam_module4: module4 {
+						badge = "d5xx_rgb_right";
+						position = "centerright";
+						orientation = "1";
+						cam_module4_drivernode0: drivernode0 {
+							pcl_id = "v4l2_sensor";
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/cam_i2cmux/i2c@1/d5xx@1e";
+						};
+					};
 				};
 			};
 
 			bus@0 {
 				host1x@13e00000 {
 					nvcsi@15a00000 {
-						num-channels = <4>;
+						num-channels = <5>;
 						#address-cells = <1>;
 						#size-cells = <0>;
 
