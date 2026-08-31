@@ -596,6 +596,7 @@ struct ds5_dfu_dev {
 	int device_open_count;
 	enum dfu_state dfu_state_flag;
 	enum dfu_fw_state manifest_state;
+	bool manifest_complete;
 	unsigned char *dfu_msg;
 	u16 msg_write_once;
 	// unsigned char init_v4l_f; // need refactoring
@@ -2923,6 +2924,14 @@ static int ds5_set_calibration_data(struct ds5 *state,
 #define DS5_HW_RESET_TIMEOUT_MS		10000
 #define DS5_HW_RESET_MAX_RETRIES	(DS5_HW_RESET_TIMEOUT_MS / DS5_HW_RESET_POLL_INTERVAL_MS)
 
+/*
+ * D585 reinitializes its serializer from HKR roughly 1.5 seconds after a
+ * post-DFU reboot.  Recovering the serializer alias before that point is
+ * ineffective because the later HKR PWDNB cycle resets it back to the
+ * default address.
+ */
+#define DS5_D585_DFU_SERDES_SETTLE_MS	1500
+
 /* Minimum interval between consecutive HW resets (ms).
  * Rapid back-to-back resets degrade the GMSL link.
  */
@@ -3053,6 +3062,8 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	u16 d585_product_id = READ_ONCE(state->ds5_dev->d585_product_id);
 	bool d585_proto_reset = d585_product_id == D585_2C_PROTO_PID ||
 				 d585_product_id == D585_3C_PROTO_PID;
+	bool post_dfu_reset = d585_proto_reset &&
+		READ_ONCE(state->dfu_dev.manifest_complete);
 	unsigned long ds5_last_reset_jiffies = READ_ONCE(state->ds5_dev->last_reset_jiffies);
 	unsigned long ts, timeout;
 
@@ -3164,6 +3175,18 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 		if (!primary || !primary->dser_ops->recover_link)
 			return -ENODEV;
 
+		/*
+		 * The D585 manifestation reset is followed by HKR's own GMSL PWDNB
+		 * cycle.  Let that finish before restoring the serializer alias;
+		 * otherwise the alias is lost again just after this function returns.
+		 */
+		if (post_dfu_reset) {
+			dev_info(&state->client->dev,
+				 "%s(): waiting for D585 post-DFU GMSL initialization\n",
+				 __func__);
+			msleep(DS5_D585_DFU_SERDES_SETTLE_MS);
+		}
+
 		mutex_lock(&serdes_lock__);
 		ret = primary->ser_ops->reset_control(primary->ser_dev);
 		if (!ret)
@@ -3211,6 +3234,12 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 
 		ret = ds5_read_poll(state, DS5_DFU_MAGIC_REG, &ready_status);
 		if (!ret && ready_status == DS5_DFU_MAGIC_LSW) {
+			if (post_dfu_reset) {
+				dev_dbg(&state->client->dev,
+					"%s(): transient DFU state during manifestation reset\n",
+					__func__);
+				continue;
+			}
 			dev_warn(&state->client->dev,
 				"%s(): Device in DFU/recovery mode after reset\n", __func__);
 			state->dfu_dev.dfu_state_flag = DS5_DFU_RECOVERY;
@@ -3301,6 +3330,8 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	}
 
 	WRITE_ONCE(state->ds5_dev->last_reset_jiffies, jiffies);
+	if (post_dfu_reset)
+		WRITE_ONCE(state->dfu_dev.manifest_complete, false);
 
 	return 0;
 }
@@ -7199,6 +7230,8 @@ static int ds5_dfu_finalize_download(struct ds5 *state)
 		ret = ds5_dfu_wait_for_get_dfu_status(state, manifest_state);
 	if (!ret)
 		state->dfu_dev.dfu_state_flag = DS5_DFU_DONE;
+	if (!ret)
+		WRITE_ONCE(state->dfu_dev.manifest_complete, true);
 
 	return ret;
 }
@@ -7305,6 +7338,7 @@ static int ds5_dfu_device_open(struct inode *inode, struct file *file)
 		return -EBUSY;
 	}
 	state->dfu_dev.device_open_count++;
+	WRITE_ONCE(state->dfu_dev.manifest_complete, false);
 	if (state->dfu_dev.dfu_state_flag != DS5_DFU_RECOVERY)
 		state->dfu_dev.dfu_state_flag = DS5_DFU_OPEN;
 	/*
