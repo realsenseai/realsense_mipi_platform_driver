@@ -1,0 +1,917 @@
+From: Shengyong Zhou <shengyong.zhou@realsenseai.com>
+Date: Sun, 23 Aug 2026 01:10:00 +0800
+Subject: [PATCH] D5xx metadata VC mux fanout
+
+Route a shared VC/DT capture by the frame-bound GMSL source identity.
+The physical owner queue remains zero-copy; the secondary normal V4L2 node
+receives one GPCDMA copy through DMA-BUF mappings without a CPU pixel copy.
+Arm a secondary source until the owner VI is active, and quiesce it before
+the physical owner stops so the shared HKR pipe cannot be left half-open.
+Allow either V4L2 node to stream on first. Return all driver-owned
+buffers when mux-specific start fails, preserving the videobuf2 contract.
+
+Signed-off-by: Shengyong Zhou <shengyong.zhou@realsenseai.com>
+
+diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
+index bd576606190a2ae9afb605ffb6eb3493ea1dd7f4..ce169f356c2fd44b2cb256dd1c08f28571f9c2cc 100644
+--- a/drivers/media/platform/tegra/camera/vi/channel.c
++++ b/drivers/media/platform/tegra/camera/vi/channel.c
+@@ -10,6 +10,7 @@
+ #include <linux/bitmap.h>
+ #include <linux/clk.h>
+ #include <linux/delay.h>
++#include <linux/dmaengine.h>
+ #include <linux/nvhost.h>
+ #include <linux/lcm.h>
+ #include <linux/list.h>
+@@ -44,6 +45,7 @@
+ #include <uapi/linux/nvhost_nvcsi_ioctl.h>
+ #include "nvcsi/nvcsi.h"
+ #include "nvcsi/deskew.h"
++#include "vi5_fops.h"
+ 
+ #define TPG_CSI_GROUP_ID	10
+ #define HDMI_IN_RATE 550000000
+@@ -1006,20 +1008,250 @@ int tegra_channel_set_power(struct tegra_channel *chan, bool on)
+ }
+ EXPORT_SYMBOL(tegra_channel_set_power);
+ 
++/* owner->d5xx_vc_mux.copy_lock must be held by the caller. */
++static int d5xx_vc_mux_start_secondary_locked(struct tegra_channel *owner)
++{
++	struct tegra_channel *secondary = owner->d5xx_vc_mux.secondary_chan;
++	int ret;
++
++	if (!secondary)
++		return -ENODEV;
++	if (atomic_read(&secondary->is_streaming))
++		return 0;
++
++	ret = tegra_channel_set_power(secondary, true);
++	if (ret)
++		return ret;
++
++	tegra_camera_update_clknbw(secondary, true);
++	ret = v4l2_subdev_call(secondary->subdev_on_csi, video, s_stream, true);
++	if (ret == -ENOIOCTLCMD)
++		ret = 0;
++	if (ret) {
++		tegra_camera_update_clknbw(secondary, false);
++		tegra_channel_set_power(secondary, false);
++		return ret;
++	}
++
++	atomic_set(&secondary->is_streaming, ENABLE);
++	return 0;
++}
++
++static bool d5xx_vc_mux_formats_match(struct tegra_channel *owner,
++				       struct tegra_channel *secondary)
++{
++	return owner->format.width == secondary->format.width &&
++		owner->format.height == secondary->format.height &&
++		owner->format.pixelformat == secondary->format.pixelformat &&
++		owner->format.sizeimage == secondary->format.sizeimage;
++}
++
++/* Return every driver-owned buffer before a start_streaming() failure. */
++static int d5xx_vc_mux_start_error(struct tegra_channel *chan, int error)
++{
++	tegra_channel_queued_buf_done(chan, VB2_BUF_STATE_QUEUED, false);
++	return error;
++}
++
++/* owner->d5xx_vc_mux.copy_lock must be held by the caller. */
++static void d5xx_vc_mux_stop_secondary_locked(struct tegra_channel *owner,
++					       bool fail_queue)
++{
++	struct tegra_channel *secondary = owner->d5xx_vc_mux.secondary_chan;
++
++	if (!secondary)
++		return;
++
++	secondary->d5xx_vc_mux.stream_requested = false;
++	if (atomic_read(&secondary->is_streaming)) {
++		int ret = v4l2_subdev_call(secondary->subdev_on_csi, video,
++					   s_stream, false);
++
++		if (ret < 0 && ret != -ENOIOCTLCMD)
++			dev_err(owner->vi->dev,
++				"D5xx VC mux source stop failed: %d\n", ret);
++		tegra_camera_update_clknbw(secondary, false);
++		tegra_channel_set_power(secondary, false);
++		atomic_set(&secondary->is_streaming, DISABLE);
++	}
++
++	vi5_d5xx_vc_mux_dma_unmap(owner, true);
++	if (fail_queue)
++		vb2_queue_error(&secondary->queue);
++	tegra_channel_queued_buf_done(secondary, VB2_BUF_STATE_ERROR, false);
++}
++
+ static int tegra_channel_start_streaming(struct vb2_queue *vq, u32 count)
+ {
+ 	struct tegra_channel *chan = vb2_get_drv_priv(vq);
+ 	struct tegra_mc_vi *vi = chan->vi;
++	bool dma_acquired = false;
++	bool standalone_start = false;
++
++	if (chan->d5xx_vc_mux.enabled && !chan->d5xx_vc_mux.owner) {
++		struct tegra_channel *owner = chan->d5xx_vc_mux.owner_chan;
++		int ret;
++
++		if (!owner)
++			return d5xx_vc_mux_start_error(chan, -ENODEV);
++
++		mutex_lock(&owner->d5xx_vc_mux.copy_lock);
++		if (owner->d5xx_vc_mux.owner_stopping) {
++			mutex_unlock(&owner->d5xx_vc_mux.copy_lock);
++			return d5xx_vc_mux_start_error(chan, -EPIPE);
++		}
++		chan->d5xx_vc_mux.stream_requested = true;
++		if (!atomic_read(&owner->is_streaming)) {
++			if (!owner->d5xx_vc_mux.stream_requested) {
++				mutex_unlock(&owner->d5xx_vc_mux.copy_lock);
++				usleep_range(2000, 3000);
++				mutex_lock(&owner->d5xx_vc_mux.copy_lock);
++			}
++			if (owner->d5xx_vc_mux.owner_stopping) {
++				chan->d5xx_vc_mux.stream_requested = false;
++				mutex_unlock(&owner->d5xx_vc_mux.copy_lock);
++				return d5xx_vc_mux_start_error(chan, -EPIPE);
++			}
++			/*
++			 * A single secondary node owns VI directly; a paired start
++			 * remains armed for the shared physical owner.
++			 */
++			if (!owner->d5xx_vc_mux.stream_requested) {
++				chan->d5xx_vc_mux.standalone = true;
++				standalone_start = true;
++				mutex_unlock(&owner->d5xx_vc_mux.copy_lock);
++			} else {
++				mutex_unlock(&owner->d5xx_vc_mux.copy_lock);
++				return 0;
++			}
++		}
++
++		if (!standalone_start) {
++			if (!d5xx_vc_mux_formats_match(owner, chan))
++				ret = -EINVAL;
++			else
++				ret = d5xx_vc_mux_start_secondary_locked(owner);
++			if (ret)
++				chan->d5xx_vc_mux.stream_requested = false;
++			mutex_unlock(&owner->d5xx_vc_mux.copy_lock);
++			if (ret)
++				return d5xx_vc_mux_start_error(chan, ret);
++			return ret;
++		}
++	}
++
++	if (chan->d5xx_vc_mux.owner) {
++		dma_cap_mask_t mask;
++
++		if (!chan->d5xx_vc_mux.secondary_chan)
++			return d5xx_vc_mux_start_error(chan, -ENODEV);
++		mutex_lock(&chan->d5xx_vc_mux.copy_lock);
++		if (chan->d5xx_vc_mux.secondary_chan->d5xx_vc_mux.standalone) {
++			mutex_unlock(&chan->d5xx_vc_mux.copy_lock);
++			return d5xx_vc_mux_start_error(chan, -EBUSY);
++		}
++		chan->d5xx_vc_mux.owner_stopping = false;
++		chan->d5xx_vc_mux.stream_requested = true;
++		mutex_unlock(&chan->d5xx_vc_mux.copy_lock);
++
++		dma_cap_zero(mask);
++		dma_cap_set(DMA_MEMCPY, mask);
++		chan->d5xx_vc_mux.dma_chan =
++			dma_request_channel(mask, NULL, NULL);
++		if (!chan->d5xx_vc_mux.dma_chan) {
++			mutex_lock(&chan->d5xx_vc_mux.copy_lock);
++			chan->d5xx_vc_mux.stream_requested = false;
++			mutex_unlock(&chan->d5xx_vc_mux.copy_lock);
++			return d5xx_vc_mux_start_error(chan, -ENODEV);
++		}
++		/*
++		 * GPCDMA supports transfers up to 1 GiB.  Advertise that limit to
++		 * the DMA API so the exported vb2 buffer is mapped as one IOVA
++		 * segment instead of the default 64 KiB segments.
++		 */
++		if (dma_set_max_seg_size(
++			    chan->d5xx_vc_mux.dma_chan->device->dev, SZ_1G)) {
++			dma_release_channel(chan->d5xx_vc_mux.dma_chan);
++			chan->d5xx_vc_mux.dma_chan = NULL;
++			mutex_lock(&chan->d5xx_vc_mux.copy_lock);
++			chan->d5xx_vc_mux.stream_requested = false;
++			mutex_unlock(&chan->d5xx_vc_mux.copy_lock);
++			return d5xx_vc_mux_start_error(chan, -ENODEV);
++		}
++
++		chan->d5xx_vc_mux.owner_frames = 0;
++		chan->d5xx_vc_mux.secondary_frames = 0;
++		chan->d5xx_vc_mux.dropped_frames = 0;
++		chan->d5xx_vc_mux.invalid_metadata = 0;
++		chan->d5xx_vc_mux.dma_errors = 0;
++		chan->d5xx_vc_mux.dma_last_error = 0;
++		dma_acquired = true;
++	}
+ 
+ 	if (vi->fops) {
+ 		int ret = 0;
+ 
+ 		/* power on hw at the start of streaming */
+ 		ret = vi->fops->vi_power_on(chan);
+-		if (ret < 0)
++		if (ret < 0) {
++			if (standalone_start) {
++				mutex_lock(&chan->d5xx_vc_mux.owner_chan->d5xx_vc_mux.copy_lock);
++				chan->d5xx_vc_mux.standalone = false;
++				chan->d5xx_vc_mux.stream_requested = false;
++				mutex_unlock(&chan->d5xx_vc_mux.owner_chan->d5xx_vc_mux.copy_lock);
++			}
++			if (dma_acquired) {
++				dma_release_channel(chan->d5xx_vc_mux.dma_chan);
++				chan->d5xx_vc_mux.dma_chan = NULL;
++				mutex_lock(&chan->d5xx_vc_mux.copy_lock);
++				chan->d5xx_vc_mux.stream_requested = false;
++				mutex_unlock(&chan->d5xx_vc_mux.copy_lock);
++				return d5xx_vc_mux_start_error(chan, ret);
++			}
+ 			return ret;
++		}
+ 
+-		return vi->fops->vi_start_streaming(vq, count);
++		ret = vi->fops->vi_start_streaming(vq, count);
++		if (ret < 0 && standalone_start) {
++			mutex_lock(&chan->d5xx_vc_mux.owner_chan->d5xx_vc_mux.copy_lock);
++			chan->d5xx_vc_mux.standalone = false;
++			chan->d5xx_vc_mux.stream_requested = false;
++			mutex_unlock(&chan->d5xx_vc_mux.owner_chan->d5xx_vc_mux.copy_lock);
++		}
++		if (ret < 0 && dma_acquired) {
++			dma_release_channel(chan->d5xx_vc_mux.dma_chan);
++			chan->d5xx_vc_mux.dma_chan = NULL;
++			mutex_lock(&chan->d5xx_vc_mux.copy_lock);
++			chan->d5xx_vc_mux.stream_requested = false;
++			mutex_unlock(&chan->d5xx_vc_mux.copy_lock);
++		}
++		if (!ret && chan->d5xx_vc_mux.owner) {
++			struct tegra_channel *secondary =
++				chan->d5xx_vc_mux.secondary_chan;
++
++			mutex_lock(&chan->d5xx_vc_mux.copy_lock);
++			if (secondary->d5xx_vc_mux.stream_requested &&
++			    !atomic_read(&secondary->is_streaming)) {
++				if (!d5xx_vc_mux_formats_match(chan, secondary))
++					ret = -EINVAL;
++				else
++					ret = d5xx_vc_mux_start_secondary_locked(chan);
++				if (ret) {
++					secondary->d5xx_vc_mux.stream_requested =
++						false;
++					vb2_queue_error(&secondary->queue);
++					tegra_channel_queued_buf_done(secondary,
++						VB2_BUF_STATE_ERROR, false);
++					dev_err(chan->vi->dev,
++						"D5xx VC mux source start failed: %d\n",
++						ret);
++					/* Keep the already-running owner usable. */
++					ret = 0;
++				}
++			}
++			mutex_unlock(&chan->d5xx_vc_mux.copy_lock);
++		}
++		return ret;
+ 	}
+ 	return 0;
+ }
+@@ -1029,12 +1261,86 @@ static void tegra_channel_stop_streaming(struct vb2_queue *vq)
+ 	struct tegra_channel *chan = vb2_get_drv_priv(vq);
+ 	struct tegra_mc_vi *vi = chan->vi;
+ 
++	if (chan->d5xx_vc_mux.enabled && !chan->d5xx_vc_mux.owner &&
++	    !chan->d5xx_vc_mux.standalone) {
++		struct tegra_channel *owner = chan->d5xx_vc_mux.owner_chan;
++
++		if (owner)
++			mutex_lock(&owner->d5xx_vc_mux.copy_lock);
++		if (owner)
++			d5xx_vc_mux_stop_secondary_locked(owner, false);
++		else {
++			chan->d5xx_vc_mux.stream_requested = false;
++			tegra_channel_queued_buf_done(chan, VB2_BUF_STATE_ERROR,
++						       false);
++		}
++		if (owner)
++			mutex_unlock(&owner->d5xx_vc_mux.copy_lock);
++		return;
++	}
++	if (chan->d5xx_vc_mux.enabled && chan->d5xx_vc_mux.standalone) {
++		struct tegra_channel *owner = chan->d5xx_vc_mux.owner_chan;
++
++		mutex_lock(&owner->d5xx_vc_mux.copy_lock);
++		chan->d5xx_vc_mux.standalone = false;
++		chan->d5xx_vc_mux.stream_requested = false;
++		mutex_unlock(&owner->d5xx_vc_mux.copy_lock);
++	}
++
++	if (chan->d5xx_vc_mux.owner) {
++		struct tegra_channel *secondary =
++			chan->d5xx_vc_mux.secondary_chan;
++		bool secondary_active = false;
++
++		mutex_lock(&chan->d5xx_vc_mux.copy_lock);
++		chan->d5xx_vc_mux.owner_stopping = true;
++		if (secondary) {
++			secondary_active =
++				secondary->d5xx_vc_mux.stream_requested ||
++				atomic_read(&secondary->is_streaming);
++			/*
++			 * The owner supplies the physical VI capture.  If it closes,
++			 * fail the dependent queue so userspace can STREAMOFF it and
++			 * restart the pair from a clean shared-pipe state.
++			 */
++			if (secondary_active)
++				d5xx_vc_mux_stop_secondary_locked(chan, true);
++		}
++		mutex_unlock(&chan->d5xx_vc_mux.copy_lock);
++	}
++
+ 	if (vi->fops) {
+ 		vi->fops->vi_stop_streaming(vq);
+ 		atomic_set(&chan->is_streaming, DISABLE);
+ 		vi->fops->vi_power_off(chan);
+ 	}
+ 
++	if (chan->d5xx_vc_mux.owner) {
++		mutex_lock(&chan->d5xx_vc_mux.copy_lock);
++		chan->d5xx_vc_mux.owner_stopping = false;
++		chan->d5xx_vc_mux.stream_requested = false;
++		mutex_unlock(&chan->d5xx_vc_mux.copy_lock);
++	}
++
++	if (chan->d5xx_vc_mux.owner && chan->d5xx_vc_mux.dma_chan) {
++		mutex_lock(&chan->d5xx_vc_mux.copy_lock);
++		vi5_d5xx_vc_mux_dma_unmap(chan, false);
++		vi5_d5xx_vc_mux_dma_unmap(chan, true);
++		dev_info(chan->vi->dev,
++			 "D5xx VC mux: source %u=%llu source %u=%llu dropped=%llu invalid=%llu dma_errors=%llu last_dma_error=%d\n",
++			 chan->d5xx_vc_mux.source_id,
++			 (unsigned long long)chan->d5xx_vc_mux.owner_frames,
++			 chan->d5xx_vc_mux.secondary_chan->d5xx_vc_mux.source_id,
++			 (unsigned long long)chan->d5xx_vc_mux.secondary_frames,
++			 (unsigned long long)chan->d5xx_vc_mux.dropped_frames,
++			 (unsigned long long)chan->d5xx_vc_mux.invalid_metadata,
++			 (unsigned long long)chan->d5xx_vc_mux.dma_errors,
++			 chan->d5xx_vc_mux.dma_last_error);
++		dma_release_channel(chan->d5xx_vc_mux.dma_chan);
++		chan->d5xx_vc_mux.dma_chan = NULL;
++		mutex_unlock(&chan->d5xx_vc_mux.copy_lock);
++	}
++
+ 	/* Clean-up recorded videobuf2 queue initial timestamp */
+ 	queue_init_ts = 0;
+ }
+@@ -2563,6 +2869,32 @@ int tegra_vi_get_port_info(struct tegra_channel *chan,
+ 				dev_err(chan->vi->dev, "num lanes error\n");
+ 			chan->numlanes = value;
+ 
++			{
++				int mux_ret;
++				u32 source_id;
++				u32 owner_channel_id;
++
++				mux_ret = of_property_read_u32(
++					ep, "realsense,d5xx-vc-mux-source-id",
++					&source_id);
++				if (!mux_ret && (source_id > U8_MAX ||
++						 of_property_read_u32(ep,
++						 "realsense,d5xx-vc-mux-owner-channel",
++						 &owner_channel_id))) {
++					dev_err(chan->vi->dev,
++						"invalid D5xx VC mux endpoint\n");
++					return -EINVAL;
++				}
++				if (!mux_ret) {
++					chan->d5xx_vc_mux.enabled = true;
++					chan->d5xx_vc_mux.source_id = source_id;
++					chan->d5xx_vc_mux.owner_channel_id =
++						owner_channel_id;
++					chan->d5xx_vc_mux.owner =
++						index == owner_channel_id;
++				}
++			}
++
+ 			if (value > 12) {
+ 				dev_err(chan->vi->dev, "num lanes >12!\n");
+ 				return -EINVAL;
+@@ -3083,6 +3415,7 @@ int tegra_channel_init(struct tegra_channel *chan)
+ 	init_waitqueue_head(&chan->dequeue_wait);
+ 	spin_lock_init(&chan->dequeue_lock);
+ 	mutex_init(&chan->stop_kthread_lock);
++	mutex_init(&chan->d5xx_vc_mux.copy_lock);
+ 	init_rwsem(&chan->reset_lock);
+ 	atomic_set(&chan->is_streaming, DISABLE);
+ 	spin_lock_init(&chan->capture_state_lock);
+@@ -3231,6 +3564,44 @@ int tegra_vi_channels_init(struct tegra_mc_vi *vi)
+ 		return ret;
+ 	}
+ 
++	list_for_each_entry(it, &vi->vi_chans, list) {
++		struct tegra_channel *owner = NULL;
++		struct tegra_channel *candidate;
++
++		if (!it->d5xx_vc_mux.enabled)
++			continue;
++
++		list_for_each_entry(candidate, &vi->vi_chans, list) {
++			if (candidate->id == it->d5xx_vc_mux.owner_channel_id) {
++				owner = candidate;
++				break;
++			}
++		}
++
++		if (!owner || !owner->d5xx_vc_mux.enabled ||
++		    !owner->d5xx_vc_mux.owner ||
++		    owner->port[0] != it->port[0] ||
++		    owner->virtual_channel != it->virtual_channel) {
++			dev_err(vi->dev, "invalid D5xx VC mux topology on channel %u\n",
++				it->id);
++			return -EINVAL;
++		}
++
++		it->d5xx_vc_mux.owner_chan = owner;
++		if (it == owner)
++			continue;
++		if (owner->d5xx_vc_mux.secondary_chan ||
++		    owner->d5xx_vc_mux.source_id == it->d5xx_vc_mux.source_id) {
++			dev_err(vi->dev, "ambiguous D5xx VC mux topology\n");
++			return -EINVAL;
++		}
++		owner->d5xx_vc_mux.secondary_chan = it;
++		dev_info(vi->dev,
++			 "D5xx VC mux topology: owner channel %u source %u, secondary channel %u source %u\n",
++			 owner->id, owner->d5xx_vc_mux.source_id,
++			 it->id, it->d5xx_vc_mux.source_id);
++	}
++
+ 	return 0;
+ }
+ EXPORT_SYMBOL(tegra_vi_channels_init);
+diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+index b078c6126f19e5ac590f5f0b7e4b4a28993988d3..b8fdd33e70e51ec2e93cf909cf1cfdeb1770132f 100644
+--- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
++++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+@@ -12,6 +12,9 @@
+  */
+ 
+ #include <linux/errno.h>
++#include <linux/completion.h>
++#include <linux/dma-mapping.h>
++#include <linux/dmaengine.h>
+ #include <linux/freezer.h>
+ #include <linux/fs.h>
+ #include <linux/kthread.h>
+@@ -42,6 +45,13 @@
+ #define VI_CHAN_PATH_MAX 40
+ 
+ #define CAPTURE_TIMEOUT_MS	2500
++#define D5XX_GMSL_META_ID	0x80000022U
++#define D5XX_GMSL_META_SIZE	11U
++#define D5XX_GMSL_META_OFFSET	(D4XX_META_BUFSIZE - D5XX_GMSL_META_SIZE)
++#define D5XX_GMSL_META_VERSION_OFFSET	(D5XX_GMSL_META_OFFSET + 8U)
++#define D5XX_GMSL_META_FLAGS_OFFSET	(D5XX_GMSL_META_OFFSET + 9U)
++#define D5XX_GMSL_META_SOURCE_OFFSET	(D5XX_GMSL_META_OFFSET + 10U)
++#define D5XX_VC_MUX_DMA_TIMEOUT_MS	100U
+ 
+ static const struct vi_capture_setup default_setup = {
+ 	.channel_flags = 0
+@@ -478,27 +488,46 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+ 		chan->capture_descr_sequence += 1;
+ }
+ 
+-static void vi5_release_metadata_buffer(struct tegra_channel *chan,
+-	struct tegra_channel_buffer *buf)
++static void *vi5_metadata_addr(struct tegra_channel *chan,
++			       struct tegra_channel_buffer *buf)
++{
++	unsigned int descr_index = buf->capture_descr_index[0];
++	unsigned int emb_offset;
++
++	if (!chan->emb_buf_stride ||
++	    chan->emb_buf_size < D4XX_META_BUFSIZE ||
++	    descr_index >= chan->capture_queue_depth ||
++	    check_mul_overflow(descr_index, chan->emb_buf_stride,
++			       &emb_offset) ||
++	    emb_offset > chan->emb_buf_size - D4XX_META_BUFSIZE)
++		return NULL;
++
++	return (u8 *)chan->emb_buf_addr + emb_offset;
++}
++
++static void vi5_release_metadata_buffer(struct tegra_channel *capture_chan,
++					struct tegra_channel *output_chan,
++					struct tegra_channel_buffer *buf,
++					struct vb2_v4l2_buffer *vbuf)
+ {
+ 	struct vb2_buffer *evb = NULL;
+ 	struct vb2_v4l2_buffer *evbuf;
+-	struct vb2_v4l2_buffer *vbuf = &buf->buf;
+ 	void *frm_buffer;
+ 	void *metadata_addr;
+-	unsigned int descr_index = buf->capture_descr_index[0];
+-	unsigned int emb_offset;
+ 
+-	spin_lock(&chan->embedded.spin_lock);
+-	if (0 < chan->embedded.num_buffers) {
+-		evb = chan->embedded.buffers[chan->embedded.tail];
+-		chan->embedded.buffers[chan->embedded.tail] = NULL;
+-		chan->embedded.tail++;
+-		if (chan->embedded.tail > 15)
+-			chan->embedded.tail = chan->embedded.tail - 16;
+-		chan->embedded.num_buffers--;
++	if (!output_chan->embedded.video)
++		return;
++
++	spin_lock(&output_chan->embedded.spin_lock);
++	if (output_chan->embedded.num_buffers > 0) {
++		evb = output_chan->embedded.buffers[output_chan->embedded.tail];
++		output_chan->embedded.buffers[output_chan->embedded.tail] = NULL;
++		output_chan->embedded.tail++;
++		if (output_chan->embedded.tail > 15)
++			output_chan->embedded.tail = output_chan->embedded.tail - 16;
++		output_chan->embedded.num_buffers--;
+ 	}
+-	spin_unlock(&chan->embedded.spin_lock);
++	spin_unlock(&output_chan->embedded.spin_lock);
+ 
+ 	if (!evb)
+ 		return;
+@@ -509,17 +538,12 @@ static void vi5_release_metadata_buffer(struct tegra_channel *chan,
+ 		return;
+ 	}
+ 
+-	if (!chan->emb_buf_stride ||
+-		chan->emb_buf_size < D4XX_META_BUFSIZE ||
+-		descr_index >= chan->capture_queue_depth ||
+-		check_mul_overflow(descr_index, chan->emb_buf_stride,
+-			&emb_offset) ||
+-		emb_offset > chan->emb_buf_size - D4XX_META_BUFSIZE) {
++	metadata_addr = vi5_metadata_addr(capture_chan, buf);
++	if (!metadata_addr) {
+ 		vb2_buffer_done(evb, VB2_BUF_STATE_ERROR);
+ 		return;
+ 	}
+ 
+-	metadata_addr = (u8 *)chan->emb_buf_addr + emb_offset;
+ 	memcpy(frm_buffer, metadata_addr, D4XX_META_BUFSIZE);
+ 	evbuf = to_vb2_v4l2_buffer(evb);
+ 	evbuf->sequence = vbuf->sequence;
+@@ -528,17 +552,275 @@ static void vi5_release_metadata_buffer(struct tegra_channel *chan,
+ 	vb2_buffer_done(evb, VB2_BUF_STATE_DONE);
+ }
+ 
++static int d5xx_vc_mux_source_id(struct tegra_channel *chan,
++				 struct tegra_channel_buffer *buf, u8 *source_id)
++{
++	u8 *metadata = vi5_metadata_addr(chan, buf);
++	__le32 id;
++	__le32 size;
++
++	if (!metadata)
++		return -EINVAL;
++
++	memcpy(&id, metadata + D5XX_GMSL_META_OFFSET, sizeof(id));
++	memcpy(&size, metadata + D5XX_GMSL_META_OFFSET + sizeof(id),
++	       sizeof(size));
++	if (le32_to_cpu(id) != D5XX_GMSL_META_ID ||
++	    le32_to_cpu(size) != D5XX_GMSL_META_SIZE ||
++	    metadata[D5XX_GMSL_META_VERSION_OFFSET] != 1U ||
++	    !(metadata[D5XX_GMSL_META_FLAGS_OFFSET] & BIT(0)))
++		return -EINVAL;
++
++	*source_id = metadata[D5XX_GMSL_META_SOURCE_OFFSET];
++	return 0;
++}
++
++static struct tegra_channel_buffer *
++d5xx_vc_mux_dequeue_target(struct tegra_channel *chan)
++{
++	struct tegra_channel_buffer *buf = NULL;
++
++	spin_lock(&chan->start_lock);
++	if (!list_empty(&chan->capture)) {
++		buf = list_first_entry(&chan->capture,
++				       struct tegra_channel_buffer, queue);
++		list_del_init(&buf->queue);
++	}
++	spin_unlock(&chan->start_lock);
++	return buf;
++}
++
++static void d5xx_vc_mux_dma_complete(void *arg)
++{
++	complete(arg);
++}
++
++static void d5xx_vc_mux_dma_unmap_one(struct d5xx_vc_mux_dma_map *map)
++{
++	if (!map->dbuf)
++		return;
++
++	if (map->sgt)
++		dma_buf_unmap_attachment(map->attach, map->sgt, map->dir);
++	if (map->attach)
++		dma_buf_detach(map->dbuf, map->attach);
++	dma_buf_put(map->dbuf);
++	memset(map, 0, sizeof(*map));
++}
++
++void vi5_d5xx_vc_mux_dma_unmap(struct tegra_channel *owner, bool secondary)
++{
++	struct d5xx_vc_mux_dma_map *maps = secondary ?
++		owner->d5xx_vc_mux.secondary_maps :
++		owner->d5xx_vc_mux.source_maps;
++	unsigned int i;
++
++	for (i = 0; i < VB2_MAX_FRAME; i++)
++		d5xx_vc_mux_dma_unmap_one(&maps[i]);
++}
++
++static int d5xx_vc_mux_dma_map(struct tegra_channel *owner,
++			       struct vb2_buffer *vb,
++			       struct d5xx_vc_mux_dma_map *map,
++			       enum dma_data_direction dir)
++{
++	struct dma_buf *dbuf;
++
++	if (map->dbuf)
++		return 0;
++
++	if (vb->planes[0].dbuf) {
++		dbuf = vb->planes[0].dbuf;
++		get_dma_buf(dbuf);
++	} else {
++		const struct vb2_mem_ops *mem_ops = vb->vb2_queue->mem_ops;
++
++		if (!mem_ops || !mem_ops->get_dmabuf)
++			return -EOPNOTSUPP;
++		dbuf = mem_ops->get_dmabuf(vb, vb->planes[0].mem_priv, O_RDWR);
++		if (IS_ERR_OR_NULL(dbuf))
++			return -EIO;
++	}
++
++	map->attach = dma_buf_attach(dbuf, owner->d5xx_vc_mux.dma_chan->device->dev);
++	if (IS_ERR(map->attach)) {
++		int ret = PTR_ERR(map->attach);
++
++		map->attach = NULL;
++		dma_buf_put(dbuf);
++		return ret;
++	}
++
++	map->sgt = dma_buf_map_attachment(map->attach, dir);
++	if (IS_ERR(map->sgt)) {
++		int ret = PTR_ERR(map->sgt);
++
++		map->sgt = NULL;
++		dma_buf_detach(dbuf, map->attach);
++		map->attach = NULL;
++		dma_buf_put(dbuf);
++		return ret;
++	}
++
++	map->dbuf = dbuf;
++	map->dir = dir;
++	return 0;
++}
++
++static int d5xx_vc_mux_dma_copy(struct tegra_channel *owner,
++				 struct tegra_channel_buffer *src,
++				 struct tegra_channel_buffer *dst)
++{
++	struct dma_chan *chan = owner->d5xx_vc_mux.dma_chan;
++	struct d5xx_vc_mux_dma_map *src_map;
++	struct d5xx_vc_mux_dma_map *dst_map;
++	struct dma_async_tx_descriptor *tx;
++	DECLARE_COMPLETION_ONSTACK(done);
++	dma_cookie_t cookie;
++	size_t len = owner->format.sizeimage;
++	int ret;
++
++	if (!chan || src->buf.vb2_buf.index >= VB2_MAX_FRAME ||
++	    dst->buf.vb2_buf.index >= VB2_MAX_FRAME ||
++	    vb2_plane_size(&src->buf.vb2_buf, 0) < len ||
++	    vb2_plane_size(&dst->buf.vb2_buf, 0) < len)
++		return -ENODEV;
++
++	src_map = &owner->d5xx_vc_mux.source_maps[src->buf.vb2_buf.index];
++	dst_map = &owner->d5xx_vc_mux.secondary_maps[dst->buf.vb2_buf.index];
++	ret = d5xx_vc_mux_dma_map(owner, &src->buf.vb2_buf, src_map,
++				  DMA_TO_DEVICE);
++	if (ret)
++		return ret;
++	ret = d5xx_vc_mux_dma_map(owner, &dst->buf.vb2_buf, dst_map,
++				  DMA_FROM_DEVICE);
++	if (ret)
++		return ret;
++
++	dma_sync_sgtable_for_device(chan->device->dev, src_map->sgt,
++				    DMA_TO_DEVICE);
++	dma_sync_sgtable_for_device(chan->device->dev, dst_map->sgt,
++				    DMA_FROM_DEVICE);
++
++	if (src_map->sgt->nents != 1 || dst_map->sgt->nents != 1 ||
++	    sg_dma_len(src_map->sgt->sgl) < len ||
++	    sg_dma_len(dst_map->sgt->sgl) < len)
++		return -E2BIG;
++
++	tx = dmaengine_prep_dma_memcpy(chan,
++				       sg_dma_address(dst_map->sgt->sgl),
++				       sg_dma_address(src_map->sgt->sgl), len,
++				       DMA_CTRL_ACK | DMA_PREP_INTERRUPT);
++	if (!tx)
++		return -EIO;
++	tx->callback = d5xx_vc_mux_dma_complete;
++	tx->callback_param = &done;
++	cookie = dmaengine_submit(tx);
++	ret = dma_submit_error(cookie);
++	if (ret)
++		return ret;
++
++	dma_async_issue_pending(chan);
++	if (!wait_for_completion_timeout(&done,
++					 msecs_to_jiffies(D5XX_VC_MUX_DMA_TIMEOUT_MS))) {
++		dmaengine_terminate_sync(chan);
++		return -ETIMEDOUT;
++	}
++
++	dma_sync_sgtable_for_cpu(chan->device->dev, dst_map->sgt,
++				 DMA_FROM_DEVICE);
++	return 0;
++}
++
++static void d5xx_vc_mux_recycle_owner(struct tegra_channel *chan,
++				      struct tegra_channel_buffer *buf)
++{
++	buf->vb2_state = VB2_BUF_STATE_QUEUED;
++	spin_lock(&chan->start_lock);
++	list_add_tail(&buf->queue, &chan->capture);
++	spin_unlock(&chan->start_lock);
++	wake_up_interruptible(&chan->start_wait);
++}
++
+ static void vi5_release_buffer(struct tegra_channel *chan,
+ 	struct tegra_channel_buffer *buf)
+ {
+ 	struct vb2_v4l2_buffer *vbuf = &buf->buf;
++	struct tegra_channel *secondary;
++	struct tegra_channel_buffer *target;
++	u8 source_id;
++	int ret;
++
++	if (!chan->d5xx_vc_mux.owner ||
++	    buf->vb2_state != VB2_BUF_STATE_DONE)
++		goto release_owner;
++
++	ret = d5xx_vc_mux_source_id(chan, buf, &source_id);
++	secondary = chan->d5xx_vc_mux.secondary_chan;
++	if (ret || (source_id != chan->d5xx_vc_mux.source_id &&
++		    (!secondary || source_id != secondary->d5xx_vc_mux.source_id))) {
++		if (!chan->d5xx_vc_mux.invalid_metadata) {
++			u8 *metadata = vi5_metadata_addr(chan, buf);
++
++			if (metadata)
++				dev_info(chan->vi->dev,
++					 "D5xx VC mux first invalid metadata: ret=%d source=%u head=%*ph tail=%*ph\n",
++					 ret, source_id, 16, metadata, 32,
++					 metadata + D4XX_META_BUFSIZE - 32U);
++		}
++		chan->d5xx_vc_mux.invalid_metadata++;
++		buf->vb2_state = VB2_BUF_STATE_ERROR;
++		goto release_owner;
++	}
++
++	if (source_id == chan->d5xx_vc_mux.source_id) {
++		chan->d5xx_vc_mux.owner_frames++;
++		goto release_owner;
++	}
++
++	mutex_lock(&chan->d5xx_vc_mux.copy_lock);
++	if (!atomic_read(&secondary->is_streaming)) {
++		chan->d5xx_vc_mux.dropped_frames++;
++		goto recycle_owner;
++	}
++
++	target = d5xx_vc_mux_dequeue_target(secondary);
++	if (!target) {
++		chan->d5xx_vc_mux.dropped_frames++;
++		goto recycle_owner;
++	}
++
++	ret = d5xx_vc_mux_dma_copy(chan, buf, target);
++	if (ret) {
++		chan->d5xx_vc_mux.dma_errors++;
++		chan->d5xx_vc_mux.dma_last_error = ret;
++		vb2_buffer_done(&target->buf.vb2_buf, VB2_BUF_STATE_ERROR);
++		goto recycle_owner;
++	}
++
++	target->buf.sequence = secondary->sequence++;
++	target->buf.field = V4L2_FIELD_NONE;
++	target->buf.vb2_buf.timestamp = vbuf->vb2_buf.timestamp;
++	vb2_set_plane_payload(&target->buf.vb2_buf, 0,
++			      secondary->format.sizeimage);
++	if (chan->embedded_data_height == 1)
++		vi5_release_metadata_buffer(chan, secondary, buf, &target->buf);
++	vb2_buffer_done(&target->buf.vb2_buf, VB2_BUF_STATE_DONE);
++	chan->d5xx_vc_mux.secondary_frames++;
++
++recycle_owner:
++	mutex_unlock(&chan->d5xx_vc_mux.copy_lock);
++	d5xx_vc_mux_recycle_owner(chan, buf);
++	return;
++
++release_owner:
+ 
+ 	vbuf->sequence = chan->sequence++;
+ 	vbuf->field = V4L2_FIELD_NONE;
+ 	vb2_set_plane_payload(&vbuf->vb2_buf, 0, chan->format.sizeimage);
+ 
+ 	if (chan->embedded_data_height == 1 && buf->vb2_state == VB2_BUF_STATE_DONE)
+-		vi5_release_metadata_buffer(chan, buf);
++		vi5_release_metadata_buffer(chan, chan, buf, vbuf);
+ 
+ 	vb2_buffer_done(&vbuf->vb2_buf, buf->vb2_state);
+ }
+diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.h b/drivers/media/platform/tegra/camera/vi/vi5_fops.h
+index 761a7cc4bdb9b5e23133443be9d634e4b48468fc..8ace6706707d8b36bab40fbe53f649a4dc38bc99 100644
+--- a/drivers/media/platform/tegra/camera/vi/vi5_fops.h
++++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.h
+@@ -8,6 +8,9 @@
+ #ifndef __T186_VI5_H__
+ #define __T186_VI5_H__
+ 
++struct tegra_channel;
++
+ extern struct tegra_vi_fops vi5_fops;
++void vi5_d5xx_vc_mux_dma_unmap(struct tegra_channel *owner, bool secondary);
+ 
+ #endif
+diff --git a/include/media/mc_common.h b/include/media/mc_common.h
+index cea3ca26bcab7e3f6113e82e16a94d84909cd66f..b2a20ffd6c490a66c757f7da07065a726e8c4480 100644
+--- a/include/media/mc_common.h
++++ b/include/media/mc_common.h
+@@ -35,6 +35,9 @@
+ #include <media/tegra_camera_core.h>
+ #include <media/csi.h>
+ #include <linux/workqueue.h>
++#include <linux/dma-buf.h>
++#include <linux/dma-direction.h>
++#include <linux/scatterlist.h>
+ #include <linux/semaphore.h>
+ #include <linux/rwsem.h>
+ #include <linux/version.h>
+@@ -94,6 +97,13 @@ struct tegra_channel_buffer {
+ 	int state;
+ };
+ 
++struct d5xx_vc_mux_dma_map {
++	struct dma_buf *dbuf;
++	struct dma_buf_attachment *attach;
++	struct sg_table *sgt;
++	enum dma_data_direction dir;
++};
++
+ #define to_tegra_channel_buffer(vb) \
+ 	container_of(vb, struct tegra_channel_buffer, buf)
+ 
+@@ -297,6 +307,28 @@ struct tegra_channel {
+ 	void *emb_buf_addr;
+ 	unsigned int emb_buf_stride;
+ 	unsigned int emb_buf_size;
++
++	struct {
++		bool enabled;
++		bool owner;
++		u8 source_id;
++		u32 owner_channel_id;
++		struct tegra_channel *owner_chan;
++		struct tegra_channel *secondary_chan;
++		struct dma_chan *dma_chan;
++		struct mutex copy_lock;
++		bool stream_requested;
++		bool standalone;
++		bool owner_stopping;
++		struct d5xx_vc_mux_dma_map source_maps[VB2_MAX_FRAME];
++		struct d5xx_vc_mux_dma_map secondary_maps[VB2_MAX_FRAME];
++		u64 owner_frames;
++		u64 secondary_frames;
++		u64 dropped_frames;
++		u64 invalid_metadata;
++		u64 dma_errors;
++		int dma_last_error;
++	} d5xx_vc_mux;
+ };
+ 
+ #define to_tegra_channel(vdev) \

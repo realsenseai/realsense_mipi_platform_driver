@@ -1009,7 +1009,6 @@ EXPORT_SYMBOL(max96724_sdev_unregister);
 
 int max96724_get_available_pipe_id(struct device *dev, int vc_id)
 {
-	int i;
 	int pipe_id = -ENOMEM;
 	struct max96724 *priv = dev_get_drvdata(dev);
 
@@ -1017,12 +1016,15 @@ int max96724_get_available_pipe_id(struct device *dev, int vc_id)
 		return -EINVAL;
 
 	mutex_lock(&priv->lock);
-	for (i = 0; i < MAX96724_MAX_PIPES; i++) {
-		if (i == vc_id && !priv->pipe[i].st_count) {
-			priv->pipe[i].st_count++;
-			pipe_id = i;
-			break;
-		}
+	/*
+	 * Tunnel-mode MAX96724 keeps one deserializer pipe per output VC.
+	 * Multiple logical HKR sources may intentionally share that VC and are
+	 * separated later by metadata source-id fan-out in VI. Treat the pipe as
+	 * a refcounted VC resource instead of an exclusive stream resource.
+	 */
+	if (priv->pipe[vc_id].st_count != U32_MAX) {
+		priv->pipe[vc_id].st_count++;
+		pipe_id = vc_id;
 	}
 	mutex_unlock(&priv->lock);
 
@@ -1039,8 +1041,14 @@ int max96724_release_pipe(struct device *dev, int pipe_id)
 		return -EINVAL;
 
 	mutex_lock(&priv->lock);
-	priv->pipe[pipe_id].st_count = 0;
-	priv->retriggered_pipe_mask &= ~BIT(pipe_id);
+	if (priv->pipe[pipe_id].st_count)
+		priv->pipe[pipe_id].st_count--;
+	else
+		dev_warn(dev, "%s: pipe %d is not active\n", __func__,
+			 pipe_id);
+
+	if (!priv->pipe[pipe_id].st_count)
+		priv->retriggered_pipe_mask &= ~BIT(pipe_id);
 	for (i = 0; i < MAX96724_MAX_PIPES; i++) {
 		if (priv->pipe[i].st_count)
 			break;

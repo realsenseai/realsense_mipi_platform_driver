@@ -78,8 +78,8 @@ struct max96717 {
 	struct max96717_client_ctx g_client;
 	struct mutex lock;
 	bool pixel_mode;
-	/* bit[ser_vc_id] set while that pipe is streaming (set in set_pipe,
-	 * cleared in stream_stop). When it drops to 0 the MIPI RX is re-armed. */
+	/* Multiple logical streams may share one tunnel VC. */
+	u8 active_vc_refcount[MAX96717_MAX_VC];
 	u16 active_vc_mask;
 };
 
@@ -399,6 +399,8 @@ int max96717_init_settings(struct device *dev)
 	 * ensures a deserializer/link reset can't strand a stale bit and
 	 * permanently suppress the last-stream MIPI RX re-arm. */
 	priv->active_vc_mask = 0;
+	memset(priv->active_vc_refcount, 0,
+	       sizeof(priv->active_vc_refcount));
 
 	err |= max96717_set_registers(dev, gpio_release,
 				     ARRAY_SIZE(gpio_release));
@@ -435,8 +437,14 @@ int max96717_set_pipe(struct device *dev, int pipe_id,
 		return -EINVAL;
 
 	mutex_lock(&priv->lock);
-
+	if (priv->active_vc_refcount[vc_id] == U8_MAX) {
+		err = -EOVERFLOW;
+		goto unlock;
+	}
+	priv->active_vc_refcount[vc_id]++;
 	priv->active_vc_mask |= (u16)BIT(vc_id);
+
+unlock:
 	mutex_unlock(&priv->lock);
 
 	return err;
@@ -452,7 +460,14 @@ int max96717_stream_stop(struct device *dev, u32 vc_id)
 		return -EINVAL;
 
 	mutex_lock(&priv->lock);
-	priv->active_vc_mask &= (u16)~BIT(vc_id);
+	if (!priv->active_vc_refcount[vc_id]) {
+		dev_warn(dev, "%s: VC%u is not active\n", __func__, vc_id);
+		err = -EINVAL;
+		goto unlock;
+	}
+	priv->active_vc_refcount[vc_id]--;
+	if (!priv->active_vc_refcount[vc_id])
+		priv->active_vc_mask &= (u16)~BIT(vc_id);
 
 	if (priv->pixel_mode && priv->active_vc_mask == 0) {
 		/*
@@ -464,6 +479,8 @@ int max96717_stream_stop(struct device *dev, u32 vc_id)
 		dev_dbg(dev, "%s: last stream stopped, MIPI RX re-armed (err %d)\n",
 			__func__, err);
 	}
+
+unlock:
 	mutex_unlock(&priv->lock);
 
 	return err;
