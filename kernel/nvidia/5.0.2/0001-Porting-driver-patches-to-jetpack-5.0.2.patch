@@ -14,15 +14,15 @@ Signed-off-by: Junze Wu <junze.wu@intel.com>
  .../media/platform/tegra/camera/vi/graph.c    |  50 +-
  .../platform/tegra/camera/vi/mc_common.c      |  32 ++
  .../platform/tegra/camera/vi/vi4_formats.h    |  32 +-
- .../media/platform/tegra/camera/vi/vi5_fops.c | 143 +++++-
- .../platform/tegra/camera/vi/vi5_formats.h    |  30 +-
+ .../media/platform/tegra/camera/vi/vi5_fops.c | 136 +-
+ .../platform/tegra/camera/vi/vi5_formats.h    |  28 -
  .../tegra/camera/tegra_camera_platform.c      |   5 +
  include/media/gmsl-link.h                     |   7 +
  include/media/max9295.h                       |   2 +
  include/media/max9296.h                       |   3 +
  include/media/mc_common.h                     |  25 +
  include/media/tegra_camera_core.h             |  10 +-
- 17 files changed, 1543 insertions(+), 29 deletions(-)
+ 17 files changed, 1534 insertions(+), 29 deletions(-)
 
 diff --git a/drivers/media/i2c/Kconfig b/drivers/media/i2c/Kconfig
 index 8362bc85b..90f5a90e6 100644
@@ -1688,21 +1688,7 @@ index 69ebee6a8..6e08f65ea 100644
  
  	chan->request[vi_port] = dma_alloc_coherent(chan->tegra_vi_channel[vi_port]->rtcpu_dev,
  					setup.queue_depth * setup.request_size,
-@@ -337,6 +337,13 @@ static void vi5_setup_surface(struct tegra_channel *chan,
- 		offset = buf->addr + chan->buffer_offset[1 - vi_port];
- 	}
- 
-+	/* Y16I: one 32bpp L/R column pair per V4L2 pixel.
-+	 * However, GMSL caps at 24bpp, so we alias it to RAW16, and the de-facto
-+	 * width should be double the requested size
-+	 */
-+	if (chan->fmtinfo->fourcc == V4L2_PIX_FMT_Y16I)
-+		width *= 2;
-+
- 	memcpy(desc, &capture_template, sizeof(capture_template));
- 	memset(desc_memoryinfo, 0, sizeof(*desc_memoryinfo));
- 
-@@ -375,12 +382,45 @@ static void vi5_release_buffer(struct tegra_channel *chan,
+@@ -375,12 +375,45 @@ static void vi5_release_buffer(struct tegra_channel *chan,
  	struct tegra_channel_buffer *buf)
  {
  	struct vb2_v4l2_buffer *vbuf = &buf->buf;
@@ -1748,7 +1734,7 @@ index 69ebee6a8..6e08f65ea 100644
  }
  
  static void vi5_capture_enqueue(struct tegra_channel *chan,
-@@ -432,6 +472,88 @@ uncorr_err:
+@@ -432,6 +465,88 @@ uncorr_err:
  	spin_unlock_irqrestore(&chan->capture_state_lock, flags);
  }
  
@@ -1837,7 +1823,7 @@ index 69ebee6a8..6e08f65ea 100644
  static void vi5_capture_dequeue(struct tegra_channel *chan,
  	struct tegra_channel_buffer *buf)
  {
-@@ -476,15 +598,29 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
+@@ -476,15 +591,29 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
  			} else {
  				dev_warn(vi->dev,
  					"corr_err: discarding frame %d, flags: %d, "
@@ -1870,7 +1856,7 @@ index 69ebee6a8..6e08f65ea 100644
  			}
  		} else if (!vi_port) {
  			gang_prev_frame_id = descr->status.frame_id;
-@@ -529,7 +665,6 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
+@@ -529,7 +658,6 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
  	trace_tegra_channel_capture_frame("eof", &ts);
  #endif
  
@@ -1878,7 +1864,7 @@ index 69ebee6a8..6e08f65ea 100644
  	goto rel_buf;
  
  uncorr_err:
-@@ -632,6 +767,9 @@ static int tegra_channel_kthread_capture_enqueue(void *data)
+@@ -632,6 +760,9 @@ static int tegra_channel_kthread_capture_enqueue(void *data)
  		wait_event_interruptible(chan->start_wait,
  			(kthread_should_stop() || !list_empty(&chan->capture)));
  
@@ -1888,7 +1874,7 @@ index 69ebee6a8..6e08f65ea 100644
  		while (!(kthread_should_stop() || list_empty(&chan->capture))) {
  			spin_lock_irqsave(&chan->capture_state_lock, flags);
  			if ((chan->capture_state == CAPTURE_ERROR)
-@@ -823,6 +961,8 @@ static int vi5_channel_start_streaming(struct vb2_queue *vq, u32 count)
+@@ -823,6 +954,8 @@ static int vi5_channel_start_streaming(struct vb2_queue *vq, u32 count)
  							sensor_mode->\
  							 image_properties.\
  						      embedded_metadata_height;
@@ -1941,7 +1927,7 @@ index 51cbbad5b..8c1a4f5bc 100644
  	TEGRA_VIDEO_FORMAT(YUV422, 16, UYVY8_2X8, 2, 1, T_U8_Y8__V8_Y8,
  				YUV422_8, UYVY, "YUV 4:2:2 UYVY"),
  	TEGRA_VIDEO_FORMAT(YUV422, 16, VYUY8_2X8, 2, 1, T_V8_Y8__U8_Y8,
-@@ -141,6 +143,22 @@ static const struct tegra_video_format vi5_video_formats[] = {
+@@ -141,6 +143,18 @@ static const struct tegra_video_format vi5_video_formats[] = {
  				YUV422_8, YUYV, "YUV 4:2:2 YUYV"),
  	TEGRA_VIDEO_FORMAT(YUV422, 16, YVYU8_2X8, 2, 1, T_Y8_V8__Y8_U8,
  				YUV422_8, YVYU, "YUV 4:2:2 YVYU"),
@@ -1956,10 +1942,6 @@ index 51cbbad5b..8c1a4f5bc 100644
 +	// R[7:3]R[3:0] | L[3:0]R[11:8] | L[11:8]L[7:4] | ALIGN[7:0]
 +	TEGRA_VIDEO_FORMAT(RGB888, 24, RGB888_1X24, 4, 1, T_A8R8G8B8,
 +				RGB888, Y12I, "Y12I 24"),
-+	TEGRA_VIDEO_FORMAT(RAW16, 16, ARGB8888_1X32, 4, 1, T_R16,
-+				RAW16, Y16I, "Y16I 32"),
-+	TEGRA_VIDEO_FORMAT(RAW16, 16, SGRBG16_1X16, 2, 1, T_R16,
-+				RAW16, RW16, "RW16 16"),
 +
  };
  
