@@ -509,7 +509,7 @@ index 02a1837f02b417eafabce82b1b158adc5414c171..a066e29282b460fecc15a54c4c96f102
  	memcpy(frm_buffer, metadata_addr, D4XX_META_BUFSIZE);
  	evbuf = to_vb2_v4l2_buffer(evb);
  	evbuf->sequence = vbuf->sequence;
-@@ -522,17 +546,266 @@ static void vi5_release_metadata_buffer(struct tegra_channel *chan,
+@@ -522,17 +546,275 @@ static void vi5_release_metadata_buffer(struct tegra_channel *chan,
  	vb2_buffer_done(evb, VB2_BUF_STATE_DONE);
  }
  
@@ -720,6 +720,15 @@ index 02a1837f02b417eafabce82b1b158adc5414c171..a066e29282b460fecc15a54c4c96f102
 +	secondary = chan->d5xx_vc_mux.secondary_chan;
 +	if (ret || (source_id != chan->d5xx_vc_mux.source_id &&
 +		    (!secondary || source_id != secondary->d5xx_vc_mux.source_id))) {
++		if (!chan->d5xx_vc_mux.invalid_metadata) {
++			u8 *metadata = vi5_metadata_addr(chan, buf);
++
++			if (metadata)
++				dev_info(chan->vi->dev,
++					 "D5xx VC mux first invalid metadata: ret=%d source=%u head=%*ph tail=%*ph\n",
++					 ret, source_id, 16, metadata, 32,
++					 metadata + D4XX_META_BUFSIZE - 32U);
++		}
 +		chan->d5xx_vc_mux.invalid_metadata++;
 +		buf->vb2_state = VB2_BUF_STATE_ERROR;
 +		goto release_owner;
