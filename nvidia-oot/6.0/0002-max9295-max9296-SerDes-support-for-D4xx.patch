@@ -369,7 +369,7 @@ index 1ceaf3cd..97559460 100644
 +EXPORT_SYMBOL(max9296_init_settings);
 +
 +int max9296_set_pipe(struct device *dev, int pipe_id,
-+		     u8 data_type1, u8 data_type2, u32 vc_id)
++		     u8 data_type1, u8 data_type2, u32 link, u32 vc_id)
 +{
 +	struct max9296 *priv = dev_get_drvdata(dev);
 +	int err = 0;
@@ -459,7 +459,7 @@ index 210dbc80..6b4c796e 100644
  
 +int max9296_get_available_pipe_id(struct device *dev, int vc_id);
 +int max9296_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
-+		     u8 data_type2, u32 vc_id);
++		     u8 data_type2, u32 link, u32 vc_id);
 +int max9296_release_pipe(struct device *dev, int pipe_id);
 +void max9296_reset_oneshot(struct device *dev);
 +
@@ -777,7 +777,7 @@ index d50bea51..92b483b6 100644
  }
  EXPORT_SYMBOL(max9296_init_settings);
  
-+int max9296_bind_ser_to_dser_pipe(struct device *dev, int dser_pipe_id, int ser_pipe_id, u32 vc_id)
++int max9296_bind_ser_to_dser_pipe(struct device *dev, int dser_pipe_id, int ser_pipe_id, u32 link)
 +{
 +	/* pipe id's are 1:1 in this deserializer */
 +	return 0;
@@ -785,7 +785,7 @@ index d50bea51..92b483b6 100644
 +EXPORT_SYMBOL(max9296_bind_ser_to_dser_pipe);
 +
  int max9296_set_pipe(struct device *dev, int pipe_id,
- 		     u8 data_type1, u8 data_type2, u32 vc_id)
+ 		     u8 data_type1, u8 data_type2, u32 link, u32 vc_id)
  {
 diff --git a/include/media/max9296.h b/include/media/max9296.h
 index 6b4c796e..db7365d7 100644
@@ -804,9 +804,9 @@ index 6b4c796e..db7365d7 100644
 + * @param [in]  dev             The deserializer device handle.
 + * @param [in]  dser_pipe_id    Deserializer pipe id.
 + * @param [in]  ser_pipe_id     Serializer pipe id.
-+ * @param [in]  vc_id           vc_id associated with this pipe path.
++ * @param [in]  link            GMSL link the serializer pipe lives on.
 + */
-+int max9296_bind_ser_to_dser_pipe(struct device *dev, int dser_pipe_id, int ser_pipe_id, u32 vc_id);
++int max9296_bind_ser_to_dser_pipe(struct device *dev, int dser_pipe_id, int ser_pipe_id, u32 link);
 +
  /** @} */
  
