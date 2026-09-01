@@ -1047,8 +1047,12 @@ int max96724_release_pipe(struct device *dev, int pipe_id)
 		dev_warn(dev, "%s: pipe %d is not active\n", __func__,
 			 pipe_id);
 
-	if (!priv->pipe[pipe_id].st_count)
+	if (!priv->pipe[pipe_id].st_count) {
 		priv->retriggered_pipe_mask &= ~BIT(pipe_id);
+		priv->pipe[pipe_id].dt_type = 0;
+		priv->pipe[pipe_id].dt_type2 = 0;
+		priv->pipe[pipe_id].map_configured = false;
+	}
 	for (i = 0; i < MAX96724_MAX_PIPES; i++) {
 		if (priv->pipe[i].st_count)
 			break;
@@ -1276,10 +1280,29 @@ int max96724_bind_ser_to_dser_pipe(struct device *dev, int dser_pipe_id,
 }
 EXPORT_SYMBOL(max96724_bind_ser_to_dser_pipe);
 
+static int max96724_add_pipe_dt(u8 *data_type1, u8 *data_type2, u8 data_type)
+{
+	if (!data_type || data_type == *data_type1 || data_type == *data_type2)
+		return 0;
+	if (!*data_type1) {
+		*data_type1 = data_type;
+		return 0;
+	}
+	if (!*data_type2) {
+		*data_type2 = data_type;
+		return 0;
+	}
+
+	return -ENOSPC;
+}
+
 int max96724_set_pipe(struct device *dev, int pipe_id,
 		      u8 data_type1, u8 data_type2, u32 link, u32 vc_id)
 {
 	struct max96724 *priv = dev_get_drvdata(dev);
+	struct pipe_ctx *pipe;
+	u8 merged_data_type1 = 0;
+	u8 merged_data_type2 = 0;
 	int err = 0;
 
 	if (pipe_id < 0 || pipe_id >= MAX96724_MAX_PIPES ||
@@ -1294,7 +1317,29 @@ int max96724_set_pipe(struct device *dev, int pipe_id,
 
 	mutex_lock(&priv->lock);
 
-	err = __max96724_set_pipe(dev, pipe_id, data_type1, data_type2, vc_id);
+	pipe = &priv->pipe[pipe_id];
+	if (pipe->st_count > 1 && pipe->map_configured) {
+		err = max96724_add_pipe_dt(&merged_data_type1,
+					   &merged_data_type2, pipe->dt_type);
+		if (!err)
+			err = max96724_add_pipe_dt(&merged_data_type1,
+						   &merged_data_type2,
+						   pipe->dt_type2);
+	}
+	if (!err)
+		err = max96724_add_pipe_dt(&merged_data_type1,
+					   &merged_data_type2, data_type1);
+	if (!err)
+		err = max96724_add_pipe_dt(&merged_data_type1,
+					   &merged_data_type2, data_type2);
+	if (err) {
+		dev_err(dev,
+			"pipe %d VC%u cannot route more than two long-packet DTs\n",
+			pipe_id, vc_id);
+	} else {
+		err = __max96724_set_pipe(dev, pipe_id, merged_data_type1,
+					  merged_data_type2, vc_id);
+	}
 
 	mutex_unlock(&priv->lock);
 

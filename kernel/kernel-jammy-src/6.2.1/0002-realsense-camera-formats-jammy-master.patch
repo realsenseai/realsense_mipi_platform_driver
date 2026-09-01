@@ -197,9 +197,10 @@ index 9260791b8438..fd50e9c34a0e 100644
 diff --git a/include/uapi/linux/media-bus-format.h b/include/uapi/linux/media-bus-format.h
 --- a/include/uapi/linux/media-bus-format.h
 +++ b/include/uapi/linux/media-bus-format.h
-@@ -162,1 +162,4 @@
-+/* RealSense flat NV12 bytes over an opaque 8-bit CSI carrier */
+@@ -162,1 +162,5 @@
++/* RealSense opaque 8-bit CSI carriers */
 +#define MEDIA_BUS_FMT_RS_NV12_FLAT_1X8		0x5008
++#define MEDIA_BUS_FMT_D5X_ODPD_1X8			0x5009
 +
  /* HSV - next is	0x6002 */
 -- 

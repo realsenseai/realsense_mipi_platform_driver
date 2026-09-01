@@ -67,7 +67,7 @@
 		target-path = "/";
 		__overlay__ {
 			tegra-capture-vi {
-				num-channels = <5>;
+				num-channels = <6>;
 				ports {
 					#address-cells = <1>;
 					#size-cells = <0>;
@@ -140,6 +140,19 @@
 							remote-endpoint = <&d5xx_csi_out4>;
 						};
 					};
+
+					/* VC3: dummy ODPD — RAW8 payload carried as DT 0x32 */
+					port@5 {
+						status = "okay";
+						reg = <5>;
+						d5xx_vi_in5: endpoint {
+							status = "okay";
+							vc-id = <3>;
+							port-index = <2>;
+							bus-width = <4>;
+							remote-endpoint = <&d5xx_csi_out5>;
+						};
+					};
 				};
 			};
 
@@ -149,8 +162,8 @@
 			 * tegra_camera_misc.parent == NULL. At STREAMON,
 			 * vi5_power_on() -> tegra_camera_emc_clk_enable() calls
 			 * dev_get_drvdata(NULL) -> NULL deref at offset 0x78 ->
-			 * kernel panic / instant reboot. The 4 modules below map
-			 * the 4 D5xx streams (Depth/RGB/IR/IMU) for bandwidth calc.
+			 * kernel panic / instant reboot. The modules below map the
+			 * D5xx logical streams for bandwidth calculation.
 			 */
 			tegra-camera-platform {
 				status = "okay";
@@ -210,13 +223,22 @@
 							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/cam_i2cmux/i2c@1/d5xx@1e";
 						};
 					};
+					cam_module5: module5 {
+						badge = "d5xx_odpd";
+						position = "frontright";
+						orientation = "1";
+						cam_module5_drivernode0: drivernode0 {
+							pcl_id = "v4l2_sensor";
+							sysfs-device-tree = "/sys/firmware/devicetree/base/bus@0/cam_i2cmux/i2c@1/d5xx@1f";
+						};
+					};
 				};
 			};
 
 			bus@0 {
 				host1x@13e00000 {
 					nvcsi@15a00000 {
-						num-channels = <5>;
+						num-channels = <6>;
 						#address-cells = <1>;
 						#size-cells = <0>;
 
@@ -369,6 +391,36 @@
 								};
 							};
 						};
+
+						/* NVCSI channel 5: dummy ODPD (VC3, DT 0x32) */
+						channel@5 {
+							status = "okay";
+							reg = <5>;
+							ports {
+								status = "okay";
+								#address-cells = <1>;
+								#size-cells = <0>;
+								port@0 {
+									status = "okay";
+									reg = <0>;
+									d5xx_csi_in5: endpoint@10 {
+										status = "okay";
+										port-index = <2>;
+										bus-width = <4>;
+										vc-id = <3>;
+										remote-endpoint = <&d5xx_odpd_out>;
+									};
+								};
+								port@1 {
+									status = "okay";
+									reg = <1>;
+									d5xx_csi_out5: endpoint@11 {
+										status = "okay";
+										remote-endpoint = <&d5xx_vi_in5>;
+									};
+								};
+							};
+						};
 					};
 				};
 
@@ -459,6 +511,64 @@
 								csi_pixel_bit_depth = "8";
 								active_w = "640";
 								active_h = "480";
+								tegra_sinterface = "serial_c";
+								phy_mode = "DPHY";
+								discontinuous_clk = "no";
+								cil_settletime = "0";
+								deskew_initial_enable = "false";
+								deskew_periodic_enable = "false";
+								mclk_khz = "24000";
+								pix_clk_hz = "650000000";
+								serdes_pix_clk_hz = "750000000";
+								line_length = "640";
+								embedded_metadata_height = "0";
+							};
+
+							gmsl-link {
+								src-csi-port = "a";
+								dst-csi-port = "a";
+								serdes-csi-link = "a";
+								csi-mode = "1x4";
+								st-vc = <3>;
+								vc-id = <3>;
+								num-lanes = <4>;
+							};
+						};
+
+						/* Dummy ODPD stream — VC3, RAW8 source on wire DT 0x32. */
+						d5xx_odpd: d5xx@1f {
+							status = "okay";
+							def-addr = <0x10>;
+							reg = <0x1f>;
+							override_reg = <0x1a>;
+							compatible = "realsense,d5xx";
+							use_sensor_mode_id = "true";
+							cam-type = "ODPD";
+							mipi-lane-rate-mbps = <1300>;
+							nvidia,gmsl-ser-device = <&ser_a>;
+							nvidia,gmsl-dser-device = <&dser>;
+
+							ports {
+								#address-cells = <1>;
+								#size-cells = <0>;
+
+								port@0 {
+									reg = <0>;
+									d5xx_odpd_out: endpoint {
+										vc-id = <3>;
+										port-index = <2>;
+										bus-width = <4>;
+										remote-endpoint = <&d5xx_csi_in5>;
+									};
+								};
+							};
+
+							mode0 {
+								pixel_t = "grey_y8";
+								num_lanes = "4";
+								csi_pixel_bit_depth = "8";
+								active_w = "640";
+								active_h = "360";
 								tegra_sinterface = "serial_c";
 								phy_mode = "DPHY";
 								discontinuous_clk = "no";

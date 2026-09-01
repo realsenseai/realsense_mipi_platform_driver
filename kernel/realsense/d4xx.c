@@ -37,6 +37,10 @@
 #include <media/v4l2-subdev.h>
 #include <media/v4l2-mediabus.h>
 
+#ifndef MEDIA_BUS_FMT_D5X_ODPD_1X8
+#define MEDIA_BUS_FMT_D5X_ODPD_1X8	0x5009
+#endif
+
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 #include <media/max9295.h>
 #include <media/max9296.h>
@@ -164,12 +168,14 @@ struct ser_interface {
 #define DS5_IMU_STREAM_STATUS		0x100C
 #define DS5_DUALRGB_RIGHT_STREAM_STATUS	0x1010
 #define DS5_IR_STREAM_STATUS		0x1014
+#define D5X_ODPD_STREAM_STATUS		0x1018
 
 #define DS5_STREAM_DEPTH		0x0
 #define DS5_STREAM_RGB			0x1
 #define DS5_STREAM_IMU			0x2
 #define DS5_STREAM_DUALRGB_RIGHT	0x3
 #define DS5_STREAM_IR			0x4
+#define D5X_STREAM_ODPD			0x5
 #define DS5_STREAM_STOP			0x100
 #define DS5_STREAM_START		0x200
 #define DS5_STREAM_IDLE			0x1
@@ -217,6 +223,14 @@ struct ser_interface {
 #define DS5_IR_FPS				0x408C
 #define DS5_IR_OVERRIDE			0x409C
 #define DS5_IR_CONTROL_STATUS 	0x409E
+
+#define D5X_ODPD_STREAM_DT		0x40A0
+#define D5X_ODPD_STREAM_MD		0x40A2
+#define D5X_ODPD_RES_WIDTH		0x40A4
+#define D5X_ODPD_RES_HEIGHT		0x40A8
+#define D5X_ODPD_FPS			0x40AC
+#define D5X_ODPD_OVERRIDE		0x40BC
+#define D5X_ODPD_CONTROL_STATUS		0x40BE
 
 #define DS5_DEPTH_CONTROL_BASE		0x4100
 #define DS5_RGB_CONTROL_BASE		0x4200
@@ -275,6 +289,7 @@ struct ser_interface {
 #define DS5_IMU_CONFIG_STATUS		0x4804
 #define DS5_DUALRGB_RIGHT_CONFIG_STATUS	0x4806
 #define DS5_IR_CONFIG_STATUS		0x4808
+#define D5X_ODPD_CONFIG_STATUS		0x480A
 
 #define DS5_STATUS_STREAMING		0x1
 #define DS5_STATUS_INVALID_DT		0x2
@@ -625,6 +640,7 @@ struct ds5 {
 	struct regulator *vcc;
 	const struct ds5_variant *variant;
 	int is_depth, is_y8, is_rgb, is_imu;
+	bool is_odpd;
 	bool is_dualrgb_right;
 	bool metadata_enabled;
 	int aggregated;
@@ -705,6 +721,7 @@ struct ds5_dev {
 	bool rgb_streaming;
 	bool dualrgb_right_streaming;
 	bool imu_streaming;
+	bool odpd_streaming;
 };
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
@@ -1067,6 +1084,7 @@ static const u16 ds5_framerate_15_90[] = {15, 30, 60, 90};
 static const u16 ds5_imu_framerates[] = {50, 100, 200, 400};
 /* D58x carries accel and gyro on one CSI node; expose their USB-rate union. */
 static const u16 d58x_imu_framerates[] = {100, 200, 400};
+static const u16 d5x_odpd_framerates[] = {60};
 static const u16 ds5_framerate_90[] = {90};
 static const u16 ds5_framerate_100[] = {100};
 
@@ -1465,6 +1483,10 @@ static const struct ds5_resolution ds5_size_imu_extended_d58x_pixel_mode[] = {
 	},
 };
 
+static const struct ds5_resolution d5x_size_odpd[] = {
+	DS5_RES(640, 360, d5x_odpd_framerates)
+};
+
 static const struct ds5_format ds5_depth_formats_d40x[] = {
 	{
 		// TODO: 0x31 is replaced with 0x1e since it caused low FPS in Jetson.
@@ -1789,6 +1811,16 @@ static const struct ds5_format ds5_imu_formats_extended_d58x_pixel_mode[] = {
 	},
 };
 
+static const struct ds5_format d5x_odpd_formats[] = {
+	{
+		.data_type = GMSL_CSI_DT_RAW_8,
+		.override_data_type = 0x32,
+		.mbus_code = MEDIA_BUS_FMT_D5X_ODPD_1X8,
+		.n_resolutions = ARRAY_SIZE(d5x_size_odpd),
+		.resolutions = d5x_size_odpd,
+	},
+};
+
 static const struct v4l2_mbus_framefmt ds5_mbus_framefmt_template = {
 	.width = 0,
 	.height = 0,
@@ -1804,8 +1836,12 @@ static const struct v4l2_mbus_framefmt ds5_mbus_framefmt_template = {
 static const char *ds5_get_sensor_name(struct ds5 *state)
 {
 	static const char *sensor_name[] = {"unknown", "RGB", "DEPTH", "Y8", "IMU"};
-	int sensor_id = state->is_rgb * 1 + state->is_depth * 2 + \
+	int sensor_id = state->is_rgb * 1 + state->is_depth * 2 +
 			state->is_y8 * 3 + state->is_imu * 4;
+
+	if (state->is_odpd)
+		return "ODPD";
+
 	if (sensor_id >= (sizeof(sensor_name)/sizeof(*sensor_name)))
 		sensor_id = 0;
 
@@ -2276,6 +2312,14 @@ static int ds5_configure(struct ds5 *state)
 		fps_addr = DS5_IR_FPS;
 		width_addr = DS5_IR_RES_WIDTH;
 		height_addr = DS5_IR_RES_HEIGHT;
+	} else if (state->is_odpd) {
+		sensor = &state->imu.sensor;
+		dt_addr = D5X_ODPD_STREAM_DT;
+		md_addr = D5X_ODPD_STREAM_MD;
+		override_addr = D5X_ODPD_OVERRIDE;
+		fps_addr = D5X_ODPD_FPS;
+		width_addr = D5X_ODPD_RES_WIDTH;
+		height_addr = D5X_ODPD_RES_HEIGHT;
 	} else if (state->is_imu) {
 		sensor = &state->imu.sensor;
 		dt_addr = DS5_IMU_STREAM_DT;
@@ -2799,7 +2843,8 @@ static bool d500_camera_is_idle_locked(struct ds5 *state)
 	       !state->ds5_dev->rgb_streaming &&
 	       !state->ds5_dev->dualrgb_right_streaming &&
 	       !state->ds5_dev->ir_streaming &&
-	       !state->ds5_dev->imu_streaming;
+	       !state->ds5_dev->imu_streaming &&
+	       !state->ds5_dev->odpd_streaming;
 }
 
 static int d500_get_device_mode(struct ds5 *state, u32 *mode)
@@ -3000,6 +3045,7 @@ static void ds5_reset_streaming_flags(struct ds5_dev *ds5_dev)
 	ds5_dev->rgb_streaming = false;
 	ds5_dev->dualrgb_right_streaming = false;
 	ds5_dev->imu_streaming = false;
+	ds5_dev->odpd_streaming = false;
 	mutex_unlock(&ds5_dev->lock);
 }
 
@@ -3074,6 +3120,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	bool dualrgb_right_streaming;
 	bool ir_streaming;
 	bool imu_streaming;
+	bool odpd_streaming;
 	u16 d585_product_id = READ_ONCE(state->ds5_dev->d585_product_id);
 	bool d585_proto_reset = d585_product_id == D585_2C_PROTO_PID ||
 				 d585_product_id == D585_3C_PROTO_PID;
@@ -3119,6 +3166,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	dualrgb_right_streaming = state->ds5_dev->dualrgb_right_streaming;
 	ir_streaming = state->ds5_dev->ir_streaming;
 	imu_streaming = state->ds5_dev->imu_streaming;
+	odpd_streaming = state->ds5_dev->odpd_streaming;
 	mutex_unlock(&state->ds5_dev->lock);
 
 	if (depth_streaming)
@@ -3132,6 +3180,8 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 		ds5_write(state, DS5_START_STOP_STREAM,	DS5_STREAM_STOP | DS5_STREAM_IR);
 	if (imu_streaming)
 		ds5_write(state, DS5_START_STOP_STREAM,	DS5_STREAM_STOP | DS5_STREAM_IMU);
+	if (odpd_streaming)
+		ds5_write(state, DS5_START_STOP_STREAM, DS5_STREAM_STOP | D5X_STREAM_ODPD);
 
 	/* 2. Increment DS5 reset generation.
 	 *    After HW reset the device loses all configuration, so driver
@@ -6260,6 +6310,12 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		stream_id = DS5_STREAM_IR;
 		vc_id = 2;
 		streaming_flag = &state->ds5_dev->ir_streaming;
+	} else if (state->is_odpd) {
+		config_status_base = D5X_ODPD_CONFIG_STATUS;
+		stream_status_base = D5X_ODPD_STREAM_STATUS;
+		stream_id = D5X_STREAM_ODPD;
+		vc_id = 3;
+		streaming_flag = &state->ds5_dev->odpd_streaming;
 	} else if (state->is_imu) {
 		config_status_base = DS5_IMU_CONFIG_STATUS;
 		stream_status_base = DS5_IMU_STREAM_STATUS;
@@ -6360,7 +6416,8 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		    state->ds5_dev->rgb_streaming ||
 		    state->ds5_dev->dualrgb_right_streaming ||
 		    state->ds5_dev->ir_streaming ||
-		    state->ds5_dev->imu_streaming))
+		    state->ds5_dev->imu_streaming ||
+		    state->ds5_dev->odpd_streaming))
 		state->ds5_dev->link_flush_pending = true;
 #endif
 	*streaming_flag = on;
@@ -6936,6 +6993,12 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	sensor->mux_pad = DS5_MUX_PAD_RGB;
 
 	sensor = &state->imu.sensor;
+	if (state->is_odpd) {
+		sensor->formats = d5x_odpd_formats;
+		sensor->n_formats = ARRAY_SIZE(d5x_odpd_formats);
+		sensor->mux_pad = DS5_MUX_PAD_IMU;
+		goto imu_format_done;
+	}
 
 	state->d58x_pixel_mode = false;
 #ifdef CONFIG_VIDEO_D4XX_SERDES
@@ -6962,6 +7025,8 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	
 	sensor->n_formats = 1;
 	sensor->mux_pad = DS5_MUX_PAD_IMU;
+
+imu_format_done:
 
 	/* Development: set a configuration during probing */
 	if ((cfg0 & 0xff00) == 0x1800) {
@@ -7851,6 +7916,7 @@ static int ds5_probe(struct i2c_client *c
 	state->is_y8 = 0;
 	state->is_rgb = 0;
 	state->is_imu = 0;
+	state->is_odpd = false;
 	state->is_dualrgb_right = false;
 #ifdef CONFIG_OF
 	ret = of_property_read_string(c->dev.of_node, "cam-type", &str);
@@ -7876,6 +7942,12 @@ static int ds5_probe(struct i2c_client *c
 		state->is_imu = 1;
 		state->control_base = DS5_DEPTH_CONTROL_BASE;
 		state->control_status_reg = DS5_DEPTH_CONTROL_STATUS;
+	}
+	if (!ret && !strcmp(str, "ODPD")) {
+		state->is_imu = 1;
+		state->is_odpd = true;
+		state->control_base = DS5_DEPTH_CONTROL_BASE;
+		state->control_status_reg = D5X_ODPD_CONTROL_STATUS;
 	}
 
 	mode0_node = of_get_child_by_name(state->client->dev.of_node, "mode0");
