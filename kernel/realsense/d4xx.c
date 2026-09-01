@@ -5829,7 +5829,7 @@ static int ds5_imu_init(struct i2c_client *c, struct ds5 *state)
 {
 	state->imu.sensor.mux_pad = DS5_MUX_PAD_IMU;
 	return ds5_sensor_init(c, state, &state->imu.sensor,
-		       &ds5_subdev_ops, "imu");
+		       &ds5_subdev_ops, state->is_odpd ? "odpd" : "imu");
 }
 
 /* No locking needed */
@@ -6781,12 +6781,19 @@ static int ds5_mux_init(struct i2c_client *c, struct ds5 *state)
 	sd->internal_ops = &ds5_mux_internal_ops;
 	v4l2_set_subdevdata(sd, state);
 #ifdef CONFIG_OF
-	snprintf(sd->name, sizeof(sd->name), "DS5 mux %d-%04x",
-		 i2c_adapter_id(c->adapter), c->addr);
+	if (state->is_odpd)
+		snprintf(sd->name, sizeof(sd->name), "D5X ODPD mux %d-%04x",
+			 i2c_adapter_id(c->adapter), c->addr);
+	else
+		snprintf(sd->name, sizeof(sd->name), "DS5 mux %d-%04x",
+			 i2c_adapter_id(c->adapter), c->addr);
 #else
 	if (state->aggregated)
 		suffix += 4;
-	snprintf(sd->name, sizeof(sd->name), "DS5 mux %c", suffix);
+	if (state->is_odpd)
+		snprintf(sd->name, sizeof(sd->name), "D5X ODPD mux %c", suffix);
+	else
+		snprintf(sd->name, sizeof(sd->name), "DS5 mux %c", suffix);
 #endif
 	sd->flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
 	entity->obj_type = MEDIA_ENTITY_TYPE_V4L2_SUBDEV;

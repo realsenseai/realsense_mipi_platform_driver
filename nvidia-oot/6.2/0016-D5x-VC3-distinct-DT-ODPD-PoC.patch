@@ -18,9 +18,37 @@ demux is added.
 
 Signed-off-by: Shengyong Zhou <shengyong.zhou@realsenseai.com>
 ---
- drivers/media/platform/tegra/camera/vi/core.c        | 9 +++++++--
- .../media/platform/tegra/camera/vi/vi5_formats.h     | 3 +++
- 2 files changed, 10 insertions(+), 2 deletions(-)
+ drivers/media/platform/tegra/camera/vi/channel.c     |  9 +++++++++
+ drivers/media/platform/tegra/camera/vi/core.c        |  9 +++++++--
+ .../media/platform/tegra/camera/vi/vi5_formats.h     |  3 +++
+ 3 files changed, 19 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
+--- a/drivers/media/platform/tegra/camera/vi/channel.c
++++ b/drivers/media/platform/tegra/camera/vi/channel.c
+@@ -2471,6 +2471,7 @@ __tegra_channel_set_format(struct tegra_channel *chan,
+ 	struct v4l2_subdev *sd = chan->subdev_on_csi;
+ 	struct v4l2_subdev_pad_config pad_cfg;
+ 	struct v4l2_subdev_state cfg = {.pads = &pad_cfg};
++	const struct tegra_video_format *mbus_vfmt;
+ 	int ret = 0;
+ 
+ 	vfmt = tegra_core_get_format_by_fourcc(chan, pix->pixelformat);
+@@ -2485,6 +2486,14 @@ __tegra_channel_set_format(struct tegra_channel *chan,
+ 	ret = v4l2_subdev_call(sd, pad, set_fmt, &cfg, &fmt);
+ 	if (ret == -ENOIOCTLCMD)
+ 		return -ENOTTY;
++	if (!ret) {
++		/* The subdevice's returned mbus code is the authoritative carrier
++		 * identity when multiple rows share one application fourcc. */
++		mbus_vfmt = tegra_core_get_format_by_code(chan,
++						      fmt.format.code, 0);
++		if (mbus_vfmt && mbus_vfmt->fourcc == pix->pixelformat)
++			vfmt = mbus_vfmt;
++	}
+ 
+ 	v4l2_fill_pix_format(pix, &fmt.format);
+ 	if (!ret) {
 
 diff --git a/drivers/media/platform/tegra/camera/vi/core.c b/drivers/media/platform/tegra/camera/vi/core.c
 --- a/drivers/media/platform/tegra/camera/vi/core.c
