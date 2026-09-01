@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: zhou <shengyong.zhou@realsenseai.com>
+Date: Tue, 1 Sep 2026 19:30:00 +0800
+Subject: [PATCH] media: tegra: prefer active mbus row before set format
+
+When several transport rows expose the same application fourcc, query the
+channel's active subdevice code before calling set_fmt.  This preserves the
+native CSI datatype identity instead of replacing it with the first fourcc
+match.
+
+Signed-off-by: zhou <shengyong.zhou@realsenseai.com>
+---
+ drivers/media/platform/tegra/camera/vi/channel.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
+--- a/drivers/media/platform/tegra/camera/vi/channel.c
++++ b/drivers/media/platform/tegra/camera/vi/channel.c
+@@ -2480,6 +2480,13 @@ __tegra_channel_set_format(struct tegra_channel *chan,
+ 
+ 	fmt.which = V4L2_SUBDEV_FORMAT_ACTIVE;
+ 	fmt.pad = 0;
++	ret = v4l2_subdev_call(sd, pad, get_fmt, &cfg, &fmt);
++	if (!ret) {
++		mbus_vfmt = tegra_core_get_format_by_code(chan,
++						      fmt.format.code, 0);
++		if (mbus_vfmt && mbus_vfmt->fourcc == pix->pixelformat)
++			vfmt = mbus_vfmt;
++	}
+ 	v4l2_fill_mbus_format(&fmt.format, pix, vfmt->code);
+ 
+ 	ret = v4l2_subdev_call(sd, pad, set_fmt, &cfg, &fmt);
+-- 
+2.43.0
