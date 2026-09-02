@@ -1336,9 +1336,21 @@ int max96724_set_pipe(struct device *dev, int pipe_id,
 		dev_err(dev,
 			"pipe %d VC%u cannot route more than two long-packet DTs\n",
 			pipe_id, vc_id);
-	} else {
+	} else if (!pipe->map_configured || pipe->vc_id != vc_id ||
+		   pipe->dt_type != merged_data_type1 ||
+		   pipe->dt_type2 != merged_data_type2) {
 		err = __max96724_set_pipe(dev, pipe_id, merged_data_type1,
 					  merged_data_type2, vc_id);
+		if (!err)
+			dev_info(dev,
+				 "pipe %d VC%u route programmed: DT 0x%02x, 0x%02x\n",
+				 pipe_id, vc_id, merged_data_type1,
+				 merged_data_type2);
+	} else {
+		dev_info(dev,
+			 "pipe %d VC%u route reused: DT 0x%02x, 0x%02x\n",
+			 pipe_id, vc_id, merged_data_type1,
+			 merged_data_type2);
 	}
 
 	mutex_unlock(&priv->lock);

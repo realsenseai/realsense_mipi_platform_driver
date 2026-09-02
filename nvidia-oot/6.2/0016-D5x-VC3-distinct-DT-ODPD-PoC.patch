@@ -3,79 +3,19 @@ From: Shengyong Zhou <shengyong.zhou@realsenseai.com>
 Date: Tue, 1 Sep 2026 12:00:00 +0800
 Subject: [PATCH] media: tegra: add native DT 0x32 ODPD capture row
 
-Expose an 8-bit GREY surface whose CSI match data type is USER_3
-(0x32).  A dedicated media-bus code keeps format discovery scoped to
-the ODPD subdevice while reusing the standard GREY V4L2 ABI and RAW8
-memory writer.
+Expose the D5x 8-bit ODPD result map with a private ODPD V4L2 fourcc
+and a dedicated media-bus code.  The CSI match data type is USER_3
+(0x32), while the output surface remains one byte per result-map cell.
 
-When a fourcc has multiple format rows, prefer the row enumerated by the
-channel's subdevice.  This keeps S_FMT(GREY) on the ODPD-specific mbus row
-without adding a product fourcc or an ODPD-name check.
-
-The VI selects the resulting DT match before capture and DMA writes
-directly into the ODPD vb2 queue.  No payload copy or post-capture software
-demux is added.
+Using a semantic fourcc avoids presenting ODPD as greyscale and keeps
+format selection deterministic without duplicate-fourcc lookup changes.
+The VI still selects payload DT before capture DMA and writes directly
+into the ODPD vb2 queue; no payload copy or post-capture demux is added.
 
 Signed-off-by: Shengyong Zhou <shengyong.zhou@realsenseai.com>
 ---
- drivers/media/platform/tegra/camera/vi/channel.c     |  9 +++++++++
- drivers/media/platform/tegra/camera/vi/core.c        |  9 +++++++--
- .../media/platform/tegra/camera/vi/vi5_formats.h     |  3 +++
- 3 files changed, 19 insertions(+), 2 deletions(-)
-
-diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
---- a/drivers/media/platform/tegra/camera/vi/channel.c
-+++ b/drivers/media/platform/tegra/camera/vi/channel.c
-@@ -2471,6 +2471,7 @@ __tegra_channel_set_format(struct tegra_channel *chan,
- 	struct v4l2_subdev *sd = chan->subdev_on_csi;
- 	struct v4l2_subdev_pad_config pad_cfg;
- 	struct v4l2_subdev_state cfg = {.pads = &pad_cfg};
-+	const struct tegra_video_format *mbus_vfmt;
- 	int ret = 0;
- 
- 	vfmt = tegra_core_get_format_by_fourcc(chan, pix->pixelformat);
-@@ -2485,6 +2486,14 @@ __tegra_channel_set_format(struct tegra_channel *chan,
- 	ret = v4l2_subdev_call(sd, pad, set_fmt, &cfg, &fmt);
- 	if (ret == -ENOIOCTLCMD)
- 		return -ENOTTY;
-+	if (!ret) {
-+		/* The subdevice's returned mbus code is the authoritative carrier
-+		 * identity when multiple rows share one application fourcc. */
-+		mbus_vfmt = tegra_core_get_format_by_code(chan,
-+						      fmt.format.code, 0);
-+		if (mbus_vfmt && mbus_vfmt->fourcc == pix->pixelformat)
-+			vfmt = mbus_vfmt;
-+	}
- 
- 	v4l2_fill_pix_format(pix, &fmt.format);
- 	if (!ret) {
-
-diff --git a/drivers/media/platform/tegra/camera/vi/core.c b/drivers/media/platform/tegra/camera/vi/core.c
---- a/drivers/media/platform/tegra/camera/vi/core.c
-+++ b/drivers/media/platform/tegra/camera/vi/core.c
-@@ -153,15 +153,20 @@ tegra_core_get_format_by_code(struct tegra_channel *chan,
- const struct tegra_video_format *
- tegra_core_get_format_by_fourcc(struct tegra_channel *chan, u32 fourcc)
- {
-+	const struct tegra_video_format *fallback = NULL;
- 	unsigned int i;
- 
- 	for (i = 0; i < chan->num_video_formats; ++i) {
--		if (chan->video_formats[i]->fourcc == fourcc)
-+		if (chan->video_formats[i]->fourcc != fourcc)
-+			continue;
-+		if (!fallback)
-+			fallback = chan->video_formats[i];
-+		if (test_bit(i, chan->fmts_bitmap))
- 			return chan->video_formats[i];
- 	}
- 	spec_bar();
- 
--	return NULL;
-+	return fallback;
- }
- EXPORT_SYMBOL(tegra_core_get_format_by_fourcc);
- 
+ drivers/media/platform/tegra/camera/vi/vi5_formats.h | 3 +++
+ 1 file changed, 3 insertions(+)
 
 diff --git a/drivers/media/platform/tegra/camera/vi/vi5_formats.h b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
 --- a/drivers/media/platform/tegra/camera/vi/vi5_formats.h
@@ -85,7 +25,7 @@ diff --git a/drivers/media/platform/tegra/camera/vi/vi5_formats.h b/drivers/medi
  				RAW8, NV12, "NV12 flat over RAW8",
  				0, 0, 1, 1, 3, 2),
 +	TEGRA_VIDEO_FORMAT(RAW8, 8, D5X_ODPD_1X8, 1, 1, T_R8,
-+				USER_3, GREY, "D5xx ODPD over DT 0x32"),
++				USER_3, ODPD, "D5x ODPD 8-bit DT0x32"),
 +
  
  };

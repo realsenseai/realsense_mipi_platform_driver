@@ -231,6 +231,8 @@ struct ser_interface {
 #define D5X_ODPD_FPS			0x40AC
 #define D5X_ODPD_OVERRIDE		0x40BC
 #define D5X_ODPD_CONTROL_STATUS		0x40BE
+#define D5X_ODPD_WIRE_DT		0x32
+#define D5X_IMU_ODPD_SHARED_VC		3
 
 #define DS5_DEPTH_CONTROL_BASE		0x4100
 #define DS5_RGB_CONTROL_BASE		0x4200
@@ -1814,7 +1816,7 @@ static const struct ds5_format ds5_imu_formats_extended_d58x_pixel_mode[] = {
 static const struct ds5_format d5x_odpd_formats[] = {
 	{
 		.data_type = GMSL_CSI_DT_RAW_8,
-		.override_data_type = 0x32,
+		.override_data_type = D5X_ODPD_WIRE_DT,
 		.mbus_code = MEDIA_BUS_FMT_D5X_ODPD_1X8,
 		.n_resolutions = ARRAY_SIZE(d5x_size_odpd),
 		.resolutions = d5x_size_odpd,
@@ -2262,6 +2264,22 @@ static u8 ds5_wire_data_type(const struct ds5_format *format)
 		format->data_type;
 }
 
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+static void d5xx_prepare_shared_vc_route(struct ds5 *state, u16 vc_id,
+					 u16 *data_type1, u16 *data_type2)
+{
+	if (!ds5_is_d58x(state) ||
+	    state->dser_ops != &max96724_interface ||
+	    vc_id != D5X_IMU_ODPD_SHARED_VC ||
+	    (!state->is_imu && !state->is_odpd) || *data_type2)
+		return;
+
+	/* Program the complete route before either producer starts. */
+	*data_type1 = GMSL_CSI_DT_RAW_8;
+	*data_type2 = D5X_ODPD_WIRE_DT;
+}
+#endif
+
 static int ds5_configure(struct ds5 *state)
 {
 	struct ds5_sensor *sensor;
@@ -2340,6 +2358,7 @@ static int ds5_configure(struct ds5 *state)
 	is_calib = (state->is_y8 && (data_type1 == GMSL_CSI_DT_RGB_888));
 
 	vc_id = state->g_ctx.dst_vc;
+	d5xx_prepare_shared_vc_route(state, vc_id, &data_type1, &data_type2);
 	/* vc_id is the deserializer-side VC, from DT and used by the VI graph.
 	 * The serializer and the camera's own registers speak the serializer VC,
 	 * which only the deserializer's remap table can resolve. */
