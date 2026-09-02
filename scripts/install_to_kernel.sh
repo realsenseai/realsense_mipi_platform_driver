@@ -7,7 +7,7 @@ if [ "$#" -lt 1 ] || [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
       echo "Update the kernel modules and boot files on the local device for a specific JetPack version."
       echo ""
       echo "Arguments:"
-      echo "  JETPACK_VERSION   JetPack version (e.g., 5.0.2, 5.1.2, 6.0, 6.1, 6.2, 6.2.1, 7.0, 7.1, 7.2)"
+      echo "  JETPACK_VERSION   JetPack version (e.g., 5.0.2, 5.1.2, 6.0, 6.1, 6.2, 6.2.1, 6.2.2, 7.0, 7.1, 7.2)"
       echo "  BOOT_FOLDER       Folder name under /boot to copy Image (default: dev)"
       echo "  DELAY_SECONDS     Delay before reboot in seconds (default: 0)"
       echo ""
@@ -69,7 +69,7 @@ if [ "${JETPACK_VERSION}" = "5.0.2" ] || [ "${JETPACK_VERSION}" = "5.1.2" ]; the
           sudo cp videobuf-core.ko /lib/modules/$(uname -r)/updates/
     echo "sudo cp videobuf-vmalloc.ko /lib/modules/$(uname -r)/updates/"
           sudo cp videobuf-vmalloc.ko /lib/modules/$(uname -r)/updates/
-elif [ "${JETPACK_VERSION}" = "6.0" ] || [ "${JETPACK_VERSION}" = "6.1" ] || [ "${JETPACK_VERSION}" = "6.2" ] || [ "${JETPACK_VERSION}" = "6.2.1" ] || [ "${JETPACK_VERSION}" = "7.0" ] || [ "${JETPACK_VERSION}" = "7.1" ] || [ "${JETPACK_VERSION}" = "7.2" ]; then
+elif [ "${JETPACK_VERSION}" = "6.0" ] || [ "${JETPACK_VERSION}" = "6.1" ] || [ "${JETPACK_VERSION}" = "6.2" ] || [ "${JETPACK_VERSION}" = "6.2.1" ] || [ "${JETPACK_VERSION}" = "6.2.2" ] || [ "${JETPACK_VERSION}" = "7.0" ] || [ "${JETPACK_VERSION}" = "7.1" ] || [ "${JETPACK_VERSION}" = "7.2" ]; then
     MODULES_DIR="lib/modules/$(uname -r)"
     # Accept any compression (rootfs.tar.gz, rootfs.tar.bz2, rootfs.tar.xz, ...);
     # tar autodetects the format from the file contents.
