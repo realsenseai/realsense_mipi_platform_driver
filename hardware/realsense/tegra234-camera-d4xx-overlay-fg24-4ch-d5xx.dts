@@ -120,6 +120,7 @@
 						d5xx_vi_in3: endpoint {
 							status = "okay";
 							vc-id = <3>;
+							nvidia,vi-resource-vc-id = <3>;
 							port-index = <2>;
 							bus-width = <4>;
 							remote-endpoint = <&d5xx_csi_out3>;
@@ -148,6 +149,7 @@
 						d5xx_vi_in5: endpoint {
 							status = "okay";
 							vc-id = <3>;
+							nvidia,vi-resource-vc-id = <7>;
 							port-index = <2>;
 							bus-width = <4>;
 							remote-endpoint = <&d5xx_csi_out5>;
