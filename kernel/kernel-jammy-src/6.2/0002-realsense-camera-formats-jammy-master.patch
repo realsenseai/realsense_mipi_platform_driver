@@ -153,7 +153,7 @@ index 7c596a85f34f..7c36ba1bb35a 100644
  	case V4L2_PIX_FMT_Z16:		descr = "16-bit Depth"; break;
  	case V4L2_PIX_FMT_INZI:		descr = "Planar 10:16 Greyscale Depth"; break;
  	case V4L2_PIX_FMT_CNF4:		descr = "4-bit Depth Confidence (Packed)"; break;
-@@ -1387,6 +1388,14 @@ static void v4l_fill_fmtdesc(struct v4l2_fmtdesc *fmt)
+@@ -1387,6 +1388,15 @@ static void v4l_fill_fmtdesc(struct v4l2_fmtdesc *fmt)
  	case V4L2_META_FMT_VIVID:       descr = "Vivid Metadata"; break;
  	case V4L2_META_FMT_RK_ISP1_PARAMS:	descr = "Rockchip ISP1 3A Parameters"; break;
  	case V4L2_META_FMT_RK_ISP1_STAT_3A:	descr = "Rockchip ISP1 3A Statistics"; break;
@@ -165,6 +165,7 @@ index 7c596a85f34f..7c36ba1bb35a 100644
 +	case V4L2_PIX_FMT_INZC:		descr = "Planar Depth/Confidence (INZC)"; break;
 +	case V4L2_PIX_FMT_PAIR:		descr = "Relative IR (PAIR)"; break;
 +	case V4L2_PIX_FMT_Z16H:		descr = "Z16 Huffman Compression"; break;
++	case V4L2_PIX_FMT_ODPD:		descr = "D5x ODPD 8-bit Result Map"; break;
  
  	default:
  		/* Compressed formats */
@@ -172,7 +173,7 @@ diff --git a/include/uapi/linux/videodev2.h b/include/uapi/linux/videodev2.h
 index 9260791b8438..fd50e9c34a0e 100644
 --- a/include/uapi/linux/videodev2.h
 +++ b/include/uapi/linux/videodev2.h
-@@ -731,12 +731,21 @@ struct v4l2_pix_format {
+@@ -731,12 +731,22 @@ struct v4l2_pix_format {
  #define V4L2_PIX_FMT_S5C_UYVY_JPG v4l2_fourcc('S', '5', 'C', 'I') /* S5C73M3 interleaved UYVY/JPEG */
  #define V4L2_PIX_FMT_Y8I      v4l2_fourcc('Y', '8', 'I', ' ') /* Greyscale 8-bit L/R interleaved */
  #define V4L2_PIX_FMT_Y12I     v4l2_fourcc('Y', '1', '2', 'I') /* Greyscale 12-bit L/R interleaved */
@@ -191,15 +192,17 @@ index 9260791b8438..fd50e9c34a0e 100644
 +#define V4L2_PIX_FMT_INZC     v4l2_fourcc('I', 'N', 'Z', 'C') /* Planar Depth/Confidence */
 +#define V4L2_PIX_FMT_PAIR     v4l2_fourcc('P', 'A', 'I', 'R') /* Relative IR */
 +#define V4L2_PIX_FMT_Z16H     v4l2_fourcc('Z', '1', '6', 'H') /* Depth Z16 custom Huffman Code compression*/
++#define V4L2_PIX_FMT_ODPD     v4l2_fourcc('O', 'D', 'P', 'D') /* D5x ODPD 8-bit result map */
  
  /* 10bit raw bayer packed, 32 bytes for every 25 pixels, last LSB 6 bits unused */
  #define V4L2_PIX_FMT_IPU3_SBGGR10	v4l2_fourcc('i', 'p', '3', 'b') /* IPU3 packed 10-bit BGGR bayer */
 diff --git a/include/uapi/linux/media-bus-format.h b/include/uapi/linux/media-bus-format.h
 --- a/include/uapi/linux/media-bus-format.h
 +++ b/include/uapi/linux/media-bus-format.h
-@@ -162,1 +162,4 @@
-+/* RealSense flat NV12 bytes over an opaque 8-bit CSI carrier */
+@@ -162,1 +162,5 @@
++/* RealSense opaque 8-bit CSI carriers */
 +#define MEDIA_BUS_FMT_RS_NV12_FLAT_1X8		0x5008
++#define MEDIA_BUS_FMT_D5X_ODPD_1X8			0x5009
 +
  /* HSV - next is	0x6002 */
 -- 

@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Shengyong Zhou <shengyong.zhou@realsenseai.com>
+Date: Tue, 1 Sep 2026 12:00:00 +0800
+Subject: [PATCH] media: tegra: add native DT 0x32 ODPD capture row
+
+Expose the D5x 8-bit ODPD result map with a private ODPD V4L2 fourcc
+and a dedicated media-bus code.  The CSI match data type is USER_3
+(0x32), while the output surface remains one byte per result-map cell.
+
+Using a semantic fourcc avoids presenting ODPD as greyscale and keeps
+format selection deterministic without duplicate-fourcc lookup changes.
+The VI still selects payload DT before capture DMA and writes directly
+into the ODPD vb2 queue; no payload copy or post-capture demux is added.
+
+Signed-off-by: Shengyong Zhou <shengyong.zhou@realsenseai.com>
+---
+ drivers/media/platform/tegra/camera/vi/vi5_formats.h | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/drivers/media/platform/tegra/camera/vi/vi5_formats.h b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
+--- a/drivers/media/platform/tegra/camera/vi/vi5_formats.h
++++ b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
+@@ -182,6 +182,9 @@ static const struct tegra_video_format vi5_video_formats[] = {
+ 	TEGRA_VIDEO_FORMAT_OVERRIDE(RAW8, 8, RS_NV12_FLAT_1X8, 1, 1, T_R8,
+ 				RAW8, NV12, "NV12 flat over RAW8",
+ 				0, 0, 1, 1, 3, 2),
++	TEGRA_VIDEO_FORMAT(RAW8, 8, D5X_ODPD_1X8, 1, 1, T_R8,
++				USER_3, ODPD, "D5x ODPD 8-bit DT0x32"),
++
+ 
+ };
+ 
+-- 
+2.43.0
