@@ -30,6 +30,7 @@
 #include <linux/string.h>
 #include <linux/videodev2.h>
 #include <linux/version.h>
+#include <linux/workqueue.h>
 #include <linux/mutex.h>
 #include <media/media-entity.h>
 #include <media/v4l2-ctrls.h>
@@ -587,6 +588,8 @@ struct ds5_dfu_dev {
 	u16 msg_write_once;
 	// unsigned char init_v4l_f; // need refactoring
 	u32 bus_clk_rate;
+	/* D585 post-DFU host-side SerDes re-init (see ds5_post_dfu_recovery_work_fn). */
+	struct delayed_work post_dfu_work;
 };
 
 enum {
@@ -7704,6 +7707,111 @@ e_depth:
 	return ret;
 }
 
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+/*
+ * HKR autonomously reboots after DFU manifest and pulses PWDNB on the
+ * device-side serializer, dropping the GMSL link. Reprogram the host-side
+ * SerDes so the bus comes back — same block ds5_hw_reset_with_recovery
+ * uses for the D585 HWRST path, minus the reset trigger (FW already did it).
+ * Runs from a workqueue so ds5_dfu_device_release doesn't block userspace
+ * close() for the ~5 s HKR takes to boot the new image.
+ */
+#define DS5_POST_DFU_RECOVERY_DELAY_MS	5000
+
+static void ds5_post_dfu_recovery_work_fn(struct work_struct *work)
+{
+	struct ds5 *state = container_of(to_delayed_work(work),
+					 struct ds5, dfu_dev.post_dfu_work);
+	struct ds5 *primary;
+	u16 d585_product_id;
+	u16 dev_type = DS5_DEVICE_TYPE_UNKNOWN;
+	int ret;
+
+	/* Defensive re-check: the schedule site is D585-proto-gated, but the
+	 * cached PID could have changed between schedule and dispatch. */
+	d585_product_id = READ_ONCE(state->ds5_dev->d585_product_id);
+	if (d585_product_id != D585_2C_PROTO_PID &&
+	    d585_product_id != D585_3C_PROTO_PID)
+		return;
+
+	mutex_lock(&state->lock);
+
+	dev_info(&state->client->dev,
+		 "%s(): starting host-side SerDes recovery after DFU manifest\n",
+		 __func__);
+
+	/* Clear stale cached device type so the readiness poll below reads
+	 * the register instead of short-circuiting on a pre-reset value. */
+	WRITE_ONCE(state->ds5_dev->cached_device_type,
+		   DS5_DEVICE_TYPE_UNKNOWN);
+
+	primary = state->ds5_dev->ds5_primary;
+	if (!primary || !primary->dser_ops->recover_link) {
+		dev_err(&state->client->dev,
+			"%s(): no primary/recover_link\n", __func__);
+		mutex_unlock(&state->lock);
+		return;
+	}
+
+	mutex_lock(&serdes_lock__);
+	ret = primary->ser_ops->reset_control(primary->ser_dev);
+	if (!ret)
+		ret = primary->dser_ops->recover_link(primary->dser_dev,
+						      primary->ser_dev,
+						      primary->gmsl_link);
+	if (!ret)
+		ret = primary->ser_ops->setup_control(primary->ser_dev);
+	if (!ret)
+		ret = primary->ser_ops->init_settings(primary->ser_dev);
+	mutex_unlock(&serdes_lock__);
+	if (ret) {
+		dev_err(&state->client->dev,
+			"%s(): SerDes recovery failed (%d)\n", __func__, ret);
+		mutex_unlock(&state->lock);
+		return;
+	}
+
+	ret = ds5_wait_device_type(state, &dev_type);
+	if (ret < 0) {
+		dev_err(&state->client->dev,
+			"%s(): device type not ready (ret=%d, val=0x%x)\n",
+			__func__, ret, dev_type);
+		mutex_unlock(&state->lock);
+		return;
+	}
+	dev_info(&state->client->dev,
+		 "%s(): GMSL link recovered (device type 0x%04x)\n",
+		 __func__, dev_type);
+
+	ret = ds5_read(state, DS5_FW_VERSION, &state->fw_version);
+	if (ret >= 0)
+		ret = ds5_read(state, DS5_FW_BUILD, &state->fw_build);
+	if (ret < 0) {
+		dev_err(&state->client->dev,
+			"%s(): FW version read failed (%d)\n", __func__, ret);
+		mutex_unlock(&state->lock);
+		return;
+	}
+
+	/* HKR reboot drops its MIPI TX runtime configuration. */
+	ret = ds5_hw_init(state->client, state);
+	if (ret) {
+		dev_err(&state->client->dev,
+			"%s(): ds5_hw_init failed (%d)\n", __func__, ret);
+		mutex_unlock(&state->lock);
+		return;
+	}
+
+	dev_info(&state->client->dev,
+		 "%s(): post-DFU recovery complete. Device type 0x%04x, firmware: %d.%d.%d.%d\n",
+		 __func__, dev_type,
+		 (state->fw_version >> 8) & 0xff, state->fw_version & 0xff,
+		 (state->fw_build >> 8) & 0xff, state->fw_build & 0xff);
+
+	mutex_unlock(&state->lock);
+}
+#endif /* CONFIG_VIDEO_D4XX_SERDES */
+
 static int ds5_dfu_device_release(struct inode *inode, struct file *file)
 {
 	struct ds5 *state = container_of(inode->i_cdev, struct ds5, dfu_dev.ds5_cdev);
@@ -7714,6 +7822,20 @@ static int ds5_dfu_device_release(struct inode *inode, struct file *file)
 	int ret = 0, retry = 10;
 	mutex_lock(&state->lock);
 	state->dfu_dev.device_open_count--;
+
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	/* Successful DFU on D585 proto ⇒ HKR will PWDNB-cycle the serializer;
+	 * schedule host-side SerDes re-init so the bus comes back without
+	 * requiring rmmod+modprobe. D400 leaves d585_product_id at 0. */
+	if (state->dfu_dev.dfu_state_flag == DS5_DFU_DONE) {
+		u16 pid = READ_ONCE(state->ds5_dev->d585_product_id);
+
+		if (pid == D585_2C_PROTO_PID || pid == D585_3C_PROTO_PID)
+			schedule_delayed_work(&state->dfu_dev.post_dfu_work,
+				msecs_to_jiffies(DS5_POST_DFU_RECOVERY_DELAY_MS));
+	}
+#endif
+
 	if (state->dfu_dev.dfu_state_flag != DS5_DFU_RECOVERY)
 		state->dfu_dev.dfu_state_flag = DS5_DFU_IDLE;
 	/* We disable this section as it has no effect when device in operational
@@ -7833,6 +7955,10 @@ static int ds5_chrdev_init(struct i2c_client *c, struct ds5 *state)
 		return ret;
 	}
 	cdev_add(ds5_cdev, *dev_num, 1);
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	INIT_DELAYED_WORK(&state->dfu_dev.post_dfu_work,
+			  ds5_post_dfu_recovery_work_fn);
+#endif
 	atomic_inc(&primary_chardev);
 	return 0;
 };
@@ -7845,6 +7971,10 @@ static int ds5_chrdev_remove(struct ds5 *state)
 		return 0;
 	}
 	dev_dbg(&state->client->dev, "%s()\n", __func__);
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	/* Ensure no post-DFU worker races module teardown. */
+	cancel_delayed_work_sync(&state->dfu_dev.post_dfu_work);
+#endif
 	unregister_chrdev_region(*dev_num, 1);
 	device_destroy(*ds5_class, *dev_num);
 	if (atomic_dec_and_test(&primary_chardev)) {
