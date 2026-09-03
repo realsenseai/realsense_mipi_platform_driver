@@ -1013,6 +1013,34 @@ static int ds5_read_poll(struct ds5 *state, u16 reg, u16 *val)
 	return regmap_raw_read(state->regmap, reg, val, 2);
 }
 
+static int ds5_read_exposure(struct ds5 *state, u16 base, u32 max,
+			     u32 *value)
+{
+	u16 msw;
+	u16 lsw;
+	u32 exposure;
+	int ret;
+
+	ret = ds5_read(state, base | DS5_MANUAL_EXPOSURE_MSB, &msw);
+	if (ret)
+		return ret;
+
+	ret = ds5_read(state, base | DS5_MANUAL_EXPOSURE_LSB, &lsw);
+	if (ret)
+		return ret;
+
+	exposure = ((u32)msw << 16) | lsw;
+	if (exposure < 1 || exposure > max) {
+		dev_err(&state->client->dev,
+			"%s(): invalid exposure pair 0x%04x:0x%04x\n",
+			__func__, msw, lsw);
+		return -ERANGE;
+	}
+
+	*value = exposure;
+	return 0;
+}
+
 static int ds5_raw_read(struct ds5 *state, u16 reg, void *val, size_t val_len)
 {
 	int ret;
@@ -4256,11 +4284,11 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		if (state->is_imu)
 			return -EINVAL;
 		/* see ds5_hw_set_exposure */
-		ds5_read(state, base | DS5_MANUAL_EXPOSURE_MSB, &reg);
-		data = ((u32)reg << 16) & 0xffff0000;
-		ds5_read(state, base | DS5_MANUAL_EXPOSURE_LSB, &reg);
-		data |= reg;
-		*ctrl->p_new.p_u32 = data;
+		ret = ds5_read_exposure(state, base,
+					state->is_rgb ? MAX_RGB_EXP : MAX_DEPTH_EXP,
+					&data);
+		if (!ret)
+			*ctrl->p_new.p_u32 = data;
 		break;
 
 	case V4L2_CID_BRIGHTNESS:
@@ -4390,27 +4418,21 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 	case DS5_CAMERA_CID_AE_ROI_GET:
 		if (ctrl->p_new.p_u16) {
-			u16 len = sizeof(struct hwm_cmd) + 12;
-			u16 dataLen = 0;
-			struct hwm_cmd *ae_roi_cmd;
-			ae_roi_cmd = devm_kzalloc(&state->client->dev, len, GFP_KERNEL);
-			if (!ae_roi_cmd) {
-				dev_err(&state->client->dev,
-					"%s(): Can't allocate memory for 0x%x\n",
-					__func__, ctrl->id);
-				ret = -ENOMEM;
-				break;
-			}
-			memcpy(ae_roi_cmd, &get_ae_roi, sizeof(struct hwm_cmd));
-			ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd), ae_roi_cmd);
-			if (ret) {
-				devm_kfree(&state->client->dev, ae_roi_cmd);
+			u16 data_len = 0;
+			u8 response[sizeof(u32) + (4 * sizeof(u16))];
+			struct hwm_cmd ae_roi_cmd;
+
+			memcpy(&ae_roi_cmd, &get_ae_roi, sizeof(ae_roi_cmd));
+			ret = ds5_hwmc_send(state, sizeof(ae_roi_cmd), &ae_roi_cmd);
+			if (ret)
 				return ret;
-			}
-			ret = ds5_get_hwmc(state, ae_roi_cmd->Data, len, &dataLen);
-			if (!ret && dataLen <= ctrl->dims[0])
-				memcpy(ctrl->p_new.p_u16, ae_roi_cmd->Data + 4, 8);
-			devm_kfree(&state->client->dev, ae_roi_cmd);
+
+			ret = ds5_get_hwmc(state, response, sizeof(response), &data_len);
+			if (!ret && data_len == sizeof(response))
+				memcpy(ctrl->p_new.p_u16, response + sizeof(u32),
+				       sizeof(response) - sizeof(u32));
+			else if (!ret)
+				ret = -EBADMSG;
 		}
 		break;
 	case DS5_CAMERA_CID_AE_SETPOINT_GET:
