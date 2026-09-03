@@ -1,51 +1,39 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ejgoldik <ehud.joseph.goldik@realsenseai.com>
-Date: Wed, 19 Aug 2026 11:00:00 +0300
-Subject: [PATCH] media: tegra: per-format VI datatype override for wire-order
- capture
+Date: Sun, 31 Aug 2026 10:00:00 +0300
+Subject: [PATCH] media: tegra: per-format VI transport geometry and datatype
+ override
 
-Let a format-table row declare a datatype override and a transport
-geometry: the VI substitutes the row's dt_override for the incoming
-pixel datatype (matching must be disabled - dt_enable never matches a
-frame otherwise), pairs it with an explicit memory writer, and scales
-frame_x/frame_y and sizeimage by the row's wire-geometry fractions,
-rounding frame_x up to the line padding the transmitter applies.
+JP5 counterpart of nvidia-oot 0013. Let a format-table row declare a
+datatype override and a transport geometry: the VI substitutes the row's
+dt_override for the incoming pixel datatype (DT matching has to be off
+for the override to take effect), pairs it with an explicit memory
+writer, and scales the captured frame_x/frame_y and sizeimage by the
+row's wire-geometry fractions, rounding frame_x up to the line padding
+the transmitter applies. Both VI4 (Xavier) and VI5 carry it.
 
-Four rows use it. The D58x calibration streams (RGB GRBG10 as
-V4L2_PIX_FMT_SGRBG16 'GR16', IR Y16I) transmit LSB-first RAW16, which
-the NVCSI RAW16 rule byte-swaps (CSI-2 defines RAW16 MSB-first); both
-override to YUV422-8 + T_Y8_U8__Y8_V8 for byte-identical little-endian
-capture, and Y16I declares frame_x_scale = 2/1 (32bpp L/R pair on a
-16bpp wire), replacing the fourcc-gated width doubling formerly in the
-0001 patches. Flat NV12 rides a RAW8 wire carrier with native matching (a
-geometry-only row; the MAX96717 pixel pipe forwards standard 8-bit DTs but drops user-defined ones) and
-frame_y_scale = 3/2 transport rows, replacing the per-format special
-cases of the earlier flat-NV12 receive path. The D401 CSI-PT stream is
-a geometry-only row too: packed 10-bit BGGR, 5 bytes per 4 pixels, that
-the VDF dword-aligns per line and sends over a RAW8 carrier at one wire
-pixel per byte - bpp and frame_x_scale 5/4 with frame_x_align 4, which
-gives 1288 px -> 1612 wire bytes and stays correct at any width. The
-d4xx driver can then advertise, and hand the FW, the true pixel width
-instead of the transport byte count. Encoding the padding as a ratio
-(1612/1288) would have been exact only at that one resolution.
-
-HW-verified (JP6.2, fw-orin-5, D585): GR16 30/30 clean frames, Y16I
-5/5, LE payload on both, coexists with concurrent embedded-metadata
-capture; NV12 10/10 @640x360 and 5/5 @1280x720, exact 1.5*bpl*H frames.
+One row uses it: the D401 CSI-PT stream. It is packed 10-bit BGGR, 5
+bytes per 4 pixels, that the VDF dword-aligns per line and sends over a
+RAW8 carrier at one wire pixel per byte - bpp and frame_x_scale 5/4 with
+frame_x_align 4, which gives 1288 px -> 1612 wire bytes and stays
+correct at any width. The d4xx driver can then advertise, and hand the
+FW, the true pixel width instead of the transport byte count.
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- drivers/media/platform/tegra/camera/vi/channel.c   | 11 ++++
+ drivers/media/platform/tegra/camera/vi/channel.c   | 11 +++++
+ drivers/media/platform/tegra/camera/vi/vi4_fops.c  | 26 +++++++++-
+ .../media/platform/tegra/camera/vi/vi4_formats.h   |  7 +++
  drivers/media/platform/tegra/camera/vi/vi5_fops.c  | 23 +++++++++
- .../media/platform/tegra/camera/vi/vi5_formats.h   | 23 +++++++++
- include/media/tegra_camera_core.h                  | 58 ++++++++++++++++++++++
- 4 files changed, 115 insertions(+)
+ .../media/platform/tegra/camera/vi/vi5_formats.h   |  7 +++
+ include/media/tegra_camera_core.h                  | 57 ++++++++++++++++++++++
+ 6 files changed, 129 insertions(+), 2 deletions(-)
 
 diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
-index ac5e0e9c..bedcaf95 100644
+index 8498ff034..898b30f4b 100644
 --- a/drivers/media/platform/tegra/camera/vi/channel.c
 +++ b/drivers/media/platform/tegra/camera/vi/channel.c
-@@ -192,6 +192,9 @@ static void tegra_channel_fmt_align(struct tegra_channel *chan,
+@@ -202,6 +202,9 @@ static void tegra_channel_fmt_align(struct tegra_channel *chan,
  	fmt_align = (denominator == 1) ? numerator : 1;
  	align = lcm(chan->width_align, fmt_align);
  	align = align > 0 ? align : 1;
@@ -55,7 +43,7 @@ index ac5e0e9c..bedcaf95 100644
  	bpl = tegra_core_bytes_per_line(*width, align, vfmt);
  
  	/* Align stride */
-@@ -295,6 +298,10 @@ static void tegra_channel_update_format(struct tegra_channel *chan,
+@@ -305,6 +308,10 @@ static void tegra_channel_update_format(struct tegra_channel *chan,
  
  	if (fourcc == V4L2_PIX_FMT_NV16)
  		chan->format.sizeimage *= 2;
@@ -66,7 +54,7 @@ index ac5e0e9c..bedcaf95 100644
  }
  
  static void tegra_channel_fmts_bitmap_init(struct tegra_channel *chan)
-@@ -2129,6 +2136,10 @@ __tegra_channel_try_format(struct tegra_channel *chan,
+@@ -2099,6 +2106,10 @@ __tegra_channel_try_format(struct tegra_channel *chan,
  	if (chan->fmtinfo->fourcc == V4L2_PIX_FMT_NV16)
  		pix->sizeimage *= 2;
  
@@ -77,11 +65,74 @@ index ac5e0e9c..bedcaf95 100644
  	return ret;
  }
  
+diff --git a/drivers/media/platform/tegra/camera/vi/vi4_fops.c b/drivers/media/platform/tegra/camera/vi/vi4_fops.c
+index 9bae5563c..970c9048f 100644
+--- a/drivers/media/platform/tegra/camera/vi/vi4_fops.c
++++ b/drivers/media/platform/tegra/camera/vi/vi4_fops.c
+@@ -454,6 +454,25 @@ static int tegra_channel_capture_setup(struct tegra_channel *chan,
+ 		width = chan->gang_width;
+ 	}
+ 
++	/* Rows may scale the transport geometry (tegra_camera_core.h):
++	 * the frame/crop/output extents count wire pixels and rows, which
++	 * can differ from the V4L2 geometry.
++	 */
++	width = tegra_frac_scale(width, &chan->fmtinfo->frame_x_scale);
++	if (chan->fmtinfo->frame_x_align > 1)
++		width = roundup(width, chan->fmtinfo->frame_x_align);
++	height = tegra_frac_scale(height, &chan->fmtinfo->frame_y_scale);
++
++	/* Formats may declare a datatype override (tegra_camera_core.h) to
++	 * substitute the parsing rule for the incoming pixel packets;
++	 * DT matching has to be off for the override to take effect.
++	 */
++	if (chan->fmtinfo->dt_override) {
++		data_type = 0;
++		if (chan->fmtinfo->pixfmt_override)
++			format = chan->fmtinfo->pixfmt_override;
++	}
++
+ 	err = tegra_channel_notify_enable(chan, index);
+ 	if (err < 0) {
+ 		dev_err(chan->vi->dev,
+@@ -475,9 +494,12 @@ static int tegra_channel_capture_setup(struct tegra_channel *chan,
+ 
+ 	vi4_channel_write(chan, vnc_id, MATCH_DATATYPE,
+ 			((data_type << DATATYPE_SHIFT) & DATATYPE) |
+-			DATATYPE_MASK);
++			(chan->fmtinfo->dt_override ? 0 : DATATYPE_MASK));
+ 
+-	vi4_channel_write(chan, vnc_id, DT_OVERRIDE, 0x0);
++	vi4_channel_write(chan, vnc_id, DT_OVERRIDE,
++			chan->fmtinfo->dt_override ?
++			(((chan->fmtinfo->dt_override << 1) & OVRD_DT) |
++			 DT_OVRD_EN) : 0x0);
+ 
+ 	vi4_channel_write(chan, vnc_id, MATCH_FRAMEID,
+ 			((0 << FRAMEID_SHIFT) & FRAMEID) | 0);
+diff --git a/drivers/media/platform/tegra/camera/vi/vi4_formats.h b/drivers/media/platform/tegra/camera/vi/vi4_formats.h
+index 2ec79cf9c..349210391 100644
+--- a/drivers/media/platform/tegra/camera/vi/vi4_formats.h
++++ b/drivers/media/platform/tegra/camera/vi/vi4_formats.h
+@@ -156,6 +156,13 @@ static const struct tegra_video_format vi4_video_formats[] = {
+ 	TEGRA_VIDEO_FORMAT(RGB888, 24, RGB888_1X24, 4, 1, T_A8R8G8B8,
+ 				RGB888, Y12I, "Y12I 24"),
+ 
++	// D401 CSI-PT: packed 10-bit BGGR (5 bytes per 4 pixels) that the VDF
++	// dword-aligns per line, carried as RAW8 - one wire pixel per byte, so
++	// the same 5/4 and 4-byte padding give both bytesperline and frame_x.
++	TEGRA_VIDEO_FORMAT_OVERRIDE(RAW8, 8, RS_SBGGR10P_1X8, 5, 4, T_L8,
++				RAW8, SBGGR10P, "BGGR10P dword-aligned",
++				0, 0, 5, 4, 1, 1, 4),
++
+ 
+ };
+ 
 diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-index 487ea192..cf98375e 100644
+index 0ea253c44..5082888e3 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
 +++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-@@ -407,6 +407,15 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+@@ -390,6 +390,15 @@ static void vi5_setup_surface(struct tegra_channel *chan,
  		offset = buf->addr + chan->buffer_offset[1 - vi_port];
  	}
  
@@ -97,7 +148,7 @@ index 487ea192..cf98375e 100644
  	memcpy(desc, &capture_template, sizeof(capture_template));
  	memset(desc_memoryinfo, 0, sizeof(*desc_memoryinfo));
  
-@@ -420,6 +429,20 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+@@ -403,6 +412,20 @@ static void vi5_setup_surface(struct tegra_channel *chan,
  	desc->ch_cfg.pixfmt_enable = 1;
  	desc->ch_cfg.pixfmt.format = format;
  
@@ -119,44 +170,28 @@ index 487ea192..cf98375e 100644
  	desc_memoryinfo->surface[0].size = chan->format.bytesperline * height;
  	desc->ch_cfg.atomp.surface_stride[0] = bpl;
 diff --git a/drivers/media/platform/tegra/camera/vi/vi5_formats.h b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
-index 73c1d846..41198a90 100644
+index ae6727e25..952925e83 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi5_formats.h
 +++ b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
-@@ -149,6 +149,29 @@ static const struct tegra_video_format vi5_video_formats[] = {
- 	// R[7:3]R[3:0] | L[3:0]R[11:8] | L[11:8]L[7:4] | ALIGN[7:0]
+@@ -155,6 +155,13 @@ static const struct tegra_video_format vi5_video_formats[] = {
  	TEGRA_VIDEO_FORMAT(RGB888, 24, RGB888_1X24, 4, 1, T_A8R8G8B8,
  				RGB888, Y12I, "Y12I 24"),
-+	// D58x calib surfaces: LE 16-bit samples over RAW16, captured in wire
-+	// byte order — the DT override bypasses the RAW16 rule's CSI-2
-+	// MSB-first byte swap. Y16I is a 32bpp L/R pair riding a 16bpp wire,
-+	// so its frame_x scale is 2 wire pixels per V4L2 pixel.
-+	TEGRA_VIDEO_FORMAT_OVERRIDE(RAW16, 16, ARGB8888_1X32, 4, 1, T_R16,
-+				RAW16, Y16I, "Y16I 32 LE",
-+				TEGRA_IMAGE_DT_YUV422_8,
-+				TEGRA_IMAGE_FORMAT_T_Y8_U8__Y8_V8, 2, 1, 1, 1, 0),
-+	TEGRA_VIDEO_FORMAT_OVERRIDE(RAW16, 16, SGRBG16_1X16, 2, 1, T_R16,
-+				RAW16, SGRBG16, "GRBG16 16 LE",
-+				TEGRA_IMAGE_DT_YUV422_8,
-+				TEGRA_IMAGE_FORMAT_T_Y8_U8__Y8_V8, 1, 1, 1, 1, 0),
-+	// Flat NV12 bytes over a RAW8 wire carrier: native match and byte
-+	// rule, one byte per wire pixel. Transport rows = H * 3/2.
-+	TEGRA_VIDEO_FORMAT_OVERRIDE(RAW8, 8, RS_NV12_FLAT_1X8, 1, 1, T_R8,
-+				RAW8, NV12, "NV12 flat over RAW8",
-+				0, 0, 1, 1, 3, 2, 0),
+ 
 +	// D401 CSI-PT: packed 10-bit BGGR (5 bytes per 4 pixels) that the VDF
 +	// dword-aligns per line, carried as RAW8 - one wire pixel per byte, so
 +	// the same 5/4 and 4-byte padding give both bytesperline and frame_x.
 +	TEGRA_VIDEO_FORMAT_OVERRIDE(RAW8, 8, RS_SBGGR10P_1X8, 5, 4, T_R8,
 +				RAW8, SBGGR10P, "BGGR10P dword-aligned",
 +				0, 0, 5, 4, 1, 1, 4),
- 
++
  };
  
+ #endif
 diff --git a/include/media/tegra_camera_core.h b/include/media/tegra_camera_core.h
-index a4c69782..1fea0c1f 100644
+index 67221b0c6..35a418009 100644
 --- a/include/media/tegra_camera_core.h
 +++ b/include/media/tegra_camera_core.h
-@@ -92,6 +92,24 @@ struct tegra_frac {
+@@ -97,6 +97,24 @@ struct tegra_frac {
  	unsigned int denominator;
  };
  
@@ -181,7 +216,7 @@ index a4c69782..1fea0c1f 100644
  /**
   * struct tegra_video_format - Tegra video format description
   * @vf_code: video format code
-@@ -102,6 +120,20 @@ struct tegra_frac {
+@@ -107,6 +125,19 @@ struct tegra_frac {
   * @img_dt: image data type
   * @fourcc: V4L2 pixel format FCC identifier
   * @description: format description, suitable for userspace
@@ -190,11 +225,10 @@ index a4c69782..1fea0c1f 100644
 + * @pixfmt_override: VI memory format paired with @dt_override (0 = keep
 + *		@img_fmt)
 + * @frame_x_scale: wire pixels per V4L2 pixel as a fraction; scales the
-+ *		capture descriptor frame_x (zero numerator or denominator =
-+ *		no scaling)
++ *		captured frame_x (zero numerator or denominator = no scaling)
 + * @frame_y_scale: transport rows per V4L2 row as a fraction; scales the
-+ *		capture descriptor frame_y and surface size (zero numerator
-+ *		or denominator = no scaling)
++ *		captured frame_y and surface size (zero numerator or
++ *		denominator = no scaling)
 + * @frame_x_align: granularity the transmitter pads each line up to, in wire
 + *		pixels; 0 and 1 both mean unpadded, being roundup no-ops.
 + *		The scaled frame_x rounds up to it, and it is folded into
@@ -202,7 +236,7 @@ index a4c69782..1fea0c1f 100644
   */
  struct tegra_video_format {
  	enum tegra_vf_code vf_code;
-@@ -112,6 +144,11 @@ struct tegra_video_format {
+@@ -117,6 +148,11 @@ struct tegra_video_format {
  	enum tegra_image_dt img_dt;
  	u32 fourcc;
  	__u8 description[32];
@@ -214,7 +248,7 @@ index a4c69782..1fea0c1f 100644
  };
  
  #define	TEGRA_VIDEO_FORMAT(VF_CODE, BPP, MBUS_CODE, FRAC_BPP_NUM,	\
-@@ -127,6 +164,27 @@ struct tegra_video_format {
+@@ -132,6 +168,27 @@ struct tegra_video_format {
  	DESCRIPTION,							\
  }
  

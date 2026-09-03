@@ -6,12 +6,12 @@
 #
 # Env overrides (defaults = D401 dual-RGB):
 #   DEPTH_DEV=/dev/video0  DEPTH_W=1280 DEPTH_H=720
-#   RAW_DEVS="/dev/video2 /dev/video4"  RAW_W=1612 RAW_H=808 RAW_FMT=BA81
+#   RAW_DEVS="/dev/video2 /dev/video4"  RAW_W=1288 RAW_H=808 RAW_FMT=pBAA
 #   FPS=30   OUT=/tmp/sofeof_phased.txt
 set -u
 DEPTH_DEV=${DEPTH_DEV:-/dev/video0}; DEPTH_W=${DEPTH_W:-1280}; DEPTH_H=${DEPTH_H:-720}
-RAW_DEVS=${RAW_DEVS:-"/dev/video2 /dev/video4"}; RAW_W=${RAW_W:-1612}; RAW_H=${RAW_H:-808}
-RAW_FMT=${RAW_FMT:-BA81}; FPS=${FPS:-30}; OUT=${OUT:-/tmp/sofeof_phased.txt}
+RAW_DEVS=${RAW_DEVS:-"/dev/video2 /dev/video4"}; RAW_W=${RAW_W:-1288}; RAW_H=${RAW_H:-808}
+RAW_FMT=${RAW_FMT:-pBAA}; FPS=${FPS:-30}; OUT=${OUT:-/tmp/sofeof_phased.txt}
 
 TR=/sys/kernel/debug/tracing
 [ -d /sys/kernel/tracing/events ] && TR=/sys/kernel/tracing
