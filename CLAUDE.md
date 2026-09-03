@@ -133,6 +133,12 @@ The build system cross-compiles for ARM64. Toolchains vary by JetPack:
 
 ## V4L2 control conventions
 
+- **D5x GMSL stream identity is one canonical numeric ABI.** A Host stream
+  command ID, the corresponding HKR stream ID/HIF MC, and RGB metadata-demux
+  `source_id` must always have the same numeric value. Keep symbolic names at
+  each layer, but never add a Host-side or HKR-side translation table between
+  those identities. VC is an independent routing property and must not be
+  inferred from the stream ID or `source_id`.
 - A control that librealsense reaches through a **USB depth XU selector** must be a **single read/write V4L2 control**, not a split get/set pair. The MIPI backend's `xu_to_cid()` maps one selector to one CID, and both `get_xu()` and `set_xu()` use that same CID — so a read-only "get" CID plus a separate "set" CID cannot be reached by a single selector. Expose one control with flags `V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE` (do **not** set `READ_ONLY`): `VOLATILE` routes each read to `ds5_g_volatile_ctrl`, `EXECUTE_ON_WRITE` routes each write to `ds5_s_ctrl`. `DS5_CAMERA_CID_AE_MODE` (depth AE regular/accelerated, HWMC SETAETYPE 0x87 / GETAETYPE 0x88, XU selector 0x11) is the reference example.
 - Split get/set CID pairs (e.g. `ae_roi_get/set`, `ae_setpoint_get/set`) are only appropriate for controls librealsense drives via the HWMC blob passthrough (`RS_HWMONITOR → RS_CAMERA_CID_HWMC`), never via a direct XU selector. Adding a matching `case` in librealsense's `xu_to_cid()` is still required for the selector to resolve.
 
