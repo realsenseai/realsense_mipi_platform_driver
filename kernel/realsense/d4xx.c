@@ -17,6 +17,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <linux/bitops.h>
 #include <linux/delay.h>
 #include <linux/gpio.h>
 #include <linux/i2c.h>
@@ -3063,6 +3064,21 @@ static int d500_set_gyro_sensitivity(struct ds5 *state, u32 sensitivity)
 	return ret;
 }
 
+/* DISABLED has no framework toggle. Mirror v4l2_ctrl_activate()'s lock-free bit
+ * twiddling: callers may already hold the handler lock via ds5_s_ctrl().
+ */
+static void ds5_v4l2_ctrl_set_disabled(struct v4l2_ctrl *ctrl, bool disabled)
+{
+	if (!ctrl)
+		return;
+
+	/* V4L2_CTRL_FLAG_DISABLED == 0x0001 */
+	if (disabled)
+		set_bit(0, &ctrl->flags);
+	else
+		clear_bit(0, &ctrl->flags);
+}
+
 static int d500_refresh_device_mode(struct ds5 *state, bool boot_mode)
 {
 	u32 mode;
@@ -3080,11 +3096,10 @@ static int d500_refresh_device_mode(struct ds5 *state, bool boot_mode)
 	}
 	mutex_unlock(&state->ds5_dev->lock);
 
-	if (state->ctrls.dual_rgb_ae_policy) {
-		const bool active = !ret && mode == D500_DEVICE_MODE_2C;
-
-		v4l2_ctrl_activate(state->ctrls.dual_rgb_ae_policy, active);
-	}
+	/* 2C-only controls are hidden rather than merely deactivated, so a 3C
+	 * device does not enumerate them at all. */
+	ds5_v4l2_ctrl_set_disabled(state->ctrls.dual_rgb_ae_policy,
+				   ret || mode != D500_DEVICE_MODE_2C);
 
 	return ret;
 }
@@ -5914,8 +5929,7 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 				v4l2_ctrl_new_custom(hdl,
 						     &ds5_ctrl_dual_rgb_ae_policy_d58x,
 						     sensor);
-			if (ctrls->dual_rgb_ae_policy)
-				v4l2_ctrl_activate(ctrls->dual_rgb_ae_policy, false);
+			ds5_v4l2_ctrl_set_disabled(ctrls->dual_rgb_ae_policy, true);
 			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_visual_preset, sensor);
 			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_soc_pvt_temperature,
 					     sensor);
