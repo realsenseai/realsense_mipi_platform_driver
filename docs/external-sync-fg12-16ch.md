@@ -51,7 +51,10 @@ The `CAM_SYNCALL` pin does not have TSC routing in the Orin SoC, so it cannot be
 | Overlay DTS | Deserializers with TSC (MFP2) | Generators | MFP6 input |
 |---|---|---|---|
 | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-1.dts` | 1 | `@380` | Yes |
+| `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-1-d5xx.dts` | 1 | `@380` | Yes |
+| `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-1-d5xx-d4xx.dts` | 1 | `@380` | Yes |
 | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-1-2-3.dts` | 1 | `@380` | Yes |
+| `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-1-2-3-d5xx-3d4xx.dts` | 1 | `@380` | Yes |
 | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-4.dts` | 1, 2 | `@380`, `@480` | Yes |
 | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-4-8-12.dts` | 1, 2, 4 | `@380`, `@480`, `@500` | Yes |
 | `tegra234-camera-d4xx-overlay-fg12-16ch-PWR-only.dts` | 1, 2, 4 | `@380`, `@480`, `@500` | Yes |

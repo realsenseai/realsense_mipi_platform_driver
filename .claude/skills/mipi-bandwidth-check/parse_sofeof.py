@@ -4,6 +4,8 @@
 #
 #   python parse_sofeof.py <trace_file> [depthWxH] [rawWxH]
 #   e.g. python parse_sofeof.py trace.txt 1280x720 1612x808
+#   (rawWxH is the WIRE geometry in bytes/line, not the V4L2 width: the D401
+#    CSI-PT node advertises 1288x808 'pBAA' over a 1612-byte RAW8 line.)
 #
 # Spans are reported both over the whole run and restricted to the ALL-N overlap window
 # (between the last-started channel's first and last SOF) -- the latter is the steady
@@ -20,7 +22,7 @@ depth_bytes = raw_bytes = None
 def wh_bytes(s, bpp):
     w, h = s.lower().split('x'); return int(round(int(w)*int(h)*bpp))
 if len(sys.argv) > 2: depth_bytes = wh_bytes(sys.argv[2], 2)    # Z16
-if len(sys.argv) > 3: raw_bytes  = wh_bytes(sys.argv[3], 1)    # BA81 (1 byte/px, = RAW10-of-1288 wire bytes)
+if len(sys.argv) > 3: raw_bytes  = wh_bytes(sys.argv[3], 1)    # RAW8 wire (1 byte/px, = dword-aligned RAW10-of-1288)
 
 pat = re.compile(r'-(\d+)\s+\[\d+\].*?(sof|eof):(\d+)\.(\d+)')
 events = {}
