@@ -7772,7 +7772,7 @@ static int ds5_dfu_device_open(struct inode *inode, struct file *file)
 #if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)
 	/* get i2c controller and set dfu bus clock rate */
 	while (parent && i2c_parent_is_i2c_adapter(parent))
-		parent = i2c_parent_is_i2c_adapter(state->client->adapter);
+		parent = i2c_parent_is_i2c_adapter(parent);
 
 	if (!parent) {
 		mutex_unlock(&state->lock);
@@ -7986,7 +7986,7 @@ static int ds5_dfu_device_release(struct inode *inode, struct file *file)
 #if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)
 	/* get i2c controller and restore bus clock rate */
 	while (parent && i2c_parent_is_i2c_adapter(parent))
-		parent = i2c_parent_is_i2c_adapter(state->client->adapter);
+		parent = i2c_parent_is_i2c_adapter(parent);
 	if (!parent) {
 		mutex_unlock(&state->lock);
 		return 0;
