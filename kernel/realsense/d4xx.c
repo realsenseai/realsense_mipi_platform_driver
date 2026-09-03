@@ -145,6 +145,12 @@ struct ser_interface {
 #define DS5_DEVICE_TYPE_D45X		6
 #define DS5_DEVICE_TYPE_D43X		5
 #define DS5_DEVICE_TYPE_UNKNOWN		0
+/*
+ * FW version major byte identifies the family in recovery, where DEVICE_TYPE
+ * (0x0310) is not served: D58x reports 7 or 8, D4xx reports 5.
+ */
+#define DS5_D58X_FW_MAJOR_MIN		7
+#define DS5_D58X_FW_MAJOR_MAX		8
 
 /* GVD response payload size per product line */
 #define DS5_GVD_LEN_D4XX		276
@@ -297,6 +303,13 @@ enum ds5_mux_pad {
 #define PIPE_NOT_CONFIGURED	-1
 
 #define DFU_WAIT_RET_LEN 6
+
+/*
+ * Deadline for the D58x manifest wait; the manifest can legitimately take
+ * up to ~90 s, so the bound is generous and only guards against a device
+ * stuck in an intermediate manifest state.
+ */
+#define DFU_MANIFEST_TIMEOUT_MS 180000
 
 #define DS5_START_POLL_TIME	10
 #define DS5_START_MAX_TIME	2000
@@ -583,6 +596,8 @@ struct ds5_dfu_dev {
 	struct class *ds5_class;
 	int device_open_count;
 	enum dfu_state dfu_state_flag;
+	enum dfu_fw_state manifest_state;
+	bool manifest_complete;
 	unsigned char *dfu_msg;
 	u16 msg_write_once;
 	// unsigned char init_v4l_f; // need refactoring
@@ -3114,6 +3129,14 @@ static int ds5_set_calibration_data(struct ds5 *state,
 #define DS5_HW_RESET_TIMEOUT_MS		10000
 #define DS5_HW_RESET_MAX_RETRIES	(DS5_HW_RESET_TIMEOUT_MS / DS5_HW_RESET_POLL_INTERVAL_MS)
 
+/*
+ * D585 reinitializes its serializer from HKR roughly 1.5 seconds after a
+ * post-DFU reboot.  Recovering the serializer alias before that point is
+ * ineffective because the later HKR PWDNB cycle resets it back to the
+ * default address.
+ */
+#define DS5_D585_DFU_SERDES_SETTLE_MS	1500
+
 /* Minimum interval between consecutive HW resets (ms).
  * Rapid back-to-back resets degrade the GMSL link.
  */
@@ -3244,6 +3267,8 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	u16 d585_product_id = READ_ONCE(state->ds5_dev->d585_product_id);
 	bool d585_proto_reset = d585_product_id == D585_2C_PROTO_PID ||
 				 d585_product_id == D585_3C_PROTO_PID;
+	bool post_dfu_reset = d585_proto_reset &&
+		READ_ONCE(state->dfu_dev.manifest_complete);
 	unsigned long ds5_last_reset_jiffies = READ_ONCE(state->ds5_dev->last_reset_jiffies);
 	unsigned long ts, timeout;
 
@@ -3270,6 +3295,42 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 			msleep(jiffies_to_msecs(remaining));
 		}
 	}
+
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	/*
+	 * D585 prototype-only workaround for the serializer/control-path recovery
+	 * issue post-DFU manifestation. Restore the serializer alias and control
+	 * tunnel before the first camera I2C access after the SDK-triggered HW reset.
+	 */
+	if (post_dfu_reset) {
+		struct ds5 *primary = state->ds5_dev->ds5_primary;
+
+		if (!primary || !primary->dser_ops->recover_link)
+			return -ENODEV;
+
+		mutex_lock(&serdes_lock__);
+		ret = primary->ser_ops->reset_control(primary->ser_dev);
+		if (!ret)
+			ret = primary->dser_ops->recover_link(primary->dser_dev,
+						      primary->ser_dev,
+						      primary->gmsl_link);
+		if (!ret)
+			ret = primary->ser_ops->setup_control(primary->ser_dev);
+		if (!ret)
+			ret = primary->ser_ops->init_settings(primary->ser_dev);
+		mutex_unlock(&serdes_lock__);
+		if (ret) {
+			dev_err(&state->client->dev,
+				"%s(): pre-HW-reset D585 SerDes recovery failed (%d)\n",
+				__func__, ret);
+			return ret;
+		}
+
+		dev_info(&state->client->dev,
+			 "%s(): pre-HW-reset D585 GMSL control path recovered\n",
+			 __func__);
+	}
+#endif
 
 	/* 1. Stop active streams on the device before reset.
 	 *    This ensures FW and SERDES are in a clean state.
@@ -3355,6 +3416,18 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 		if (!primary || !primary->dser_ops->recover_link)
 			return -ENODEV;
 
+		/*
+		 * The D585 manifestation reset is followed by HKR's own GMSL PWDNB
+		 * cycle.  Let that finish before restoring the serializer alias;
+		 * otherwise the alias is lost again just after this function returns.
+		 */
+		if (post_dfu_reset) {
+			dev_info(&state->client->dev,
+				 "%s(): waiting for D585 post-DFU GMSL initialization\n",
+				 __func__);
+			msleep(DS5_D585_DFU_SERDES_SETTLE_MS);
+		}
+
 		mutex_lock(&serdes_lock__);
 		ret = primary->ser_ops->reset_control(primary->ser_dev);
 		if (!ret)
@@ -3402,6 +3475,12 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 
 		ret = ds5_read_poll(state, DS5_DFU_MAGIC_REG, &ready_status);
 		if (!ret && ready_status == DS5_DFU_MAGIC_LSW) {
+			if (post_dfu_reset) {
+				dev_dbg(&state->client->dev,
+					"%s(): transient DFU state during manifestation reset\n",
+					__func__);
+				continue;
+			}
 			dev_warn(&state->client->dev,
 				"%s(): Device in DFU/recovery mode after reset\n", __func__);
 			state->dfu_dev.dfu_state_flag = DS5_DFU_RECOVERY;
@@ -3492,6 +3571,8 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	}
 
 	WRITE_ONCE(state->ds5_dev->last_reset_jiffies, jiffies);
+	if (post_dfu_reset)
+		WRITE_ONCE(state->dfu_dev.manifest_complete, false);
 
 	return 0;
 }
@@ -7388,6 +7469,8 @@ static int ds5_dfu_wait_for_get_dfu_status(struct ds5 *state,
 	u16 status, dfu_state_len = 0x0000;
 	unsigned char dfu_asw_buf[DFU_WAIT_RET_LEN];
 	unsigned int dfu_wr_wait_msec = 0;
+	unsigned long manifest_deadline = jiffies +
+			msecs_to_jiffies(DFU_MANIFEST_TIMEOUT_MS);
 
 	do {
 		ds5_write_with_check(state, 0x5008, 0x0003); // Get Write state
@@ -7419,7 +7502,18 @@ static int ds5_dfu_wait_for_get_dfu_status(struct ds5 *state,
 		dfu_wr_wait_msec = (((unsigned int)dfu_asw_buf[3]) << 16)
 						| (((unsigned int)dfu_asw_buf[2]) << 8)
 						| dfu_asw_buf[1];
-	} while (dfu_asw_buf[4] == dfuDNBUSY && exp_state == dfuDNLOAD_IDLE);
+	/*
+	 * D58x manifestation runs dfuMANIFEST_SYNC -> dfuMANIFEST ->
+	 * dfuMANIFEST_WAIT_RESET; keep polling through the intermediate
+	 * states until the terminal wait-reset state is reached, bounded by
+	 * manifest_deadline so a stuck device errors out instead of hanging.
+	 */
+	} while ((dfu_asw_buf[4] == dfuDNBUSY &&
+		  exp_state == dfuDNLOAD_IDLE) ||
+		 ((dfu_asw_buf[4] == dfuMANIFEST_SYNC ||
+		   dfu_asw_buf[4] == dfuMANIFEST) &&
+		  exp_state == dfuMANIFEST_WAIT_RESET &&
+		  time_before(jiffies, manifest_deadline)));
 
 	if (dfu_asw_buf[4] != exp_state) {
 		dev_notice(&state->client->dev,
@@ -7455,6 +7549,7 @@ static int ds5_dfu_get_dev_info(struct ds5 *state, struct __fw_status *buf)
 static int ds5_dfu_detach(struct ds5 *state)
 {
 	int ret;
+	u8 fw_major;
 	struct __fw_status buf = {0};
 
 	ds5_write_with_check(state, 0x500c, 0x00);
@@ -7467,6 +7562,15 @@ static int ds5_dfu_detach(struct ds5 *state)
 			__func__, buf.FW_lastVersion);
 	dev_notice(&state->client->dev, "%s():FW status (%s)\n",
 			__func__, buf.DFU_isLocked ? "locked" : "unlocked");
+	/* Recovery never ran ds5_wait_device_type(), so use the known D58x FW
+	 * major range only as a DFU-session hint. Do not write cached_device_type:
+	 * that cache is reserved for a value read from DS5_DEVICE_TYPE and is also
+	 * used outside DFU for readiness and register routing.
+	 */
+	fw_major = (buf.FW_lastVersion >> 24) & 0xff;
+	if (!ret && fw_major >= DS5_D58X_FW_MAJOR_MIN &&
+	    fw_major <= DS5_D58X_FW_MAJOR_MAX)
+		state->dfu_dev.manifest_state = dfuMANIFEST_WAIT_RESET;
 	return ret;
 };
 
@@ -7515,6 +7619,23 @@ e_dfu_read_failed:
 	mutex_unlock(&state->lock);
 	return ret;
 };
+
+/* The caller must hold state->lock. */
+static int ds5_dfu_finalize_download(struct ds5 *state)
+{
+	enum dfu_fw_state manifest_state = state->dfu_dev.manifest_state;
+	int ret;
+
+	ret = ds5_write(state, 0x4a04, 0x00); /* Download complete */
+	if (!ret)
+		ret = ds5_dfu_wait_for_get_dfu_status(state, manifest_state);
+	if (!ret)
+		state->dfu_dev.dfu_state_flag = DS5_DFU_DONE;
+	if (!ret)
+		WRITE_ONCE(state->dfu_dev.manifest_complete, true);
+
+	return ret;
+}
 
 static ssize_t ds5_dfu_device_write(struct file *flip,
 		const char __user *buffer, size_t len, loff_t *offset)
@@ -7576,12 +7697,9 @@ static ssize_t ds5_dfu_device_write(struct file *flip,
 			if (!ret)
 				ret = ds5_dfu_wait_for_get_dfu_status(state, dfuDNLOAD_IDLE);
 			if (!ret)
-				ret = ds5_write(state, 0x4a04, 0x00); /*Download complete */
-			if (!ret)
-				ret = ds5_dfu_wait_for_get_dfu_status(state, dfuMANIFEST);
+				ret = ds5_dfu_finalize_download(state);
 			if (ret < 0)
 				goto dfu_write_error;
-			state->dfu_dev.dfu_state_flag = DS5_DFU_DONE;
 		}
 		if (len)
 			dev_notice(&state->client->dev, "%s(): DFU block (%d) bytes written\n",
@@ -7621,8 +7739,15 @@ static int ds5_dfu_device_open(struct inode *inode, struct file *file)
 		return -EBUSY;
 	}
 	state->dfu_dev.device_open_count++;
+	WRITE_ONCE(state->dfu_dev.manifest_complete, false);
 	if (state->dfu_dev.dfu_state_flag != DS5_DFU_RECOVERY)
 		state->dfu_dev.dfu_state_flag = DS5_DFU_OPEN;
+	/*
+	 * Operational probe has an authoritative type; recovery defaults to the
+	 * D4xx terminal state until ds5_dfu_detach() obtains a D58x-only hint.
+	 */
+	state->dfu_dev.manifest_state = ds5_is_d58x(state) ?
+		dfuMANIFEST_WAIT_RESET : dfuMANIFEST;
 	state->dfu_dev.dfu_msg = devm_kzalloc(&state->client->dev,
 			DFU_BLOCK_SIZE, GFP_KERNEL);
 	if (!state->dfu_dev.dfu_msg) {
@@ -7651,6 +7776,30 @@ static int ds5_dfu_device_open(struct inode *inode, struct file *file)
 	mutex_unlock(&state->lock);
 	return 0;
 };
+
+static int ds5_dfu_device_flush(struct file *file, fl_owner_t id)
+{
+	struct ds5 *state = file->private_data;
+	int ret = 0;
+
+	(void)id;
+	mutex_lock(&state->lock);
+	/* A partial block finalizes in write(). Use close as the end signal for an
+	 * aligned image because userspace may split it across multiple writes.
+	 */
+	if (state->dfu_dev.dfu_state_flag == DS5_DFU_IN_PROGRESS) {
+		ret = ds5_dfu_finalize_download(state);
+		if (ret < 0) {
+			state->dfu_dev.dfu_state_flag = DS5_DFU_ERROR;
+			/* Reset the DFU device to IDLE, matching the write error path. */
+			if (!ds5_write(state, 0x5010, 0x0))
+				state->dfu_dev.dfu_state_flag = DS5_DFU_IDLE;
+		}
+	}
+	mutex_unlock(&state->lock);
+
+	return ret;
+}
 
 /* Adjust sync_mode control range based on device type.
  * Must be called after ds5_mux_init() which creates the control.
@@ -7857,6 +8006,7 @@ static const struct file_operations ds5_device_file_ops = {
 	.read = &ds5_dfu_device_read,
 	.write = &ds5_dfu_device_write,
 	.open = &ds5_dfu_device_open,
+	.flush = &ds5_dfu_device_flush,
 	.release = &ds5_dfu_device_release
 };
 
