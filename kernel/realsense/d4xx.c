@@ -76,11 +76,11 @@ struct dser_interface {
 	int (*recover_link)(struct device *dev, struct device *ser_dev, u32 link);
 	int (*setup_fsync)(struct device *dev, u32 fps);
 	int (*disable_fsync)(struct device *dev);
-	
+
 	/* Device registration */
 	int (*sdev_register)(struct device *dev, struct gmsl_link_ctx *g_ctx);
 	int (*sdev_unregister)(struct device *dev, struct device *s_dev);
-	
+
 	/* Power management */
 	int (*power_on)(struct device *dev);
 	void (*power_off)(struct device *dev);
@@ -169,11 +169,13 @@ struct ser_interface {
 #define DS5_DEPTH_STREAM_STATUS		0x1004
 #define DS5_RGB_STREAM_STATUS		0x1008
 #define DS5_IMU_STREAM_STATUS		0x100C
+#define D500_DUAL_RGB_RIGHT_STREAM_STATUS	0x1010
 #define DS5_IR_STREAM_STATUS		0x1014
 
 #define DS5_STREAM_DEPTH		0x0
 #define DS5_STREAM_RGB			0x1
 #define DS5_STREAM_IMU			0x2
+#define D500_STREAM_DUAL_RGB_RIGHT	0x3
 #define DS5_STREAM_IR			0x4
 #define DS5_STREAM_STOP			0x100
 #define DS5_STREAM_START		0x200
@@ -195,6 +197,13 @@ struct ser_interface {
 #define DS5_RGB_FPS				0x402C
 #define DS5_RGB_CONTROL_STATUS 	0x402E
 #define DS5_RGB_OVERRIDE		0x403C
+
+#define D500_DUAL_RGB_RIGHT_STREAM_DT	0x4060
+#define D500_DUAL_RGB_RIGHT_STREAM_MD	0x4062
+#define D500_DUAL_RGB_RIGHT_RES_WIDTH	0x4064
+#define D500_DUAL_RGB_RIGHT_RES_HEIGHT	0x4068
+#define D500_DUAL_RGB_RIGHT_FPS		0x406C
+#define D500_DUAL_RGB_RIGHT_OVERRIDE	0x407C
 
 /* SerDes startup I2C readiness polling (defer probe if not responsive) */
 #define DS5_SERDES_STARTUP_TIMEOUT_MS 2000
@@ -270,6 +279,7 @@ struct ser_interface {
 #define DS5_DEPTH_CONFIG_STATUS		0x4800
 #define DS5_RGB_CONFIG_STATUS		0x4802
 #define DS5_IMU_CONFIG_STATUS		0x4804
+#define D500_DUAL_RGB_RIGHT_CONFIG_STATUS	0x4806
 #define DS5_IR_CONFIG_STATUS		0x4808
 
 #define DS5_STATUS_STREAMING		0x1
@@ -292,6 +302,17 @@ enum ds5_mux_pad {
 	DS5_MUX_PAD_IR,
 	DS5_MUX_PAD_IMU,
 	DS5_MUX_PAD_COUNT,
+};
+
+enum d500_stereo_mode {
+	D500_STEREO_MODE_LEFT = 0,
+	D500_STEREO_MODE_RIGHT,
+	D500_STEREO_MODE_FRAME_ALTERNATE,
+};
+
+enum d500_device_mode {
+	D500_DEVICE_MODE_3C = 0,
+	D500_DEVICE_MODE_2C = 1,
 };
 
 #define DS5_N_CONTROLS			8
@@ -529,6 +550,7 @@ struct ds5_ctrls {
 		struct v4l2_ctrl *device_mode;
 		struct v4l2_ctrl *dual_rgb_ae_policy;
 		struct v4l2_ctrl *minz;
+		struct v4l2_ctrl *rgb_stereo_mode;
 		/* RGB-only ISP controls. Only ae_priority needs a stored
 		 * pointer because it must be disabled per-SKU after probe
 		 * (D40X/D401 does not support it). The remaining controls
@@ -708,6 +730,7 @@ struct ds5_dev {
 	bool depth_streaming;
 	bool ir_streaming;
 	bool rgb_streaming;
+	bool d500_dual_rgb_right_streaming;
 	bool imu_streaming;
 };
 
@@ -2217,9 +2240,28 @@ static u8 ds5_wire_data_type(const struct ds5_format *format)
 		format->data_type;
 }
 
+static enum d500_stereo_mode d500_active_stereo_mode(struct ds5 *state)
+{
+	int mode;
+
+	if (!state->is_rgb || !state->ctrls.rgb_stereo_mode ||
+	    !READ_ONCE(state->ds5_dev->device_mode_valid) ||
+	    READ_ONCE(state->ds5_dev->active_device_mode) !=
+		D500_DEVICE_MODE_2C)
+		return D500_STEREO_MODE_LEFT;
+
+	mode = READ_ONCE(state->ctrls.rgb_stereo_mode->cur.val);
+	if (mode < D500_STEREO_MODE_LEFT ||
+	    mode > D500_STEREO_MODE_FRAME_ALTERNATE)
+		return D500_STEREO_MODE_LEFT;
+
+	return mode;
+}
+
 static int ds5_configure(struct ds5 *state)
 {
 	struct ds5_sensor *sensor;
+	enum d500_stereo_mode stereo_mode = d500_active_stereo_mode(state);
 	u16 md_fmt, vc_id;
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	u16 data_type1, data_type2;
@@ -2243,6 +2285,14 @@ static int ds5_configure(struct ds5 *state)
 		fps_addr = DS5_DEPTH_FPS;
 		width_addr = DS5_DEPTH_RES_WIDTH;
 		height_addr = DS5_DEPTH_RES_HEIGHT;
+	} else if (state->is_rgb && stereo_mode == D500_STEREO_MODE_RIGHT) {
+		sensor = &state->rgb.sensor;
+		dt_addr = D500_DUAL_RGB_RIGHT_STREAM_DT;
+		md_addr = D500_DUAL_RGB_RIGHT_STREAM_MD;
+		override_addr = D500_DUAL_RGB_RIGHT_OVERRIDE;
+		fps_addr = D500_DUAL_RGB_RIGHT_FPS;
+		width_addr = D500_DUAL_RGB_RIGHT_RES_WIDTH;
+		height_addr = D500_DUAL_RGB_RIGHT_RES_HEIGHT;
 	} else if (state->is_rgb) {
 		sensor = &state->rgb.sensor;
 		dt_addr = DS5_RGB_STREAM_DT;
@@ -2425,6 +2475,130 @@ static int ds5_configure(struct ds5 *state)
 	}
 
 	return 0;
+}
+
+/* FRAME_ALTERNATE shares the RGB SerDes/VI pipe. Configure only the second
+ * HKR logical source here; ds5_configure() already owns the physical pipe and
+ * the primary RGB register bank. No pixel copy or second VI channel is added.
+ */
+static int d500_configure_dual_rgb_right(struct ds5 *state)
+{
+	struct ds5_sensor *sensor = &state->rgb.sensor;
+	u16 md_fmt = state->metadata_enabled ? GMSL_CSI_DT_EMBED : 0;
+	u16 md_vc;
+	u16 width;
+	int ret;
+	unsigned int i;
+	struct {
+		u16 addr;
+		u16 value;
+	} regs[6];
+
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	ret = state->dser_ops->get_ser_vc_id ?
+		state->dser_ops->get_ser_vc_id(state->dser_dev,
+					       state->gmsl_link,
+					       state->g_ctx.dst_vc) :
+		(int)state->g_ctx.dst_vc;
+	if (ret < 0)
+		return ret;
+	md_vc = ret;
+#else
+	md_vc = 1;
+#endif
+
+	width = sensor->config.resolution->width;
+	if (sensor->config.format->mbus_code == MEDIA_BUS_FMT_SBGGR8_1X8 &&
+	    width == 1612)
+		width = 1288;
+
+	regs[0].addr = D500_DUAL_RGB_RIGHT_STREAM_DT;
+	regs[0].value = sensor->config.format->data_type;
+	regs[1].addr = D500_DUAL_RGB_RIGHT_STREAM_MD;
+	regs[1].value = (md_vc << 8) | md_fmt;
+	regs[2].addr = D500_DUAL_RGB_RIGHT_OVERRIDE;
+	regs[2].value = ds5_wire_data_type(sensor->config.format);
+	regs[3].addr = D500_DUAL_RGB_RIGHT_FPS;
+	regs[3].value = sensor->config.framerate;
+	regs[4].addr = D500_DUAL_RGB_RIGHT_RES_WIDTH;
+	regs[4].value = width;
+	regs[5].addr = D500_DUAL_RGB_RIGHT_RES_HEIGHT;
+	regs[5].value = sensor->config.resolution->height;
+
+	for (i = 0; i < ARRAY_SIZE(regs); i++) {
+		ret = ds5_write(state, regs[i].addr, regs[i].value);
+		if (ret < 0)
+			return ret;
+	}
+
+	return 0;
+}
+
+static int d500_dual_rgb_right_s_stream(struct ds5 *state, bool on)
+{
+	u16 expected = on ? DS5_STREAM_STREAMING : DS5_STREAM_IDLE;
+	u16 command = (on ? DS5_STREAM_START : DS5_STREAM_STOP) |
+		D500_STREAM_DUAL_RGB_RIGHT;
+	u16 stream_status = ~expected;
+	u16 config_status = 0;
+	unsigned int i;
+	int ret;
+
+	mutex_lock(&state->ds5_dev->lock);
+	if (state->ds5_dev->d500_dual_rgb_right_streaming == on) {
+		mutex_unlock(&state->ds5_dev->lock);
+		return 0;
+	}
+	mutex_unlock(&state->ds5_dev->lock);
+
+	if (on) {
+		ret = d500_configure_dual_rgb_right(state);
+		if (ret)
+			return ret;
+	}
+
+	for (i = 0; i < DS5_START_MAX_COUNT; i++) {
+		ret = ds5_write(state, DS5_START_STOP_STREAM, command);
+		if (ret < 0)
+			goto retry;
+
+		ret = ds5_read(state, D500_DUAL_RGB_RIGHT_STREAM_STATUS,
+			       &stream_status);
+		if (ret < 0 || stream_status != expected)
+			goto retry;
+
+		ret = ds5_read(state, D500_DUAL_RGB_RIGHT_CONFIG_STATUS,
+			       &config_status);
+		if (ret < 0)
+			goto retry;
+		if (on && (config_status & (DS5_STATUS_INVALID_DT |
+					 DS5_STATUS_INVALID_RES |
+					 DS5_STATUS_INVALID_FPS))) {
+			ret = -EINVAL;
+			break;
+		}
+		if (on == !!(config_status & DS5_STATUS_STREAMING)) {
+			mutex_lock(&state->ds5_dev->lock);
+			state->ds5_dev->d500_dual_rgb_right_streaming = on;
+			mutex_unlock(&state->ds5_dev->lock);
+			dev_info(&state->client->dev,
+				 "D500 dual-RGB Right toggle ok to %d, retries %u\n",
+				 on, i);
+			return 0;
+		}
+
+retry:
+		msleep_range(DS5_START_POLL_TIME);
+	}
+
+	if (on)
+		ds5_write(state, DS5_START_STOP_STREAM,
+			  DS5_STREAM_STOP | D500_STREAM_DUAL_RGB_RIGHT);
+	dev_warn(&state->client->dev,
+		 "D500 dual-RGB Right toggle to %d failed: stream=%u config=0x%04x ret=%d\n",
+		 on, stream_status, config_status, ret);
+
+	return ret < 0 ? ret : -EAGAIN;
 }
 
 static int ds5_sensor_g_frame_interval(struct v4l2_subdev *sd,
@@ -2621,10 +2795,7 @@ enum ds5_sync_mode {
 #define D500_CAMERA_CID_DUAL_RGB_AE_POLICY (DS5_CAMERA_CID_BASE + 37)
 #define D500_CAMERA_CID_GYRO_SENSITIVITY (DS5_CAMERA_CID_BASE + 38)
 
-enum d500_device_mode {
-	D500_DEVICE_MODE_3C = 0,
-	D500_DEVICE_MODE_2C = 1,
-};
+#define D500_CAMERA_CID_STEREO_MODE	(DS5_CAMERA_CID_BASE + 39)
 
 enum d500_2c_ae_mode {
 	D500_2C_AE_POLICY_AUTO = 0,
@@ -2730,7 +2901,6 @@ static int d500_dpp_xu_read(struct ds5 *state,
 		return -EBADMSG;
 	return 0;
 }
-
 static int d500_dpp_xu_write(struct ds5 *state,
 			     const struct d500_dpp_ctrl_desc *desc,
 			     const struct d500_dpp_xu_control *control)
@@ -2944,6 +3114,7 @@ static bool d500_camera_is_idle_locked(struct ds5 *state)
 {
 	return !state->ds5_dev->depth_streaming &&
 	       !state->ds5_dev->rgb_streaming &&
+	       !state->ds5_dev->d500_dual_rgb_right_streaming &&
 	       !state->ds5_dev->ir_streaming &&
 	       !state->ds5_dev->imu_streaming;
 }
@@ -3094,6 +3265,28 @@ static void ds5_v4l2_ctrl_set_disabled(struct v4l2_ctrl *ctrl, bool disabled)
 		clear_bit(0, &ctrl->flags);
 }
 
+static int d500_set_stereo_mode(struct ds5 *state, u32 mode)
+{
+	int ret = 0;
+
+	if (mode > D500_STEREO_MODE_FRAME_ALTERNATE)
+		return -EINVAL;
+
+	mutex_lock(&state->ds5_dev->lock);
+	if (!state->is_rgb || !state->ds5_dev->device_mode_valid ||
+	    state->ds5_dev->active_device_mode != D500_DEVICE_MODE_2C)
+		ret = -EOPNOTSUPP;
+	else if (state->ds5_dev->rgb_streaming ||
+		 state->ds5_dev->d500_dual_rgb_right_streaming)
+		ret = -EBUSY;
+	mutex_unlock(&state->ds5_dev->lock);
+
+	if (!ret)
+		ds5_config_cache_clear(&state->rgb.sensor);
+
+	return ret;
+}
+
 static int d500_refresh_device_mode(struct ds5 *state, bool boot_mode)
 {
 	u32 mode;
@@ -3114,6 +3307,8 @@ static int d500_refresh_device_mode(struct ds5 *state, bool boot_mode)
 	/* 2C-only controls are hidden rather than merely deactivated, so a 3C
 	 * device does not enumerate them at all. */
 	ds5_v4l2_ctrl_set_disabled(state->ctrls.dual_rgb_ae_policy,
+				   ret || mode != D500_DEVICE_MODE_2C);
+	ds5_v4l2_ctrl_set_disabled(state->ctrls.rgb_stereo_mode,
 				   ret || mode != D500_DEVICE_MODE_2C);
 
 	return ret;
@@ -3205,6 +3400,7 @@ static void ds5_reset_streaming_flags(struct ds5_dev *ds5_dev)
 	ds5_dev->depth_streaming = false;
 	ds5_dev->ir_streaming = false;
 	ds5_dev->rgb_streaming = false;
+	ds5_dev->d500_dual_rgb_right_streaming = false;
 	ds5_dev->imu_streaming = false;
 	mutex_unlock(&ds5_dev->lock);
 }
@@ -3277,6 +3473,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	struct hwm_cmd reset_cmd;
 	bool depth_streaming;
 	bool rgb_streaming;
+	bool d500_dual_rgb_right_streaming;
 	bool ir_streaming;
 	bool imu_streaming;
 	u16 d585_product_id = READ_ONCE(state->ds5_dev->d585_product_id);
@@ -3359,6 +3556,8 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	mutex_lock(&state->ds5_dev->lock);
 	depth_streaming = state->ds5_dev->depth_streaming;
 	rgb_streaming = state->ds5_dev->rgb_streaming;
+	d500_dual_rgb_right_streaming =
+		state->ds5_dev->d500_dual_rgb_right_streaming;
 	ir_streaming = state->ds5_dev->ir_streaming;
 	imu_streaming = state->ds5_dev->imu_streaming;
 	mutex_unlock(&state->ds5_dev->lock);
@@ -3367,6 +3566,9 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 		ds5_write(state, DS5_START_STOP_STREAM,	DS5_STREAM_STOP | DS5_STREAM_DEPTH);
 	if (rgb_streaming)
 		ds5_write(state, DS5_START_STOP_STREAM,	DS5_STREAM_STOP | DS5_STREAM_RGB);
+	if (d500_dual_rgb_right_streaming)
+		ds5_write(state, DS5_START_STOP_STREAM,
+			  DS5_STREAM_STOP | D500_STREAM_DUAL_RGB_RIGHT);
 	if (ir_streaming)
 		ds5_write(state, DS5_START_STOP_STREAM,	DS5_STREAM_STOP | DS5_STREAM_IR);
 	if (imu_streaming)
@@ -3815,7 +4017,7 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			}
 		}
 		break;
-	case DS5_CAMERA_CID_AE_ROI_SET: 
+	case DS5_CAMERA_CID_AE_ROI_SET:
 		if (ctrl->p_new.p_u16) {
 			struct hwm_cmd ae_roi_cmd;
 			memcpy(&ae_roi_cmd, &set_ae_roi, sizeof(ae_roi_cmd));
@@ -4056,6 +4258,12 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			    DS5_DEVICE_TYPE_D58X)
 			ret = d500_set_gyro_sensitivity(state, ctrl->val);
 		break;
+	case D500_CAMERA_CID_STEREO_MODE:
+		if (state->is_rgb &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X)
+			ret = d500_set_stereo_mode(state, ctrl->val);
+		break;
 	case DS5_CAMERA_CID_PWM:
 		if (state->is_depth)
 			ret = ds5_write(state, base | DS5_PWM_FREQUENCY, ctrl->val);
@@ -4174,7 +4382,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 {
 	struct ds5 *state = container_of(ctrl->handler, struct ds5,
 			ctrls.handler);
-			
+
 	u32 data;
 	struct d500_dpp_ctrl_desc dpp_desc;
 	int ret = 0;
@@ -4428,7 +4636,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		}
 		memcpy(ae_setpoint_cmd, &get_ae_setpoint, sizeof(struct hwm_cmd));
 		ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd), ae_setpoint_cmd);
-		if (ret) {		
+		if (ret) {
 			devm_kfree(&state->client->dev, ae_setpoint_cmd);
 			return ret;
 		}
@@ -4470,7 +4678,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		devm_kfree(&state->client->dev, ae_type_cmd);
 		}
 		break;
-	case DS5_CAMERA_CID_HWMC_RW: 
+	case DS5_CAMERA_CID_HWMC_RW:
 		if (ctrl->p_new.p_u8) {
 			unsigned char *data = (unsigned char *)ctrl->p_new.p_u8;
 			u16 dataLen = 0;
@@ -4967,6 +5175,24 @@ static const struct v4l2_ctrl_config ds5_ctrl_gyro_sensitivity_d58x = {
 	.def = D500_GYRO_SENSITIVITY_125_DPS,
 	.qmenu = d500_gyro_sensitivity_menu,
 	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
+static const char * const d500_stereo_mode_menu[] = {
+	[D500_STEREO_MODE_LEFT] = "Left",
+	[D500_STEREO_MODE_RIGHT] = "Right",
+	[D500_STEREO_MODE_FRAME_ALTERNATE] = "Frame Alternate",
+};
+
+static const struct v4l2_ctrl_config d500_ctrl_stereo_mode = {
+	.ops = &ds5_ctrl_ops,
+	.id = D500_CAMERA_CID_STEREO_MODE,
+	.name = "Stereo Mode",
+	.type = V4L2_CTRL_TYPE_MENU,
+	.min = D500_STEREO_MODE_LEFT,
+	.max = D500_STEREO_MODE_FRAME_ALTERNATE,
+	.def = D500_STEREO_MODE_LEFT,
+	.qmenu = d500_stereo_mode_menu,
+	.flags = V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 };
 
 static const struct v4l2_ctrl_config ds5_ctrl_pwm = {
@@ -5957,6 +6183,13 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 			ctrls->ae_priority->flags |= V4L2_CTRL_FLAG_VOLATILE |
 					V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
 		}
+
+		if (is_d58x) {
+			ctrls->rgb_stereo_mode =
+				v4l2_ctrl_new_custom(hdl, &d500_ctrl_stereo_mode,
+						     sensor);
+			ds5_v4l2_ctrl_set_disabled(ctrls->rgb_stereo_mode, true);
+		}
 	}
 
 	if (hdl->error) {
@@ -6626,6 +6859,10 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	bool ds5_config_done = !on; /* for stop, skip config */
 	bool reset_invalidated = false;
 	bool *streaming_flag = NULL;
+	enum d500_stereo_mode stereo_mode = d500_active_stereo_mode(state);
+	bool frame_alternate = state->is_rgb &&
+		stereo_mode == D500_STEREO_MODE_FRAME_ALTERNATE;
+	int right_ret = 0;
 	int cur_ds5 = atomic_read(ds5_get_reset_gen(state));
 
 	/* Lazy invalidation after HW or deserializer reset.
@@ -6641,14 +6878,23 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	}
 
 	// spare duplicate calls
-	if (sensor->streaming == on)
+	if (sensor->streaming == on) {
+		if (frame_alternate)
+			return d500_dual_rgb_right_s_stream(state, on);
 		return 0;
+	}
 	if (state->is_depth) {
 		config_status_base = DS5_DEPTH_CONFIG_STATUS;
 		stream_status_base = DS5_DEPTH_STREAM_STATUS;
 		stream_id = DS5_STREAM_DEPTH;
 		vc_id = 0;
 		streaming_flag = &state->ds5_dev->depth_streaming;
+	} else if (state->is_rgb && stereo_mode == D500_STEREO_MODE_RIGHT) {
+		config_status_base = D500_DUAL_RGB_RIGHT_CONFIG_STATUS;
+		stream_status_base = D500_DUAL_RGB_RIGHT_STREAM_STATUS;
+		stream_id = D500_STREAM_DUAL_RGB_RIGHT;
+		vc_id = 1;
+		streaming_flag = &state->ds5_dev->d500_dual_rgb_right_streaming;
 	} else if (state->is_rgb) {
 		config_status_base = DS5_RGB_CONFIG_STATUS;
 		stream_status_base = DS5_RGB_STREAM_STATUS;
@@ -6686,6 +6932,8 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		stream_cmd = (DS5_STREAM_STOP | stream_id);
 		expected_streaming_state = DS5_STREAM_IDLE;
 		status = DS5_STATUS_STREAMING;
+		if (frame_alternate)
+			right_ret = d500_dual_rgb_right_s_stream(state, false);
 	}
 
 	/* Verify stream is in the expected state before issuing command */
@@ -6748,7 +6996,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			if (on && state->dser_ops->retrigger_datapath)
 				state->dser_ops->retrigger_datapath(state->dser_dev);
 #endif
-			return 0;
+			return right_ret;
 		}
 	}
 
@@ -6759,6 +7007,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	 * so the flush cannot truncate a sibling's in-flight frames. */
 	if (on && !(state->ds5_dev->depth_streaming ||
 		    state->ds5_dev->rgb_streaming ||
+		    state->ds5_dev->d500_dual_rgb_right_streaming ||
 		    state->ds5_dev->ir_streaming ||
 		    state->ds5_dev->imu_streaming))
 		state->ds5_dev->link_flush_pending = true;
@@ -6908,6 +7157,43 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		msleep_range(100);
 #endif
 	}
+
+	if (on && ret >= 0 && frame_alternate) {
+		right_ret = d500_dual_rgb_right_s_stream(state, true);
+		if (right_ret) {
+			/* A FRAME_ALTERNATE STREAMON is atomic from userspace's
+			 * perspective. Do not leave Left running if Right failed.
+			 */
+			ds5_write(state, DS5_START_STOP_STREAM,
+				  DS5_STREAM_STOP | DS5_STREAM_RGB);
+			mutex_lock(&state->ds5_dev->lock);
+			state->ds5_dev->rgb_streaming = false;
+			mutex_unlock(&state->ds5_dev->lock);
+			sensor->streaming = false;
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+			mutex_lock(&serdes_lock__);
+			if (sensor->pipe_id >= 0 &&
+			    !state->dser_ops->release_pipe(state->dser_dev,
+							 sensor->pipe_id))
+				sensor->pipe_id = PIPE_NOT_CONFIGURED;
+			mutex_unlock(&serdes_lock__);
+			if (state->ser_ops->stream_stop) {
+				int ser_vc_id = state->dser_ops->get_ser_vc_id ?
+					state->dser_ops->get_ser_vc_id(state->dser_dev,
+						state->gmsl_link, vc_id) :
+					(int)vc_id;
+
+				if (ser_vc_id >= 0)
+					state->ser_ops->stream_stop(state->ser_dev,
+						ser_vc_id);
+			}
+#endif
+			return right_ret;
+		}
+	}
+
+	if (!on && ret >= 0 && right_ret)
+		ret = right_ret;
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	if (on && ret >= 0 && state->dser_ops->retrigger_datapath)
 		state->dser_ops->retrigger_datapath(state->dser_dev);
@@ -7359,7 +7645,7 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 		sensor->formats = ds5_imu_formats_extended;
 	else
 		sensor->formats = ds5_imu_formats;
-	
+
 	sensor->n_formats = 1;
 	sensor->mux_pad = DS5_MUX_PAD_IMU;
 
