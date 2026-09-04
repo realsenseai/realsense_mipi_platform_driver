@@ -27,6 +27,7 @@
 #include <linux/of_gpio.h>
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
+#include <linux/rwsem.h>
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/videodev2.h>
@@ -688,6 +689,11 @@ struct ds5_dev {
 	*/
 	unsigned long last_reset_jiffies;
 
+	/* Camera-side I2C tunnels over this camera's GMSL link, so a one-shot
+	 * link reset NACKs every transaction until the link re-locks.  Register
+	 * accessors take it for read, the reset takes it for write. */
+	struct rw_semaphore link_i2c_rwsem;
+
 #ifdef CONFIG_VIDEO_D4XX_SERDES
  	/* Pointer to the deserializer dev */
 	struct dser_control *dser_control;
@@ -733,8 +739,10 @@ static void ds5_init_global_slots_once(void)
 		return;
 	}
 
-	for (i = 0; i < MAX_DS5_NUM; i++)
+	for (i = 0; i < MAX_DS5_NUM; i++) {
 		mutex_init(&ds5_inited[i].lock);
+		init_rwsem(&ds5_inited[i].link_i2c_rwsem);
+	}
 
 	for (i = 0; i < MAX_DSER_NUM; i++)
 		mutex_init(&dser_inited[i].lock);
@@ -855,6 +863,7 @@ static void ds5_init_global_slots_once(void)
 	mutex_lock(&ds5_slots_lock__);
 	if (!ds5_slots_inited) {
 		mutex_init(&ds5_inited[0].lock);
+		init_rwsem(&ds5_inited[0].link_i2c_rwsem);
 		ds5_slots_inited = true;
 	}
 	mutex_unlock(&ds5_slots_lock__);
@@ -914,8 +923,27 @@ static inline void msleep_range(unsigned int delay_base)
 #endif
 #endif
 
+/* Park register access while this camera's GMSL link is reset.  ds5_dev is NULL
+ * until the camera's shared state is linked during probe, hence the guards. */
+static inline struct ds5_dev *ds5_i2c_lock(struct ds5 *state)
+{
+	struct ds5_dev *ds5_dev = state->ds5_dev;
+
+	if (ds5_dev)
+		down_read(&ds5_dev->link_i2c_rwsem);
+
+	return ds5_dev;
+}
+
+static inline void ds5_i2c_unlock(struct ds5_dev *ds5_dev)
+{
+	if (ds5_dev)
+		up_read(&ds5_dev->link_i2c_rwsem);
+}
+
 static int ds5_write(struct ds5 *state, u16 reg, u16 val)
 {
+	struct ds5_dev *ds5_dev;
 	int ret;
 	int retry;
 	u8 value[2];
@@ -927,6 +955,7 @@ static int ds5_write(struct ds5 *state, u16 reg, u16 val)
 			"%s(): writing to register: 0x%04x, value1: 0x%x, value2:0x%x\n",
 			__func__, reg, value[1], value[0]);
 
+	ds5_dev = ds5_i2c_lock(state);
 	for (retry = 0; retry < DS5_I2C_RETRY_COUNT; retry++) {
 		ret = regmap_raw_write(state->regmap, reg, value, sizeof(value));
 		if (ret == 0)
@@ -939,6 +968,8 @@ static int ds5_write(struct ds5 *state, u16 reg, u16 val)
 				     DS5_I2C_RETRY_DELAY_US + 500);
 		}
 	}
+	ds5_i2c_unlock(ds5_dev);
+
 	if (ret < 0)
 		dev_err(&state->client->dev,
 			"%s(): i2c write failed after %d retries, 0x%04x = 0x%x, err %d\n",
@@ -953,9 +984,11 @@ static int ds5_write(struct ds5 *state, u16 reg, u16 val)
 static int ds5_raw_write(struct ds5 *state, u16 reg,
 		const void *val, size_t val_len)
 {
+	struct ds5_dev *ds5_dev;
 	int ret;
 	int retry;
 
+	ds5_dev = ds5_i2c_lock(state);
 	for (retry = 0; retry < DS5_I2C_RETRY_COUNT; retry++) {
 		ret = regmap_raw_write(state->regmap, reg, val, val_len);
 		if (ret == 0)
@@ -968,6 +1001,8 @@ static int ds5_raw_write(struct ds5 *state, u16 reg,
 				     DS5_I2C_RETRY_DELAY_US + 500);
 		}
 	}
+	ds5_i2c_unlock(ds5_dev);
+
 	if (ret < 0)
 		dev_err(&state->client->dev,
 			"%s(): i2c raw write failed after %d retries, 0x%04x size(%d), err %d\n",
@@ -982,9 +1017,11 @@ static int ds5_raw_write(struct ds5 *state, u16 reg,
 
 static int ds5_read(struct ds5 *state, u16 reg, u16 *val)
 {
+	struct ds5_dev *ds5_dev;
 	int ret;
 	int retry;
 
+	ds5_dev = ds5_i2c_lock(state);
 	for (retry = 0; retry < DS5_I2C_RETRY_COUNT; retry++) {
 		ret = regmap_raw_read(state->regmap, reg, val, 2);
 		if (ret == 0)
@@ -997,6 +1034,8 @@ static int ds5_read(struct ds5 *state, u16 reg, u16 *val)
 				     DS5_I2C_RETRY_DELAY_US + 500);
 		}
 	}
+	ds5_i2c_unlock(ds5_dev);
+
 	if (ret < 0)
 		dev_err(&state->client->dev,
 			"%s(): i2c read failed after %d retries, 0x%04x, err %d\n",
@@ -1015,9 +1054,11 @@ static int ds5_read_poll(struct ds5 *state, u16 reg, u16 *val)
 
 static int ds5_raw_read(struct ds5 *state, u16 reg, void *val, size_t val_len)
 {
+	struct ds5_dev *ds5_dev;
 	int ret;
 	int retry;
 
+	ds5_dev = ds5_i2c_lock(state);
 	for (retry = 0; retry < DS5_I2C_RETRY_COUNT; retry++) {
 		ret = regmap_raw_read(state->regmap, reg, val, val_len);
 		if (ret == 0)
@@ -1030,6 +1071,8 @@ static int ds5_raw_read(struct ds5 *state, u16 reg, void *val, size_t val_len)
 				     DS5_I2C_RETRY_DELAY_US + 500);
 		}
 	}
+	ds5_i2c_unlock(ds5_dev);
+
 	if (ret < 0)
 		dev_err(&state->client->dev,
 			"%s(): i2c raw read failed after %d retries, 0x%04x size(%d), err %d\n",
@@ -3558,8 +3601,11 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 
 	/* RSDEV-12608: drop the stale partial frame a mid-stream camera reset leaves
 	 * in this link's line buffer (NULL-safe; max9296 leaves none). */
-	if (state->dser_ops->reset_oneshot_link)
+	if (state->dser_ops->reset_oneshot_link) {
+		down_write(&state->ds5_dev->link_i2c_rwsem);
 		state->dser_ops->reset_oneshot_link(state->dser_dev, state->gmsl_link);
+		up_write(&state->ds5_dev->link_i2c_rwsem);
+	}
 
 	/* Re-apply ESYNC tunneling to match cached sync_mode control */
 	if (state->ctrls.sync_mode) {
@@ -6592,8 +6638,9 @@ static int ds5_mux_s_frame_interval(struct v4l2_subdev *sd,
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 /* RSDSO-21786: fire the link flush at most once per cold bring-up. The flag is
- * consumed under ds5_dev->lock, but the op itself (CTRL1 write plus a 100 ms
- * settle) must run unlocked so it cannot stall a sibling's start. */
+ * consumed under ds5_dev->lock, which the op must not hold so it cannot stall a
+ * sibling's start.  It does take link_i2c_rwsem for write, parking sibling
+ * register access for the CTRL1 write plus the 100 ms settle. */
 static void ds5_flush_idle_link(struct ds5 *state)
 {
 	bool flush;
@@ -6606,8 +6653,11 @@ static void ds5_flush_idle_link(struct ds5 *state)
 	state->ds5_dev->link_flush_pending = false;
 	mutex_unlock(&state->ds5_dev->lock);
 
-	if (flush)
+	if (flush) {
+		down_write(&state->ds5_dev->link_i2c_rwsem);
 		state->dser_ops->reset_oneshot_link(state->dser_dev, state->gmsl_link);
+		up_write(&state->ds5_dev->link_i2c_rwsem);
+	}
 }
 #endif
 
