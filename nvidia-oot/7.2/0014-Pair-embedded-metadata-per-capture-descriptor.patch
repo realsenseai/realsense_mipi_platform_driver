@@ -1,0 +1,193 @@
+From: RealSense <support@realsenseai.com>
+Date: Wed, 19 Aug 2026 11:20:00 +0800
+Subject: [PATCH] Pair embedded metadata per capture descriptor
+
+Allocate one page-aligned embedded-metadata DMA slot per VI capture
+descriptor.  Select the same slot at descriptor setup and buffer release so
+in-flight frames cannot overwrite each other's metadata.  Complete metadata
+with the pixel sequence and timestamp before releasing the pixel vb2 buffer.
+
+The change only adds capture_queue_depth * one-page coherent storage per
+metadata-enabled channel and does not copy pixel data.
+---
+diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
+index 62c53af..0252438 100644
+--- a/drivers/media/platform/tegra/camera/vi/channel.c
++++ b/drivers/media/platform/tegra/camera/vi/channel.c
+@@ -3064,6 +3064,7 @@ int tegra_channel_cleanup_video_embedded(struct tegra_channel *chan)
+ 		dma_free_coherent(vi_unit_dev,
+ 				chan->emb_buf_size,
+ 				chan->emb_buf_addr, chan->emb_buf);
++		chan->emb_buf_stride = 0;
+ 		chan->emb_buf_size = 0;
+ 		vb2_queue_release(queue);
+ #if defined(CONFIG_VIDEOBUF2_DMA_CONTIG)
+diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+index 526dd9a..6d9df30 100644
+--- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
++++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+@@ -7,6 +7,7 @@
+ #include <linux/fs.h>
+ #include <linux/kthread.h>
+ #include <linux/nvhost.h>
++#include <linux/overflow.h>
+ #include <linux/pm_runtime.h>
+ #include <linux/sched/task.h>
+ #include <linux/semaphore.h>
+@@ -467,12 +468,15 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+ 	}
+
+ 	if (chan->embedded_data_height > 0) {
++		dma_addr_t emb_offset =
++			(dma_addr_t)descr_index * chan->emb_buf_stride;
++
+ 		desc->ch_cfg.embdata_enable = 1;
+ 		desc->ch_cfg.frame.embed_x = chan->embedded_data_width * BPP_MEM;
+ 		desc->ch_cfg.frame.embed_y = chan->embedded_data_height;
+
+ 		desc_memoryinfo->surface[VI_ATOMP_SURFACE_EMBEDDED].base_address
+-			= chan->emb_buf;
++			= chan->emb_buf + emb_offset;
+ 		desc_memoryinfo->surface[VI_ATOMP_SURFACE_EMBEDDED].size
+ 			= desc->ch_cfg.frame.embed_x * desc->ch_cfg.frame.embed_y;
+
+@@ -489,11 +493,15 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+ }
+
+ static void vi5_release_metadata_buffer(struct tegra_channel *chan,
+-	struct vb2_v4l2_buffer *vbuf)
++	struct tegra_channel_buffer *buf)
+ {
+ 	struct vb2_buffer *evb = NULL;
+ 	struct vb2_v4l2_buffer *evbuf;
+-	void* frm_buffer;
++	struct vb2_v4l2_buffer *vbuf = &buf->buf;
++	void *frm_buffer;
++	void *metadata_addr;
++	unsigned int descr_index = buf->capture_descr_index[0];
++	unsigned int emb_offset;
+
+ 	spin_lock(&chan->embedded.spin_lock);
+ 	if (0 < chan->embedded.num_buffers) {
+@@ -510,10 +518,23 @@ static void vi5_release_metadata_buffer(struct tegra_channel *chan,
+ 		return;
+
+ 	frm_buffer = vb2_plane_vaddr(evb, 0);
+-	if (!frm_buffer)
++	if (!frm_buffer) {
++		vb2_buffer_done(evb, VB2_BUF_STATE_ERROR);
+ 		return;
++	}
+
+-	memcpy(frm_buffer, chan->emb_buf_addr, 255);
++	if (!chan->emb_buf_stride ||
++		chan->emb_buf_size < 255 ||
++		descr_index >= chan->capture_queue_depth ||
++		check_mul_overflow(descr_index, chan->emb_buf_stride,
++			&emb_offset) ||
++		emb_offset > chan->emb_buf_size - 255) {
++		vb2_buffer_done(evb, VB2_BUF_STATE_ERROR);
++		return;
++	}
++
++	metadata_addr = (u8 *)chan->emb_buf_addr + emb_offset;
++	memcpy(frm_buffer, metadata_addr, 255);
+ 	evbuf = to_vb2_v4l2_buffer(evb);
+ 	evbuf->sequence = vbuf->sequence;
+ 	vb2_set_plane_payload(evb, 0, 255);
+@@ -535,10 +556,10 @@ static void vi5_release_buffer(struct tegra_channel *chan,
+ 	vbuf->field = V4L2_FIELD_NONE;
+ 	vb2_set_plane_payload(&vbuf->vb2_buf, 0, chan->format.sizeimage);
+
+-	vb2_buffer_done(&vbuf->vb2_buf, buf->vb2_state);
+-
+ 	if (chan->embedded_data_height == 1 && buf->vb2_state == VB2_BUF_STATE_DONE)
+-		vi5_release_metadata_buffer(chan, vbuf);
++		vi5_release_metadata_buffer(chan, buf);
++
++	vb2_buffer_done(&vbuf->vb2_buf, buf->vb2_state);
+ }
+
+ static void vi5_capture_enqueue(struct tegra_channel *chan,
+@@ -1004,6 +1025,7 @@ static int vi5_channel_start_streaming(struct vb2_queue *vq, u32 count)
+ 	struct device_node *node;
+ 	struct sensor_mode_properties *sensor_mode;
+ 	struct camera_common_data *s_data;
++	unsigned int emb_buf_stride = 0;
+ 	unsigned int emb_buf_size = 0;
+
+ 	/* Skip in bypass mode */
+@@ -1027,6 +1049,7 @@ static int vi5_channel_start_streaming(struct vb2_queue *vq, u32 count)
+ 				if (s_data != NULL && node != NULL) {
+ 					int idx = s_data->mode_prop_idx;
+
++					emb_buf_stride = 0;
+ 					emb_buf_size = 0;
+ 					if (idx < s_data->sensor_props.\
+ 								num_modes) {
+@@ -1041,15 +1064,24 @@ static int vi5_channel_start_streaming(struct vb2_queue *vq, u32 count)
+ 							sensor_mode->\
+ 							 image_properties.\
+ 						      embedded_metadata_height;
+-						/* rounding up to page size */
+-						emb_buf_size =
++						/* One DMA slot per capture descriptor. */
++						emb_buf_stride =
+ 							round_up(chan->\
+ 							embedded_data_width *
+ 								chan->\
+ 							embedded_data_height *
+ 							BPP_MEM, PAGE_SIZE);
++						if (!chan->capture_queue_depth ||
++							check_mul_overflow(emb_buf_stride,
++								chan->capture_queue_depth,
++								&emb_buf_size)) {
++							dev_err(&chan->video->dev,
++								"embedded buffer size overflow\n");
++							goto err_setup;
++						}
+ 					}
+ 				}
++				chan->emb_buf_stride = emb_buf_stride;
+ 				/* Allocate buffer for Embedded Data if need to*/
+ 				if (emb_buf_size > chan->emb_buf_size) {
+ 					struct device *vi_unit_dev;
+@@ -1068,6 +1100,7 @@ static int vi5_channel_start_streaming(struct vb2_queue *vq, u32 count)
+ 							chan->emb_buf_addr,
+ 							chan->emb_buf);
+ 						chan->emb_buf_size = 0;
++						chan->emb_buf_stride = 0;
+ 					}
+
+ 					chan->emb_buf_addr =
+@@ -1081,6 +1114,7 @@ static int vi5_channel_start_streaming(struct vb2_queue *vq, u32 count)
+ 						goto err_setup;
+ 					}
+ 					chan->emb_buf_size = emb_buf_size;
++					chan->emb_buf_stride = emb_buf_stride;
+ 				}
+ 			}
+ 			ret = tegra_channel_capture_setup(chan, vi_port);
+@@ -1171,6 +1205,7 @@ static int vi5_channel_stop_streaming(struct vb2_queue *vq)
+ 				dma_free_coherent(vi_unit_dev, chan->emb_buf_size,
+ 								chan->emb_buf_addr, chan->emb_buf);
+ 				chan->emb_buf_size = 0;
++				chan->emb_buf_stride = 0;
+ 			}
+
+ 			vi_channel_close_ex(chan->vi_channel_id[vi_port],
+diff --git a/include/media/mc_common.h b/include/media/mc_common.h
+index 15ab008..d908237 100644
+--- a/include/media/mc_common.h
++++ b/include/media/mc_common.h
+@@ -281,6 +281,7 @@ struct tegra_channel {
+
+ 	dma_addr_t emb_buf;
+ 	void *emb_buf_addr;
++	unsigned int emb_buf_stride;
+ 	unsigned int emb_buf_size;
+ };
+
+
+--
+2.43.0
