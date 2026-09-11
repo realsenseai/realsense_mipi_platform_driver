@@ -1675,6 +1675,18 @@ static const struct ds5_resolution d58x_y8_sizes[] = {
 	DS5_RES(256, 144, ds5_framerate_to_90)
 };
 
+/* Temporary, non-mergeable Perception-MUX PoC profile.  It deliberately
+ * reuses the IR control bank only to drive the existing GMSL stream command
+ * into FlowGmsl while the final PerceptionSetConfig control ABI is reviewed. */
+static const struct ds5_resolution d58x_perception_poc_sizes[] = {
+	{
+		.width = 256,
+		.height = 321,
+		.framerates = &ds5_framerate_30,
+		.n_framerates = 1,
+	},
+};
+
 static const struct ds5_resolution d58x_calibration_sizes[] = {
 	DS5_RES(1600, 1300, ds5_framerate_15_25)
 };
@@ -1710,6 +1722,12 @@ static const struct ds5_format ds5_y_formats_d58x[] = {
 		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
 		.n_resolutions = ARRAY_SIZE(d58x_y8_sizes),
 		.resolutions = d58x_y8_sizes,
+	}, {
+		/* Temporary aggregate Perception node: variable-height RAW8 carrier. */
+		.data_type = GMSL_CSI_DT_RAW_8,
+		.mbus_code = MEDIA_BUS_FMT_RS_VARLEN_1X8,
+		.n_resolutions = ARRAY_SIZE(d58x_perception_poc_sizes),
+		.resolutions = d58x_perception_poc_sizes,
 	}, {
 		.data_type = GMSL_CSI_DT_YUV422_8,	/* Y8I */
 		.mbus_code = MEDIA_BUS_FMT_VYUY8_1X16,
