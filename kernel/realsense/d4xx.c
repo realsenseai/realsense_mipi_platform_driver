@@ -1680,8 +1680,8 @@ static const struct ds5_resolution d58x_y8_sizes[] = {
  * into FlowGmsl while the final PerceptionSetConfig control ABI is reviewed. */
 static const struct ds5_resolution d58x_perception_poc_sizes[] = {
 	{
-		.width = 256,
-		.height = 321,
+		.width = 1024,
+		.height = 81,
 		.framerates = &ds5_framerate_30,
 		.n_framerates = 1,
 	},
