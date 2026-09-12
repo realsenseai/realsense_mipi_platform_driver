@@ -1678,12 +1678,14 @@ static const struct ds5_resolution d58x_y8_sizes[] = {
 /* Temporary, non-mergeable Perception-MUX PoC profile.  It deliberately
  * reuses the IR control bank only to drive the existing GMSL stream command
  * into FlowGmsl while the final PerceptionSetConfig control ABI is reviewed. */
+static const u16 d58x_perception_poc_framerates[] = {30, 60, 120};
+
 static const struct ds5_resolution d58x_perception_poc_sizes[] = {
 	{
 		.width = 1024,
 		.height = 81,
-		.framerates = &ds5_framerate_30,
-		.n_framerates = 1,
+		.framerates = d58x_perception_poc_framerates,
+		.n_framerates = ARRAY_SIZE(d58x_perception_poc_framerates),
 	},
 };
 
