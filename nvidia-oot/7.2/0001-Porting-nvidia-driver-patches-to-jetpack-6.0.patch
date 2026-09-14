@@ -2,16 +2,18 @@ diff --git a/drivers/media/i2c/Makefile b/drivers/media/i2c/Makefile
 index fdf09df6..b1042aa3 100644
 --- a/drivers/media/i2c/Makefile
 +++ b/drivers/media/i2c/Makefile
-@@ -17,6 +17,9 @@ subdir-ccflags-y += -Werror
+@@ -17,6 +17,11 @@ subdir-ccflags-y += -Werror
  ifneq ($(NV_BUILD_SYSTEM_TYPE),embedded-linux)
  obj-m += max9295.o
  obj-m += max9296.o
 +subdir-ccflags-y += -DCONFIG_VIDEO_D4XX_SERDES
 +subdir-ccflags-y += -DCONFIG_TEGRA_CAMERA_PLATFORM
 +obj-m += d4xx.o
++obj-m += max96717.o
++obj-m += max96724.o
  ifndef CONFIG_TEGRA_SYSTEM_TYPE_ACK
  obj-m += max96712.o
- 
+
 diff --git a/drivers/media/i2c/max9295.c b/drivers/media/i2c/max9295.c
 index b363d5f6..e7c77845 100644
 --- a/drivers/media/i2c/max9295.c
@@ -72,7 +74,7 @@ index b363d5f6..e7c77845 100644
 +	err |= max9295_set_registers(dev, map_bpp8dbl, ARRAY_SIZE(map_bpp8dbl));
 +
 +	if (data_type1 == GMSL_CSI_DT_RGB_888)
-+		bpp = 0x18;
++		bpp = 0x20 | 0x18; /* Enable soft_bpp and 24 bit */
 +
 +	map_pipe_control[0].addr += 0x2 * pipe_id;
 +	map_pipe_control[1].addr += 0x2 * pipe_id;
@@ -967,7 +969,21 @@ diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/p
 index 69d76521..e23df865 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
 +++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-@@ -463,6 +463,39 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+@@ -419,6 +419,13 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+ 		}
+ 	}
+ 
++	/* Y16I: one 32bpp L/R column pair per V4L2 pixel.
++	 * However, GMSL caps at 24bpp, so we alias it to RAW16, and the de-facto
++	 * width should be double the requested size
++	 */
++	if (chan->fmtinfo->fourcc == V4L2_PIX_FMT_Y16I)
++		width *= 2;
++
+ 	memcpy(desc, &capture_template, sizeof(capture_template));
+ 	memset(desc_memoryinfo, 0, sizeof(*desc_memoryinfo));
+ 
+@@ -463,6 +470,39 @@ static void vi5_setup_surface(struct tegra_channel *chan,
  		chan->capture_descr_sequence += 1;
  }
  
@@ -999,7 +1015,7 @@ index 69d76521..e23df865 100644
 +	memcpy(frm_buffer, chan->emb_buf_addr, 255);
 +	evbuf = to_vb2_v4l2_buffer(evb);
 +	evbuf->sequence = vbuf->sequence;
-+	vb2_set_plane_payload(evb, 0, 68);
++	vb2_set_plane_payload(evb, 0, 255);
 +	evb->timestamp = vbuf->vb2_buf.timestamp;
 +	vb2_buffer_done(evb, VB2_BUF_STATE_DONE);
 +}
@@ -1007,7 +1023,7 @@ index 69d76521..e23df865 100644
  static void vi5_release_buffer(struct tegra_channel *chan,
  	struct tegra_channel_buffer *buf)
  {
-@@ -478,6 +511,9 @@ static void vi5_release_buffer(struct tegra_channel *chan,
+@@ -478,6 +518,9 @@ static void vi5_release_buffer(struct tegra_channel *chan,
  	vb2_set_plane_payload(&vbuf->vb2_buf, 0, chan->format.sizeimage);
  
  	vb2_buffer_done(&vbuf->vb2_buf, buf->vb2_state);
@@ -1061,7 +1077,7 @@ index d0403936..c04ca61f 100644
  	TEGRA_VIDEO_FORMAT(YUV422, 16, UYVY8_2X8, 2, 1, T_U8_Y8__V8_Y8,
  				YUV422_8, UYVY, "YUV 4:2:2 UYVY"),
  	TEGRA_VIDEO_FORMAT(YUV422, 16, VYUY8_2X8, 2, 1, T_V8_Y8__U8_Y8,
-@@ -162,6 +164,18 @@ static const struct tegra_video_format vi5_video_formats[] = {
+@@ -162,6 +164,22 @@ static const struct tegra_video_format vi5_video_formats[] = {
  				YUV422_8, YUYV, "YUV 4:2:2 YUYV"),
  	TEGRA_VIDEO_FORMAT(YUV422, 16, YVYU8_2X8, 2, 1, T_Y8_V8__Y8_U8,
  				YUV422_8, YVYU, "YUV 4:2:2 YVYU"),
@@ -1076,6 +1092,10 @@ index d0403936..c04ca61f 100644
 +	// R[7:3]R[3:0] | L[3:0]R[11:8] | L[11:8]L[7:4] | ALIGN[7:0]
 +	TEGRA_VIDEO_FORMAT(RGB888, 24, RGB888_1X24, 4, 1, T_A8R8G8B8,
 +				RGB888, Y12I, "Y12I 24"),
++	TEGRA_VIDEO_FORMAT(RAW16, 16, ARGB8888_1X32, 4, 1, T_R16,
++				RAW16, Y16I, "Y16I 32"),
++	TEGRA_VIDEO_FORMAT(RAW16, 16, SGRBG16_1X16, 2, 1, T_R16,
++				RAW16, RW16, "RW16 16"),
 +
  };
  
@@ -1084,13 +1104,14 @@ diff --git a/include/media/gmsl-link.h b/include/media/gmsl-link.h
 index ad902d0a..7dce2356 100644
 --- a/include/media/gmsl-link.h
 +++ b/include/media/gmsl-link.h
-@@ -40,6 +40,9 @@
+@@ -40,6 +40,10 @@
  #define GMSL_CSI_DT_RAW_12 0x2C
  #define GMSL_CSI_DT_UED_U1 0x30
  #define GMSL_CSI_DT_EMBED 0x12
 +#define GMSL_CSI_DT_YUV422_8 0x1E
 +#define GMSL_CSI_DT_RGB_888 0x24
 +#define GMSL_CSI_DT_RAW_8 0x2A
++#define GMSL_CSI_DT_RAW_16 0x2E
  
  #define GMSL_ST_ID_UNUSED 0xFF
  

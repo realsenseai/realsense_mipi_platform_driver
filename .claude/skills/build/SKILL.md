@@ -59,6 +59,36 @@ Flags:
 
 Output directory: `images/$VERSION/` (normalized: `images/6.x/` for JP 6.x, `images/5.x/` for JP 5.x).
 
+### Step 3 (optional): Overlay-only rebuild
+
+When only a device-tree overlay changed (new/edited `tegra234-camera-d4xx-overlay*.dts`) and the kernel/modules are already built, skip the full `build_all.sh` and rebuild just the DTBs — far faster, and it does NOT recompile `d4xx.c` (safe when the build tree sits on an unrelated WIP branch).
+
+Prerequisite: the workspace was built at least once (`out` symlink + kernel image present in `sources_$VERSION/`).
+
+1. If the overlay is **new**, link it into the tree and add it to the enumeration (mirrors what `apply_patches.sh` does):
+   ```bash
+   ov=sources_$VERSION/hardware/nvidia/t23x/nv-public/overlay
+   ln -f hardware/realsense/<new-overlay>.dts "$ov/"
+   grep -q "<new-overlay>.dtbo" "$ov/Makefile" || \
+     sed -i "/<sibling-overlay>.dtbo/i dtbo-y += <new-overlay>.dtbo" "$ov/Makefile"
+   ```
+   Also add the same `dtbo-y +=` line to `hardware/nvidia/t23x/nv-public/6.x/0001-overlay-*.patch` so a clean `apply_patches.sh` keeps building it (bump the hunk `@@` count + diffstat).
+
+2. Build only the DTBs (same env `build_all.sh` uses):
+   ```bash
+   . scripts/setup-common $VERSION
+   export DEVDIR=$(pwd) TEGRA_KERNEL_OUT="$DEVDIR/images/$VERSION" ARCH=arm64
+   export CROSS_COMPILE=$DEVDIR/l4t-gcc/6.x/bin/aarch64-buildroot-linux-gnu-
+   export KERNEL_HEADERS="$DEVDIR/sources_$VERSION/kernel/kernel-jammy-src"
+   cd sources_$VERSION && make dtbs
+   ```
+   Output: `sources_$VERSION/nvidia-oot/device-tree/platform/generic-dts/dtbs/<overlay>.dtbo`
+
+3. Validate before deploy:
+   ```bash
+   dtc -I dtb -O dts <overlay>.dtbo | grep -E "overlay-name|num-channels|max9295"
+   ```
+
 ## Build Architecture Details
 
 ### What gets built per JetPack generation

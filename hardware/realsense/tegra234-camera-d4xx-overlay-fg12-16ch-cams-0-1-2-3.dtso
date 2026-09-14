@@ -1,21 +1,26 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // SPDX-FileCopyrightText: Copyright (c) 2018-2023, INTEL CORPORATION.  All rights reserved.
 
+/*
+ * Four-camera Fangzhu (FG12-16CH) overlay for AGX Orin (tegra234) on JetPack 7.
+ *
+ * Content is identical to tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-1-2-3.dts
+ * (four D457 on a single MAX96712, link-mask 0xf, 16 VCs) — the JP7 (.dtso) form
+ * differs only in that the p3737 platform dt-bindings header is absent from the
+ * noble 6.8 tree, so the JETSON_COMPATIBLE macro is replaced by the hardcoded
+ * board compatible string (matching fw-orin-2's live /proc/device-tree/compatible).
+ * Same convention as the one-camera tegra234-camera-d4xx-overlay-fg12-16ch.dtso.
+ */
+
 /dts-v1/;
 /plugin/;
 
 #include <dt-bindings/clock/tegra234-clock.h>
 #include <dt-bindings/gpio/tegra234-gpio.h>
 #include <dt-bindings/pinctrl/pinctrl-tegra.h>
-#include <dt-bindings/tegra234-p3737-0000+p3701-0000.h>
 
 #define MAX1_CSI_SYNC	TEGRA234_AON_GPIO(BB, 2)  //MAX96712_1 MFP2
-#define MAX2_CSI_SYNC	TEGRA234_AON_GPIO(AA, 7)  //MAX96712_2 MFP2
-#define MAX4_CSI_SYNC	TEGRA234_AON_GPIO(BB, 3)  //MAX96712_4 MFP2
 #define CAM0_PWDN	TEGRA234_MAIN_GPIO(H, 6)  //MAX96712_1 PWDN
-#define CAM1_PWDN	TEGRA234_MAIN_GPIO(H, 3)  //MAX96712_2 PWDN
-#define CAM2_PWDN	TEGRA234_MAIN_GPIO(AC, 0) //MAX96712_3 PWDN
-#define CAM3_PWDN	TEGRA234_MAIN_GPIO(AC, 1) //MAX96712_4 PWDN
 #define CAM12V_POC	TEGRA234_MAIN_GPIO(AC, 7)
 
 #define CAMERA_I2C_MUX_BUS(x) (0x1E + x)
@@ -24,11 +29,11 @@
 
 /* camera control gpio definitions */
 / {
-	overlay-name = "QUAD Jetson RealSense Camera D4xx with max96712 and tca9546 (fg12-16ch) for Calibration";
+	overlay-name = "Jetson four RealSense Cameras D4xx with a single max96712 and tca9546 (fg12-16ch)";
 	jetson-header-name = "Jetson AGX CSI Connector";
-	compatible = JETSON_COMPATIBLE;
+	compatible = "nvidia,p3737-0000+p3701-0000", "nvidia,p3701-0000", "nvidia,tegra234";
 
-	/* TSC signal generators for MAX96712 MFP2 sync (one per deserializer). */
+	/* TSC signal generators for MAX96712 MFP2 sync. */
 	fragment@3 {
 		target-path = "/";
 		__overlay__ {
@@ -40,26 +45,14 @@
 					duty_cycle = <25>;
 					gpio_pinmux = <&gpio_aon MAX1_CSI_SYNC GPIO_ACTIVE_LOW>;
 				};
-				generator@480 {
-					status = "okay";
-					freq_hz = <30>;
-					duty_cycle = <25>;
-					gpio_pinmux = <&gpio_aon MAX2_CSI_SYNC GPIO_ACTIVE_LOW>;
-				};
-				generator@500 {
-					status = "okay";
-					freq_hz = <30>;
-					duty_cycle = <25>;
-					gpio_pinmux = <&gpio_aon MAX4_CSI_SYNC GPIO_ACTIVE_LOW>;
-				};
 			};
 		};
 	};
 
-	/* Muxing MAX<1/2/4>_CSI_SYNC to TSC function
-	 * MAX3_CSI_SYNC (PCC.02) & MAX_ALL_CAM_SYNC (PCC.00) do not have
-	 * this routing on Orin, so we define them as high-Z input with pull-down for external wiring
-	 * use jumper cable from MAX<1/2/4>_CSI_SYNC to MAX3_CSI_SYNC to use Orin TSC for sync signal or
+	/* Muxing MAX1_CSI_SYNC to TSC function
+	 * MAX_ALL_CAM_SYNC (PCC.00) does not have This routing on Orin
+	 * so we define it as high-Z input with pull-down for external wiring
+	 * Use MAX1_CSI_SYNC for Orin TSC as sync signal or use
 	 * MAX_ALL_CAM_SYNC connected to an external signal generator
 	 */
 	fragment@2 {
@@ -70,25 +63,6 @@
 			tsc_sync_pinmux: tsc-sync-pins {
 				max1-csi-sync {
 					nvidia,pins = "soc_gpio50_pbb2";
-					nvidia,function = "tsc";
-					nvidia,tristate = <TEGRA_PIN_DISABLE>;
-					nvidia,enable-input = <TEGRA_PIN_DISABLE>;
-				};
-				max2-csi-sync {
-					nvidia,pins = "can0_err_paa7";
-					nvidia,function = "tsc";
-					nvidia,tristate = <TEGRA_PIN_DISABLE>;
-					nvidia,enable-input = <TEGRA_PIN_DISABLE>;
-				};
-				max3-csi-sync-input {
-					nvidia,pins = "spi2_mosi_pcc2";
-					nvidia,function = "rsvd1";
-					nvidia,tristate = <TEGRA_PIN_ENABLE>;
-					nvidia,enable-input = <TEGRA_PIN_ENABLE>;
-					nvidia,pull = <TEGRA_PIN_PULL_DOWN>;
-				};
-				max4-csi-sync {
-					nvidia,pins = "can1_err_pbb3";
 					nvidia,function = "tsc";
 					nvidia,tristate = <TEGRA_PIN_DISABLE>;
 					nvidia,enable-input = <TEGRA_PIN_DISABLE>;
@@ -132,7 +106,7 @@
 							status = "okay";
 							vc-id = <0>;
 							port-index = <0>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out0>;
 						};
 					};
@@ -143,7 +117,7 @@
 							status = "okay";
 							vc-id = <1>;
 							port-index = <0>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out1>;
 						};
 					};
@@ -154,7 +128,7 @@
 							status = "okay";
 							vc-id = <2>;
 							port-index = <0>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out2>;
 						};
 					};
@@ -165,7 +139,7 @@
 							status = "okay";
 							vc-id = <3>;
 							port-index = <0>;
-							bus-width = <2>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out3>;
 						};
 					};
@@ -174,9 +148,9 @@
 						reg = <4>;
 						d4xx_vi_in4: endpoint {
 							status = "okay";
-							vc-id = <0>;
-							port-index = <2>;
-							bus-width = <2>;
+							vc-id = <4>;
+							port-index = <0>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out4>;
 						};
 					};
@@ -185,9 +159,9 @@
 						reg = <5>;
 						d4xx_vi_in5: endpoint {
 							status = "okay";
-							vc-id = <1>;
-							port-index = <2>;
-							bus-width = <2>;
+							vc-id = <5>;
+							port-index = <0>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out5>;
 						};
 					};
@@ -196,9 +170,9 @@
 						reg = <6>;
 						d4xx_vi_in6: endpoint {
 							status = "okay";
-							vc-id = <2>;
-							port-index = <2>;
-							bus-width = <2>;
+							vc-id = <6>;
+							port-index = <0>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out6>;
 						};
 					};
@@ -207,9 +181,9 @@
 						reg = <7>;
 						d4xx_vi_in7: endpoint {
 							status = "okay";
-							vc-id = <3>;
-							port-index = <2>;
-							bus-width = <2>;
+							vc-id = <7>;
+							port-index = <0>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out7>;
 						};
 					};
@@ -218,9 +192,9 @@
 						reg = <8>;
 						d4xx_vi_in8: endpoint {
 							status = "okay";
-							vc-id = <0>;
-							port-index = <4>;
-							bus-width = <2>;
+							vc-id = <8>;
+							port-index = <0>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out8>;
 						};
 					};
@@ -229,9 +203,9 @@
 						reg = <9>;
 						d4xx_vi_in9: endpoint {
 							status = "okay";
-							vc-id = <1>;
-							port-index = <4>;
-							bus-width = <2>;
+							vc-id = <9>;
+							port-index = <0>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out9>;
 						};
 					};
@@ -240,9 +214,9 @@
 						reg = <10>;
 						d4xx_vi_in10: endpoint {
 							status = "okay";
-							vc-id = <2>;
-							port-index = <4>;
-							bus-width = <2>;
+							vc-id = <10>;
+							port-index = <0>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out10>;
 						};
 					};
@@ -251,9 +225,9 @@
 						reg = <11>;
 						d4xx_vi_in11: endpoint {
 							status = "okay";
-							vc-id = <3>;
-							port-index = <4>;
-							bus-width = <2>;
+							vc-id = <11>;
+							port-index = <0>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out11>;
 						};
 					};
@@ -262,9 +236,9 @@
 						reg = <12>;
 						d4xx_vi_in12: endpoint {
 							status = "okay";
-							vc-id = <0>;
-							port-index = <5>;
-							bus-width = <2>;
+							vc-id = <12>;
+							port-index = <0>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out12>;
 						};
 					};
@@ -273,9 +247,9 @@
 						reg = <13>;
 						d4xx_vi_in13: endpoint {
 							status = "okay";
-							vc-id = <1>;
-							port-index = <5>;
-							bus-width = <2>;
+							vc-id = <13>;
+							port-index = <0>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out13>;
 						};
 					};
@@ -284,9 +258,9 @@
 						reg = <14>;
 						d4xx_vi_in14: endpoint {
 							status = "okay";
-							vc-id = <2>;
-							port-index = <5>;
-							bus-width = <2>;
+							vc-id = <14>;
+							port-index = <0>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out14>;
 						};
 					};
@@ -295,9 +269,9 @@
 						reg = <15>;
 						d4xx_vi_in15: endpoint {
 							status = "okay";
-							vc-id = <3>;
-							port-index = <5>;
-							bus-width = <2>;
+							vc-id = <15>;
+							port-index = <0>;
+							bus-width = <4>;
 							remote-endpoint = <&d4xx_csi_out15>;
 						};
 					};
@@ -319,7 +293,7 @@
 									d4xx_csi_in0: endpoint@0 {
 										status = "okay";
 										port-index = <0>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_0_out>;
 									};
 								};
@@ -344,7 +318,7 @@
 									d4xx_csi_in1: endpoint@2 {
 										status = "okay";
 										port-index = <0>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_1_out>;
 									};
 								};
@@ -369,7 +343,7 @@
 									d4xx_csi_in2: endpoint@4 {
 										status = "okay";
 										port-index = <0>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_2_out>;
 									};
 								};
@@ -394,7 +368,7 @@
 									d4xx_csi_in3: endpoint@6 {
 										status = "okay";
 										port-index = <0>;
-										bus-width = <2>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_3_out>;
 									};
 								};
@@ -418,8 +392,8 @@
 									reg = <0>;
 									d4xx_csi_in4: endpoint@8 {
 										status = "okay";
-										port-index = <2>;
-										bus-width = <2>;
+										port-index = <0>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_4_out>;
 									};
 								};
@@ -443,8 +417,8 @@
 									reg = <0>;
 									d4xx_csi_in5: endpoint@10 {
 										status = "okay";
-										port-index = <2>;
-										bus-width = <2>;
+										port-index = <0>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_5_out>;
 									};
 								};
@@ -468,8 +442,8 @@
 									reg = <0>;
 									d4xx_csi_in6: endpoint@12 {
 										status = "okay";
-										port-index = <2>;
-										bus-width = <2>;
+										port-index = <0>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_6_out>;
 									};
 								};
@@ -493,8 +467,8 @@
 									reg = <0>;
 									d4xx_csi_in7: endpoint@14 {
 										status = "okay";
-										port-index = <2>;
-										bus-width = <2>;
+										port-index = <0>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_7_out>;
 									};
 								};
@@ -518,8 +492,8 @@
 									reg = <0>;
 									d4xx_csi_in8: endpoint@16 {
 										status = "okay";
-										port-index = <4>;
-										bus-width = <2>;
+										port-index = <0>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_8_out>;
 									};
 								};
@@ -543,8 +517,8 @@
 									reg = <0>;
 									d4xx_csi_in9: endpoint@18 {
 										status = "okay";
-										port-index = <4>;
-										bus-width = <2>;
+										port-index = <0>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_9_out>;
 									};
 								};
@@ -568,8 +542,8 @@
 									reg = <0>;
 									d4xx_csi_in10: endpoint@20 {
 										status = "okay";
-										port-index = <4>;
-										bus-width = <2>;
+										port-index = <0>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_10_out>;
 									};
 								};
@@ -593,8 +567,8 @@
 									reg = <0>;
 									d4xx_csi_in11: endpoint@22 {
 										status = "okay";
-										port-index = <4>;
-										bus-width = <2>;
+										port-index = <0>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_11_out>;
 									};
 								};
@@ -618,8 +592,8 @@
 									reg = <0>;
 									d4xx_csi_in12: endpoint@24 {
 										status = "okay";
-										port-index = <6>;
-										bus-width = <2>;
+										port-index = <0>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_12_out>;
 									};
 								};
@@ -643,8 +617,8 @@
 									reg = <0>;
 									d4xx_csi_in13: endpoint@26 {
 										status = "okay";
-										port-index = <6>;
-										bus-width = <2>;
+										port-index = <0>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_13_out>;
 									};
 								};
@@ -668,8 +642,8 @@
 									reg = <0>;
 									d4xx_csi_in14: endpoint@28 {
 										status = "okay";
-										port-index = <6>;
-										bus-width = <2>;
+										port-index = <0>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_14_out>;
 									};
 								};
@@ -693,8 +667,8 @@
 									reg = <0>;
 									d4xx_csi_in15: endpoint@30 {
 										status = "okay";
-										port-index = <6>;
-										bus-width = <2>;
+										port-index = <0>;
+										bus-width = <4>;
 										remote-endpoint = <&ds5_15_out>;
 									};
 								};
@@ -730,11 +704,14 @@
 							#address-cells = <1>;
 							#size-cells = <0>;
 
-							dser_a: max96712@29 {
+							dser: max96712@29 {
 								status = "okay";
 								reg = <0x29>;
 								compatible = "maxim,max96712";
 								csi-mode = "2x4";
+								/* 4-lane CSI output towards the Jetson (1100 Mbps/lane). */
+								lane_cnt = <4>;
+								link-mask = <0xf>;
 								channel = "a";
 								pwdn-gpios = <&gpio CAM0_PWDN GPIO_ACTIVE_HIGH>;
 							};
@@ -743,7 +720,620 @@
 								status = "okay";
 								compatible = "maxim,max9295";
 								reg = <0x40>;
-								maxim,gmsl-dser-device = <&dser_a>;
+								maxim,gmsl-dser-device = <&dser>;
+								external_addr_reassign;
+							};
+
+							ser_b: max9295_b@41 {
+								status = "okay";
+								compatible = "maxim,max9295";
+								reg = <0x41>;
+								maxim,gmsl-dser-device = <&dser>;
+								external_addr_reassign;
+							};
+
+							ser_c: max9295_c@42 {
+								status = "okay";
+								compatible = "maxim,max9295";
+								reg = <0x42>;
+								maxim,gmsl-dser-device = <&dser>;
+								external_addr_reassign;
+							};
+
+							ser_d: max9295_d@43 {
+								status = "okay";
+								compatible = "maxim,max9295";
+								reg = <0x43>;
+								maxim,gmsl-dser-device = <&dser>;
+								external_addr_reassign;
+							};
+
+							ds5_15: ds5@4d {
+								status = "okay";
+								def-addr = <0x10>;
+								reg = <0x4d>;
+								override_reg = <0x4a>;
+								compatible = "intel,d4xx";
+								use_sensor_mode_id = "true";
+								vcc-supply = <&vdd_cam12v_poc>;
+								cam-type = "IMU";
+								nvidia,gmsl-ser-device = <&ser_d>;
+								nvidia,gmsl-dser-device = <&dser>;
+								ports {
+									#address-cells = <1>;
+									#size-cells = <0>;
+
+									port@0 {
+										reg = <0>;
+										ds5_15_out: endpoint {
+											vc-id = <15>;
+											port-index = <15>;
+											bus-width = <2>;
+											remote-endpoint = <&d4xx_csi_in15>;
+										};
+									};
+								};
+								mode0 {
+									pixel_t = "grey_y16";
+									num_lanes = "4";
+									csi_pixel_bit_depth = "16";
+									active_w = "640";
+									active_h = "480";
+									tegra_sinterface = "serial_b";
+									mclk_khz = "24000";
+									pix_clk_hz = "74250000";
+									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									line_length = "1280"; /* 2200 */
+									embedded_metadata_height = "0";
+								};
+								gmsl-link {
+									src-csi-port = "b";
+									dst-csi-port = "a";
+									serdes-csi-link = "a";
+									csi-mode = "1x4";
+									st-vc = <0>;
+									vc-id = <15>;
+									num-lanes = <2>;
+								};
+							};
+
+							ds5_14: ds5@4c {
+								status = "okay";
+								def-addr = <0x10>;
+								reg = <0x4c>;
+								override_reg = <0x4a>;
+								compatible = "intel,d4xx";
+								use_sensor_mode_id = "true";
+								vcc-supply = <&vdd_cam12v_poc>;
+								cam-type = "Y8";
+								nvidia,gmsl-ser-device = <&ser_d>;
+								nvidia,gmsl-dser-device = <&dser>;
+								ports {
+									#address-cells = <1>;
+									#size-cells = <0>;
+
+									port@0 {
+										reg = <0>;
+										ds5_14_out: endpoint {
+											vc-id = <14>;
+											port-index = <14>;
+											bus-width = <2>;
+											remote-endpoint = <&d4xx_csi_in14>;
+										};
+									};
+								};
+								/* mode0: Y8, mode1: depth D16 */
+								mode0 {
+									pixel_t = "grey_y16";
+									num_lanes = "4";
+									csi_pixel_bit_depth = "16";
+									active_w = "1280";
+									active_h = "720";
+									tegra_sinterface = "serial_b";
+									mclk_khz = "24000";
+									pix_clk_hz = "74250000";
+									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									line_length = "1280"; /* 2200 */
+									embedded_metadata_height = "1";
+								};
+								gmsl-link {
+									src-csi-port = "b";
+									dst-csi-port = "a";
+									serdes-csi-link = "a";
+									csi-mode = "1x4";
+									st-vc = <0>;
+									vc-id = <14>;
+									num-lanes = <2>;
+								};
+							};
+
+							ds5_13: ds5@4b {
+								status = "okay";
+								def-addr = <0x10>;
+								reg = <0x4b>;
+								override_reg = <0x4a>;
+								compatible = "intel,d4xx";
+								use_sensor_mode_id = "true";
+								vcc-supply = <&vdd_cam12v_poc>;
+								cam-type = "RGB";
+								nvidia,gmsl-ser-device = <&ser_d>;
+								nvidia,gmsl-dser-device = <&dser>;
+								ports {
+									#address-cells = <1>;
+									#size-cells = <0>;
+
+									port@0 {
+										reg = <0>;
+										ds5_13_out: endpoint {
+											vc-id = <13>;
+											port-index = <13>;
+											bus-width = <2>;
+											remote-endpoint = <&d4xx_csi_in13>;
+										};
+									};
+								};
+								mode0 {
+									pixel_t = "grey_y16";
+									num_lanes = "4";
+									csi_pixel_bit_depth = "16";
+									active_w = "1920";
+									active_h = "1080";
+									tegra_sinterface = "serial_e";
+									mclk_khz = "24000";
+									pix_clk_hz = "74250000";
+									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									line_length = "1280"; /* 2200 */
+									embedded_metadata_height = "1";
+								};
+								gmsl-link {
+									src-csi-port = "b";
+									dst-csi-port = "a";
+									serdes-csi-link = "a";
+									csi-mode = "1x4";
+									st-vc = <0>;
+									vc-id = <13>;
+									num-lanes = <2>;
+								};
+							};
+
+							ds5_12: ds5@4a {
+								status = "okay";
+								def-addr = <0x10>;
+								reg = <0x4a>;
+								compatible = "intel,d4xx";
+								use_sensor_mode_id = "true";
+								vcc-supply = <&vdd_cam12v_poc>;
+								cam-type = "Depth";
+								nvidia,gmsl-ser-device = <&ser_d>;
+								nvidia,gmsl-dser-device = <&dser>;
+								ports {
+									#address-cells = <1>;
+									#size-cells = <0>;
+
+									port@0 {
+										reg = <0>;
+										ds5_12_out: endpoint {
+											vc-id = <12>;
+											port-index = <12>;
+											bus-width = <2>;
+											remote-endpoint = <&d4xx_csi_in12>;
+										};
+									};
+								};
+								mode0 {
+									pixel_t = "grey_y16";
+									num_lanes = "4";
+									csi_pixel_bit_depth = "16";
+									active_w = "1280";
+									active_h = "720";
+									tegra_sinterface = "serial_a";
+									mclk_khz = "24000";
+									pix_clk_hz = "74250000";
+									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									line_length = "1280"; /* 2200 */
+									embedded_metadata_height = "1";
+								};
+								gmsl-link {
+									src-csi-port = "b";
+									dst-csi-port = "a";
+									serdes-csi-link = "a";
+									csi-mode = "1x4";
+									st-vc = <0>;
+									vc-id = <12>;
+									num-lanes = <2>;
+								};
+							};
+
+							ds5_11: ds5@3d {
+								status = "okay";
+								def-addr = <0x10>;
+								reg = <0x3d>;
+								override_reg = <0x3a>;
+								compatible = "intel,d4xx";
+								use_sensor_mode_id = "true";
+								vcc-supply = <&vdd_cam12v_poc>;
+								cam-type = "IMU";
+								nvidia,gmsl-ser-device = <&ser_c>;
+								nvidia,gmsl-dser-device = <&dser>;
+								ports {
+									#address-cells = <1>;
+									#size-cells = <0>;
+
+									port@0 {
+										reg = <0>;
+										ds5_11_out: endpoint {
+											vc-id = <11>;
+											port-index = <11>;
+											bus-width = <2>;
+											remote-endpoint = <&d4xx_csi_in11>;
+										};
+									};
+								};
+								mode0 {
+									pixel_t = "grey_y16";
+									num_lanes = "4";
+									csi_pixel_bit_depth = "16";
+									active_w = "640";
+									active_h = "480";
+									tegra_sinterface = "serial_b";
+									mclk_khz = "24000";
+									pix_clk_hz = "74250000";
+									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									line_length = "1280"; /* 2200 */
+									embedded_metadata_height = "0";
+								};
+								gmsl-link {
+									src-csi-port = "b";
+									dst-csi-port = "a";
+									serdes-csi-link = "a";
+									csi-mode = "1x4";
+									st-vc = <0>;
+									vc-id = <11>;
+									num-lanes = <2>;
+								};
+							};
+
+							ds5_10: ds5@3c {
+								status = "okay";
+								def-addr = <0x10>;
+								reg = <0x3c>;
+								override_reg = <0x3a>;
+								compatible = "intel,d4xx";
+								use_sensor_mode_id = "true";
+								vcc-supply = <&vdd_cam12v_poc>;
+								cam-type = "Y8";
+								nvidia,gmsl-ser-device = <&ser_c>;
+								nvidia,gmsl-dser-device = <&dser>;
+								ports {
+									#address-cells = <1>;
+									#size-cells = <0>;
+
+									port@0 {
+										reg = <0>;
+										ds5_10_out: endpoint {
+											vc-id = <10>;
+											port-index = <10>;
+											bus-width = <2>;
+											remote-endpoint = <&d4xx_csi_in10>;
+										};
+									};
+								};
+								/* mode0: Y8, mode1: depth D16 */
+								mode0 {
+									pixel_t = "grey_y16";
+									num_lanes = "4";
+									csi_pixel_bit_depth = "16";
+									active_w = "1280";
+									active_h = "720";
+									tegra_sinterface = "serial_b";
+									mclk_khz = "24000";
+									pix_clk_hz = "74250000";
+									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									line_length = "1280"; /* 2200 */
+									embedded_metadata_height = "1";
+								};
+								gmsl-link {
+									src-csi-port = "b";
+									dst-csi-port = "a";
+									serdes-csi-link = "a";
+									csi-mode = "1x4";
+									st-vc = <0>;
+									vc-id = <10>;
+									num-lanes = <2>;
+								};
+							};
+
+							ds5_9: ds5@3b {
+								status = "okay";
+								def-addr = <0x10>;
+								reg = <0x3b>;
+								override_reg = <0x3a>;
+								compatible = "intel,d4xx";
+								use_sensor_mode_id = "true";
+								vcc-supply = <&vdd_cam12v_poc>;
+								cam-type = "RGB";
+								nvidia,gmsl-ser-device = <&ser_c>;
+								nvidia,gmsl-dser-device = <&dser>;
+								ports {
+									#address-cells = <1>;
+									#size-cells = <0>;
+
+									port@0 {
+										reg = <0>;
+										ds5_9_out: endpoint {
+											vc-id = <9>;
+											port-index = <9>;
+											bus-width = <2>;
+											remote-endpoint = <&d4xx_csi_in9>;
+										};
+									};
+								};
+								mode0 {
+									pixel_t = "grey_y16";
+									num_lanes = "4";
+									csi_pixel_bit_depth = "16";
+									active_w = "1920";
+									active_h = "1080";
+									tegra_sinterface = "serial_e";
+									mclk_khz = "24000";
+									pix_clk_hz = "74250000";
+									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									line_length = "1280"; /* 2200 */
+									embedded_metadata_height = "1";
+								};
+								gmsl-link {
+									src-csi-port = "b";
+									dst-csi-port = "a";
+									serdes-csi-link = "a";
+									csi-mode = "1x4";
+									st-vc = <0>;
+									vc-id = <9>;
+									num-lanes = <2>;
+								};
+							};
+
+							ds5_8: ds5@3a {
+								status = "okay";
+								def-addr = <0x10>;
+								reg = <0x3a>;
+								compatible = "intel,d4xx";
+								use_sensor_mode_id = "true";
+								vcc-supply = <&vdd_cam12v_poc>;
+								cam-type = "Depth";
+								nvidia,gmsl-ser-device = <&ser_c>;
+								nvidia,gmsl-dser-device = <&dser>;
+								ports {
+									#address-cells = <1>;
+									#size-cells = <0>;
+
+									port@0 {
+										reg = <0>;
+										ds5_8_out: endpoint {
+											vc-id = <8>;
+											port-index = <8>;
+											bus-width = <2>;
+											remote-endpoint = <&d4xx_csi_in8>;
+										};
+									};
+								};
+								mode0 {
+									pixel_t = "grey_y16";
+									num_lanes = "4";
+									csi_pixel_bit_depth = "16";
+									active_w = "1280";
+									active_h = "720";
+									tegra_sinterface = "serial_a";
+									mclk_khz = "24000";
+									pix_clk_hz = "74250000";
+									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									line_length = "1280"; /* 2200 */
+									embedded_metadata_height = "1";
+								};
+								gmsl-link {
+									src-csi-port = "b";
+									dst-csi-port = "a";
+									serdes-csi-link = "a";
+									csi-mode = "1x4";
+									st-vc = <0>;
+									vc-id = <8>;
+									num-lanes = <2>;
+								};
+							};
+
+							ds5_7: ds5@2d {
+								status = "okay";
+								def-addr = <0x10>;
+								reg = <0x2d>;
+								override_reg = <0x2a>;
+								compatible = "intel,d4xx";
+								use_sensor_mode_id = "true";
+								vcc-supply = <&vdd_cam12v_poc>;
+								cam-type = "IMU";
+								nvidia,gmsl-ser-device = <&ser_b>;
+								nvidia,gmsl-dser-device = <&dser>;
+								ports {
+									#address-cells = <1>;
+									#size-cells = <0>;
+
+									port@0 {
+										reg = <0>;
+										ds5_7_out: endpoint {
+											vc-id = <7>;
+											port-index = <7>;
+											bus-width = <2>;
+											remote-endpoint = <&d4xx_csi_in7>;
+										};
+									};
+								};
+								mode0 {
+									pixel_t = "grey_y16";
+									num_lanes = "4";
+									csi_pixel_bit_depth = "16";
+									active_w = "640";
+									active_h = "480";
+									tegra_sinterface = "serial_b";
+									mclk_khz = "24000";
+									pix_clk_hz = "74250000";
+									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									line_length = "1280"; /* 2200 */
+									embedded_metadata_height = "0";
+								};
+								gmsl-link {
+									src-csi-port = "b";
+									dst-csi-port = "a";
+									serdes-csi-link = "a";
+									csi-mode = "1x4";
+									st-vc = <0>;
+									vc-id = <7>;
+									num-lanes = <2>;
+								};
+							};
+
+							ds5_6: ds5@2c {
+								status = "okay";
+								def-addr = <0x10>;
+								reg = <0x2c>;
+								override_reg = <0x2a>;
+								compatible = "intel,d4xx";
+								use_sensor_mode_id = "true";
+								vcc-supply = <&vdd_cam12v_poc>;
+								cam-type = "Y8";
+								nvidia,gmsl-ser-device = <&ser_b>;
+								nvidia,gmsl-dser-device = <&dser>;
+								ports {
+									#address-cells = <1>;
+									#size-cells = <0>;
+
+									port@0 {
+										reg = <0>;
+										ds5_6_out: endpoint {
+											vc-id = <6>;
+											port-index = <6>;
+											bus-width = <2>;
+											remote-endpoint = <&d4xx_csi_in6>;
+										};
+									};
+								};
+								/* mode0: Y8, mode1: depth D16 */
+								mode0 {
+									pixel_t = "grey_y16";
+									num_lanes = "4";
+									csi_pixel_bit_depth = "16";
+									active_w = "1280";
+									active_h = "720";
+									tegra_sinterface = "serial_b";
+									mclk_khz = "24000";
+									pix_clk_hz = "74250000";
+									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									line_length = "1280"; /* 2200 */
+									embedded_metadata_height = "1";
+								};
+								gmsl-link {
+									src-csi-port = "b";
+									dst-csi-port = "a";
+									serdes-csi-link = "a";
+									csi-mode = "1x4";
+									st-vc = <0>;
+									vc-id = <6>;
+									num-lanes = <2>;
+								};
+							};
+
+							ds5_5: ds5@2b {
+								status = "okay";
+								def-addr = <0x10>;
+								reg = <0x2b>;
+								override_reg = <0x2a>;
+								compatible = "intel,d4xx";
+								use_sensor_mode_id = "true";
+								vcc-supply = <&vdd_cam12v_poc>;
+								cam-type = "RGB";
+								nvidia,gmsl-ser-device = <&ser_b>;
+								nvidia,gmsl-dser-device = <&dser>;
+								ports {
+									#address-cells = <1>;
+									#size-cells = <0>;
+
+									port@0 {
+										reg = <0>;
+										ds5_5_out: endpoint {
+											vc-id = <5>;
+											port-index = <5>;
+											bus-width = <2>;
+											remote-endpoint = <&d4xx_csi_in5>;
+										};
+									};
+								};
+								mode0 {
+									pixel_t = "grey_y16";
+									num_lanes = "4";
+									csi_pixel_bit_depth = "16";
+									active_w = "1920";
+									active_h = "1080";
+									tegra_sinterface = "serial_e";
+									mclk_khz = "24000";
+									pix_clk_hz = "74250000";
+									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									line_length = "1280"; /* 2200 */
+									embedded_metadata_height = "1";
+								};
+								gmsl-link {
+									src-csi-port = "b";
+									dst-csi-port = "a";
+									serdes-csi-link = "a";
+									csi-mode = "1x4";
+									st-vc = <0>;
+									vc-id = <5>;
+									num-lanes = <2>;
+								};
+							};
+
+							ds5_4: ds5@2a {
+								status = "okay";
+								def-addr = <0x10>;
+								reg = <0x2a>;
+								compatible = "intel,d4xx";
+								use_sensor_mode_id = "true";
+								vcc-supply = <&vdd_cam12v_poc>;
+								cam-type = "Depth";
+								nvidia,gmsl-ser-device = <&ser_b>;
+								nvidia,gmsl-dser-device = <&dser>;
+								ports {
+									#address-cells = <1>;
+									#size-cells = <0>;
+
+									port@0 {
+										reg = <0>;
+										ds5_4_out: endpoint {
+											vc-id = <4>;
+											port-index = <4>;
+											bus-width = <2>;
+											remote-endpoint = <&d4xx_csi_in4>;
+										};
+									};
+								};
+								mode0 {
+									pixel_t = "grey_y16";
+									num_lanes = "4";
+									csi_pixel_bit_depth = "16";
+									active_w = "1280";
+									active_h = "720";
+									tegra_sinterface = "serial_a";
+									mclk_khz = "24000";
+									pix_clk_hz = "74250000";
+									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									line_length = "1280"; /* 2200 */
+									embedded_metadata_height = "1";
+								};
+								gmsl-link {
+									src-csi-port = "b";
+									dst-csi-port = "a";
+									serdes-csi-link = "a";
+									csi-mode = "1x4";
+									st-vc = <0>;
+									vc-id = <4>;
+									num-lanes = <2>;
+								};
 							};
 
 							ds5_3: ds5@1d {
@@ -756,7 +1346,7 @@
 								vcc-supply = <&vdd_cam12v_poc>;
 								cam-type = "IMU";
 								nvidia,gmsl-ser-device = <&ser_a>;
-								nvidia,gmsl-dser-device = <&dser_a>;
+								nvidia,gmsl-dser-device = <&dser>;
 								ports {
 									#address-cells = <1>;
 									#size-cells = <0>;
@@ -773,13 +1363,14 @@
 								};
 								mode0 {
 									pixel_t = "grey_y16";
-									num_lanes = "2";
+									num_lanes = "4";
 									csi_pixel_bit_depth = "16";
 									active_w = "640";
 									active_h = "480";
-									tegra_sinterface = "serial_a";
+									tegra_sinterface = "serial_b";
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
+									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
 									line_length = "1280"; /* 2200 */
 									embedded_metadata_height = "0";
 								};
@@ -804,7 +1395,7 @@
 								vcc-supply = <&vdd_cam12v_poc>;
 								cam-type = "Y8";
 								nvidia,gmsl-ser-device = <&ser_a>;
-								nvidia,gmsl-dser-device = <&dser_a>;
+								nvidia,gmsl-dser-device = <&dser>;
 								ports {
 									#address-cells = <1>;
 									#size-cells = <0>;
@@ -822,15 +1413,16 @@
 								/* mode0: Y8, mode1: depth D16 */
 								mode0 {
 									pixel_t = "grey_y16";
-									num_lanes = "2";
+									num_lanes = "4";
 									csi_pixel_bit_depth = "16";
 									active_w = "1280";
 									active_h = "720";
-									tegra_sinterface = "serial_a";
+									tegra_sinterface = "serial_b";
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
+									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
 									line_length = "1280"; /* 2200 */
-									embedded_metadata_height = "0";
+									embedded_metadata_height = "1";
 								};
 								gmsl-link {
 									src-csi-port = "b";
@@ -853,7 +1445,7 @@
 								vcc-supply = <&vdd_cam12v_poc>;
 								cam-type = "RGB";
 								nvidia,gmsl-ser-device = <&ser_a>;
-								nvidia,gmsl-dser-device = <&dser_a>;
+								nvidia,gmsl-dser-device = <&dser>;
 								ports {
 									#address-cells = <1>;
 									#size-cells = <0>;
@@ -870,13 +1462,14 @@
 								};
 								mode0 {
 									pixel_t = "grey_y16";
-									num_lanes = "2";
+									num_lanes = "4";
 									csi_pixel_bit_depth = "16";
 									active_w = "1920";
 									active_h = "1080";
-									tegra_sinterface = "serial_a";
+									tegra_sinterface = "serial_e";
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
+									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
 									line_length = "1280"; /* 2200 */
 									embedded_metadata_height = "1";
 								};
@@ -900,7 +1493,7 @@
 								vcc-supply = <&vdd_cam12v_poc>;
 								cam-type = "Depth";
 								nvidia,gmsl-ser-device = <&ser_a>;
-								nvidia,gmsl-dser-device = <&dser_a>;
+								nvidia,gmsl-dser-device = <&dser>;
 								ports {
 									#address-cells = <1>;
 									#size-cells = <0>;
@@ -917,658 +1510,14 @@
 								};
 								mode0 {
 									pixel_t = "grey_y16";
-									num_lanes = "2";
+									num_lanes = "4";
 									csi_pixel_bit_depth = "16";
 									active_w = "1280";
 									active_h = "720";
 									tegra_sinterface = "serial_a";
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
-									line_length = "1280"; /* 2200 */
-									embedded_metadata_height = "1";
-								};
-								gmsl-link {
-									src-csi-port = "b";
-									dst-csi-port = "a";
-									serdes-csi-link = "a";
-									csi-mode = "1x4";
-									st-vc = <0>;
-									vc-id = <0>;
-									num-lanes = <2>;
-								};
-							};
-						};
-						i2c@1 {
-							status = "okay";
-							reg = <1>;
-							i2c-mux,deselect-on-exit;
-							#address-cells = <1>;
-							#size-cells = <0>;
-
-							dser_b: max96712@29 {
-								status = "okay";
-								reg = <0x29>;
-								compatible = "maxim,max96712";
-								csi-mode = "2x4";
-								channel = "b";
-								pwdn-gpios = <&gpio CAM1_PWDN GPIO_ACTIVE_HIGH>;
-							};
-
-							ser_b: max9295_b@40 {
-								status = "okay";
-								compatible = "maxim,max9295";
-								reg = <0x40>;
-								maxim,gmsl-dser-device = <&dser_b>;
-							};
-
-							ds5_7: ds5@1d {
-								status = "okay";
-								def-addr = <0x10>;
-								reg = <0x1d>;
-								override_reg = <0x1a>;
-								compatible = "intel,d4xx";
-								use_sensor_mode_id = "true";
-								vcc-supply = <&vdd_cam12v_poc>;
-								cam-type = "IMU";
-								nvidia,gmsl-ser-device = <&ser_b>;
-								nvidia,gmsl-dser-device = <&dser_b>;
-								ports {
-									#address-cells = <1>;
-									#size-cells = <0>;
-
-									port@0 {
-										reg = <0>;
-										ds5_7_out: endpoint {
-											vc-id = <3>;
-											port-index = <7>;
-											bus-width = <2>;
-											remote-endpoint = <&d4xx_csi_in7>;
-										};
-									};
-								};
-								mode0 {
-									pixel_t = "grey_y16";
-									num_lanes = "2";
-									csi_pixel_bit_depth = "16";
-									active_w = "640";
-									active_h = "480";
-									tegra_sinterface = "serial_c";
-									mclk_khz = "24000";
-									pix_clk_hz = "74250000";
-									line_length = "1280"; /* 2200 */
-									embedded_metadata_height = "0";
-								};
-								gmsl-link {
-									src-csi-port = "b";
-									dst-csi-port = "a";
-									serdes-csi-link = "a";
-									csi-mode = "1x4";
-									st-vc = <0>;
-									vc-id = <3>;
-									num-lanes = <2>;
-								};
-							};
-
-							ds5_6: ds5@1c {
-								status = "okay";
-								def-addr = <0x10>;
-								reg = <0x1c>;
-								override_reg = <0x1a>;
-								compatible = "intel,d4xx";
-								use_sensor_mode_id = "true";
-								vcc-supply = <&vdd_cam12v_poc>;
-								cam-type = "Y8";
-								nvidia,gmsl-ser-device = <&ser_b>;
-								nvidia,gmsl-dser-device = <&dser_b>;
-								ports {
-									#address-cells = <1>;
-									#size-cells = <0>;
-
-									port@0 {
-										reg = <0>;
-										ds5_6_out: endpoint {
-											vc-id = <2>;
-											port-index = <6>;
-											bus-width = <2>;
-											remote-endpoint = <&d4xx_csi_in6>;
-										};
-									};
-								};
-								/* mode0: Y8, mode1: depth D16 */
-								mode0 {
-									pixel_t = "grey_y16";
-									num_lanes = "2";
-									csi_pixel_bit_depth = "16";
-									active_w = "1280";
-									active_h = "720";
-									tegra_sinterface = "serial_c";
-									mclk_khz = "24000";
-									pix_clk_hz = "74250000";
-									line_length = "1280"; /* 2200 */
-									embedded_metadata_height = "0";
-								};
-								gmsl-link {
-									src-csi-port = "b";
-									dst-csi-port = "a";
-									serdes-csi-link = "a";
-									csi-mode = "1x4";
-									st-vc = <0>;
-									vc-id = <2>;
-									num-lanes = <2>;
-								};
-							};
-
-							ds5_5: ds5@1b {
-								status = "okay";
-								def-addr = <0x10>;
-								reg = <0x1b>;
-								override_reg = <0x1a>;
-								compatible = "intel,d4xx";
-								use_sensor_mode_id = "true";
-								vcc-supply = <&vdd_cam12v_poc>;
-								cam-type = "RGB";
-								nvidia,gmsl-ser-device = <&ser_b>;
-								nvidia,gmsl-dser-device = <&dser_b>;
-								ports {
-									#address-cells = <1>;
-									#size-cells = <0>;
-
-									port@0 {
-										reg = <0>;
-										ds5_5_out: endpoint {
-											vc-id = <1>;
-											port-index = <5>;
-											bus-width = <2>;
-											remote-endpoint = <&d4xx_csi_in5>;
-										};
-									};
-								};
-								mode0 {
-									pixel_t = "grey_y16";
-									num_lanes = "2";
-									csi_pixel_bit_depth = "16";
-									active_w = "1920";
-									active_h = "1080";
-									tegra_sinterface = "serial_c";
-									mclk_khz = "24000";
-									pix_clk_hz = "74250000";
-									line_length = "1280"; /* 2200 */
-									embedded_metadata_height = "1";
-								};
-								gmsl-link {
-									src-csi-port = "b";
-									dst-csi-port = "a";
-									serdes-csi-link = "a";
-									csi-mode = "1x4";
-									st-vc = <0>;
-									vc-id = <1>;
-									num-lanes = <2>;
-								};
-							};
-
-							ds5_4: ds5@1a {
-								status = "okay";
-								def-addr = <0x10>;
-								reg = <0x1a>;
-								compatible = "intel,d4xx";
-								use_sensor_mode_id = "true";
-								vcc-supply = <&vdd_cam12v_poc>;
-								cam-type = "Depth";
-								nvidia,gmsl-ser-device = <&ser_b>;
-								nvidia,gmsl-dser-device = <&dser_b>;
-								ports {
-									#address-cells = <1>;
-									#size-cells = <0>;
-
-									port@0 {
-										reg = <0>;
-										ds5_4_out: endpoint {
-											vc-id = <0>;
-											port-index = <4>;
-											bus-width = <2>;
-											remote-endpoint = <&d4xx_csi_in4>;
-										};
-									};
-								};
-								mode0 {
-									pixel_t = "grey_y16";
-									num_lanes = "2";
-									csi_pixel_bit_depth = "16";
-									active_w = "1280";
-									active_h = "720";
-									tegra_sinterface = "serial_c";
-									mclk_khz = "24000";
-									pix_clk_hz = "74250000";
-									line_length = "1280"; /* 2200 */
-									embedded_metadata_height = "1";
-								};
-								gmsl-link {
-									src-csi-port = "b";
-									dst-csi-port = "a";
-									serdes-csi-link = "a";
-									csi-mode = "1x4";
-									st-vc = <0>;
-									vc-id = <0>;
-									num-lanes = <2>;
-								};
-							};
-						};
-						i2c@2 {
-							status = "okay";
-							reg = <2>;
-							i2c-mux,deselect-on-exit;
-							#address-cells = <1>;
-							#size-cells = <0>;
-
-							dser_c: max96712@29 {
-								status = "okay";
-								reg = <0x29>;
-								compatible = "maxim,max96712";
-								csi-mode = "2x4";
-								channel = "c";
-								pwdn-gpios = <&gpio CAM2_PWDN GPIO_ACTIVE_HIGH>;
-							};
-
-							ser_c: max9295_c@40 {
-								status = "okay";
-								compatible = "maxim,max9295";
-								reg = <0x40>;
-								maxim,gmsl-dser-device = <&dser_c>;
-							};
-
-							ds5_11: ds5@1d {
-								status = "okay";
-								def-addr = <0x10>;
-								reg = <0x1d>;
-								override_reg = <0x1a>;
-								compatible = "intel,d4xx";
-								use_sensor_mode_id = "true";
-								vcc-supply = <&vdd_cam12v_poc>;
-								cam-type = "IMU";
-								nvidia,gmsl-ser-device = <&ser_c>;
-								nvidia,gmsl-dser-device = <&dser_c>;
-								ports {
-									#address-cells = <1>;
-									#size-cells = <0>;
-
-									port@0 {
-										reg = <0>;
-										ds5_11_out: endpoint {
-											vc-id = <3>;
-											port-index = <11>;
-											bus-width = <2>;
-											remote-endpoint = <&d4xx_csi_in11>;
-										};
-									};
-								};
-								mode0 {
-									pixel_t = "grey_y16";
-									num_lanes = "2";
-									csi_pixel_bit_depth = "16";
-									active_w = "640";
-									active_h = "480";
-									tegra_sinterface = "serial_e";
-									mclk_khz = "24000";
-									pix_clk_hz = "74250000";
-									line_length = "1280"; /* 2200 */
-									embedded_metadata_height = "0";
-								};
-								gmsl-link {
-									src-csi-port = "b";
-									dst-csi-port = "a";
-									serdes-csi-link = "a";
-									csi-mode = "1x4";
-									st-vc = <0>;
-									vc-id = <3>;
-									num-lanes = <2>;
-								};
-							};
-
-							ds5_10: ds5@1c {
-								status = "okay";
-								def-addr = <0x10>;
-								reg = <0x1c>;
-								override_reg = <0x1a>;
-								compatible = "intel,d4xx";
-								use_sensor_mode_id = "true";
-								vcc-supply = <&vdd_cam12v_poc>;
-								cam-type = "Y8";
-								nvidia,gmsl-ser-device = <&ser_c>;
-								nvidia,gmsl-dser-device = <&dser_c>;
-								ports {
-									#address-cells = <1>;
-									#size-cells = <0>;
-
-									port@0 {
-										reg = <0>;
-										ds5_10_out: endpoint {
-											vc-id = <2>;
-											port-index = <10>;
-											bus-width = <2>;
-											remote-endpoint = <&d4xx_csi_in10>;
-										};
-									};
-								};
-								/* mode0: Y8, mode1: depth D16 */
-								mode0 {
-									pixel_t = "grey_y16";
-									num_lanes = "2";
-									csi_pixel_bit_depth = "16";
-									active_w = "1280";
-									active_h = "720";
-									tegra_sinterface = "serial_e";
-									mclk_khz = "24000";
-									pix_clk_hz = "74250000";
-									line_length = "1280"; /* 2200 */
-									embedded_metadata_height = "0";
-								};
-								gmsl-link {
-									src-csi-port = "b";
-									dst-csi-port = "a";
-									serdes-csi-link = "a";
-									csi-mode = "1x4";
-									st-vc = <0>;
-									vc-id = <2>;
-									num-lanes = <2>;
-								};
-							};
-
-							ds5_9: ds5@1b {
-								status = "okay";
-								def-addr = <0x10>;
-								reg = <0x1b>;
-								override_reg = <0x1a>;
-								compatible = "intel,d4xx";
-								use_sensor_mode_id = "true";
-								vcc-supply = <&vdd_cam12v_poc>;
-								cam-type = "RGB";
-								nvidia,gmsl-ser-device = <&ser_c>;
-								nvidia,gmsl-dser-device = <&dser_c>;
-								ports {
-									#address-cells = <1>;
-									#size-cells = <0>;
-
-									port@0 {
-										reg = <0>;
-										ds5_9_out: endpoint {
-											vc-id = <1>;
-											port-index = <9>;
-											bus-width = <2>;
-											remote-endpoint = <&d4xx_csi_in9>;
-										};
-									};
-								};
-								mode0 {
-									pixel_t = "grey_y16";
-									num_lanes = "2";
-									csi_pixel_bit_depth = "16";
-									active_w = "1920";
-									active_h = "1080";
-									tegra_sinterface = "serial_e";
-									mclk_khz = "24000";
-									pix_clk_hz = "74250000";
-									line_length = "1280"; /* 2200 */
-									embedded_metadata_height = "1";
-								};
-								gmsl-link {
-									src-csi-port = "b";
-									dst-csi-port = "a";
-									serdes-csi-link = "a";
-									csi-mode = "1x4";
-									st-vc = <0>;
-									vc-id = <1>;
-									num-lanes = <2>;
-								};
-							};
-
-							ds5_8: ds5@1a {
-								status = "okay";
-								def-addr = <0x10>;
-								reg = <0x1a>;
-								compatible = "intel,d4xx";
-								use_sensor_mode_id = "true";
-								vcc-supply = <&vdd_cam12v_poc>;
-								cam-type = "Depth";
-								nvidia,gmsl-ser-device = <&ser_c>;
-								nvidia,gmsl-dser-device = <&dser_c>;
-								ports {
-									#address-cells = <1>;
-									#size-cells = <0>;
-
-									port@0 {
-										reg = <0>;
-										ds5_8_out: endpoint {
-											vc-id = <0>;
-											port-index = <8>;
-											bus-width = <2>;
-											remote-endpoint = <&d4xx_csi_in8>;
-										};
-									};
-								};
-								mode0 {
-									pixel_t = "grey_y16";
-									num_lanes = "2";
-									csi_pixel_bit_depth = "16";
-									active_w = "1280";
-									active_h = "720";
-									tegra_sinterface = "serial_e";
-									mclk_khz = "24000";
-									pix_clk_hz = "74250000";
-									line_length = "1280"; /* 2200 */
-									embedded_metadata_height = "1";
-								};
-								gmsl-link {
-									src-csi-port = "b";
-									dst-csi-port = "a";
-									serdes-csi-link = "a";
-									csi-mode = "1x4";
-									st-vc = <0>;
-									vc-id = <0>;
-									num-lanes = <2>;
-								};
-							};
-						};
-						i2c@3 {
-							status = "okay";
-							reg = <3>;
-							i2c-mux,deselect-on-exit;
-							#address-cells = <1>;
-							#size-cells = <0>;
-
-							dser_d: max96712@29 {
-								status = "okay";
-								reg = <0x29>;
-								compatible = "maxim,max96712";
-								csi-mode = "2x4";
-								channel = "d";
-								pwdn-gpios = <&gpio CAM3_PWDN GPIO_ACTIVE_HIGH>;
-							};
-
-							ser_d: max9295_d@40 {
-								status = "okay";
-								compatible = "maxim,max9295";
-								reg = <0x40>;
-								maxim,gmsl-dser-device = <&dser_d>;
-							};
-
-							ds5_15: ds5@1d {
-								status = "okay";
-								def-addr = <0x10>;
-								reg = <0x1d>;
-								override_reg = <0x1a>;
-								compatible = "intel,d4xx";
-								use_sensor_mode_id = "true";
-								vcc-supply = <&vdd_cam12v_poc>;
-								cam-type = "IMU";
-								nvidia,gmsl-ser-device = <&ser_d>;
-								nvidia,gmsl-dser-device = <&dser_d>;
-								ports {
-									#address-cells = <1>;
-									#size-cells = <0>;
-
-									port@0 {
-										reg = <0>;
-										ds5_15_out: endpoint {
-											vc-id = <3>;
-											port-index = <15>;
-											bus-width = <2>;
-											remote-endpoint = <&d4xx_csi_in15>;
-										};
-									};
-								};
-								mode0 {
-									pixel_t = "grey_y16";
-									num_lanes = "2";
-									csi_pixel_bit_depth = "16";
-									active_w = "640";
-									active_h = "480";
-									tegra_sinterface = "serial_g";
-									mclk_khz = "24000";
-									pix_clk_hz = "74250000";
-									line_length = "1280"; /* 2200 */
-									embedded_metadata_height = "0";
-								};
-								gmsl-link {
-									src-csi-port = "b";
-									dst-csi-port = "a";
-									serdes-csi-link = "a";
-									csi-mode = "1x4";
-									st-vc = <0>;
-									vc-id = <3>;
-									num-lanes = <2>;
-								};
-							};
-
-							ds5_14: ds5@1c {
-								status = "okay";
-								def-addr = <0x10>;
-								reg = <0x1c>;
-								override_reg = <0x1a>;
-								compatible = "intel,d4xx";
-								use_sensor_mode_id = "true";
-								vcc-supply = <&vdd_cam12v_poc>;
-								cam-type = "Y8";
-								nvidia,gmsl-ser-device = <&ser_d>;
-								nvidia,gmsl-dser-device = <&dser_d>;
-								ports {
-									#address-cells = <1>;
-									#size-cells = <0>;
-
-									port@0 {
-										reg = <0>;
-										ds5_14_out: endpoint {
-											vc-id = <2>;
-											port-index = <14>;
-											bus-width = <2>;
-											remote-endpoint = <&d4xx_csi_in14>;
-										};
-									};
-								};
-								/* mode0: Y8, mode1: depth D16 */
-								mode0 {
-									pixel_t = "grey_y16";
-									num_lanes = "2";
-									csi_pixel_bit_depth = "16";
-									active_w = "1280";
-									active_h = "720";
-									tegra_sinterface = "serial_g";
-									mclk_khz = "24000";
-									pix_clk_hz = "74250000";
-									line_length = "1280"; /* 2200 */
-									embedded_metadata_height = "0";
-								};
-								gmsl-link {
-									src-csi-port = "b";
-									dst-csi-port = "a";
-									serdes-csi-link = "a";
-									csi-mode = "1x4";
-									st-vc = <0>;
-									vc-id = <2>;
-									num-lanes = <2>;
-								};
-							};
-
-							ds5_13: ds5@1b {
-								status = "okay";
-								def-addr = <0x10>;
-								reg = <0x1b>;
-								override_reg = <0x1a>;
-								compatible = "intel,d4xx";
-								use_sensor_mode_id = "true";
-								vcc-supply = <&vdd_cam12v_poc>;
-								cam-type = "RGB";
-								nvidia,gmsl-ser-device = <&ser_d>;
-								nvidia,gmsl-dser-device = <&dser_d>;
-								ports {
-									#address-cells = <1>;
-									#size-cells = <0>;
-
-									port@0 {
-										reg = <0>;
-										ds5_13_out: endpoint {
-											vc-id = <1>;
-											port-index = <13>;
-											bus-width = <2>;
-											remote-endpoint = <&d4xx_csi_in13>;
-										};
-									};
-								};
-								mode0 {
-									pixel_t = "grey_y16";
-									num_lanes = "2";
-									csi_pixel_bit_depth = "16";
-									active_w = "1920";
-									active_h = "1080";
-									tegra_sinterface = "serial_g";
-									mclk_khz = "24000";
-									pix_clk_hz = "74250000";
-									line_length = "1280"; /* 2200 */
-									embedded_metadata_height = "1";
-								};
-								gmsl-link {
-									src-csi-port = "b";
-									dst-csi-port = "a";
-									serdes-csi-link = "a";
-									csi-mode = "1x4";
-									st-vc = <0>;
-									vc-id = <1>;
-									num-lanes = <2>;
-								};
-							};
-
-							ds5_12: ds5@1a {
-								status = "okay";
-								def-addr = <0x10>;
-								reg = <0x1a>;
-								compatible = "intel,d4xx";
-								use_sensor_mode_id = "true";
-								vcc-supply = <&vdd_cam12v_poc>;
-								cam-type = "Depth";
-								nvidia,gmsl-ser-device = <&ser_d>;
-								nvidia,gmsl-dser-device = <&dser_d>;
-								ports {
-									#address-cells = <1>;
-									#size-cells = <0>;
-
-									port@0 {
-										reg = <0>;
-										ds5_12_out: endpoint {
-											vc-id = <0>;
-											port-index = <12>;
-											bus-width = <2>;
-											remote-endpoint = <&d4xx_csi_in12>;
-										};
-									};
-								};
-								mode0 {
-									pixel_t = "grey_y16";
-									num_lanes = "2";
-									csi_pixel_bit_depth = "16";
-									active_w = "1280";
-									active_h = "720";
-									tegra_sinterface = "serial_g";
-									mclk_khz = "24000";
-									pix_clk_hz = "74250000";
+									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
 									line_length = "1280"; /* 2200 */
 									embedded_metadata_height = "1";
 								};

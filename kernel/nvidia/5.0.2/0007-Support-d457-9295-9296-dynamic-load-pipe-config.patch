@@ -216,7 +216,7 @@ index 4de304360..d295df745 100644
 -	if (sensor_type != IR_SENSOR)
 -		return 0;
 +	if (data_type1 == GMSL_CSI_DT_RGB_888)
-+		bpp = 0x18;
++		bpp = 0x20 | 0x18; /* Enable soft_bpp and 24 bit */
  
 -	priv = dev_get_drvdata(dev);
 -	if ((priv->ir_type_value != Y8_Y8I) &&
@@ -569,13 +569,14 @@ diff --git a/include/media/gmsl-link.h b/include/media/gmsl-link.h
 index 9cfd907bd..533f31eb8 100644
 --- a/include/media/gmsl-link.h
 +++ b/include/media/gmsl-link.h
-@@ -53,16 +53,12 @@
+@@ -53,16 +53,13 @@
  #define GMSL_CSI_DT_RAW_12 0x2C
  #define GMSL_CSI_DT_UED_U1 0x30
  #define GMSL_CSI_DT_EMBED 0x12
 +#define GMSL_CSI_DT_YUV422_8 0x1E
 +#define GMSL_CSI_DT_RGB_888 0x24
 +#define GMSL_CSI_DT_RAW_8 0x2A
++#define GMSL_CSI_DT_RAW_16 0x2E
  
  #define GMSL_ST_ID_UNUSED 0xFF
  

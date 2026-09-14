@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yogev Modlin <yogev.modlin@realsenseai.com>
+Date: Wed, 2 Jul 2026 16:10:00 +0300
+Subject: [PATCH] csi5: do not override RCE error config on the v4l2 path
+
+L4T 35.5 ("csi5: add error config", bug 4499208) makes the v4l2 path
+send NVCSI_CONFIG_FLAG_ERROR with a zeroed nvcsi_error_config on every
+stream start, replacing the RCE default error handling that JetPack
+5.1.2 used. With the override, the D457 first-color-frame corruption is
+reported as CHANSEL err_data 0x100, which the D457 recovery mask in
+vi5_fops.c does not cover - every color frame is discarded and the
+stream never starts. Drop the flag so the RCE defaults are used again
+and the corruption is reported as err_data 0x20000, which triggers the
+existing D457 channel recovery (JetPack 5.1.2 behavior).
+
+Signed-off-by: Yogev Modlin <yogev.modlin@realsenseai.com>
+---
+ drivers/media/platform/tegra/camera/nvcsi/csi5_fops.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/media/platform/tegra/camera/nvcsi/csi5_fops.c b/drivers/media/platform/tegra/camera/nvcsi/csi5_fops.c
+index fab8be2ec..0380d61c8 100644
+--- a/drivers/media/platform/tegra/camera/nvcsi/csi5_fops.c
++++ b/drivers/media/platform/tegra/camera/nvcsi/csi5_fops.c
+@@ -302,7 +302,7 @@ static int csi5_stream_set_config(struct tegra_csi_channel *chan, u32 stream_id,
+ 	msg.csi_stream_set_config_req.cil_config = cil_config;
+ 	msg.csi_stream_set_config_req.error_config = err_config;
+ 	msg.csi_stream_set_config_req.config_flags = NVCSI_CONFIG_FLAG_BRICK |
+-						NVCSI_CONFIG_FLAG_CIL | NVCSI_CONFIG_FLAG_ERROR;
++						NVCSI_CONFIG_FLAG_CIL;
+ 
+ 	if (tegra_chan->valid_ports > 1)
+ 		vi_port = (stream_id > 0) ? 1 : 0;
+-- 
+2.34.1

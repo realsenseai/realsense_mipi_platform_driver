@@ -107,7 +107,8 @@ sudo depmod
     |---|---|
     | `tegra264-camera-d4xx-overlay.dtbo` | max9296 deserializer board w/ one camera |
     | `tegra264-camera-d4xx-overlay-max96712-EVB.dtbo` | max96712 evaluation board w/ one camera |
-    | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0.dtbo` | Fangzhu/FG12-16CH (max96712) w/ one camera — **AGX Orin (tegra234)**, not Thor (see note below) |
+    | `tegra234-camera-d4xx-overlay-fg12-16ch.dtbo` | Fangzhu/FG12-16CH (max96712) w/ one camera (link 0) — **AGX Orin (tegra234)**, not Thor (see note below) |
+    | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-1-2-3.dtbo` | Fangzhu/FG12-16CH (max96712) w/ four cameras (links 0-3) — **AGX Orin (tegra234)**, not Thor |
     | `tegra264-camera-d4xx-overlay-advantech.dtbo` | Advantech board w/ one camera on the bottom right of the left port (i2c9) |
     | `tegra264-camera-d4xx-overlay-advantech-cams-0-1-2-3.dtbo` | Advantech board w/ four cameras on the left port (i2c9) |
     | `tegra264-camera-d4xx-overlay-advantech-cams-4-5.dtbo` | Advantech board w/ two cameras on the bottom right and top right of the right port (i2c12) |
@@ -131,7 +132,7 @@ On Jetson target (user home folder) assuming backup step was followed:
 
 ## Running JP7.2 on AGX Orin (tegra234)
 
-JP7.2 (Jetson Linux R39.2) is a unified release that runs on both Jetson Thor™ (tegra264) and AGX Orin™ (tegra234). The overlays listed above are Thor (tegra264); on AGX Orin use the tegra234 overlay `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0.dtbo`.
+JP7.2 (Jetson Linux R39.2) is a unified release that runs on both Jetson Thor™ (tegra264) and AGX Orin™ (tegra234). The overlays listed above are Thor (tegra264); on AGX Orin use a tegra234 overlay — `tegra234-camera-d4xx-overlay-fg12-16ch.dtbo` (one camera) or `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-1-2-3.dtbo` (four cameras).
 
 Two things differ when installing the rebuilt kernel onto an AGX Orin that was just flashed with SDK Manager:
 
@@ -140,7 +141,7 @@ Two things differ when installing the rebuilt kernel onto an AGX Orin that was j
 sudo cp -r ./lib/modules/6.8.12-tegra /lib/modules/
 sudo depmod 6.8.12-tegra
 sudo cp ./boot/Image /boot/Image-6.8.12-tegra
-sudo cp ./boot/tegra234-camera-d4xx-overlay-fg12-16ch-cams-0.dtbo /boot/
+sudo cp ./boot/tegra234-camera-d4xx-overlay-fg12-16ch.dtbo /boot/
 sudo update-initramfs -c -k 6.8.12-tegra        # -> /boot/initrd.img-6.8.12-tegra
 ```
 
@@ -152,7 +153,7 @@ LABEL d4xx
       INITRD /boot/initrd.img-6.8.12-tegra
       FDT /boot/dtb/kernel_tegra234-p3737-0000+p3701-0000-nv.dtb
       APPEND ${cbootargs} root=/dev/nvme0n1p1 rw rootwait rootfstype=ext4 ...   # copy verbatim from the primary entry
-      OVERLAYS /boot/tegra234-camera-d4xx-overlay-fg12-16ch-cams-0.dtbo
+      OVERLAYS /boot/tegra234-camera-d4xx-overlay-fg12-16ch.dtbo
 ```
 Set `DEFAULT d4xx`, then reboot. The D457 (depth/RGB/IR/IMU) is discovered as `/dev/video0`–`video6`.
 

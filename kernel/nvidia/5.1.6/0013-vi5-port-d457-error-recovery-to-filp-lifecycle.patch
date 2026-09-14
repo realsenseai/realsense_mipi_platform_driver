@@ -1,0 +1,90 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yogev Modlin <yogev.modlin@realsenseai.com>
+Date: Wed, 2 Jul 2026 16:11:00 +0300
+Subject: [PATCH] vi5: port D457 channel error recovery to filp-based lifecycle
+
+L4T 35.6.x ("camera: vi5: fix stream on/off memory leakage", bug
+4206070) rewrote the VI channel lifecycle: channels are tracked as
+struct file in chan->fp[] and all close paths use filp_close().
+vi5_channel_error_recover_internal() still used the old sequence
+(vi_channel_close_ex + vi_channel_open_ex), which bypasses chan->fp[]
+bookkeeping. On the first D457 color-frame corruption (err_data
+0x20000) the recovery left chan->fp[] pointing at freed private_data;
+closing the stream then oopsed in vi_capture_shutdown ->
+tegra_camrtc_reboot (NULL deref) and panicked the whole system, with a
+secondary Oops in tegra_capture_ivc_worker during the RTCPU teardown
+race.
+
+Port the recovery to the new lifecycle: reset the RCE-side channel
+first (vi_capture_release with CAPTURE_CHANNEL_RESET_FLAG_IMMEDIATE,
+while the handle is still valid - this is what actually frees the CSI
+channel-match configuration in the RCE; without it the reopen fails
+with "match configuration is already in use"), then filp_close(), then
+reopen through vi5_channel_open() so chan->fp[] stays consistent.
+
+Keep the bail-out (goto done) on a failed vi_capture_release instead of
+falling through to filp_close(): force-closing a channel whose release
+just failed drives vi_capture_shutdown against inconsistent state - the
+exact NULL-deref path this patch exists to avoid - and matches the
+upstream vi5_channel_error_recover behaviour on the JP6.2 base. Also
+NULL chan->fp[] right after filp_close(), alongside the tegra_vi_channel
+reset: vi5_channel_stop_streaming() filp_close()es chan->fp[] again on
+the real stop, so a stale (freed) pointer left by a partial recovery
+would be a use-after-free.
+
+Validated on Jetson AGX Xavier + D457 GMSL (L4T 35.6.4): color streams
+at 5-90 fps with the first-frame corruption recovered transparently; no
+panic on stream close.
+
+Signed-off-by: Yogev Modlin <yogev.modlin@realsenseai.com>
+---
+ drivers/media/platform/tegra/camera/vi/vi5_fops.c | 19 ++++++++++---------
+ 1 file changed, 10 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+index 845d0cedf..7d15d64a2 100644
+--- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
++++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+@@ -539,15 +539,19 @@ static int vi5_channel_error_recover_internal(struct tegra_channel *chan)
+ 	struct v4l2_subdev *csi_subdev;
+ 	dev_dbg(chan->vi->dev, "%s() vc: %d\n", __func__, chan->virtual_channel);
+
+-	/* stop vi channel */
++	/* stop vi channel (filp-based lifecycle on 35.6.x base).
++	 * Reset the RCE-side channel FIRST (frees the CSI match config)
++	 * while the VI channel handle is still valid, then close the filp.
++	 */
+ 	for(vi_port = 0; vi_port < chan->valid_ports; vi_port++) {
+ 		err = vi_capture_release(chan->tegra_vi_channel[vi_port],
+ 			CAPTURE_CHANNEL_RESET_FLAG_IMMEDIATE);
+ 		if (err) {
+-			dev_err(&chan->video->dev, "vi capture release failed\n");
++			dev_err(chan->vi->dev, "vi capture release failed\n");
+ 			goto done;
+ 		}
+-		vi_channel_close_ex(chan->id, chan->tegra_vi_channel[vi_port]);
++		filp_close(chan->fp[vi_port], NULL);
++		chan->fp[vi_port] = NULL;
+ 		chan->tegra_vi_channel[vi_port] = NULL;
+ 	}
+
+@@ -583,14 +587,11 @@ static int vi5_channel_error_recover_internal(struct tegra_channel *chan)
+ 	v4l2_subdev_call(csi_subdev, core, sync,
+ 		V4L2_SYNC_EVENT_SUBDEV_ERROR_RECOVER);
+
+-	/* restart vi channel */
++	/* restart vi channel (filp-based lifecycle on 35.6.x base) */
+ 	for(vi_port = 0; vi_port < chan->valid_ports; vi_port++) {
+-		chan->tegra_vi_channel[vi_port] = vi_channel_open_ex(chan->id + vi_port, false);
+-		if (IS_ERR(chan->tegra_vi_channel[vi_port])) {
+-			err = PTR_ERR(chan->tegra_vi_channel[vi_port]);
+-			chan->tegra_vi_channel[vi_port] = NULL;
++		err = vi5_channel_open(chan, vi_port);
++		if (err < 0)
+ 			goto done;
+-		}
+ 		err = tegra_channel_capture_setup(chan, vi_port);
+ 		if (err < 0)
+ 			goto done;
+--
+2.34.1

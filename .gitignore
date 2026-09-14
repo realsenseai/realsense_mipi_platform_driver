@@ -3,6 +3,7 @@
 /kernel_mod
 /sources_*
 /.claude/skills/v4l2-test/v4l2-test_results
+/.claude/skills/v4l2-test/v4l2_test_results
 **__pycache__
 /test.logs
 /.vscode/*.db*

@@ -1,0 +1,21 @@
+diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+index 845d0cedf..4784b949e 100644
+--- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
++++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+@@ -717,7 +717,15 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
+ #else
+ 	trace_tegra_channel_capture_frame("sof", &ts);
+ #endif
+-	vb->vb2_buf.timestamp = descr->status.sof_timestamp;
++	/* RSDSO-20101: stamp at frame-done with CLOCK_MONOTONIC so
++	 * librealsense BACKEND_TIMESTAMP (= monotonic_to_realtime(buf.timestamp))
++	 * is by construction <= TIME_OF_ARRIVAL (= system_clock::now() at callback).
++	 * The buffer queue flag advertises V4L2_BUF_FLAG_TSTAMP_SRC_EOF, which
++	 * now matches the value semantics. Hardware SOF time remains
++	 * available to userspace via the per-frame FW hwTimestamp in the MIPI
++	 * metadata payload (-> RS2_FRAME_METADATA_FRAME_TIMESTAMP).
++	 */
++	vb->vb2_buf.timestamp = ktime_get_ns();
+ 
+ 	if (frame_err)
+ #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 4, 0)

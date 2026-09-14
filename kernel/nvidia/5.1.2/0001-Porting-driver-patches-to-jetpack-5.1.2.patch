@@ -5,8 +5,8 @@ Subject: [PATCH] Porting driver patches to jetpack 5.1.2
 
 Signed-off-by: Dmitry Perchanov <dmitry.perchanov@intel.com>
 ---
- drivers/media/i2c/Kconfig                     |  21 +
- drivers/media/i2c/Makefile                    |   1 +
+ drivers/media/i2c/Kconfig                     |  29 +
+ drivers/media/i2c/Makefile                    |   3 +
  drivers/media/i2c/max9295.c                   | 145 ++++++-
  drivers/media/i2c/max9296.c                   | 189 ++++++++
  .../platform/tegra/camera/sensor_common.c     |   4 +
@@ -22,16 +22,24 @@ Signed-off-by: Dmitry Perchanov <dmitry.perchanov@intel.com>
  include/media/max9296.h                       |   8 +
  include/media/mc_common.h                     |  23 +
  include/media/tegra_camera_core.h             |   8 +
- 17 files changed, 1073 insertions(+), 29 deletions(-)
+ 17 files changed, 1074 insertions(+), 29 deletions(-)
 
 diff --git a/drivers/media/i2c/Kconfig b/drivers/media/i2c/Kconfig
 index 5ec3c683c..7f288faf7 100644
 --- a/drivers/media/i2c/Kconfig
 +++ b/drivers/media/i2c/Kconfig
-@@ -210,6 +210,27 @@ config NV_VIRTUAL_I2C_MUX
+@@ -210,6 +210,35 @@ config NV_VIRTUAL_I2C_MUX
  
  	  To compile this driver as a module, choose M here: the module
  	  will be called virtual_i2c_mux.
++
++config NV_SER_MAX96717
++	tristate "MAX92717 Serializer"
++	help
++	  If you say yes here you get support for the MAX92717 serializer.
++
++	  To compile this driver as a module, choose M here: the module
++	  will be called max96717.
 +
 +config VIDEO_D4XX
 +	tristate "D4XX camera sensor support"
@@ -60,11 +68,13 @@ diff --git a/drivers/media/i2c/Makefile b/drivers/media/i2c/Makefile
 index c4708d8c7..e11e8ad39 100644
 --- a/drivers/media/i2c/Makefile
 +++ b/drivers/media/i2c/Makefile
-@@ -27,3 +27,4 @@ obj-$(CONFIG_NV_VIDEO_HAWK_OWL) += nv_hawk_owl.o
+@@ -27,3 +27,6 @@ obj-$(CONFIG_NV_VIDEO_HAWK_OWL) += nv_hawk_owl.o
  obj-$(CONFIG_NV_DESER_MAX96712) += max96712.o
  obj-$(CONFIG_VIDEO_ECAM) += ar1335.o
  ar1335-objs :=  ar1335_common.o
++obj-$(CONFIG_VIDEO_D4XX) += max96717.o
 +obj-$(CONFIG_VIDEO_D4XX) += d4xx.o
++obj-$(CONFIG_VIDEO_D4XX) += max96724.o
 diff --git a/drivers/media/i2c/max9295.c b/drivers/media/i2c/max9295.c
 index 110f861c3..6311d97d7 100644
 --- a/drivers/media/i2c/max9295.c
@@ -138,7 +148,7 @@ index 110f861c3..6311d97d7 100644
 +	err |= max9295_set_registers(dev, map_bpp8dbl, ARRAY_SIZE(map_bpp8dbl));
 +
 +	if (data_type1 == GMSL_CSI_DT_RGB_888)
-+		bpp = 0x18;
++		bpp = 0x20 | 0x18; /* Enable soft_bpp and 24 bit */
 +
 +	map_pipe_control[0].addr += 0x2 * pipe_id;
 +	map_pipe_control[1].addr += 0x2 * pipe_id;
@@ -1138,7 +1148,21 @@ diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/p
 index b54833d3f..042a80e51 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
 +++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-@@ -422,6 +422,39 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+@@ -388,6 +388,13 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+ 		offset = buf->addr + chan->buffer_offset[1 - vi_port];
+ 	}
+ 
++	/* Y16I: one 32bpp L/R column pair per V4L2 pixel.
++	 * However, GMSL caps at 24bpp, so we alias it to RAW16, and the de-facto
++	 * width should be double the requested size
++	 */
++	if (chan->fmtinfo->fourcc == V4L2_PIX_FMT_Y16I)
++		width *= 2;
++
+ 	memcpy(desc, &capture_template, sizeof(capture_template));
+ 	memset(desc_memoryinfo, 0, sizeof(*desc_memoryinfo));
+ 
+@@ -422,6 +429,39 @@ static void vi5_setup_surface(struct tegra_channel *chan,
  	chan->capture_descr_sequence += 1;
  }
  
@@ -1178,7 +1202,7 @@ index b54833d3f..042a80e51 100644
  static void vi5_release_buffer(struct tegra_channel *chan,
  	struct tegra_channel_buffer *buf)
  {
-@@ -432,6 +465,9 @@ static void vi5_release_buffer(struct tegra_channel *chan,
+@@ -432,6 +472,9 @@ static void vi5_release_buffer(struct tegra_channel *chan,
  	vb2_set_plane_payload(&vbuf->vb2_buf, 0, chan->format.sizeimage);
  
  	vb2_buffer_done(&vbuf->vb2_buf, buf->vb2_state);
@@ -1188,7 +1212,7 @@ index b54833d3f..042a80e51 100644
  }
  
  static void vi5_capture_enqueue(struct tegra_channel *chan,
-@@ -483,6 +519,88 @@ uncorr_err:
+@@ -483,6 +526,88 @@ uncorr_err:
  	spin_unlock_irqrestore(&chan->capture_state_lock, flags);
  }
  
@@ -1277,7 +1301,7 @@ index b54833d3f..042a80e51 100644
  static void vi5_capture_dequeue(struct tegra_channel *chan,
  	struct tegra_channel_buffer *buf)
  {
-@@ -527,15 +645,29 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
+@@ -527,15 +652,29 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
  			} else {
  				dev_warn(vi->dev,
  					"corr_err: discarding frame %d, flags: %d, "
@@ -1310,7 +1334,7 @@ index b54833d3f..042a80e51 100644
  			}
  		} else if (!vi_port) {
  			gang_prev_frame_id = descr->status.frame_id;
-@@ -580,7 +712,6 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
+@@ -580,7 +719,6 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
  	trace_tegra_channel_capture_frame("eof", &ts);
  #endif
  
@@ -1362,7 +1386,7 @@ index 7ee3a6223..0c6d0ae88 100644
  	TEGRA_VIDEO_FORMAT(YUV422, 16, UYVY8_2X8, 2, 1, T_U8_Y8__V8_Y8,
  				YUV422_8, UYVY, "YUV 4:2:2 UYVY"),
  	TEGRA_VIDEO_FORMAT(YUV422, 16, VYUY8_2X8, 2, 1, T_V8_Y8__U8_Y8,
-@@ -141,6 +143,18 @@ static const struct tegra_video_format vi5_video_formats[] = {
+@@ -141,6 +143,22 @@ static const struct tegra_video_format vi5_video_formats[] = {
  				YUV422_8, YUYV, "YUV 4:2:2 YUYV"),
  	TEGRA_VIDEO_FORMAT(YUV422, 16, YVYU8_2X8, 2, 1, T_Y8_V8__Y8_U8,
  				YUV422_8, YVYU, "YUV 4:2:2 YVYU"),
@@ -1377,6 +1401,10 @@ index 7ee3a6223..0c6d0ae88 100644
 +	// R[7:3]R[3:0] | L[3:0]R[11:8] | L[11:8]L[7:4] | ALIGN[7:0]
 +	TEGRA_VIDEO_FORMAT(RGB888, 24, RGB888_1X24, 4, 1, T_A8R8G8B8,
 +				RGB888, Y12I, "Y12I 24"),
++	TEGRA_VIDEO_FORMAT(RAW16, 16, ARGB8888_1X32, 4, 1, T_R16,
++				RAW16, Y16I, "Y16I 32"),
++	TEGRA_VIDEO_FORMAT(RAW16, 16, SGRBG16_1X16, 2, 1, T_R16,
++				RAW16, RW16, "RW16 16"),
 +
  };
  
@@ -1401,13 +1429,14 @@ diff --git a/include/media/gmsl-link.h b/include/media/gmsl-link.h
 index 1eab7bac9..533f31eb8 100644
 --- a/include/media/gmsl-link.h
 +++ b/include/media/gmsl-link.h
-@@ -53,6 +53,9 @@
+@@ -53,6 +53,10 @@
  #define GMSL_CSI_DT_RAW_12 0x2C
  #define GMSL_CSI_DT_UED_U1 0x30
  #define GMSL_CSI_DT_EMBED 0x12
 +#define GMSL_CSI_DT_YUV422_8 0x1E
 +#define GMSL_CSI_DT_RGB_888 0x24
 +#define GMSL_CSI_DT_RAW_8 0x2A
++#define GMSL_CSI_DT_RAW_16 0x2E
  
  #define GMSL_ST_ID_UNUSED 0xFF
  
@@ -1551,10 +1580,11 @@ index 788cf77dc..421c22491 100644
  	TEGRA_IMAGE_DT_YUV420_8 = 24,
  	TEGRA_IMAGE_DT_YUV420_10,
  
-@@ -56,6 +58,12 @@ enum tegra_image_dt {
+@@ -56,6 +58,13 @@ enum tegra_image_dt {
  	TEGRA_IMAGE_DT_RAW10,
  	TEGRA_IMAGE_DT_RAW12,
  	TEGRA_IMAGE_DT_RAW14,
++	TEGRA_IMAGE_DT_RAW16,
 +
 +	TEGRA_IMAGE_DT_USER_1 = 48,
 +	TEGRA_IMAGE_DT_USER_2,
@@ -1564,6 +1594,13 @@ index 788cf77dc..421c22491 100644
  };
  
  /* Supported CSI to VI Data Formats */
+@@ -66,6 +66,7 @@ enum tegra_vf_code {
+ 	TEGRA_VF_RAW10,
+ 	TEGRA_VF_RAW12,
+ 	TEGRA_VF_RAW14,
++	TEGRA_VF_RAW16,
+ 	TEGRA_VF_EMBEDDED8,
+ 	TEGRA_VF_RGB565,
+ 	TEGRA_VF_RGB555,
 -- 
 2.34.1
-

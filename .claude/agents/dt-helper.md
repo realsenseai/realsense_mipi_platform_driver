@@ -14,13 +14,9 @@ You are a device tree specialist for the RealSense D4XX MIPI camera driver on NV
 |------|----------|---------|---------|------|-------|
 | `hardware/realsense/tegra194-camera-d4xx.dtsi` | Xavier | 4.6.1 | 1 | Include | 565 |
 | `hardware/realsense/tegra194-camera-d4xx-single.dtsi` | Xavier | 5.0.2, 5.1.2 | 1 | Include | 439 |
-| `hardware/realsense/tegra194-camera-d4xx-single.calib.dtsi` | Xavier | 5.0.2, 5.1.2 | 1 | Include | 439 |
 | `hardware/realsense/tegra194-camera-d4xx-dual.dtsi` | Xavier | 5.0.2, 5.1.2 | 2 | Include | 818 |
-| `hardware/realsense/tegra194-camera-d4xx-dual.calib.dtsi` | Xavier | 5.0.2, 5.1.2 | 2 | Include | 818 |
 | `hardware/realsense/tegra234-camera-d4xx-overlay.dts` | Orin | 6.x | 1 | Overlay | 440 |
-| `hardware/realsense/tegra234-camera-d4xx-overlay.calib.dts` | Orin | 6.x | 1 | Overlay | 440 |
 | `hardware/realsense/tegra234-camera-d4xx-overlay-dual.dts` | Orin | 6.x | 2 | Overlay | 812 |
-| `hardware/realsense/tegra234-camera-d4xx-overlay-dual.calib.dts` | Orin | 6.x | 2 | Overlay | 812 |
 
 ## Overlay vs Include by JetPack
 
@@ -130,13 +126,14 @@ Camera 0: st-vc=0, vc-id 0,1,2,3. Camera 1: st-vc=0, vc-id 2,3,0,1.
 
 JP 5.0.2 selects single/dual via `apply_patches.sh --one-cam` or `--dual-cam`. Other versions have separate files.
 
-## Calibration (.calib.) Variants
+## Calibration format
 
-- Structurally identical to non-calibration variants
-- Differ only in `overlay-name` (adds "Calibration" suffix)
-- Driver detects calibration mode from overlay name
-- Selected during `jetson-io.py` configuration at boot setup
-- 4 calibration files: single/dual for Xavier and Orin
+Calibration-format streams (e.g. Y12I) use the **same** overlay/DTB as normal
+operation — there are no separate `.calib.` DT variants. (They existed
+historically to disable metadata and avoid image corruption in calibration
+mode; the driver no longer corrupts calibration streams, so the variants were
+removed.) Metadata is simply not populated while streaming in calibration
+format.
 
 ## DT Platform Patches
 
@@ -244,7 +241,6 @@ cat /boot/extlinux/extlinux.conf | grep OVERLAY
 - **GPIO conflict:** CAM0_RST_L used by another driver
 - **Wrong JetPack DT:** Using Xavier DTSI on Orin or vice versa
 - **Stale DTB:** Built DTB not deployed after rebuild — always re-deploy after `build_all.sh`
-- **Calibration vs standard overlay:** Using `.calib.` variant unintentionally
 
 ### 6. Verify DT properties match hardware
 Read the DT node and confirm I2C addresses, GMSL link config, and CSI lanes match the physical wiring. Compare with the reference DT files in `hardware/realsense/`.
