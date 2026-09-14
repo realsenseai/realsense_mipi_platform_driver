@@ -1,4 +1,4 @@
-From edcb7d4d704c111db14e8845a1669d962d5a4649 Mon Sep 17 00:00:00 2001
+From f4b8c8ceb6cf323aa2fa0089a6e4b3d9b117ea3f Mon Sep 17 00:00:00 2001
 From: Xin Zhang <xin.x.zhang@intel.com>
 Date: Fri, 11 Nov 2022 16:26:51 +0800
 Subject: [PATCH] Add vi5_fops cleanup code from previous unmerged PR
@@ -11,23 +11,27 @@ is not included.
 
 Signed-off-by: Xin Zhang <xin.x.zhang@intel.com>
 ---
- .../media/platform/tegra/camera/vi/vi5_fops.c | 69 ++++++++++---------
- 1 file changed, 35 insertions(+), 34 deletions(-)
+ .../media/platform/tegra/camera/vi/vi5_fops.c | 86 +++++++++++--------
+ 1 file changed, 52 insertions(+), 34 deletions(-)
 
 diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-index 6e08f65ea..af790b60d 100644
+index 5247855..84b3194 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
 +++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
-@@ -371,49 +371,52 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+@@ -377,49 +377,69 @@ static void vi5_setup_surface(struct tegra_channel *chan,
  	chan->capture_descr_sequence += 1;
  }
  
 +static void vi5_release_metadata_buffer(struct tegra_channel *chan,
-+	struct vb2_v4l2_buffer *vbuf)
++	struct tegra_channel_buffer *buf)
 +{
 +	struct vb2_buffer *evb = NULL;
 +	struct vb2_v4l2_buffer *evbuf;
-+	void* frm_buffer;
++	struct vb2_v4l2_buffer *vbuf = &buf->buf;
++	void *frm_buffer;
++	void *metadata_addr;
++	unsigned int descr_index = buf->capture_descr_index[0];
++	unsigned int emb_offset;
 +
 +	spin_lock(&chan->embedded.spin_lock);
 +	if (0 < chan->embedded.num_buffers) {
@@ -44,13 +48,26 @@ index 6e08f65ea..af790b60d 100644
 +		return;
 +
 +	frm_buffer = vb2_plane_vaddr(evb, 0);
-+	if (!frm_buffer)
++	if (!frm_buffer) {
++		vb2_buffer_done(evb, VB2_BUF_STATE_ERROR);
 +		return;
++	}
 +
-+	memcpy(frm_buffer, chan->emb_buf_addr, 255);
++	if (!chan->emb_buf_stride ||
++		chan->emb_buf_size < D4XX_META_BUFSIZE ||
++		descr_index >= chan->capture_queue_depth ||
++		check_mul_overflow(descr_index, chan->emb_buf_stride,
++			&emb_offset) ||
++		emb_offset > chan->emb_buf_size - D4XX_META_BUFSIZE) {
++		vb2_buffer_done(evb, VB2_BUF_STATE_ERROR);
++		return;
++	}
++
++	metadata_addr = (u8 *)chan->emb_buf_addr + emb_offset;
++	memcpy(frm_buffer, metadata_addr, D4XX_META_BUFSIZE);
 +	evbuf = to_vb2_v4l2_buffer(evb);
 +	evbuf->sequence = vbuf->sequence;
-+	vb2_set_plane_payload(evb, 0, 68);
++	vb2_set_plane_payload(evb, 0, D4XX_META_PAYLOAD);
 +	evb->timestamp = vbuf->vb2_buf.timestamp;
 +	vb2_buffer_done(evb, VB2_BUF_STATE_DONE);
 +}
@@ -87,7 +104,9 @@ index 6e08f65ea..af790b60d 100644
 -			}
 -		}
 -	}
--
++	if (chan->embedded_data_height == 1 && buf->vb2_state == VB2_BUF_STATE_DONE)
++		vi5_release_metadata_buffer(chan, buf);
+ 
  	vb2_buffer_done(&vbuf->vb2_buf, buf->vb2_state);
 -	if (chan->embedded_data_height == 1 && evb) {
 -		evbuf = to_vb2_v4l2_buffer(evb);
@@ -97,21 +116,19 @@ index 6e08f65ea..af790b60d 100644
 -		evb->timestamp = vbuf->vb2_buf.timestamp;
 -		vb2_buffer_done(evb, buf->vb2_state);
 -	}
- 
-+	if (chan->embedded_data_height == 1 && buf->vb2_state == VB2_BUF_STATE_DONE)
-+		vi5_release_metadata_buffer(chan, vbuf);
+-
  }
  
  static void vi5_capture_enqueue(struct tegra_channel *chan,
-@@ -954,8 +957,6 @@ static int vi5_channel_start_streaming(struct vb2_queue *vq, u32 count)
+@@ -1027,8 +1047,6 @@ static int vi5_channel_start_streaming(struct vb2_queue *vq, u32 count)
  							sensor_mode->\
  							 image_properties.\
  						      embedded_metadata_height;
 -						if (chan->id != 0 && chan->id != 1)
 -							chan->embedded_data_height = 0;
- 						/* rounding up to page size */
- 						emb_buf_size =
- 							round_up(chan->\
+ 					}
+ 				}
+ 				ret = vi5_channel_prepare_embedded_buffer(chan);
 -- 
-2.30.2
+2.34.1
 
