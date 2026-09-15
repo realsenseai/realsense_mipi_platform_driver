@@ -315,6 +315,7 @@ enum ds5_mux_pad {
 #define DS5_START_POLL_TIME	10
 #define DS5_START_MAX_TIME	2000
 #define DS5_START_MAX_COUNT	(DS5_START_MAX_TIME / DS5_START_POLL_TIME)
+#define DS5_HWMC_BUFFER_SIZE	1024
 /*
  * RSDEV-12089: max wall-clock to wait for an HWMC command to complete. Must cover
  * a worst-case low-fps stream re-arm (ds5_mux_s_stream, bounded by
@@ -641,6 +642,12 @@ struct ds5 {
 	bool d58x_pixel_mode;
 	u16 control_base;
 	u16 control_status_reg;
+	/* HWMC_RW is exposed as separate SET and GET ioctls. Execute the complete
+	 * FW transaction during SET and retain its response here so commands from
+	 * different subdevices cannot interleave DATA/EXEC/response phases. */
+	u8 hwmc_rw_response[DS5_HWMC_BUFFER_SIZE];
+	u16 hwmc_rw_response_len;
+	bool hwmc_rw_response_valid;
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	struct gmsl_link_ctx g_ctx;
 	/* GMSL link this camera is wired to. From the serializer node's
@@ -661,6 +668,8 @@ struct ds5 {
 
 struct ds5_dev {
 	struct mutex lock;
+	/* One HW-monitor engine is shared by every subdevice of a camera. */
+	struct mutex hwmc_lock;
 
 	/*
 	* Per-camera reset generation counter.
@@ -681,6 +690,12 @@ struct ds5_dev {
 	*/
 	u16 cached_device_type;
 	u16 d585_product_id;
+	/* GVD is immutable between camera resets. Keep the response shared by all
+	 * four subdevices so repeated discovery does not transfer 606 bytes over
+	 * the GMSL I2C tunnel for every stream start. Guarded by lock. */
+	u8 gvd_cache[DS5_GVD_LEN_D5XX];
+	u16 gvd_cache_len;
+	bool gvd_cache_valid;
 
 	/* Timestamp (jiffies) of last completed HW reset.
 	* Used to enforce DS5_HW_RESET_COOLDOWN_MS between consecutive resets
@@ -733,8 +748,10 @@ static void ds5_init_global_slots_once(void)
 		return;
 	}
 
-	for (i = 0; i < MAX_DS5_NUM; i++)
+	for (i = 0; i < MAX_DS5_NUM; i++) {
 		mutex_init(&ds5_inited[i].lock);
+		mutex_init(&ds5_inited[i].hwmc_lock);
+	}
 
 	for (i = 0; i < MAX_DSER_NUM; i++)
 		mutex_init(&dser_inited[i].lock);
@@ -855,6 +872,7 @@ static void ds5_init_global_slots_once(void)
 	mutex_lock(&ds5_slots_lock__);
 	if (!ds5_slots_inited) {
 		mutex_init(&ds5_inited[0].lock);
+		mutex_init(&ds5_inited[0].hwmc_lock);
 		ds5_slots_inited = true;
 	}
 	mutex_unlock(&ds5_slots_lock__);
@@ -913,6 +931,22 @@ static inline void msleep_range(unsigned int delay_base)
 }
 #endif
 #endif
+
+/* Stream transitions normally settle within a few milliseconds. Poll at 1-2ms
+ * for the first attempts, then back off to 10ms and finally 20ms. The callers
+ * retain their absolute DS5_START_MAX_TIME deadline, so error paths stay bounded
+ * to the existing two-second budget without continuously occupying GMSL I2C. */
+static unsigned int ds5_stream_poll_delay(unsigned int retry)
+{
+	if (retry <= 2)
+		return 1;
+	if (retry <= 5)
+		return 2;
+	if (retry <= 10)
+		return DS5_START_POLL_TIME;
+
+	return 2 * DS5_START_POLL_TIME;
+}
 
 static int ds5_write(struct ds5 *state, u16 reg, u16 val)
 {
@@ -2822,8 +2856,6 @@ static int d500_dpp_ctrl_desc(u32 ctrl_id,
 #define DS5_HWMC_STATUS_OK		0
 #define DS5_HWMC_STATUS_ERR		1
 #define DS5_HWMC_STATUS_WIP		2
-#define DS5_HWMC_BUFFER_SIZE	1024
-
 enum DS5_HWMC_ERR {
 	DS5_HWMC_ERR_SUCCESS = 0,
 	DS5_HWMC_ERR_CMD     = -1,
@@ -2939,6 +2971,44 @@ static int ds5_hwmc_send(struct ds5 *state,
 	ds5_write_with_check(state, DS5_HWMC_EXEC, 0x01); /* execute cmd */
 
 	return 0;
+}
+
+/*
+ * HKR exposes one HW-monitor engine for the whole camera, while Linux exposes
+ * it through multiple V4L2 subdevices.  Serialize the complete transaction,
+ * not only the DATA/EXEC writes: a second command issued before the first
+ * response is consumed overwrites the shared FW status/response registers.
+ */
+static int ds5_hwmc_xfer(struct ds5 *state, u16 cmd_len,
+			  const struct hwm_cmd *cmd, unsigned char *data,
+			  u16 data_size, u16 *data_len)
+{
+	int ret;
+
+	mutex_lock(&state->ds5_dev->hwmc_lock);
+	ret = ds5_hwmc_send(state, cmd_len, cmd);
+	if (!ret) {
+		if (data)
+			ret = ds5_get_hwmc(state, data, data_size, data_len);
+		else
+			ret = ds5_hwmc_wait(state);
+	}
+	mutex_unlock(&state->ds5_dev->hwmc_lock);
+
+	return ret;
+}
+
+/* Reset/DFU commands intentionally have no response to consume. */
+static int ds5_hwmc_send_atomic(struct ds5 *state, u16 cmd_len,
+				 const struct hwm_cmd *cmd)
+{
+	int ret;
+
+	mutex_lock(&state->ds5_dev->hwmc_lock);
+	ret = ds5_hwmc_send(state, cmd_len, cmd);
+	mutex_unlock(&state->ds5_dev->hwmc_lock);
+
+	return ret;
 }
 
 /* Caller must hold state->ds5_dev->lock. */
@@ -3126,11 +3196,7 @@ static int ds5_set_calibration_data(struct ds5 *state,
 {
 	int ret;
 
-	ret = ds5_hwmc_send(state, length, cmd);
-	if (ret)
-		return ret;
-
-	ret = ds5_hwmc_wait(state);
+	ret = ds5_hwmc_xfer(state, length, cmd, NULL, 0, NULL);
 	if (ret) {
 		dev_err(&state->client->dev,
 				"%s(): Failed to set calibration table %d, error: %d\n",
@@ -3208,6 +3274,9 @@ static void ds5_reset_streaming_flags(struct ds5_dev *ds5_dev)
 	ds5_dev->ir_streaming = false;
 	ds5_dev->rgb_streaming = false;
 	ds5_dev->imu_streaming = false;
+	/* A camera reset may change FW identity and invalidates the descriptor. */
+	ds5_dev->gvd_cache_valid = false;
+	ds5_dev->gvd_cache_len = 0;
 	mutex_unlock(&ds5_dev->lock);
 }
 
@@ -3411,7 +3480,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 
 	/* 4. Send HW reset command */
 	memcpy(&reset_cmd, &cmd_hw_reset, sizeof(reset_cmd));
-	ret = ds5_hwmc_send(state, sizeof(reset_cmd), &reset_cmd);
+	ret = ds5_hwmc_send_atomic(state, sizeof(reset_cmd), &reset_cmd);
 	if (ret < 0) {
 		dev_err(&state->client->dev,
 			"%s(): Failed to send HW reset command: %d\n",
@@ -3595,6 +3664,8 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 }
 
 static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on);
+static int ds5_gvd(struct ds5 *state, unsigned char *data, u32 buf_len,
+		   u16 *data_len);
 
 static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 {
@@ -3825,10 +3896,8 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			ae_roi_cmd.param2 = *((u16 *)ctrl->p_new.p_u16 + 1);
 			ae_roi_cmd.param3 = *((u16 *)ctrl->p_new.p_u16 + 2);
 			ae_roi_cmd.param4 = *((u16 *)ctrl->p_new.p_u16 + 3);
-			ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd),
-				&ae_roi_cmd);
-			if (!ret)
-				ret = ds5_hwmc_wait(state);
+			ret = ds5_hwmc_xfer(state, sizeof(struct hwm_cmd),
+				&ae_roi_cmd, NULL, 0, NULL);
 		}
 		break;
 	case DS5_CAMERA_CID_AE_SETPOINT_SET:
@@ -3847,10 +3916,8 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			}
 			memcpy(ae_setpoint_cmd, &set_ae_setpoint, sizeof (set_ae_setpoint));
 			memcpy(ae_setpoint_cmd->Data, (u8 *)ctrl->p_new.p_s32, 4);
-			ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd) + 4,
-					ae_setpoint_cmd);
-			if (!ret)
-				ret = ds5_hwmc_wait(state);
+			ret = ds5_hwmc_xfer(state, sizeof(struct hwm_cmd) + 4,
+					ae_setpoint_cmd, NULL, 0, NULL);
 			devm_kfree(&state->client->dev, ae_setpoint_cmd);
 		}
 		break;
@@ -3862,9 +3929,8 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 		ae_type_cmd.param1 = ctrl->val;
 		dev_dbg(&state->client->dev, "%s(): AE_MODE set %d\n",
 			__func__, ctrl->val);
-		ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd), &ae_type_cmd);
-		if (!ret)
-			ret = ds5_hwmc_wait(state);
+		ret = ds5_hwmc_xfer(state, sizeof(struct hwm_cmd), &ae_type_cmd,
+				     NULL, 0, NULL);
 		}
 		break;
 	case DS5_CAMERA_CID_ERB:
@@ -3893,9 +3959,8 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			memcpy(erb_cmd, &erb, sizeof(struct hwm_cmd));
 			erb_cmd->param1 = offset;
 			erb_cmd->param2 = size;
-			ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd), erb_cmd);
-			if (!ret)
-				ret = ds5_get_hwmc(state, erb_cmd->Data, len, &size);
+			ret = ds5_hwmc_xfer(state, sizeof(struct hwm_cmd), erb_cmd,
+					erb_cmd->Data, len, &size);
 			if (ret) {
 				dev_err(&state->client->dev,
 					"%s(): ERB cmd failed, ret: %d,"
@@ -3952,9 +4017,8 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			ewb_cmd->param1 = offset; // start index
 			ewb_cmd->param2 = size; // size
 			memcpy(ewb_cmd->Data, (u8 *)ctrl->p_new.p_u8 + 4, size);
-			ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd) + size, ewb_cmd);
-			if (!ret)
-				ret = ds5_hwmc_wait(state);
+			ret = ds5_hwmc_xfer(state, sizeof(struct hwm_cmd) + size,
+					ewb_cmd, NULL, 0, NULL);
 			if (ret) {
 				dev_err(&state->client->dev,
 					"%s(): EWB cmd failed, ret: %d,"
@@ -3981,10 +4045,17 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 				break;
 			}
 
-			size = *((u8 *)ctrl->p_new.p_u8 + 1) << 8;
-			size |= *((u8 *)ctrl->p_new.p_u8 + 0);
-			ret = ds5_hwmc_send(state, size + 4, cmd);
-			ret = ds5_get_hwmc(state, cmd->Data, ctrl->dims[0], &size);
+			if (cmd->opcode == gvd.opcode) {
+				ret = ds5_gvd(state, cmd->Data,
+					      ctrl->dims[0] - sizeof(*cmd), &size);
+			} else {
+				size = *((u8 *)ctrl->p_new.p_u8 + 1) << 8;
+				size |= *((u8 *)ctrl->p_new.p_u8 + 0);
+				ret = ds5_hwmc_xfer(state, size + 4, cmd, cmd->Data,
+						     ctrl->dims[0], &size);
+			}
+			if (ret)
+				break;
 			if (ctrl->dims[0] < DS5_HWMC_BUFFER_SIZE) {
 				ret = -ENODATA;
 				break;
@@ -4001,6 +4072,9 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			u16 size = *((u8 *)ctrl->p_new.p_u8 + 1) << 8;
 			size |= *((u8 *)ctrl->p_new.p_u8 + 0);
 
+			state->hwmc_rw_response_valid = false;
+			state->hwmc_rw_response_len = 0;
+
 			/* Check if this is a HW reset command (opcode 0x20) */
 			if (cmd->opcode == 0x20) {
 				dev_info(&state->client->dev,
@@ -4008,7 +4082,23 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 					__func__);
 				ret = ds5_hw_reset_with_recovery(state);
 			} else {
-				ret = ds5_hwmc_send(state, size + 4, cmd);
+				/* The camera has a single HWMC engine although userspace can
+				 * reach it through four V4L2 subdevices. Keep the command and
+				 * response atomic across those subdevices. */
+				if (cmd->opcode == gvd.opcode) {
+					ret = ds5_gvd(state, state->hwmc_rw_response,
+						      sizeof(state->hwmc_rw_response),
+						      &state->hwmc_rw_response_len);
+				} else {
+					ret = ds5_hwmc_xfer(state, size + 4, cmd,
+							 state->hwmc_rw_response,
+							 sizeof(state->hwmc_rw_response),
+							 &state->hwmc_rw_response_len);
+					/* FW command errors are returned in the first word. */
+					if (!ret && !state->hwmc_rw_response_len)
+						state->hwmc_rw_response_len = sizeof(u32);
+				}
+				state->hwmc_rw_response_valid = !ret;
 			}
 		}
 		break;
@@ -4093,26 +4183,12 @@ static int ds5_get_calibration_data(struct ds5 *state, enum table_id id,
 
 	memcpy(cmd, &get_calib_data, sizeof(get_calib_data));
 	cmd->param1 = id;
-	ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd), cmd);
-	if (ret) {
-		devm_kfree(&state->client->dev, cmd);
-		return ret;
-	}
-
-	ret = ds5_hwmc_wait(state);
-
+	ret = ds5_hwmc_xfer(state, sizeof(struct hwm_cmd), cmd, cmd->Data,
+			     length + 4, &table_length);
 	if (ret) {
 		dev_err(&state->client->dev,
 				"%s(): Failed to get calibration table %d, error: %d\n",
 				__func__, id, ret);
-		devm_kfree(&state->client->dev, cmd);
-		return ret;
-	}
-
-	// get table length from fw
-	ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN,
-			&table_length, sizeof(table_length)); /* Read response length */
-	if (ret) {
 		devm_kfree(&state->client->dev, cmd);
 		return ret;
 	}
@@ -4125,37 +4201,27 @@ static int ds5_get_calibration_data(struct ds5 *state, enum table_id id,
 		return -ENOBUFS;
 	}
 
-	// read table
-	ds5_raw_read_with_check(state, DS5_HWMC_DATA, cmd->Data, table_length); /* Read table data */
-
 	// first 4 bytes are opcode HWM, not part of calibration table
 	memcpy(table, cmd->Data + 4, length);
 	devm_kfree(&state->client->dev, cmd);
 	return 0;
 }
 
-static int ds5_gvd(struct ds5 *state, unsigned char *data, u32 buf_len)
+static int ds5_read_gvd(struct ds5 *state, unsigned char *data, u32 buf_len,
+			u16 *data_len)
 {
 	struct hwm_cmd cmd;
 	int ret;
 	u16 length = 0;
 
 	memcpy(&cmd, &gvd, sizeof(gvd));
-	ret = ds5_hwmc_send(state, sizeof(cmd), &cmd);
-	if (ret)
-		return ret;
-
-	ret = ds5_hwmc_wait(state);
+	ret = ds5_hwmc_xfer(state, sizeof(cmd), &cmd, data, buf_len, &length);
 	if (ret) {
 		dev_err(&state->client->dev,
 			"%s(): Failed to read GVD, error: %d\n",
 			__func__, ret);
 		return -EIO;
 	}
-
-	ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN, &length, sizeof(length)); /* Read response length */
-	if (ret)
-		return ret;
 
 	if (!length)
 		return -ENODATA;
@@ -4167,9 +4233,46 @@ static int ds5_gvd(struct ds5 *state, unsigned char *data, u32 buf_len)
 		return -ENOBUFS;
 	}
 
-	ds5_raw_read_with_check(state, DS5_HWMC_DATA, data, length); /* Read response data */
+	if (data_len)
+		*data_len = length;
 
 	return 0;
+}
+
+static int ds5_gvd(struct ds5 *state, unsigned char *data, u32 buf_len,
+		   u16 *data_len)
+{
+	struct ds5_dev *dev = state->ds5_dev;
+	int ret = 0;
+
+	if (!data)
+		return -EINVAL;
+
+	/* Keep legacy D4xx behaviour unchanged. D58x discovery repeatedly asks for
+	 * the same 606-byte descriptor through both native and HWMC_RW controls. */
+	if (!ds5_is_d58x(state))
+		return ds5_read_gvd(state, data, buf_len, data_len);
+
+	mutex_lock(&dev->lock);
+	if (!dev->gvd_cache_valid) {
+		ret = ds5_read_gvd(state, dev->gvd_cache,
+				   sizeof(dev->gvd_cache), &dev->gvd_cache_len);
+		if (!ret)
+			dev->gvd_cache_valid = true;
+	}
+
+	if (!ret) {
+		if (dev->gvd_cache_len > buf_len) {
+			ret = -ENOBUFS;
+		} else {
+			memcpy(data, dev->gvd_cache, dev->gvd_cache_len);
+			if (data_len)
+				*data_len = dev->gvd_cache_len;
+		}
+	}
+	mutex_unlock(&dev->lock);
+
+	return ret;
 }
 
 static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
@@ -4353,24 +4456,19 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 
 	case DS5_CAMERA_CID_LOG:
-		ret = ds5_hwmc_send(state, sizeof(log_prepare), &log_prepare);
-		if (ret)
-			return ret;
+		{
+			u16 log_size = 0;
 
-		ret = ds5_hwmc_wait(state);
-		if (ret)
-			return ret;
-
-		ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN, &data, sizeof(data)); /* Read response length */
+			ret = ds5_hwmc_xfer(state, sizeof(log_prepare), &log_prepare,
+					     ctrl->p_new.p_u8, ctrl->dims[0],
+					     &log_size);
+			data = log_size;
+		}
 		dev_dbg(&state->client->dev, "%s(): log size 0x%x\n", __func__, data);
 		if (ret < 0)
 			return ret;
 		if (!data)
 			return 0;
-		if (data > 1024)
-			return -ENOBUFS;
-		ret = ds5_raw_read(state, DS5_HWMC_DATA,
-				ctrl->p_new.p_u8, data);
 		break;
 	case DS5_CAMERA_DEPTH_CALIBRATION_TABLE_GET:
 		ret = ds5_get_calibration_data(state, DEPTH_CALIBRATION_ID,
@@ -4388,7 +4486,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 	case DS5_CAMERA_CID_GVD:
 		ret = ds5_gvd(state, ctrl->p_new.p_u8,
-				ctrl->elems * ctrl->elem_size);
+				ctrl->elems * ctrl->elem_size, NULL);
 		break;
 	case DS5_CAMERA_CID_AE_ROI_GET:
 		if (ctrl->p_new.p_u16) {
@@ -4404,12 +4502,8 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 				break;
 			}
 			memcpy(ae_roi_cmd, &get_ae_roi, sizeof(struct hwm_cmd));
-			ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd), ae_roi_cmd);
-			if (ret) {
-				devm_kfree(&state->client->dev, ae_roi_cmd);
-				return ret;
-			}
-			ret = ds5_get_hwmc(state, ae_roi_cmd->Data, len, &dataLen);
+			ret = ds5_hwmc_xfer(state, sizeof(struct hwm_cmd), ae_roi_cmd,
+						ae_roi_cmd->Data, len, &dataLen);
 			if (!ret && dataLen <= ctrl->dims[0])
 				memcpy(ctrl->p_new.p_u16, ae_roi_cmd->Data + 4, 8);
 			devm_kfree(&state->client->dev, ae_roi_cmd);
@@ -4429,12 +4523,8 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			break;
 		}
 		memcpy(ae_setpoint_cmd, &get_ae_setpoint, sizeof(struct hwm_cmd));
-		ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd), ae_setpoint_cmd);
-		if (ret) {		
-			devm_kfree(&state->client->dev, ae_setpoint_cmd);
-			return ret;
-		}
-		ret = ds5_get_hwmc(state, ae_setpoint_cmd->Data, len, &dataLen);
+		ret = ds5_hwmc_xfer(state, sizeof(struct hwm_cmd), ae_setpoint_cmd,
+				    ae_setpoint_cmd->Data, len, &dataLen);
 		memcpy(ctrl->p_new.p_s32, ae_setpoint_cmd->Data + 4, 4);
 		dev_dbg(&state->client->dev, "%s(): len: %d, 0x%x \n",
 			__func__, dataLen, *(ctrl->p_new.p_s32));
@@ -4458,12 +4548,8 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			break;
 		}
 		memcpy(ae_type_cmd, &get_ae_type, sizeof(struct hwm_cmd));
-		ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd), ae_type_cmd);
-		if (ret) {
-			devm_kfree(&state->client->dev, ae_type_cmd);
-			return ret;
-		}
-		ret = ds5_get_hwmc(state, ae_type_cmd->Data, len, &dataLen);
+		ret = ds5_hwmc_xfer(state, sizeof(struct hwm_cmd), ae_type_cmd,
+				    ae_type_cmd->Data, len, &dataLen);
 		if (!ret)
 			memcpy(&ae_type, ae_type_cmd->Data + 4, sizeof(ae_type));
 		*(ctrl->p_new.p_s32) = ae_type;
@@ -4475,11 +4561,23 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 	case DS5_CAMERA_CID_HWMC_RW: 
 		if (ctrl->p_new.p_u8) {
 			unsigned char *data = (unsigned char *)ctrl->p_new.p_u8;
-			u16 dataLen = 0;
+			u16 dataLen = state->hwmc_rw_response_len;
 			u16 bufLen = ctrl->dims[0];
-			ret = ds5_get_hwmc(state, data,	bufLen, &dataLen);
+
+			if (!state->hwmc_rw_response_valid) {
+				ret = -ENODATA;
+				break;
+			}
+			if ((dataLen < 4) || (dataLen > bufLen - 4)) {
+				ret = -EBADMSG;
+				state->hwmc_rw_response_valid = false;
+				break;
+			}
+			memset(data, 0, bufLen);
+			memcpy(data, state->hwmc_rw_response, dataLen);
+			state->hwmc_rw_response_valid = false;
 			/* This is needed for librealsense, to align there code with UVC,
-		 	 * last word is length - 4 bytes header length */
+			 * last word is length - 4 bytes header length */
 			dataLen -= 4;
 			data[bufLen - 4] = (unsigned char)(dataLen & 0x00FF);
 			data[bufLen - 3] = (unsigned char)((dataLen & 0xFF00) >> 8);
@@ -5038,6 +5136,8 @@ static void ds5_init_ds5_dev(struct ds5 *state, struct ds5_dev *ds5_dev)
 	ds5_dev->serdes_setup_complete = false;
 	ds5_dev->cached_device_type = DS5_DEVICE_TYPE_UNKNOWN;
 	ds5_dev->d585_product_id = 0;
+	ds5_dev->gvd_cache_valid = false;
+	ds5_dev->gvd_cache_len = 0;
 	ds5_dev->configured_device_mode = D500_DEVICE_MODE_3C;
 	ds5_dev->active_device_mode = D500_DEVICE_MODE_3C;
 	ds5_dev->device_mode_valid = false;
@@ -6693,7 +6793,8 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	/* Verify stream is in the expected state before issuing command */
 	ts = jiffies;
 	for (timeout = ts + msecs_to_jiffies(DS5_START_MAX_TIME), i = 0;
-			time_before(jiffies, timeout); i++, msleep_range(i*DS5_START_POLL_TIME))
+			time_before(jiffies, timeout);
+			i++, msleep_range(ds5_stream_poll_delay(i)))
 	{
 		ret = ds5_read(state, config_status_base, &status);
 		if ((ret >= 0) && (on == !(status & DS5_STATUS_STREAMING))) {
@@ -6776,7 +6877,8 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	ts = jiffies;
 	streaming = ~expected_streaming_state; /* force initial toggle */
 	for (timeout = ts + msecs_to_jiffies(DS5_START_MAX_TIME), i = 0;
-			time_before(jiffies, timeout); i++, msleep_range(i*DS5_START_POLL_TIME))
+			time_before(jiffies, timeout);
+			i++, msleep_range(ds5_stream_poll_delay(i)))
 	{
 		if (!ds5_config_done) {
 			ret = ds5_configure(state);
@@ -7466,8 +7568,8 @@ static int ds5_dfu_switch_to_dfu(struct ds5 *state)
 	int i = DS5_START_MAX_COUNT;
 	u16 status;
 
-	ret = ds5_hwmc_send(state, sizeof(cmd_switch_to_dfu),
-			    (struct hwm_cmd *)&cmd_switch_to_dfu);
+	ret = ds5_hwmc_send_atomic(state, sizeof(cmd_switch_to_dfu),
+				   (struct hwm_cmd *)&cmd_switch_to_dfu);
 	if (ret)
 		return ret;
 	/*Wait for DFU fw to boot*/
@@ -8412,7 +8514,7 @@ static int ds5_probe(struct i2c_client *c
 		unsigned char *gvd_data = kzalloc(DS5_GVD_LEN_D5XX, GFP_KERNEL);
 
 		if (gvd_data) {
-			ret = ds5_gvd(state, gvd_data, DS5_GVD_LEN_D5XX);
+			ret = ds5_gvd(state, gvd_data, DS5_GVD_LEN_D5XX, NULL);
 			if (ret) {
 				dev_warn(&c->dev,
 					 "%s(): cannot cache D585 PID from GVD (%d)\n",
