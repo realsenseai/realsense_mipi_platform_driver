@@ -8,7 +8,7 @@
 
 #### BSD 2-clause "Simplified" License
 
-| Component | Home Page | License| Copyright |
+| Component | Home Page | License| Copyright |11
 | ------- | ------- | ------- | ------- |
 | Open Computer Vision Library (OpenCV) | http://github.com/opencv/opencv/ | BSD 2-clause "Simplified" License | Copyright (C) 2015-2023, OpenCV Foundation, all rights reserved. |
 
