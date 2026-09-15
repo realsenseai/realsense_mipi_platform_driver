@@ -1676,9 +1676,9 @@ static const struct ds5_resolution d58x_y8_sizes[] = {
 };
 
 /* Temporary, non-mergeable Perception-MUX PoC profile.  It deliberately
- * reuses the IR control bank to request two 30-FPS and two 90-FPS physical
+ * reuses the IR control bank to request two 30-FPS and two 60-FPS physical
  * producers while the final PerceptionSetConfig ABI is reviewed. */
-static const u16 d58x_perception_poc_framerates[] = {240};
+static const u16 d58x_perception_poc_framerates[] = {180};
 
 static const struct ds5_resolution d58x_perception_poc_sizes[] = {
 	{
