@@ -12,7 +12,7 @@
 | ------- | ------- | ------- | ------- |
 | Open Computer Vision Library (OpenCV) | http://github.com/opencv/opencv/ | BSD 2-clause "Simplified" License | Copyright (C) 2015-2023, OpenCV Foundation, all rights reserved. |
 
-###### BSD 2-clause "Simplified" License
+###### BSD 2-clause "Simplified" License11
 >   
     Copyright (c) \<year\>, \<copyright holder\>
 
