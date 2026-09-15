@@ -332,9 +332,8 @@ enum ds5_mux_pad {
 #define DFU_MAGIC_NUMBER "/0x01/0x02/0x03/0x04"
 #define DFU_BLOCK_SIZE 1024
 #ifdef CONFIG_TEGRA_CAMERA_PLATFORM
-#define DFU_I2C_STANDARD_MODE		100000
-#define DFU_I2C_FAST_MODE			400000
-#define DFU_I2C_BUS_CLK_RATE		DFU_I2C_FAST_MODE
+#define DFU_I2C_FAST_MODE_PLUS		980000	/* Fm+; SerDes MST_BT=0b111 */
+#define DFU_I2C_BUS_CLK_RATE		DFU_I2C_FAST_MODE_PLUS
 #endif
 #define ds5_read_with_check(state, addr, val) {\
 	if (ds5_read(state, addr, val))	\
