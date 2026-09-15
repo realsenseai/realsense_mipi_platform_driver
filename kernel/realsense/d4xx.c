@@ -1675,6 +1675,20 @@ static const struct ds5_resolution d58x_y8_sizes[] = {
 	DS5_RES(256, 144, ds5_framerate_to_90)
 };
 
+/* Temporary, non-mergeable Perception-MUX PoC profile.  It deliberately
+ * reuses the IR control bank to request two 30-FPS and two 60-FPS physical
+ * producers while the final PerceptionSetConfig ABI is reviewed. */
+static const u16 d58x_perception_poc_framerates[] = {180};
+
+static const struct ds5_resolution d58x_perception_poc_sizes[] = {
+	{
+		.width = 1024,
+		.height = 3601,
+		.framerates = d58x_perception_poc_framerates,
+		.n_framerates = ARRAY_SIZE(d58x_perception_poc_framerates),
+	},
+};
+
 static const struct ds5_resolution d58x_calibration_sizes[] = {
 	DS5_RES(1600, 1300, ds5_framerate_15_25)
 };
@@ -1710,6 +1724,12 @@ static const struct ds5_format ds5_y_formats_d58x[] = {
 		.mbus_code = MEDIA_BUS_FMT_Y8_1X8,
 		.n_resolutions = ARRAY_SIZE(d58x_y8_sizes),
 		.resolutions = d58x_y8_sizes,
+	}, {
+		/* Temporary aggregate Perception node: variable-height RAW8 carrier. */
+		.data_type = GMSL_CSI_DT_RAW_8,
+		.mbus_code = MEDIA_BUS_FMT_RS_VARLEN_1X8,
+		.n_resolutions = ARRAY_SIZE(d58x_perception_poc_sizes),
+		.resolutions = d58x_perception_poc_sizes,
 	}, {
 		.data_type = GMSL_CSI_DT_YUV422_8,	/* Y8I */
 		.mbus_code = MEDIA_BUS_FMT_VYUY8_1X16,
