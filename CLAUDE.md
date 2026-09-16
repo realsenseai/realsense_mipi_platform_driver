@@ -95,13 +95,16 @@ RealSense D4XX camera module
 
 ### Video device layout (per camera)
 
-Each camera creates 6 V4L2 video devices:
-- video0: Depth (Z16)
-- video1: Depth metadata (D4XX custom format)
-- video2: Color RGB (RGB888/YUV422)
-- video3: Color RGB metadata
-- video4: IR (GREY, Y8I, Y12I)
-- video5: IMU
+Each camera creates 7 V4L2 video devices — every stream except IMU has a metadata node
+(udev role symlinks `/dev/video-rs-{role}-N`):
+- Depth (Z16) + Depth metadata (`depth`, `depth-md`)
+- Color RGB (RGB888/YUV422) + Color metadata (`color`, `color-md`)
+- IR (GREY, Y8I, Y12I) + IR metadata (`ir`, `ir-md`)
+- IMU (`imu`) — no metadata node
+
+Whether a stream's metadata is captured is decided host-side per node by the DT
+`embedded_metadata_height` ("1" on the Depth/RGB/Y8 nodes, "0" on IMU) and written to the
+FW's `DS5_*_STREAM_MD` register at stream start; the camera is told, not asked.
 
 ### Cross-compilation
 
@@ -177,6 +180,9 @@ Each MIPI segment's lane count comes from a **different** DT property, so the ca
 - Do not use `0x5020` as non-DFU reset-ready status; in non-DFU mode it is not a readiness source of truth. For HW reset readiness, scratch `DS5_*_CONTROL_STATUS` with a non-zero sentinel before reset and wait for FW to restore default `0x0000` after reset. Use `0x5020` only for DFU magic detection.
 - After reset completion, use `DS5_DEVICE_TYPE` validity as the operational-readiness gate for code that depends on firmware-populated stream/config state. `DS5_FW_VERSION` can come back earlier and should only be treated as basic liveness, not full post-reset readiness.
 - On each HW reset, clear cached values for firmware-populated readiness registers before polling readiness (for example clear `cached_device_type` before waiting for `DS5_DEVICE_TYPE`). Do not let pre-reset cache values short-circuit post-reset readiness checks.
+- **Never clock more I2C bytes than the connected FW is known to load for that register.** D4xx FW answers an unmapped register with a single 16-bit word (and `DS5_HWMC_STATUS`/`_LEN` with 4); the camera's DW I2C slave **wedges — unreachable until power-cycle — when the master reads past what was loaded** (HW-proven: the format-descriptor draft's 16-byte header read at `RS_DESC_BASE` killed a legacy-FW camera). Short reads are safe (the 2-byte `DS5_HWMC_STATUS` poll against a 4-byte load runs on every HWMC). So any register a legacy FW may not implement is probed with 2-byte reads first: `ds5_desc_check_magic()` reads the two magic words before the 16-byte header, and every later descriptor read is bounded by `total_size`. It returns `0` / `-ENODEV` (magic mismatch, i.e. no descriptor) / an I2C errno, and deliberately uses bare `regmap_raw_read`: a camera serving no descriptor answers from an unmapped register, so retrying there is pure log noise. Separating the two lets `ds5_desc_fetch()` retry a transient read instead of latching `DS5_DESC_ABSENT` for the life of the module; the header reads, which only run once the magic matched, use retrying `ds5_raw_read()`.
+- **Tell the camera its link context before asking for the format descriptor.** The descriptor carries no host-context flags: the one mode-dependent entry (D58x IMU record width, 38 B tunnel / 256 B pixel) is resolved by the FW serving the table for the mode it was told. `ds5_fixed_configuration()` therefore writes `DS5_MIPI_SERDES_PIXEL_MODE` right where `d58x_pixel_mode` is decided, before `ds5_desc_apply()`; `ds5_hw_init()` stays the MIPI-config owner and re-writes it after a D585 HW reset, which is why `ds5_desc_recheck()` runs **after** that `ds5_hw_init()` call in `ds5_hw_reset_with_recovery()` — comparing earlier would see the FW's post-reboot tunnel-mode blob and report a false change. That `ds5_hw_init()` call is gated on `d585_proto_reset` (the two prototype PIDs), so the same path re-asserts `DS5_MIPI_SERDES_PIXEL_MODE` directly on the `else` branch whenever `d58x_pixel_mode` is set. **That branch is unreachable today** — every existing D585 is a prototype part, so `d585_proto_reset` is always true and `ds5_hw_init()` always runs. It exists for the first non-prototype D585 PID, where without it the camera would come back from reset in tunnel mode while the driver still believed pixel mode, and `ds5_desc_recheck()` would report a spurious "descriptor changed" telling the operator to reload the driver. Neither symptom can occur on current hardware; when a production PID appears, this is the path to exercise first.
+- Parsed format-descriptor tables (`struct ds5_desc`, module-wide list `ds5_desc_all`) are **module-lifetime** — never freed on slot re-init — because a sibling subdev can outlive the primary that owns the `ds5_dev` slot (sysfs unbind) while its `sensor->formats` still points into them. `ds5_dev->desc` is written once under `lock` before any subdev registers; afterwards only the `sensor->formats` pointers into the tables are used, so nothing on a stream path touches the lock. Whether embedded metadata is captured stays a **host** decision (DT `embedded_metadata_height` → `metadata_enabled` → `DS5_*_STREAM_MD`); the descriptor does not carry it.
 - For polling loops expecting transient I2C failures (HWMC status checks, reset readiness polls, DFU timeout checks), use `ds5_read_poll()` which performs a single-shot regmap read without retry or logging. This prevents false warnings and excessive log spam. Reserve `ds5_read()` for normal I2C operations where retry semantics are desired.
 - In `ds5_mux_s_stream()`, treat pre-toggle "already streaming" as no-op only when state is coherent; after reset-generation invalidation on start path, force stop + state clear and proceed with normal reconfiguration flow.
 - In `ds5_probe()`, the DFU-magic recovery check (`DS5_DFU_MAGIC_REG` 0x5020 → `DS5_DFU_MAGIC_LSW` 0x0201) must run **before** `ds5_wait_device_type()`. A device sitting in the bootloader after an interrupted FW upgrade never serves `DS5_DEVICE_TYPE` (0x0310) — placing the device-type wait first causes a ~10 s timeout followed by `goto e_chardev` which tears down the `/dev/d4xx-dfu*` chardev, leaving the device unrecoverable over MIPI. Early-return `DS5_DFU_RECOVERY` on magic match; only then proceed to the device-type wait for operational devices.

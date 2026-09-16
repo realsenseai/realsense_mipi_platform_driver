@@ -12,8 +12,8 @@ explicit memory writer, and scales frame_x/frame_y and sizeimage by the
 row's wire-geometry fractions, rounding frame_x up to the line padding
 the transmitter applies.
 
-Four rows use the override/geometry fields. The D58x calibration streams
-(RGB GRBG10 as V4L2_PIX_FMT_SGRBG16 'GR16', IR Y16I) transmit LSB-first
+The D58x calibration streams
+(RGB GRBG10 as V4L2_PIX_FMT_SGRBG10 'BA10', IR Y16I) transmit LSB-first
 RAW16, which the NVCSI RAW16 rule byte-swaps (CSI-2 defines RAW16
 MSB-first); both override to YUV422-8 + T_Y8_U8__Y8_V8 for
 byte-identical little-endian capture, and Y16I declares frame_x_scale =
@@ -31,7 +31,13 @@ d4xx driver can then advertise, and hand the FW, the true pixel width
 instead of the transport byte count. Encoding the padding as a ratio
 (1612/1288) would have been exact only at that one resolution.
 
-A fifth row uses the flags. Streams that multiplex differently sized
+BA10 is the memory format for the D58x RGB calibration wire
+encoding. FourCC lookup prefers rows advertised by
+the channel, retaining the standard RAW10 BA10 row for RAW10 sensors.
+The original table lookup remains the fallback when no advertised row
+matches.
+
+Another row uses the flags. Streams that multiplex differently sized
 payloads on one virtual channel (compressed images, perception blobs)
 keep a constant line length but end each frame after a per-frame number
 of lines; the RTCPU reports such a frame with err_data ==
@@ -50,7 +56,8 @@ CAPTURE_VI_ENGINE_STATUS_* layout: a short frame reports err_data bit 17
 together with notify_bits bit 42 (CHANSEL_PIX_SHORT), HW-confirmed on
 JP6.2.
 
-HW-verified (JP6.2, fw-orin-5, D585): GR16 30/30 clean frames, Y16I
+HW-verified before the BA10 rename (JP6.2, fw-orin-5, D585):
+RGB calibration 30/30 clean frames, Y16I
 5/5, LE payload on both, coexists with concurrent embedded-metadata
 capture; NV12 10/10 @640x360 and 5/5 @1280x720, exact 1.5*bpl*H frames.
 
@@ -58,9 +65,10 @@ Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
   .../media/platform/tegra/camera/vi/channel.c       | 11 ++++
   .../media/platform/tegra/camera/vi/vi5_fops.c      | 31 +++++++++++
-  .../media/platform/tegra/camera/vi/vi5_formats.h   | 49 +++++++++++++++++
+  .../media/platform/tegra/camera/vi/core.c          | 23 ++++++++
+  .../media/platform/tegra/camera/vi/vi5_formats.h   | 53 ++++++++++++++++++
   include/media/tegra_camera_core.h    | 64 ++++++++++++++++++++++
-  4 files changed, 155 insertions(+)
+  5 files changed, 182 insertions(+)
 
 diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
 index 993db7b..cf58536 100644
@@ -154,11 +162,51 @@ index 8e05301..dc9fe65 100644
  			} else {
  				dev_warn(vi->dev,
  					"corr_err: discarding frame %d, flags: %d, "
+diff --git a/drivers/media/platform/tegra/camera/vi/core.c b/drivers/media/platform/tegra/camera/vi/core.c
+--- a/drivers/media/platform/tegra/camera/vi/core.c
++++ b/drivers/media/platform/tegra/camera/vi/core.c
+@@ -96,6 +96,18 @@ int tegra_core_get_code_by_fourcc(struct tegra_channel *chan,
+ {
+ 	unsigned int i;
+ 
++	/* A FourCC does not uniquely identify a table row. BA10 is shared by
++	 * the stock SGRBG10_1X10/RAW10 row and D58x calibration's
++	 * SGRBG16_1X16/RAW16 row. The subdevice advertises the applicable
++	 * media-bus code in fmts_bitmap, so select that row before using the
++	 * legacy first-match fallback.
++	 */
++	for (i = offset; i < chan->num_video_formats; ++i) {
++		if (chan->video_formats[i]->fourcc == fourcc &&
++		    test_bit(i, chan->fmts_bitmap))
++			return chan->video_formats[i]->code;
++	}
++
+ 	for (i = offset; i < chan->num_video_formats; ++i) {
+ 		if (chan->video_formats[i]->fourcc == fourcc)
+ 			return chan->video_formats[i]->code;
+@@ -158,6 +170,17 @@ tegra_core_get_format_by_fourcc(struct tegra_channel *chan, u32 fourcc)
+ {
+ 	unsigned int i;
+ 
++	/* FourCC-to-descriptor lookup has the same one-to-many constraint as
++	 * tegra_core_get_code_by_fourcc(). Select the row advertised by this
++	 * channel so bpp, CSI data type and override settings come from the
++	 * matching media-bus format.
++	 */
++	for (i = 0; i < chan->num_video_formats; ++i) {
++		if (chan->video_formats[i]->fourcc == fourcc &&
++		    test_bit(i, chan->fmts_bitmap))
++			return chan->video_formats[i];
++	}
++
+ 	for (i = 0; i < chan->num_video_formats; ++i) {
+ 		if (chan->video_formats[i]->fourcc == fourcc)
+ 			return chan->video_formats[i];
 diff --git a/drivers/media/platform/tegra/camera/vi/vi5_formats.h b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
 index 4e50e78..710465e 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi5_formats.h
 +++ b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
-@@ -165,6 +165,55 @@ static const struct tegra_video_format vi5_video_formats[] = {
+@@ -165,6 +165,59 @@ static const struct tegra_video_format vi5_video_formats[] = {
  	// R[7:3]R[3:0] | L[3:0]R[11:8] | L[11:8]L[7:4] | ALIGN[7:0]
  	TEGRA_VIDEO_FORMAT(RGB888, 24, RGB888_1X24, 4, 1, T_A8R8G8B8,
  				RGB888, Y12I, "Y12I 24"),
@@ -174,8 +222,12 @@ index 4e50e78..710465e 100644
 +				1, 1,			/* frame_y scale */
 +				0,			/* frame_x align */
 +				0),			/* flags */
++	// BA10 is also used by the stock SGRBG10_1X10/RAW10 row. This D58x
++	// calibration row is SGRBG16_1X16/RAW16 on the wire, with one 10-bit
++	// sample in each 16-bit LE word. core.c selects it through this
++	// channel's media-bus format bitmap.
 +	TEGRA_VIDEO_FORMAT_EXTENDED(RAW16, 16, SGRBG16_1X16, 2, 1, T_R16,
-+				RAW16, SGRBG16, "GRBG16 16 LE",
++				RAW16, SGRBG10, "GRBG10 16 LE",
 +				TEGRA_IMAGE_DT_YUV422_8,		/* dt_override */
 +				TEGRA_IMAGE_FORMAT_T_Y8_U8__Y8_V8,	/* pixfmt_override */
 +				1, 1,			/* frame_x scale */
