@@ -2343,7 +2343,7 @@ static const struct ds5_resolution d58x_depth_sizes[] = {
 	DS5_RES(640, 480, ds5_framerate_to_90)
 	DS5_RES(480, 270, ds5_framerate_to_90)
 	DS5_RES(424, 240, ds5_framerate_to_90)
-	DS5_RES(256, 144, ds5_framerate_to_90)
+	DS5_RES(256, 144, ds5_framerate_90)
 };
 
 static const struct ds5_resolution d58x_y8_sizes[] = {
@@ -2354,7 +2354,7 @@ static const struct ds5_resolution d58x_y8_sizes[] = {
 	DS5_RES(640, 480, ds5_framerate_to_90)
 	DS5_RES(480, 270, ds5_framerate_to_90)
 	DS5_RES(424, 240, ds5_framerate_to_90)
-	DS5_RES(256, 144, ds5_framerate_to_90)
+	DS5_RES(256, 144, ds5_framerate_90)
 };
 
 static const struct ds5_resolution d58x_calibration_sizes[] = {
@@ -2517,6 +2517,17 @@ static void ds5_set_state_last_set(struct ds5 *state)
 		state->mux.last_set = &state->imu.sensor;
 }
 
+static u16 ds5_resolution_default_framerate(const struct ds5_resolution *res)
+{
+	unsigned int i;
+
+	for (i = 0; i < res->n_framerates; i++)
+		if (res->framerates[i] == ds5_framerate_30)
+			return ds5_framerate_30;
+
+	return res->framerates[0];
+}
+
 /* This is needed for .get_fmt()
  * and if streaming is started without .set_fmt()
  */
@@ -2524,7 +2535,6 @@ static void ds5_sensor_format_init(struct ds5_sensor *sensor)
 {
 	const struct ds5_format *fmt;
 	struct v4l2_mbus_framefmt *ffmt;
-	unsigned int i;
 
 	if (sensor->config.format)
 		return;
@@ -2543,13 +2553,8 @@ static void ds5_sensor_format_init(struct ds5_sensor *sensor)
 	sensor->config.format = fmt;
 	sensor->config.resolution = fmt->resolutions;
 	/* Set default framerate to 30, or to 1st one if not supported */
-	for (i = 0; i < fmt->resolutions->n_framerates; i++) {
-		if (fmt->resolutions->framerates[i] == ds5_framerate_30 /* fps */) {
-			sensor->config.framerate = ds5_framerate_30;
-			return;
-		}
-	}
-	sensor->config.framerate = fmt->resolutions->framerates[0];
+	sensor->config.framerate =
+		ds5_resolution_default_framerate(sensor->config.resolution);
 }
 
 /* No locking needed for enumeration methods */
@@ -2748,6 +2753,8 @@ static const struct ds5_format *ds5_sensor_find_format(
 /* 1-8 */
 #define MIPI_CSI2_TYPE_USER_DEF(i)	(0x30 + (i) - 1)
 
+static u16 __ds5_probe_framerate(const struct ds5_resolution *res, u16 target);
+
 static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
 		struct v4l2_subdev_pad_config *cfg,
@@ -2758,7 +2765,6 @@ static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 {
 	struct v4l2_mbus_framefmt *mf;// = &fmt->format;
 	int ret = 0;
-	//unsigned r;
 
 	dev_dbg(sensor->sd.dev, "%s(): state %p, "
 		"sensor %p, fmt %p, fmt->format %p\n",
@@ -2773,10 +2779,12 @@ static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 
 	sensor->config.format = ds5_sensor_find_format(sensor, mf,
 						&sensor->config.resolution);
-	//r = DS5_FRAMERATE_DEFAULT_IDX < sensor->config.resolution->n_framerates ?
-	//	DS5_FRAMERATE_DEFAULT_IDX : 0;
-	/* FIXME: check if a framerate has been set */
-	//sensor->config.framerate = sensor->config.resolution->framerates[r];
+	if (sensor->config.framerate)
+		sensor->config.framerate = __ds5_probe_framerate(
+			sensor->config.resolution, sensor->config.framerate);
+	else
+		sensor->config.framerate =
+			ds5_resolution_default_framerate(sensor->config.resolution);
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
 	if (cfg && fmt->which == V4L2_SUBDEV_FORMAT_TRY)
@@ -3126,8 +3134,6 @@ static int ds5_sensor_g_frame_interval(struct v4l2_subdev *sd,
 
 	return 0;
 }
-static u16 __ds5_probe_framerate(const struct ds5_resolution *res, u16 target);
-
 static int ds5_sensor_s_frame_interval(struct v4l2_subdev *sd,
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
 		struct v4l2_subdev_state *state,
