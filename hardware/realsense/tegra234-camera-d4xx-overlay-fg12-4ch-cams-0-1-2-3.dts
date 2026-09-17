@@ -18,7 +18,7 @@
  *  - one MAX9295 node per link (0x40..0x43) with external_addr_reassign.
  *  - 16 ds5 sensor nodes at 0x1a..0x1d / 0x2a..0x2d / 0x3a..0x3d / 0x4a..0x4d
  *    (Depth/RGB/Y8/IMU per camera), virtual channels 0..15.
- * The FangZhu-specific MAX96712 hooks (fg12-poc-enable /
+ * The FangZhu-specific MAX96712 hooks (fg12-4ch-poc-enable /
  * fg12-reverse-lane-polarity) and the GPIO-selected camera I2C mux
  * (cam_i2cmux / i2c@1) are kept from the verified FG12-4CH overlay.
  */
@@ -869,7 +869,7 @@
 						link-mask = <0xf>;
 						channel = "a";
 						fangzhu,fg12-reverse-lane-polarity;
-						fangzhu,fg12-poc-enable;
+						fangzhu,fg12-4ch-poc-enable;
 						/* <serializer-vc deserializer-vc> */
 						maxim,link0-vc-remap = <0 0>, <1 1>, <2 2>, <3 3>;
 						maxim,link1-vc-remap = <0 4>, <1 5>, <2 6>, <3 7>;
