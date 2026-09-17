@@ -290,7 +290,7 @@
 						link-mask = <0x1>;
 						channel = "a";
 						fangzhu,fg12-reverse-lane-polarity;
-						fangzhu,fg12-poc-enable;
+						fangzhu,fg12-4ch-poc-enable;
 					};
 
 					ser_a: max9295_a@40 {

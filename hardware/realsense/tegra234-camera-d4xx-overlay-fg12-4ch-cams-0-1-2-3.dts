@@ -869,7 +869,7 @@
 						link-mask = <0xf>;
 						channel = "a";
 						fangzhu,fg12-reverse-lane-polarity;
-						fangzhu,fg12-poc-enable;
+						fangzhu,fg12-4ch-poc-enable;
 						/* <serializer-vc deserializer-vc> */
 						maxim,link0-vc-remap = <0 0>, <1 1>, <2 2>, <3 3>;
 						maxim,link1-vc-remap = <0 4>, <1 5>, <2 6>, <3 7>;
