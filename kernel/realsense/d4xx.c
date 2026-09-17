@@ -225,6 +225,8 @@ enum rs_pixfmt {
 	RS_PIXFMT_GRBG16,
 	RS_PIXFMT_SBGGR10P,
 	RS_PIXFMT_IMU,
+	/* Temporary id used only by the draft Perception-MUX PoC descriptor. */
+	RS_PIXFMT_RSVL,
 };
 /*
  * FW version major byte identifies the family in recovery, where DEVICE_TYPE
@@ -1187,6 +1189,7 @@ static const struct {
 	/* D401 CSI passthrough: 10bit data riding an opeque 8-bit carrier. */
 	{ RS_PIXFMT_SBGGR10P,   MEDIA_BUS_FMT_RS_SBGGR10P_1X8, GMSL_CSI_DT_RAW_8 },
 	{ RS_PIXFMT_IMU,        MEDIA_BUS_FMT_Y8_1X8 },
+	{ RS_PIXFMT_RSVL,       MEDIA_BUS_FMT_RS_VARLEN_1X8 },
 };
 
 /* Probed a word at a time: legacy FW loads one 16-bit word for an unmapped
