@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ehud Goldik <ehud.joseph.goldik@realsenseai.com>
+Date: Sun, 6 Sep 2026 12:00:00 +0300
+Subject: [PATCH] media: v4l2: RealSense variable-length data format
+
+Add MEDIA_BUS_FMT_RS_VARLEN_1X8 and V4L2_PIX_FMT_RS_VARLEN for streams
+whose frames share one CSI virtual channel but differ in length from
+frame to frame (compressed images, multiplexed perception blobs). The
+line length is fixed and equals the V4L2 width; the line count varies
+up to the V4L2 height. The application finds each blob's length and
+type in an in-band header or the metadata stream. The Tegra VI format
+row selected by this mbus code tolerates the resulting PIXEL_INCOMPLETE
+fault (nvidia-oot 0013).
+
+Signed-off-by: Ehud Goldik <ehud.joseph.goldik@realsenseai.com>
+---
+  drivers/media/v4l2-core/v4l2-ioctl.c  | 1 +
+  include/uapi/linux/media-bus-format.h | 4 ++++
+  include/uapi/linux/videodev2.h        | 1 +
+  3 files changed, 6 insertions(+)
+
+diff --git a/drivers/media/v4l2-core/v4l2-ioctl.c b/drivers/media/v4l2-core/v4l2-ioctl.c
+index ca51e1c..8ba2ad4 100644
+--- a/drivers/media/v4l2-core/v4l2-ioctl.c
++++ b/drivers/media/v4l2-core/v4l2-ioctl.c
+@@ -1467,6 +1467,7 @@ static void v4l_fill_fmtdesc(struct v4l2_fmtdesc *fmt)
+ 	case V4L2_PIX_FMT_Y216:		descr = "16-bit YUYV Packed"; break;
+ 	/* Librealsense formats*/
+ 	case V4L2_PIX_FMT_RW16:		descr = "16-bit Raw data"; break;
++	case V4L2_PIX_FMT_RS_VARLEN:	descr = "RealSense variable-length data"; break;
+ 	case V4L2_PIX_FMT_W10:		descr = "10-bit packed 8888[2222]"; break;
+ 	case V4L2_PIX_FMT_CONFIDENCE_MAP:	descr = "Packed [44] confidence data"; break;
+ 	case V4L2_PIX_FMT_FG:		descr = "Frame Grabber (FG  )"; break;
+diff --git a/include/uapi/linux/media-bus-format.h b/include/uapi/linux/media-bus-format.h
+index a2a333f..2e03e14 100644
+--- a/include/uapi/linux/media-bus-format.h
++++ b/include/uapi/linux/media-bus-format.h
+@@ -175,6 +175,10 @@
+  * 8-bit CSI carrier */
+ #define MEDIA_BUS_FMT_RS_SBGGR10P_1X8		0x5009
+ 
++/* RealSense variable-length data: fixed line length, per-frame line count
++ * up to the declared height, over an opaque 8-bit CSI carrier */
++#define MEDIA_BUS_FMT_RS_VARLEN_1X8		0x500a
++
+ /* HSV - next is	0x6002 */
+ #define MEDIA_BUS_FMT_AHSV8888_1X32		0x6001
+ 
+diff --git a/include/uapi/linux/videodev2.h b/include/uapi/linux/videodev2.h
+index a25c0a2..f77eb32 100644
+--- a/include/uapi/linux/videodev2.h
++++ b/include/uapi/linux/videodev2.h
+@@ -812,6 +812,7 @@ struct v4l2_pix_format {
+ #define V4L2_PIX_FMT_AJPG     v4l2_fourcc('A', 'J', 'P', 'G') /* Aspeed JPEG */
+ #define V4L2_PIX_FMT_HEXTILE  v4l2_fourcc('H', 'X', 'T', 'L') /* Hextile compressed */
+ #define V4L2_PIX_FMT_RW16     v4l2_fourcc('R', 'W', '1', '6') /* Raw data 16-bit */
++#define V4L2_PIX_FMT_RS_VARLEN v4l2_fourcc('R', 'S', 'V', 'L') /* RealSense variable-length data */
+ #define V4L2_PIX_FMT_W10      v4l2_fourcc('W', '1', '0', ' ') /* Packed raw data 10-bit */
+ #define V4L2_PIX_FMT_CONFIDENCE_MAP	v4l2_fourcc('C', ' ', ' ', ' ') /* Two pixels in one byte */
+ /*  Librealsense development*/

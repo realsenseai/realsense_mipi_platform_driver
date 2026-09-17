@@ -15,7 +15,7 @@ Signed-off-by: Dmitry Perchanov <dmitry.perchanov@realsenseai.com>
 ---
  drivers/media/i2c/max9295.c |  139 +++++++++++++++++++++++++++++++
  drivers/media/i2c/max9296.c |  193 +++++++++++++++++++++++++++++++++++++++++++
- include/media/gmsl-link.h   |    3 +
+ include/media/gmsl-link.h   |    4 ++
  include/media/max9295.h     |    4 +
  include/media/max9296.h     |    8 ++
  drivers/media/i2c/max9295.c |   69 +++++++++++++++
@@ -26,7 +26,7 @@ Signed-off-by: Dmitry Perchanov <dmitry.perchanov@realsenseai.com>
  include/media/max9296.h     |   13 ++
  drivers/media/i2c/max9295.c |    2 
  drivers/media/i2c/max9296.c |    2 
- 13 files changed, 508 insertions(+), 48 deletions(-)
+ 13 files changed, 509 insertions(+), 48 deletions(-)
 
 diff --git a/drivers/media/i2c/max9295.c b/drivers/media/i2c/max9295.c
 index b363d5f6..e7c77845 100644
@@ -369,7 +369,7 @@ index 1ceaf3cd..97559460 100644
 +EXPORT_SYMBOL(max9296_init_settings);
 +
 +int max9296_set_pipe(struct device *dev, int pipe_id,
-+		     u8 data_type1, u8 data_type2, u32 vc_id)
++		     u8 data_type1, u8 data_type2, u32 link, u32 vc_id)
 +{
 +	struct max9296 *priv = dev_get_drvdata(dev);
 +	int err = 0;
@@ -400,7 +400,7 @@ diff --git a/include/media/gmsl-link.h b/include/media/gmsl-link.h
 index ad902d0a..7dce2356 100644
 --- a/include/media/gmsl-link.h
 +++ b/include/media/gmsl-link.h
-@@ -40,6 +40,10 @@
+@@ -40,6 +40,11 @@
  #define GMSL_CSI_DT_RAW_12 0x2C
  #define GMSL_CSI_DT_UED_U1 0x30
  #define GMSL_CSI_DT_EMBED 0x12
@@ -408,6 +408,7 @@ index ad902d0a..7dce2356 100644
 +#define GMSL_CSI_DT_RGB_888 0x24
 +#define GMSL_CSI_DT_RAW_8 0x2A
 +#define GMSL_CSI_DT_RAW_16 0x2E
++#define GMSL_CSI_DT_YUV420_8 0x18
  
  #define GMSL_ST_ID_UNUSED 0xFF
  
@@ -458,7 +459,7 @@ index 210dbc80..6b4c796e 100644
  
 +int max9296_get_available_pipe_id(struct device *dev, int vc_id);
 +int max9296_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
-+		     u8 data_type2, u32 vc_id);
++		     u8 data_type2, u32 link, u32 vc_id);
 +int max9296_release_pipe(struct device *dev, int pipe_id);
 +void max9296_reset_oneshot(struct device *dev);
 +
@@ -776,7 +777,7 @@ index d50bea51..92b483b6 100644
  }
  EXPORT_SYMBOL(max9296_init_settings);
  
-+int max9296_bind_ser_to_dser_pipe(struct device *dev, int dser_pipe_id, int ser_pipe_id, u32 vc_id)
++int max9296_bind_ser_to_dser_pipe(struct device *dev, int dser_pipe_id, int ser_pipe_id, u32 link)
 +{
 +	/* pipe id's are 1:1 in this deserializer */
 +	return 0;
@@ -784,7 +785,7 @@ index d50bea51..92b483b6 100644
 +EXPORT_SYMBOL(max9296_bind_ser_to_dser_pipe);
 +
  int max9296_set_pipe(struct device *dev, int pipe_id,
- 		     u8 data_type1, u8 data_type2, u32 vc_id)
+ 		     u8 data_type1, u8 data_type2, u32 link, u32 vc_id)
  {
 diff --git a/include/media/max9296.h b/include/media/max9296.h
 index 6b4c796e..db7365d7 100644
@@ -803,9 +804,9 @@ index 6b4c796e..db7365d7 100644
 + * @param [in]  dev             The deserializer device handle.
 + * @param [in]  dser_pipe_id    Deserializer pipe id.
 + * @param [in]  ser_pipe_id     Serializer pipe id.
-+ * @param [in]  vc_id           vc_id associated with this pipe path.
++ * @param [in]  link            GMSL link the serializer pipe lives on.
 + */
-+int max9296_bind_ser_to_dser_pipe(struct device *dev, int dser_pipe_id, int ser_pipe_id, u32 vc_id);
++int max9296_bind_ser_to_dser_pipe(struct device *dev, int dser_pipe_id, int ser_pipe_id, u32 link);
 +
  /** @} */
  

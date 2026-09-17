@@ -22,7 +22,7 @@ each stream's readout span, how the streams nest in time, and the true peak aggr
 
 Inputs are the same stereo sensors; **outputs differ**. RAW (EP3/EP4) is the full 808-line sensor
 scan; depth (EP2) is only the rectification/crop window. Measured on fw-orin-3, FW 5.17.3.153,
-depth 1280×720 + 2× RAW 1612×808 BA81 @30 fps (period 33.31 ms):
+depth 1280×720 + 2× RAW 1288×808 pBAA @30 fps (1612 B/line on the wire) (period 33.31 ms):
 
 ```
 frame:  |<----------------- RAW scan 24.0 ms ----------------->|        (V-blank 9.3ms)
@@ -94,7 +94,7 @@ ssh -n -i $key -o GSSAPIAuthentication=no -o BatchMode=yes -o StrictHostKeyCheck
     <user>@<RIG> "tr -d '\r' < /tmp/capture_sofeof.sh > /tmp/cap.sh; bash /tmp/cap.sh"
 ```
 Override defaults via env: `DEPTH_DEV` (/dev/video0), `RAW_DEVS` ("/dev/video2 /dev/video4"),
-`DEPTH_W`/`DEPTH_H` (1280/720), `RAW_W`/`RAW_H`/`RAW_FMT` (1612/808/BA81), `FPS` (30).
+`DEPTH_W`/`DEPTH_H` (1280/720), `RAW_W`/`RAW_H`/`RAW_FMT` (1288/808/pBAA — pass `1612x808`, the wire bytes per line, to `parse_sofeof.py`), `FPS` (30).
 The summary must show **distinct PIDs** (one per channel) and low `short_frame_discards`.
 
 ### 3. Parse (host) — `parse_sofeof.py`

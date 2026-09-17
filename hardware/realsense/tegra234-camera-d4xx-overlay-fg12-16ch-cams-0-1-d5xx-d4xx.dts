@@ -411,18 +411,22 @@
 								reg = <0x29>;
 								compatible = "maxim,max96712";
 								csi-mode = "2x4";
-								/* 4-lane CSI output towards the Jetson (1100 Mbps/lane). */
+								/* 4-lane CSI output towards the Jetson (1300 Mbps/lane). */
 								lane_cnt = <4>;
 								/* Enable links 0 (d5xx) and 1 (d4xx). */
 								link-mask = <0x3>;
 								channel = "a";
 								pwdn-gpios = <&gpio CAM0_PWDN GPIO_ACTIVE_HIGH>;
+								/* <serializer-vc deserializer-vc> */
+								maxim,link0-vc-remap = <0 0>, <1 1>, <2 2>, <3 3>;
+								maxim,link1-vc-remap = <0 4>, <1 5>, <2 6>, <3 7>;
 							};
 
 							ser_a: max96717@40 {
 								status = "okay";
 								compatible = "maxim,max96717";
 								reg = <0x40>;
+								maxim,gmsl-link-id = <0>;
 								maxim,gmsl-dser-device = <&dser>;
 								external_addr_reassign;
 							};
@@ -431,6 +435,7 @@
 								status = "okay";
 								compatible = "maxim,max9295";
 								reg = <0x41>;
+								maxim,gmsl-link-id = <1>;
 								maxim,gmsl-dser-device = <&dser>;
 								external_addr_reassign;
 							};
@@ -471,7 +476,7 @@
 									tegra_sinterface = "serial_b";
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
-									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									serdes_pix_clk_hz = "325000000"; /* 4 lanes x 1300 Mbps / 16 bpp */
 									line_length = "1280"; /* 2200 */
 									embedded_metadata_height = "0";
 								};
@@ -521,7 +526,7 @@
 									tegra_sinterface = "serial_b";
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
-									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									serdes_pix_clk_hz = "325000000"; /* 4 lanes x 1300 Mbps / 16 bpp */
 									line_length = "1280"; /* 2200 */
 									embedded_metadata_height = "1";
 								};
@@ -570,7 +575,7 @@
 									tegra_sinterface = "serial_e";
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
-									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									serdes_pix_clk_hz = "325000000"; /* 4 lanes x 1300 Mbps / 16 bpp */
 									line_length = "1280"; /* 2200 */
 									embedded_metadata_height = "1";
 								};
@@ -618,7 +623,7 @@
 									tegra_sinterface = "serial_a";
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
-									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									serdes_pix_clk_hz = "325000000"; /* 4 lanes x 1300 Mbps / 16 bpp */
 									line_length = "1280"; /* 2200 */
 									embedded_metadata_height = "1";
 								};
@@ -640,7 +645,7 @@
 								def-addr = <0x10>;
 								reg = <0x1d>;
 								override_reg = <0x1a>;
-								compatible = "intel,d4xx";
+								compatible = "realsense,d5xx";
 								use_sensor_mode_id = "true";
 								vcc-supply = <&vdd_cam12v_poc>;
 								cam-type = "IMU";
@@ -669,7 +674,7 @@
 									tegra_sinterface = "serial_b";
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
-									serdes_pix_clk_hz = "275000000";
+									serdes_pix_clk_hz = "325000000";
 									line_length = "1280"; /* 2200 */
 									embedded_metadata_height = "0";
 								};
@@ -689,7 +694,7 @@
 								def-addr = <0x10>;
 								reg = <0x1c>;
 								override_reg = <0x1a>;
-								compatible = "intel,d4xx";
+								compatible = "realsense,d5xx";
 								use_sensor_mode_id = "true";
 								vcc-supply = <&vdd_cam12v_poc>;
 								cam-type = "Y8";
@@ -719,7 +724,7 @@
 									tegra_sinterface = "serial_b";
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
-									serdes_pix_clk_hz = "275000000";
+									serdes_pix_clk_hz = "325000000";
 									line_length = "1280"; /* 2200 */
 									embedded_metadata_height = "1";
 								};
@@ -739,7 +744,7 @@
 								def-addr = <0x10>;
 								reg = <0x1b>;
 								override_reg = <0x1a>;
-								compatible = "intel,d4xx";
+								compatible = "realsense,d5xx";
 								use_sensor_mode_id = "true";
 								vcc-supply = <&vdd_cam12v_poc>;
 								cam-type = "RGB";
@@ -768,7 +773,7 @@
 									tegra_sinterface = "serial_e";
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
-									serdes_pix_clk_hz = "275000000";
+									serdes_pix_clk_hz = "325000000";
 									line_length = "1280"; /* 2200 */
 									embedded_metadata_height = "1";
 								};
@@ -787,7 +792,7 @@
 								status = "okay";
 								def-addr = <0x10>;
 								reg = <0x1a>;
-								compatible = "intel,d4xx";
+								compatible = "realsense,d5xx";
 								use_sensor_mode_id = "true";
 								vcc-supply = <&vdd_cam12v_poc>;
 								cam-type = "Depth";
@@ -816,7 +821,7 @@
 									tegra_sinterface = "serial_a";
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
-									serdes_pix_clk_hz = "275000000";
+									serdes_pix_clk_hz = "325000000";
 									line_length = "1280"; /* 2200 */
 									embedded_metadata_height = "1";
 								};

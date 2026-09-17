@@ -5,9 +5,9 @@ Subject: [PATCH] Align max9296 api to max96712
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- drivers/media/i2c/max9296.c | 14 ++++++++++++++
- include/media/max9296.h     | 14 ++++++++++++++
- 2 files changed, 28 insertions(+)
+ drivers/media/i2c/max9296.c | 16 +++++++++++++++-
+ include/media/max9296.h     | 16 +++++++++++++++-
+ 2 files changed, 30 insertions(+), 2 deletions(-)
 
 diff --git a/drivers/media/i2c/max9296.c b/drivers/media/i2c/max9296.c
 index d50bea51..92b483b6 100644
@@ -27,11 +27,11 @@ index d50bea51..92b483b6 100644
  void max9296_reset_oneshot(struct device *dev)
  {
  	struct max9296 *priv = dev_get_drvdata(dev);
-@@ -945,6 +952,13 @@ int max9296_init_settings(struct device *dev)
+@@ -945,8 +952,15 @@ int max9296_init_settings(struct device *dev)
  }
  EXPORT_SYMBOL(max9296_init_settings);
  
-+int max9296_bind_ser_to_dser_pipe(struct device *dev, int dser_pipe_id, int ser_pipe_id, u32 vc_id)
++int max9296_bind_ser_to_dser_pipe(struct device *dev, int dser_pipe_id, int ser_pipe_id, u32 link)
 +{
 +	/* pipe id's are 1:1 in this deserializer */
 +	return 0;
@@ -39,20 +39,26 @@ index d50bea51..92b483b6 100644
 +EXPORT_SYMBOL(max9296_bind_ser_to_dser_pipe);
 +
  int max9296_set_pipe(struct device *dev, int pipe_id,
- 		     u8 data_type1, u8 data_type2, u32 vc_id)
+-		     u8 data_type1, u8 data_type2, u32 vc_id)
++		     u8 data_type1, u8 data_type2, u32 link, u32 vc_id)
  {
+ 	struct max9296 *priv = dev_get_drvdata(dev);
+ 	int err = 0;
 diff --git a/include/media/max9296.h b/include/media/max9296.h
 index 6b4c796e..db7365d7 100644
 --- a/include/media/max9296.h
 +++ b/include/media/max9296.h
-@@ -24,6 +24,7 @@
+@@ -24,8 +24,9 @@
   */
  
  int max9296_get_available_pipe_id(struct device *dev, int vc_id);
 +int max9296_get_ser_pipe_id(struct device *dev, int dser_pipe_id, int vc_id);
  int max9296_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
- 		     u8 data_type2, u32 vc_id);
+-		     u8 data_type2, u32 vc_id);
++		     u8 data_type2, u32 link, u32 vc_id);
  int max9296_release_pipe(struct device *dev, int pipe_id);
+ void max9296_reset_oneshot(struct device *dev);
+ 
 @@ -154,6 +155,19 @@ int max9296_power_on(struct device *dev);
  void max9296_power_off(struct device *dev);
  
@@ -66,9 +72,9 @@ index 6b4c796e..db7365d7 100644
 + * @param [in]  dev             The deserializer device handle.
 + * @param [in]  dser_pipe_id    Deserializer pipe id.
 + * @param [in]  ser_pipe_id     Serializer pipe id.
-+ * @param [in]  vc_id           vc_id associated with this pipe path.
++ * @param [in]  link            GMSL link the serializer pipe lives on.
 + */
-+int max9296_bind_ser_to_dser_pipe(struct device *dev, int dser_pipe_id, int ser_pipe_id, u32 vc_id);
++int max9296_bind_ser_to_dser_pipe(struct device *dev, int dser_pipe_id, int ser_pipe_id, u32 link);
 +
  /** @} */
  

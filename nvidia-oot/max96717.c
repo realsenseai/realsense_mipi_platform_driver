@@ -34,8 +34,8 @@
 #define MAX96717_MIPI_RX0_RESET 0x48
 #define MAX96717_MIPI_RX0_NORMAL 0x40
 
-#define MAX96717_SRC_CTRL_ADDR 0x2BF
-#define MAX96717_SRC_PWDN_ADDR 0x02BE
+#define MAX96717_2BE_ADDR 0x02BE
+#define MAX96717_2BF_ADDR 0x02BF
 #define MAX96717_2C0_ADDR 0x02C0
 #define MAX96717_2C1_ADDR 0x02C1
 #define MAX96717_2C2_ADDR 0x02C2
@@ -44,15 +44,13 @@
 #define MAX96717_I2C4_ADDR 0x44
 #define MAX96717_I2C5_ADDR 0x45
 
-#define MAX96717_RESET_SRC 0x60
-#define MAX96717_RESET_ESYNC 0x77
-
-#define MAX96717_PWDN_GPIO 0x90
-#define MAX96717_PWDN_ESYNC_EXT 0x24
-
+/* GPIO 0 config values - Receives ID 0x17 */
+#define MAX96717_2BE_ESYNC 0x24
+#define MAX96717_2BF_ESYNC 0x60
 #define MAX96717_2C0_ESYNC 0x57
-#define MAX96717_2C1_ESYNC 0x05
-#define MAX96717_2C2_ESYNC 0x1F
+/* GPIO 1 config values - Receives ID 0x17 */
+#define MAX96717_2C1_ESYNC 0x24
+#define MAX96717_2C2_ESYNC 0x60
 #define MAX96717_2C3_ESYNC 0x57
 
 #define MAX96717_GPIO7_A_ADDR		0x02D3	/* MFP7 / pass-through SDA1 */
@@ -67,6 +65,8 @@
 /* GPIO_B: PULL_UPDN_SEL=None, TX_ID=0 */
 #define MAX96717_GPIO_B_NO_PULL		0x00
 
+#define MAX96717_MAX_VC 16
+
 struct max96717_client_ctx {
 	struct gmsl_link_ctx *g_ctx;
 	bool st_done;
@@ -80,7 +80,7 @@ struct max96717 {
 	bool pixel_mode;
 	/* bit[ser_vc_id] set while that pipe is streaming (set in set_pipe,
 	 * cleared in stream_stop). When it drops to 0 the MIPI RX is re-armed. */
-	u8 active_vc_mask;
+	u16 active_vc_mask;
 };
 
 static int max96717_write_reg(struct device *dev, u16 addr, u8 val)
@@ -166,16 +166,18 @@ int max96717_enable_gpio_tunneling(struct device *dev)
 
 	/*
 	 * GPIO0 carries H_VSYNC_TRIG from the deserializer on RX channel 23,
-	 * GPIO1 carries RGB_FSYNC on the same channel, and GPIO6 returns the
-	 * camera H_STROBE_OUT_1V8 signal on TX channel 31. These camera-side
-	 * signals are required in both pixel and tunnel video modes.
+	 * GPIO1 carries RGB_FSYNC on the same channel (Currently unused),
+	 * GPIO6 returns the camera H_STROBE_OUT_1V8 signal on TX channel 31.
 	 */
-	max96717_write_acc(dev, priv->regmap, MAX96717_SRC_PWDN_ADDR, MAX96717_PWDN_ESYNC_EXT, &err);
-	max96717_write_acc(dev, priv->regmap, MAX96717_SRC_CTRL_ADDR, MAX96717_RESET_ESYNC, &err);
+	/* GPIO 0 receiver */
+	max96717_write_acc(dev, priv->regmap, MAX96717_2BE_ADDR, MAX96717_2BE_ESYNC, &err);
+	max96717_write_acc(dev, priv->regmap, MAX96717_2BF_ADDR, MAX96717_2BF_ESYNC, &err);
 	max96717_write_acc(dev, priv->regmap, MAX96717_2C0_ADDR, MAX96717_2C0_ESYNC, &err);
+	/* GPIO 1 receiver */
 	max96717_write_acc(dev, priv->regmap, MAX96717_2C1_ADDR, MAX96717_2C1_ESYNC, &err);
 	max96717_write_acc(dev, priv->regmap, MAX96717_2C2_ADDR, MAX96717_2C2_ESYNC, &err);
 	max96717_write_acc(dev, priv->regmap, MAX96717_2C3_ADDR, MAX96717_2C3_ESYNC, &err);
+	/* GPIO 6 transmitter */
 	max96717_write_acc(dev, priv->regmap, MAX96717_GPIO6_A_ADDR, 0x27, &err);
 	max96717_write_acc(dev, priv->regmap, MAX96717_GPIO6_B_ADDR, 0x1F, &err);
 	max96717_write_acc(dev, priv->regmap, MAX96717_GPIO6_C_ADDR, 0x00, &err);
@@ -194,8 +196,8 @@ int max96717_disable_gpio_tunneling(struct device *dev)
 	mutex_lock(&priv->lock);
 
 	/* Restore default SRC pin function — plain GPIO, no ESYNC tunneling */
-	max96717_write_acc(dev, priv->regmap, MAX96717_SRC_PWDN_ADDR, MAX96717_PWDN_GPIO, &err);
-	max96717_write_acc(dev, priv->regmap, MAX96717_SRC_CTRL_ADDR, MAX96717_RESET_SRC, &err);
+	max96717_write_acc(dev, priv->regmap, MAX96717_2BE_ADDR, 0x00, &err);
+	max96717_write_acc(dev, priv->regmap, MAX96717_2BF_ADDR, 0x00, &err);
 	max96717_write_acc(dev, priv->regmap, MAX96717_2C0_ADDR, 0x00, &err);
 	max96717_write_acc(dev, priv->regmap, MAX96717_2C1_ADDR, 0x00, &err);
 	max96717_write_acc(dev, priv->regmap, MAX96717_2C2_ADDR, 0x00, &err);
@@ -359,7 +361,7 @@ int max96717_init_settings(struct device *dev)
 		{MAX96717_VIDEO_TX0_ADDR, 0x60}, /* 0x110 - VIDEO_TX0 AUTO_BPP=0 ENC_MODE=10 */
 		{MAX96717_VIDEO_TX1_ADDR, 0x10}, /* 0x111 - VIDEO_TX1 BPP=16 forced (matches DT) */
 		{MAX96717_FRONTTOP_10_ADDR, 0x4}, /* 0x312 - Fronttop_10 double 8bit */
-		{MAX96717_MIPI_RX1_ADDR, 0x30}, /* 0x331 - MIPI_RX1: 4-lane */
+		{MAX96717_MIPI_RX1_ADDR, 0xb0}, /* 0x331 - MIPI_RX1: 4-lane && enable ext VC */
 	};
 	struct reg_pair ser_cfg_post[] = {
 		{MAX96717_MIPI_RX8_ADDR, 0x22}, /* 0x338 - MIPI_RX8 settle=0x22 (t_hs[5:4]/t_clk[1:0]) */
@@ -429,12 +431,12 @@ int max96717_set_pipe(struct device *dev, int pipe_id,
 	struct max96717 *priv = dev_get_drvdata(dev);
 	int err = 0;
 
-	if (vc_id >= 8)
+	if (vc_id >= MAX96717_MAX_VC)
 		return -EINVAL;
 
 	mutex_lock(&priv->lock);
 
-	priv->active_vc_mask |= (u8)BIT(vc_id);
+	priv->active_vc_mask |= (u16)BIT(vc_id);
 	mutex_unlock(&priv->lock);
 
 	return err;
@@ -446,11 +448,11 @@ int max96717_stream_stop(struct device *dev, u32 vc_id)
 	struct max96717 *priv = dev_get_drvdata(dev);
 	int err = 0;
 
-	if (vc_id >= 8)
+	if (vc_id >= MAX96717_MAX_VC)
 		return -EINVAL;
 
 	mutex_lock(&priv->lock);
-	priv->active_vc_mask &= (u8)~BIT(vc_id);
+	priv->active_vc_mask &= (u16)~BIT(vc_id);
 
 	if (priv->pixel_mode && priv->active_vc_mask == 0) {
 		/*

@@ -1,0 +1,27 @@
+From b230e621733f481d85895c34f5797c684c11aa83 Mon Sep 17 00:00:00 2001
+From: zhou <shengyong.zhou@realsenseai.com>
+Date: Wed, 5 Aug 2026 21:24:08 +0800
+Subject: [PATCH] media: tegra: fix failed VI5 request-buffer cleanup
+
+tegra_channel_capture_setup() passed the request-pointer array itself to
+dma_free_coherent() after vi_capture_setup() failed. Free the per-port
+allocation and clear its slot so stream-off cannot unmap the same IOVA.
+
+Signed-off-by: zhou <shengyong.zhou@realsenseai.com>
+---
+ drivers/media/platform/tegra/camera/vi/vi5_fops.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+index 8200a0d76..f941b076a 100644
+--- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
++++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+@@ -363,3 +363,4 @@ static int tegra_channel_capture_setup(struct tegra_channel *chan, unsigned int
+ 				setup.queue_depth * setup.request_size,
+-				chan->request, setup.iova);
++				chan->request[vi_port], setup.iova);
++		chan->request[vi_port] = NULL;
+ 		return err;
+-- 
+2.34.1
+

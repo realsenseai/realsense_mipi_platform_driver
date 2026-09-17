@@ -699,17 +699,23 @@
 								reg = <0x29>;
 								compatible = "maxim,max96712";
 								csi-mode = "2x4";
-								/* 4-lane CSI output towards the Jetson (1100 Mbps/lane). */
+								/* 4-lane CSI output towards the Jetson (1300 Mbps/lane). */
 								lane_cnt = <4>;
 								link-mask = <0xf>;
 								channel = "a";
 								pwdn-gpios = <&gpio CAM0_PWDN GPIO_ACTIVE_HIGH>;
+								/* <serializer-vc deserializer-vc> */
+								maxim,link0-vc-remap = <0 0>, <1 1>, <2 2>, <3 3>;
+								maxim,link1-vc-remap = <0 4>, <1 5>, <2 6>, <3 7>;
+								maxim,link2-vc-remap = <0 8>, <1 9>, <2 10>, <3 11>;
+								maxim,link3-vc-remap = <0 12>, <1 13>, <2 14>, <3 15>;
 							};
 
 							ser_a: max9295_a@40 {
 								status = "okay";
 								compatible = "maxim,max9295";
 								reg = <0x40>;
+								maxim,gmsl-link-id = <0>;
 								maxim,gmsl-dser-device = <&dser>;
 								external_addr_reassign;
 							};
@@ -718,6 +724,7 @@
 								status = "okay";
 								compatible = "maxim,max9295";
 								reg = <0x41>;
+								maxim,gmsl-link-id = <1>;
 								maxim,gmsl-dser-device = <&dser>;
 								external_addr_reassign;
 							};
@@ -726,6 +733,7 @@
 								status = "okay";
 								compatible = "maxim,max9295";
 								reg = <0x42>;
+								maxim,gmsl-link-id = <2>;
 								maxim,gmsl-dser-device = <&dser>;
 								external_addr_reassign;
 							};
@@ -734,6 +742,7 @@
 								status = "okay";
 								compatible = "maxim,max9295";
 								reg = <0x43>;
+								maxim,gmsl-link-id = <3>;
 								maxim,gmsl-dser-device = <&dser>;
 								external_addr_reassign;
 							};
@@ -772,7 +781,7 @@
 									tegra_sinterface = "serial_b";
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
-									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									serdes_pix_clk_hz = "325000000"; /* 4 lanes x 1300 Mbps / 16 bpp */
 									line_length = "1280"; /* 2200 */
 									embedded_metadata_height = "0";
 								};
@@ -822,7 +831,7 @@
 									tegra_sinterface = "serial_b";
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
-									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									serdes_pix_clk_hz = "325000000"; /* 4 lanes x 1300 Mbps / 16 bpp */
 									line_length = "1280"; /* 2200 */
 									embedded_metadata_height = "1";
 								};
@@ -871,7 +880,7 @@
 									tegra_sinterface = "serial_e";
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
-									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									serdes_pix_clk_hz = "325000000"; /* 4 lanes x 1300 Mbps / 16 bpp */
 									line_length = "1280"; /* 2200 */
 									embedded_metadata_height = "1";
 								};
@@ -919,7 +928,7 @@
 									tegra_sinterface = "serial_a";
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
-									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									serdes_pix_clk_hz = "325000000"; /* 4 lanes x 1300 Mbps / 16 bpp */
 									line_length = "1280"; /* 2200 */
 									embedded_metadata_height = "1";
 								};
@@ -968,7 +977,7 @@
 									tegra_sinterface = "serial_b";
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
-									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									serdes_pix_clk_hz = "325000000"; /* 4 lanes x 1300 Mbps / 16 bpp */
 									line_length = "1280"; /* 2200 */
 									embedded_metadata_height = "0";
 								};
@@ -1018,7 +1027,7 @@
 									tegra_sinterface = "serial_b";
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
-									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									serdes_pix_clk_hz = "325000000"; /* 4 lanes x 1300 Mbps / 16 bpp */
 									line_length = "1280"; /* 2200 */
 									embedded_metadata_height = "1";
 								};
@@ -1067,7 +1076,7 @@
 									tegra_sinterface = "serial_e";
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
-									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									serdes_pix_clk_hz = "325000000"; /* 4 lanes x 1300 Mbps / 16 bpp */
 									line_length = "1280"; /* 2200 */
 									embedded_metadata_height = "1";
 								};
@@ -1115,7 +1124,7 @@
 									tegra_sinterface = "serial_a";
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
-									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									serdes_pix_clk_hz = "325000000"; /* 4 lanes x 1300 Mbps / 16 bpp */
 									line_length = "1280"; /* 2200 */
 									embedded_metadata_height = "1";
 								};
@@ -1164,7 +1173,7 @@
 									tegra_sinterface = "serial_b";
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
-									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									serdes_pix_clk_hz = "325000000"; /* 4 lanes x 1300 Mbps / 16 bpp */
 									line_length = "1280"; /* 2200 */
 									embedded_metadata_height = "0";
 								};
@@ -1214,7 +1223,7 @@
 									tegra_sinterface = "serial_b";
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
-									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									serdes_pix_clk_hz = "325000000"; /* 4 lanes x 1300 Mbps / 16 bpp */
 									line_length = "1280"; /* 2200 */
 									embedded_metadata_height = "1";
 								};
@@ -1263,7 +1272,7 @@
 									tegra_sinterface = "serial_e";
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
-									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									serdes_pix_clk_hz = "325000000"; /* 4 lanes x 1300 Mbps / 16 bpp */
 									line_length = "1280"; /* 2200 */
 									embedded_metadata_height = "1";
 								};
@@ -1311,7 +1320,7 @@
 									tegra_sinterface = "serial_a";
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
-									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									serdes_pix_clk_hz = "325000000"; /* 4 lanes x 1300 Mbps / 16 bpp */
 									line_length = "1280"; /* 2200 */
 									embedded_metadata_height = "1";
 								};
@@ -1360,7 +1369,7 @@
 									tegra_sinterface = "serial_b";
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
-									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									serdes_pix_clk_hz = "325000000"; /* 4 lanes x 1300 Mbps / 16 bpp */
 									line_length = "1280"; /* 2200 */
 									embedded_metadata_height = "0";
 								};
@@ -1410,7 +1419,7 @@
 									tegra_sinterface = "serial_b";
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
-									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									serdes_pix_clk_hz = "325000000"; /* 4 lanes x 1300 Mbps / 16 bpp */
 									line_length = "1280"; /* 2200 */
 									embedded_metadata_height = "1";
 								};
@@ -1459,7 +1468,7 @@
 									tegra_sinterface = "serial_e";
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
-									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									serdes_pix_clk_hz = "325000000"; /* 4 lanes x 1300 Mbps / 16 bpp */
 									line_length = "1280"; /* 2200 */
 									embedded_metadata_height = "1";
 								};
@@ -1507,7 +1516,7 @@
 									tegra_sinterface = "serial_a";
 									mclk_khz = "24000";
 									pix_clk_hz = "74250000";
-									serdes_pix_clk_hz = "275000000"; /* 4 lanes x 1100 Mbps / 16 bpp */
+									serdes_pix_clk_hz = "325000000"; /* 4 lanes x 1300 Mbps / 16 bpp */
 									line_length = "1280"; /* 2200 */
 									embedded_metadata_height = "1";
 								};
