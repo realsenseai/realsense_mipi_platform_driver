@@ -3372,6 +3372,14 @@ static const u32 d500_minz_max[D500_DPP_XU_MINZ_PARAM_COUNT] = {
 	1, 1, 2, 2, 256, 2, 65535,
 };
 
+static const u32 d500_minz_step[D500_DPP_XU_MINZ_PARAM_COUNT] = {
+	1, 1, 1, 1, 1, 1, 1,
+};
+
+static const u32 d500_minz_def[D500_DPP_XU_MINZ_PARAM_COUNT] = {
+	0, 0, 1, 0, 126, 1, 0,
+};
+
 static const u32 d500_decimation_min[D500_DPP_XU_DECIMATION_PARAM_COUNT] = {
 	0, 2,
 };
@@ -3461,7 +3469,10 @@ static const struct d500_dpp_ctrl_desc d500_minz_desc = {
 	.control_id = D500_DPP_XU_MINZ_CONTROL_ID,
 	.param_count = D500_DPP_XU_MINZ_PARAM_COUNT,
 	.param_type = D500_DPP_XU_INTEGER_PARAMS,
-	.idle_only = true,
+	.min = d500_minz_min,
+	.max = d500_minz_max,
+	.step = d500_minz_step,
+	.def = d500_minz_def,
 };
 
 static const struct d500_dpp_ctrl_desc d500_decimation_desc = {
@@ -3487,17 +3498,6 @@ static const struct d500_dpp_ctrl_desc d500_temporal_desc = {
 	.def = d500_temporal_def,
 };
 
-static bool d500_minz_params_valid(const u32 *params)
-{
-	u8 i;
-
-	for (i = 0; i < D500_DPP_XU_MINZ_PARAM_COUNT; i++)
-		if (params[i] < d500_minz_min[i] ||
-		    params[i] > d500_minz_max[i])
-			return false;
-	return true;
-}
-
 static bool d500_dpp_params_valid(const struct d500_dpp_ctrl_desc *desc,
 				  const u32 *params)
 {
@@ -3517,6 +3517,8 @@ static bool d500_dpp_params_valid(const struct d500_dpp_ctrl_desc *desc,
 static const struct d500_dpp_ctrl_desc *d500_dpp_ctrl_desc(u32 ctrl_id)
 {
 	switch (ctrl_id) {
+	case D500_CAMERA_CID_MINZ:
+		return &d500_minz_desc;
 	case D500_CAMERA_CID_DECIMATION:
 		return &d500_decimation_desc;
 	case D500_CAMERA_CID_TEMPORAL:
@@ -3560,6 +3562,9 @@ static int d500_dpp_ctrl_validate_elem(const struct v4l2_ctrl *ctrl, u32 idx,
 		return -EINVAL;
 
 	value = clamp(ptr.p_u32[idx], desc->min[idx], desc->max[idx]);
+	if (ctrl->id == D500_CAMERA_CID_MINZ && value != ptr.p_u32[idx])
+		return -EINVAL;
+
 	value = desc->min[idx] +
 		DIV_ROUND_CLOSEST(value - desc->min[idx], desc->step[idx]) *
 		desc->step[idx];
@@ -4456,29 +4461,6 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 		__func__, ds5_get_sensor_name(state), ctrl->name, ctrl->val);
 
 	mutex_lock(&state->lock);
-	if (ctrl->id == D500_CAMERA_CID_MINZ) {
-		struct d500_dpp_xu_control control = {
-			.header.version = D500_DPP_XU_VERSION,
-			.header.control_id =
-				cpu_to_le16(D500_DPP_XU_MINZ_CONTROL_ID),
-			.param_count = D500_DPP_XU_MINZ_PARAM_COUNT,
-			.param_type = D500_DPP_XU_INTEGER_PARAMS,
-		};
-		u8 i;
-
-		if (sensor && sensor->streaming) {
-			ret = -EBUSY;
-			goto unlock;
-		}
-		if (!d500_minz_params_valid(ctrl->p_new.p_u32)) {
-			ret = -EINVAL;
-			goto unlock;
-		}
-		for (i = 0; i < D500_DPP_XU_MINZ_PARAM_COUNT; i++)
-			control.params[i] = cpu_to_le32(ctrl->p_new.p_u32[i]);
-		ret = d500_dpp_xu_write(state, &d500_minz_desc, &control);
-		goto unlock;
-	}
 	dpp_desc = d500_dpp_ctrl_desc(ctrl->id);
 	if (dpp_desc) {
 		struct d500_dpp_xu_control control = {
@@ -4488,19 +4470,58 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			.param_count = dpp_desc->param_count,
 			.param_type = dpp_desc->param_type,
 		};
+		const u32 *new_params = ctrl->p_new.p_u32;
+		bool minz_locked = false;
 		u8 i;
 
 		if (dpp_desc->idle_only && sensor && sensor->streaming) {
 			ret = -EBUSY;
 			goto unlock;
 		}
-		if (!d500_dpp_params_valid(dpp_desc, ctrl->p_new.p_u32)) {
+		if (ctrl->id == D500_CAMERA_CID_MINZ) {
+			struct d500_dpp_xu_control current_control;
+			bool geometry_changed;
+			u32 current_filter_type;
+			u32 current_downscale_ratio;
+
+			/*
+			 * Serialize MinZ XU I/O against sibling stream changes.
+			 */
+			mutex_lock(&state->ds5_dev->lock);
+			minz_locked = true;
+			if (state->ds5_dev->depth_streaming ||
+			    state->ds5_dev->ir_streaming) {
+				ret = d500_dpp_xu_read(state, dpp_desc,
+							&current_control);
+				if (ret)
+					goto unlock_dpp;
+				current_filter_type = le32_to_cpu(
+					current_control.params[
+						D500_MINZ_FILTER_TYPE]);
+				current_downscale_ratio = le32_to_cpu(
+					current_control.params[
+						D500_MINZ_DOWNSCALE_RATIO]);
+				geometry_changed =
+					new_params[D500_MINZ_FILTER_TYPE] !=
+						current_filter_type ||
+					new_params[D500_MINZ_DOWNSCALE_RATIO] !=
+						current_downscale_ratio;
+				if (geometry_changed) {
+					ret = -EBUSY;
+					goto unlock_dpp;
+				}
+			}
+		}
+		if (!d500_dpp_params_valid(dpp_desc, new_params)) {
 			ret = -EINVAL;
-			goto unlock;
+			goto unlock_dpp;
 		}
 		for (i = 0; i < dpp_desc->param_count; i++)
-			control.params[i] = cpu_to_le32(ctrl->p_new.p_u32[i]);
+			control.params[i] = cpu_to_le32(new_params[i]);
 		ret = d500_dpp_xu_write(state, dpp_desc, &control);
+unlock_dpp:
+		if (minz_locked)
+			mutex_unlock(&state->ds5_dev->lock);
 		goto unlock;
 	}
 
@@ -5041,17 +5062,6 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 	dev_dbg(&state->client->dev, "%s(): %s - ctrl: %s \n",
 		__func__, ds5_get_sensor_name(state), ctrl->name);
 
-	if (ctrl->id == D500_CAMERA_CID_MINZ) {
-		struct d500_dpp_xu_control control;
-		u8 i;
-
-		ret = d500_dpp_xu_read(state, &d500_minz_desc, &control);
-		if (ret)
-			return ret;
-		for (i = 0; i < D500_DPP_XU_MINZ_PARAM_COUNT; i++)
-			ctrl->p_new.p_u32[i] = le32_to_cpu(control.params[i]);
-		return 0;
-	}
 	dpp_desc = d500_dpp_ctrl_desc(ctrl->id);
 	if (dpp_desc) {
 		struct d500_dpp_xu_control control;
@@ -6546,6 +6556,7 @@ enum state_sid {
 
 static const struct v4l2_ctrl_config d500_ctrl_minz = {
 	.ops = &ds5_ctrl_ops,
+	.type_ops = &d500_dpp_ctrl_type_ops,
 	.id = D500_CAMERA_CID_MINZ,
 	.name = "MinZ Configuration",
 	.type = V4L2_CTRL_TYPE_U32,
