@@ -40,6 +40,10 @@
 #include <media/v4l2-subdev.h>
 #include <media/v4l2-mediabus.h>
 
+#ifdef CONFIG_TEGRA_CAMERA_PLATFORM
+#include <media/mc_common.h>	/* tegra_channel_mark_fmts_dirty() */
+#endif
+
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 #include <media/max9295.h>
 #include <media/max9296.h>
@@ -804,6 +808,11 @@ struct ds5_dev {
 	bool ir_streaming;
 	bool rgb_streaming;
 	bool imu_streaming;
+
+	/* Per-role probe instances (indexed by DS5_MUX_PAD_*); the post-reset
+	 * reload uses them to reach every node's channel. Guarded by lock.
+	 */
+	struct ds5 *role_inst[DS5_MUX_PAD_COUNT];
 };
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
@@ -1657,18 +1666,18 @@ static void ds5_desc_apply_sensor(struct ds5_sensor *sensor,
 	sensor->mux_pad = mux_pad;
 }
 
-/* True when the camera's descriptor supplied every sensor's format table. */
-static bool ds5_desc_apply(struct ds5 *state)
+/* True when the camera's descriptor supplied every sensor's format table.
+ * Caller holds ds5_dev->lock.
+ */
+static bool __ds5_desc_apply(struct ds5 *state)
 {
 	struct ds5_dev *dd = state->ds5_dev;
 	const struct ds5_desc *desc = NULL;
 
-	mutex_lock(&dd->lock);
 	if (dd->desc_state == DS5_DESC_UNKNOWN)
 		ds5_desc_load_locked(state);
 	if (dd->desc_state == DS5_DESC_READY)
 		desc = dd->desc;
-	mutex_unlock(&dd->lock);
 	if (!desc)
 		return false;
 
@@ -1684,20 +1693,58 @@ static bool ds5_desc_apply(struct ds5 *state)
 	return true;
 }
 
-/* The V4L2 topology cannot be re-plumbed on a live device, so a descriptor
- * that changed across a HW reset is reported rather than re-applied.
- */
-static void ds5_desc_recheck(struct ds5 *state)
+static bool ds5_desc_apply(struct ds5 *state)
 {
 	struct ds5_dev *dd = state->ds5_dev;
+	bool ret;
+
+	mutex_lock(&dd->lock);
+	ret = __ds5_desc_apply(state);
+	mutex_unlock(&dd->lock);
+	return ret;
+}
+
+/* Defined after the static format tables; used by the reload path above. */
+static void ds5_apply_builtin_tables(struct ds5 *state, u16 dev_type);
+
+#ifdef CONFIG_TEGRA_CAMERA_PLATFORM
+/* Mark this node's VI format list stale (lock-free) so the VI rebuilds it on the
+ * next format ioctl. A direct refresh would deadlock - the reload runs in the
+ * reset node's s_ctrl under the video_lock the rebuild needs.
+ */
+static void ds5_mark_channel_fmts_dirty(struct ds5 *inst)
+{
+	struct v4l2_subdev *sd = &inst->mux.sd.subdev;
+	struct tegra_channel *chan = v4l2_get_subdev_hostdata(sd);
+
+	if (chan)
+		tegra_channel_mark_fmts_dirty(chan);
+	else
+		dev_warn(&inst->client->dev, "%s(): %s has no VI channel\n",
+			 __func__, sd->name);
+}
+#else
+static inline void ds5_mark_channel_fmts_dirty(struct ds5 *inst) { }
+#endif
+
+/* After a HW reset re-fetch the descriptor and re-apply every node's table (the
+ * new one, or built-in per-SKU tables if it is gone), then mark each channel
+ * stale. No-op when unchanged. @dev_type is what recovery just validated.
+ */
+static void ds5_desc_reload_after_reset(struct ds5 *state, u16 dev_type)
+{
+	struct ds5_dev *dd = state->ds5_dev;
+	struct ds5_desc *prev_desc;
+	enum ds5_desc_state prev_state;
 	struct rs_desc_header header;
-	bool present;
+	bool present, changed, fw_changed, have_desc;
+	unsigned int pad;
 	u32 crc = 0;
 	int ret;
 
 	ret = ds5_desc_check_magic(state);
 	if (ret < 0 && ret != -ENODEV)
-		return;
+		return;			/* transient I2C error: leave tables as-is */
 	present = !ret;
 	if (present) {
 		if (ds5_raw_read(state, RS_DESC_BASE, &header, sizeof(header)))
@@ -1706,14 +1753,69 @@ static void ds5_desc_recheck(struct ds5 *state)
 	}
 
 	mutex_lock(&dd->lock);
-	if (dd->desc_state == DS5_DESC_READY && crc != dd->desc->crc)
-		dev_warn(&state->client->dev,
-			 "format descriptor changed across reset (crc 0x%08x -> 0x%08x); reload d4xx to apply\n",
-			 dd->desc->crc, crc);
-	else if (dd->desc_state == DS5_DESC_ABSENT && present)
-		dev_warn(&state->client->dev,
-			 "camera now serves a format descriptor; reload d4xx to apply\n");
+	if (dd->desc_state == DS5_DESC_READY)
+		changed = !present || crc != dd->desc->crc;
+	else
+		changed = present;	/* on static tables; a descriptor appeared */
+	/* A DFU can also change fw_version-gated built-in tables (IMU across
+	 * 5.16) with no descriptor involved; siblings hold the pre-reset value.
+	 */
+	fw_changed = false;
+	for (pad = DS5_MUX_PAD_DEPTH; pad < DS5_MUX_PAD_COUNT; pad++)
+		if (dd->role_inst[pad] &&
+		    dd->role_inst[pad]->fw_version != state->fw_version)
+			fw_changed = true;
+	if (!changed && !fw_changed) {
+		mutex_unlock(&dd->lock);
+		return;			/* common case: FW unchanged across reset */
+	}
+	if (changed) {
+		/* Force a fresh fetch+parse. Publish CRC-dedups on the
+		 * module-lifetime list, so an unchanged blob costs nothing and
+		 * a changed one adds one table (the old is never freed - a
+		 * sibling subdev may still use it).
+		 */
+		prev_desc = dd->desc;
+		prev_state = dd->desc_state;
+		dd->desc_state = DS5_DESC_UNKNOWN;
+		ret = ds5_desc_load_locked(state);
+		if (ret && ret != -ENODEV) {
+			/* Transient fetch/parse failure, not "no descriptor"
+			 * (the magic matched above): keep the previous tables.
+			 */
+			dd->desc = prev_desc;
+			dd->desc_state = prev_state;
+			mutex_unlock(&dd->lock);
+			return;
+		}
+	}
+	have_desc = dd->desc_state == DS5_DESC_READY;
+
+	/* Applies are pointer swaps and the mark is a lock-free flag, so the
+	 * loop stays under dd->lock: ds5_remove() clears role_inst[] under the
+	 * same lock before its instance is freed, so no slot can go stale here.
+	 */
+	for (pad = DS5_MUX_PAD_DEPTH; pad < DS5_MUX_PAD_COUNT; pad++) {
+		struct ds5 *inst = dd->role_inst[pad];
+
+		if (!inst)
+			continue;
+		/* Share the post-reset FW version; only @state re-read it. */
+		inst->fw_version = state->fw_version;
+		if (!have_desc || !__ds5_desc_apply(inst))
+			ds5_apply_builtin_tables(inst, dev_type);
+		ds5_mark_channel_fmts_dirty(inst);
+	}
 	mutex_unlock(&dd->lock);
+
+	if (have_desc)
+		dev_info(&state->client->dev,
+			 "descriptor tables re-applied after HW reset (crc 0x%08x); nodes refreshed\n",
+			 crc);
+	else
+		dev_info(&state->client->dev,
+			 "built-in tables re-applied after HW reset (fw %x); nodes refreshed\n",
+			 state->fw_version);
 }
 
 /* Pad ops */
@@ -2490,6 +2592,111 @@ static const struct v4l2_mbus_framefmt ds5_mbus_framefmt_template = {
 	.xfer_func = V4L2_XFER_FUNC_DEFAULT,
 };
 
+/* Assign the built-in per-SKU format tables to @state's four sensors. Used at
+ * probe when the camera serves no descriptor, and by the post-HW-reset reload
+ * when it stops serving one. Pure table-pointer assignment - no I2C.
+ */
+static void ds5_apply_builtin_tables(struct ds5 *state, u16 dev_type)
+{
+	struct ds5_sensor *sensor;
+
+	sensor = &state->depth.sensor;
+	switch (dev_type) {
+	case DS5_DEVICE_TYPE_D41X:
+		sensor->formats = ds5_depth_formats_d41x;
+		break;
+	case DS5_DEVICE_TYPE_D40X:
+		sensor->formats = ds5_depth_formats_d40x;
+		break;
+	case DS5_DEVICE_TYPE_D43X:
+		sensor->formats = ds5_depth_formats_d43x;
+		break;
+	case DS5_DEVICE_TYPE_D45X:
+		sensor->formats = ds5_depth_formats_d43x;
+		break;
+	case DS5_DEVICE_TYPE_D58X:
+		sensor->formats = ds5_depth_formats_d58x;
+		break;
+	default:
+		dev_warn(&state->client->dev,
+			 "%s(): unknown device type 0x%x, using D43X format tables\n",
+			 __func__, dev_type);
+		sensor->formats = ds5_depth_formats_d43x;
+	}
+	sensor->n_formats = 1;
+	sensor->mux_pad = DS5_MUX_PAD_DEPTH;
+
+	sensor = &state->ir.sensor;
+	switch (dev_type) {
+	case DS5_DEVICE_TYPE_D40X:
+		sensor->formats = ds5_y_formats_40x;
+		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_40x);
+		break;
+	case DS5_DEVICE_TYPE_D41X:
+		sensor->formats = ds5_y_formats_41x;
+		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_41x);
+		break;
+	case DS5_DEVICE_TYPE_D45X:
+		sensor->formats = ds5_y_formats_45x;
+		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_45x);
+		break;
+	case DS5_DEVICE_TYPE_D58X:
+		sensor->formats = ds5_y_formats_d58x;
+		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_d58x);
+		break;
+	default:
+		sensor->formats = state->variant->formats;
+		sensor->n_formats = state->variant->n_formats;
+	}
+	sensor->mux_pad = DS5_MUX_PAD_IR;
+
+	sensor = &state->rgb.sensor;
+	switch (dev_type) {
+	case DS5_DEVICE_TYPE_D43X:
+		sensor->formats = &ds5_onsemi_rgb_format;
+		sensor->n_formats = DS5_ONSEMI_RGB_N_FORMATS;
+		break;
+	case DS5_DEVICE_TYPE_D41X:
+		sensor->formats = &ds5_41x_rgb_format;
+		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
+		break;
+	case DS5_DEVICE_TYPE_D40X:
+		sensor->formats = ds5_40x_rgb_formats;
+		sensor->n_formats = ARRAY_SIZE(ds5_40x_rgb_formats);
+		break;
+	case DS5_DEVICE_TYPE_D45X:
+		sensor->formats = &ds5_rlt_rgb_format;
+		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
+		break;
+	case DS5_DEVICE_TYPE_D58X:
+		sensor->formats = ds5_rgb_formats_d58x;
+		sensor->n_formats = ARRAY_SIZE(ds5_rgb_formats_d58x);
+		break;
+	default:
+		sensor->formats = &ds5_onsemi_rgb_format;
+		sensor->n_formats = DS5_ONSEMI_RGB_N_FORMATS;
+	}
+	sensor->mux_pad = DS5_MUX_PAD_RGB;
+
+	sensor = &state->imu.sensor;
+	/* Firmware 5.16 (0x0510) and later report 32-bit IMU axis values. D58x
+	 * always carries the 38-byte extended record; in serdes pixel mode the
+	 * line is zero-padded to 256 to meet GMSL2 minimum sync spacing.
+	 */
+	if (dev_type == DS5_DEVICE_TYPE_D58X) {
+		if (state->d58x_pixel_mode)
+			sensor->formats = ds5_imu_formats_extended_d58x_pixel_mode;
+		else
+			sensor->formats = d58x_imu_formats_extended_tunnel_mode;
+	} else if (state->fw_version >= 0x510) {
+		sensor->formats = ds5_imu_formats_extended;
+	} else {
+		sensor->formats = ds5_imu_formats;
+	}
+	sensor->n_formats = 1;
+	sensor->mux_pad = DS5_MUX_PAD_IMU;
+}
+
 /* Get readable sensor name */
 static const char *ds5_get_sensor_name(struct ds5 *state)
 {
@@ -2557,7 +2764,9 @@ static void ds5_sensor_format_init(struct ds5_sensor *sensor)
 		ds5_resolution_default_framerate(sensor->config.resolution);
 }
 
-/* No locking needed for enumeration methods */
+/* The formats/n_formats pair is republished at runtime by the post-reset
+ * descriptor reload under ds5_dev->lock; readers snapshot under the same lock.
+ */
 static int ds5_sensor_enum_mbus_code(struct v4l2_subdev *sd,
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
 				     struct v4l2_subdev_pad_config *cfg,
@@ -2567,18 +2776,22 @@ static int ds5_sensor_enum_mbus_code(struct v4l2_subdev *sd,
 				     struct v4l2_subdev_mbus_code_enum *mce)
 {
 	struct ds5_sensor *sensor = container_of(sd, struct ds5_sensor, sd);
+	struct ds5 *state = v4l2_get_subdevdata(sd);
+	int ret = 0;
 
 	dev_dbg(sensor->sd.dev, "%s(): sensor %s pad: %d index: %d\n",
 		__func__, sensor->sd.name, mce->pad, mce->index);
 	if (mce->pad)
 		return -EINVAL;
 
+	mutex_lock(&state->ds5_dev->lock);
 	if (mce->index >= sensor->n_formats)
-		return -EINVAL;
+		ret = -EINVAL;
+	else
+		mce->code = sensor->formats[mce->index].mbus_code;
+	mutex_unlock(&state->ds5_dev->lock);
 
-	mce->code = sensor->formats[mce->index].mbus_code;
-
-	return 0;
+	return ret;
 }
 
 static int ds5_sensor_enum_frame_size(struct v4l2_subdev *sd,
@@ -2597,12 +2810,17 @@ static int ds5_sensor_enum_frame_size(struct v4l2_subdev *sd,
 	dev_dbg(sensor->sd.dev, "%s(): sensor %s is %s\n",
 		__func__, sensor->sd.name, ds5_get_sensor_name(state));
 
+	/* Table contents are immutable; only the pair needs the lock. */
+	mutex_lock(&state->ds5_dev->lock);
 	for (i = 0, fmt = sensor->formats; i < sensor->n_formats; i++, fmt++)
 		if (fse->code == fmt->mbus_code)
 			break;
 
-	if (i == sensor->n_formats)
+	if (i == sensor->n_formats) {
+		mutex_unlock(&state->ds5_dev->lock);
 		return -EINVAL;
+	}
+	mutex_unlock(&state->ds5_dev->lock);
 
 	if (fse->index >= fmt->n_resolutions)
 		return -EINVAL;
@@ -2622,16 +2840,21 @@ static int ds5_sensor_enum_frame_interval(struct v4l2_subdev *sd,
 		struct v4l2_subdev_frame_interval_enum *fie)
 {
 	struct ds5_sensor *sensor = container_of(sd, struct ds5_sensor, sd);
+	struct ds5 *state = v4l2_get_subdevdata(sd);
 	const struct ds5_format *fmt;
 	const struct ds5_resolution *res;
 	unsigned int i;
 
+	mutex_lock(&state->ds5_dev->lock);
 	for (i = 0, fmt = sensor->formats; i < sensor->n_formats; i++, fmt++)
 		if (fie->code == fmt->mbus_code)
 			break;
 
-	if (i == sensor->n_formats)
+	if (i == sensor->n_formats) {
+		mutex_unlock(&state->ds5_dev->lock);
 		return -EINVAL;
+	}
+	mutex_unlock(&state->ds5_dev->lock);
 
 	for (i = 0, res = fmt->resolutions; i < fmt->n_resolutions; i++, res++)
 		if (res->width == fie->width && res->height == fie->height)
@@ -2693,30 +2916,32 @@ static int ds5_sensor_get_fmt(struct v4l2_subdev *sd,
 	return ret;
 }
 
-/* Called with lock held */
+/* Called with state->lock held */
 static const struct ds5_format *ds5_sensor_find_format(
 		struct ds5_sensor *sensor,
 		struct v4l2_mbus_framefmt *ffmt,
 		const struct ds5_resolution **best)
 {
+	struct ds5 *state = v4l2_get_subdevdata(&sensor->sd);
 	const struct ds5_resolution *res;
 	const struct ds5_format *fmt;
 	unsigned long best_delta = ~0;
 	unsigned int i;
 
+	mutex_lock(&state->ds5_dev->lock);
 	for (i = 0, fmt = sensor->formats; i < sensor->n_formats; i++, fmt++) {
 		if (fmt->mbus_code == ffmt->code)
 			break;
 	}
-	dev_dbg(sensor->sd.dev, "%s(): mbus_code = %x, code = %x \n",
-		__func__, fmt->mbus_code, ffmt->code);
-
 	if (i == sensor->n_formats) {
 		/* Not found, use default */
 		dev_dbg(sensor->sd.dev, "%s:%d Not found, use default\n",
 			__func__, __LINE__);
 		fmt = sensor->formats;
 	}
+	mutex_unlock(&state->ds5_dev->lock);
+	dev_dbg(sensor->sd.dev, "%s(): mbus_code = %x, code = %x\n",
+		__func__, fmt->mbus_code, ffmt->code);
 	for (i = 0, res = fmt->resolutions; i < fmt->n_resolutions; i++, res++) {
 		unsigned long delta = abs(ffmt->width * ffmt->height -
 				res->width * res->height);
@@ -4374,7 +4599,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 			 "FW has no serdes_pixel_mode support (reg 0x0404)\n");
 	}
 
-	ds5_desc_recheck(state);
+	ds5_desc_reload_after_reset(state, dev_type);
 
 	dev_info(&state->client->dev,
 		"%s(): HW reset complete. Device type 0x%04x, firmware: %d.%d.%d.%d\n",
@@ -7043,6 +7268,7 @@ static int ds5_mux_enum_mbus_code(struct v4l2_subdev *sd,
 	struct ds5 *state = container_of(sd, struct ds5, mux.sd.subdev);
 	struct v4l2_subdev_mbus_code_enum tmp = *mce;
 	struct v4l2_subdev *remote_sd;
+	unsigned int n_ir, n_depth;
 	int ret = -1;
 
 	dev_dbg(&state->client->dev, "%s(): %s \n", __func__, sd->name);
@@ -7060,8 +7286,14 @@ static int ds5_mux_enum_mbus_code(struct v4l2_subdev *sd,
 		remote_sd = &state->imu.sensor.sd;
 		break;
 	case DS5_MUX_PAD_EXTERNAL:
-		if (mce->index >= state->ir.sensor.n_formats +
-				state->depth.sensor.n_formats)
+		/* Snapshot the counts; the forwarded call re-locks and
+		 * re-checks its own bounds.
+		 */
+		mutex_lock(&state->ds5_dev->lock);
+		n_ir = state->ir.sensor.n_formats;
+		n_depth = state->depth.sensor.n_formats;
+		mutex_unlock(&state->ds5_dev->lock);
+		if (mce->index >= n_ir + n_depth)
 			return -EINVAL;
 
 		/*
@@ -7069,10 +7301,10 @@ static int ds5_mux_enum_mbus_code(struct v4l2_subdev *sd,
 		 * This should also help because D16 doesn't have a direct
 		 * analog in MIPI CSI-2.
 		 */
-		if (mce->index < state->ir.sensor.n_formats) {
+		if (mce->index < n_ir) {
 			remote_sd = &state->ir.sensor.sd;
 		} else {
-			tmp.index = mce->index - state->ir.sensor.n_formats;
+			tmp.index = mce->index - n_ir;
 			remote_sd = &state->depth.sensor.sd;
 		}
 
@@ -8064,7 +8296,6 @@ e_entity:
 
 static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 {
-	struct ds5_sensor *sensor;
 	u16 cfg0 = 0, cfg0_md = 0, cfg1 = 0, cfg1_md = 0;
 	u16 dw = 0, dh = 0, yw = 0, yh = 0, dev_type = 0;
 	bool link_mode_configured = true;
@@ -8122,104 +8353,7 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	if (link_mode_configured && ds5_desc_apply(state))
 		goto formats_done;
 
-	sensor = &state->depth.sensor;
-	switch (dev_type) {
-	case DS5_DEVICE_TYPE_D41X:
-		sensor->formats = ds5_depth_formats_d41x;
-		break;
-	case DS5_DEVICE_TYPE_D40X:
-		sensor->formats = ds5_depth_formats_d40x;
-		break;
-	case DS5_DEVICE_TYPE_D43X:
-		sensor->formats = ds5_depth_formats_d43x;
-		break;
-	case DS5_DEVICE_TYPE_D45X:
-		sensor->formats = ds5_depth_formats_d43x;
-		break;
-	case DS5_DEVICE_TYPE_D58X:
-		sensor->formats = ds5_depth_formats_d58x;
-		break;
-	default:
-		dev_warn(&client->dev,
-			"%s(): unknown device type 0x%x, using D43X format tables\n",
-			__func__, dev_type);
-		sensor->formats = ds5_depth_formats_d43x;
-	}
-	sensor->n_formats = 1;
-	sensor->mux_pad = DS5_MUX_PAD_DEPTH;
-
-	sensor = &state->ir.sensor;
-	switch (dev_type) {
-	case DS5_DEVICE_TYPE_D40X:
-        sensor->formats = ds5_y_formats_40x;
-        sensor->n_formats = ARRAY_SIZE(ds5_y_formats_40x);
-        break;
-	case DS5_DEVICE_TYPE_D41X:
-		sensor->formats = ds5_y_formats_41x;
-		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_41x);
-		break;
-	case DS5_DEVICE_TYPE_D45X:
-		sensor->formats = ds5_y_formats_45x;
-		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_45x);
-		break;
-	case DS5_DEVICE_TYPE_D58X:
-		sensor->formats = ds5_y_formats_d58x;
-		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_d58x);
-		break;
-	default:
-		sensor->formats = state->variant->formats;
-		sensor->n_formats = state->variant->n_formats;
-	}
-	sensor->mux_pad = DS5_MUX_PAD_IR;
-
-	sensor = &state->rgb.sensor;
-	switch (dev_type) {
-	case DS5_DEVICE_TYPE_D43X:
-		sensor->formats = &ds5_onsemi_rgb_format;
-		sensor->n_formats = DS5_ONSEMI_RGB_N_FORMATS;
-		break;
-	case DS5_DEVICE_TYPE_D41X:
-		sensor->formats = &ds5_41x_rgb_format;
-		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
-		break;
-	case DS5_DEVICE_TYPE_D40X:
-		sensor->formats = ds5_40x_rgb_formats;
-		sensor->n_formats = ARRAY_SIZE(ds5_40x_rgb_formats);
-		break;
-	case DS5_DEVICE_TYPE_D45X:
-		sensor->formats = &ds5_rlt_rgb_format;
-		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
-		break;
-	case DS5_DEVICE_TYPE_D58X:
-		sensor->formats = ds5_rgb_formats_d58x;
-		sensor->n_formats = ARRAY_SIZE(ds5_rgb_formats_d58x);
-		break;
-	default:
-		sensor->formats = &ds5_onsemi_rgb_format;
-		sensor->n_formats = DS5_ONSEMI_RGB_N_FORMATS;
-	}
-	sensor->mux_pad = DS5_MUX_PAD_RGB;
-
-	sensor = &state->imu.sensor;
-
-	/* For fimware version starting from: 5.16,
-	   IMU will have 32bit axis values.
- 	   5.16.x.y = firmware version: 0x0510 */
-	if (dev_type == DS5_DEVICE_TYPE_D58X) {
-		/* D58x always carries the 38-byte extended IMU record; in serdes
-		 * pixel mode the line is zero-padded (256) to meet GMSL2 pixel-mode
-		 * minimum sync spacing when sharing the pipe with video. */
-		if (state->d58x_pixel_mode)
-			sensor->formats = ds5_imu_formats_extended_d58x_pixel_mode;
-		else
-			sensor->formats = d58x_imu_formats_extended_tunnel_mode;
-	} else if (state->fw_version >= 0x510)
-		sensor->formats = ds5_imu_formats_extended;
-	else
-		sensor->formats = ds5_imu_formats;
-	
-	sensor->n_formats = 1;
-	sensor->mux_pad = DS5_MUX_PAD_IMU;
+	ds5_apply_builtin_tables(state, dev_type);
 
 formats_done:
 	/* Development: set a configuration during probing */
@@ -9231,6 +9365,7 @@ static int ds5_probe(struct i2c_client *c
 		state->control_base = DS5_DEPTH_CONTROL_BASE;
 		state->control_status_reg = DS5_DEPTH_CONTROL_STATUS;
 	}
+
 	/* create DFU chardev once */
 	if (state->is_depth) {
 		ret = ds5_chrdev_init(c, state);
@@ -9298,6 +9433,19 @@ static int ds5_probe(struct i2c_client *c
 	if (ret < 0)
 		goto e_chardev;
 
+	/* Probe succeeded: publish this per-role instance so the post-HW-reset
+	 * reload can reach its VI channel. Done last, after every failure path.
+	 */
+	if (state->ds5_dev) {
+		int role_pad = ds5_state_to_pad(state);
+
+		if (role_pad >= DS5_MUX_PAD_DEPTH && role_pad < DS5_MUX_PAD_COUNT) {
+			mutex_lock(&state->ds5_dev->lock);
+			state->ds5_dev->role_inst[role_pad] = state;
+			mutex_unlock(&state->ds5_dev->lock);
+		}
+	}
+
 	dev_info(&c->dev, "%s: driver version: %s\n", __func__,
 		THIS_MODULE->version ? THIS_MODULE->version : "N/A");
 
@@ -9334,6 +9482,18 @@ static void ds5_remove(struct i2c_client *c)
 	struct ds5 *state = container_of(i2c_get_clientdata(c), struct ds5, mux.sd.subdev);
 	if (state && !state->mux.sd.subdev.v4l2_dev) {
 		state = i2c_get_clientdata(c);
+	}
+
+	/* Drop this instance from the reload registry before it is freed. */
+	if (state->ds5_dev) {
+		int pad = ds5_state_to_pad(state);
+
+		if (pad >= DS5_MUX_PAD_DEPTH && pad < DS5_MUX_PAD_COUNT) {
+			mutex_lock(&state->ds5_dev->lock);
+			if (state->ds5_dev->role_inst[pad] == state)
+				state->ds5_dev->role_inst[pad] = NULL;
+			mutex_unlock(&state->ds5_dev->lock);
+		}
 	}
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
