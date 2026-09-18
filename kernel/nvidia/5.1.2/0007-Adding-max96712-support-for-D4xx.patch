@@ -7,11 +7,11 @@ Add MAX96712 deserializer driver support for D4XX cameras.
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- drivers/media/i2c/max96712.c | 1267 ++++++++++++++++++++++++++++++++--
- 1 file changed, 1227 insertions(+), 40 deletions(-)
+ drivers/media/i2c/max96712.c | 1281 ++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 1241 insertions(+), 40 deletions(-)
 
 diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
-index 329a10d..c8bde22 100644
+index 329a10dfd4597bf60a19b16e4992ef8b76695116..98168a68b02da2166647f88654cdf3b9f2afaab6 100644
 --- a/drivers/media/i2c/max96712.c
 +++ b/drivers/media/i2c/max96712.c
 @@ -21,32 +21,185 @@
@@ -562,7 +562,7 @@ index 329a10d..c8bde22 100644
  		i2c_unregister_device(client);
  		client = NULL;
  	}
-@@ -285,13 +639,845 @@ max96712_remove(struct i2c_client *client)
+@@ -285,13 +639,859 @@ max96712_remove(struct i2c_client *client)
  	return 0;
  }
  
@@ -1095,35 +1095,49 @@ index 329a10d..c8bde22 100644
 +	return err;
 +}
 +
-+/* Update mapping table entries that can change in runtime */
++/* Update the primary payload mapping selected by the active profile. */
 +static int __max96712_update_multi_vc_pipe(struct device *dev, int pipe_id,
 +					  u32 link, u32 vc_id, u8 data_type1)
 +{
-+	int err = 0;
++	static const u16 primary_src_addr[] = {
++		MAX96712_MIPI_TX13_SRC_0_MAP_ADDR,
++		MAX96712_MIPI_TX21_SRC_4_MAP_ADDR,
++		MAX96712_MIPI_TX29_SRC_8_MAP_ADDR,
++		MAX96712_MIPI_TX39_SRC_13_MAP_ADDR,
++	};
++	static const u16 primary_dst_addr[] = {
++		MAX96712_MIPI_TX14_DST_0_MAP_ADDR,
++		MAX96712_MIPI_TX22_DST_4_MAP_ADDR,
++		MAX96712_MIPI_TX30_DST_8_MAP_ADDR,
++		MAX96712_MIPI_TX40_DST_13_MAP_ADDR,
++	};
++	struct max96712 *priv = dev_get_drvdata(dev);
++	u32 map_pipe_offs = 0x40 * pipe_id;
++	u8 src_vc;
++	u8 dst_vc;
++	struct reg_pair map_pipe_control[2];
 +
-+	/* Currently override only needed for RGB to switch between regular/calib */
-+	if (vc_id == 1) {
-+		struct max96712 *priv = dev_get_drvdata(dev);
-+		uint32_t map_pipe_offs = 0x40 * pipe_id;
-+		u8 src_vc = vc_id << 6;
-+		u8 dst_vc = (priv->vc_remap[link][vc_id] & 0x3) << 6;
++	if (vc_id >= ARRAY_SIZE(primary_src_addr))
++		return -EINVAL;
 +
-+		struct reg_pair map_pipe_control[] = {
-+			// Update vc_id 1 formats (RGB)
-+			{MAX96712_MIPI_TX21_SRC_4_MAP_ADDR + map_pipe_offs, src_vc | data_type1},
-+			{MAX96712_MIPI_TX22_DST_4_MAP_ADDR + map_pipe_offs, dst_vc | data_type1},
-+		};
-+		dev_dbg(dev, "%s: Updating vc_id %u on pipe %u to data type 0x%x\n",
-+				__func__, vc_id, pipe_id, data_type1);
-+		err |= max96712_set_registers(priv, map_pipe_control,
-+						ARRAY_SIZE(map_pipe_control));
++	/*
++	 * The configure-once table provides the default Depth/RGB/IR/IMU data
++	 * types. A camera-provided profile can select another wire DT on any VC
++	 * (for example RAW8 Perception on VC2 instead of regular IR YUV422), so
++	 * refresh the active VC's primary mapping on every stream setup.
++	 */
++	src_vc = vc_id << 6;
++	dst_vc = (priv->vc_remap[link][vc_id] & 0x3) << 6;
++	map_pipe_control[0].addr = primary_src_addr[vc_id] + map_pipe_offs;
++	map_pipe_control[0].val = src_vc | data_type1;
++	map_pipe_control[1].addr = primary_dst_addr[vc_id] + map_pipe_offs;
++	map_pipe_control[1].val = dst_vc | data_type1;
 +
-+		if (err) {
-+			return err;
-+		}
-+	}
++	dev_dbg(dev, "%s: updating vc_id %u on pipe %u to data type 0x%x\n",
++		__func__, vc_id, pipe_id, data_type1);
 +
-+	return err;
++	return max96712_set_registers(priv, map_pipe_control,
++				      ARRAY_SIZE(map_pipe_control));
 +}
 +
 +int max96712_set_pipe(struct device *dev, int pipe_id,
@@ -1409,7 +1423,7 @@ index 329a10d..c8bde22 100644
  	{ },
  };
  
-@@ -301,6 +1487,7 @@ static struct i2c_driver max96712_i2c_driver = {
+@@ -301,6 +1501,7 @@ static struct i2c_driver max96712_i2c_driver = {
  	.driver = {
  		.name = "max96712",
  		.owner = THIS_MODULE,
