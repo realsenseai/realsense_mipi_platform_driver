@@ -2,6 +2,7 @@
 /*
  * ds5.c - Intel(R) RealSense(TM) D4XX camera driver
  *
+ * Copyright (C) 2026 RealSense, Inc.
  * Copyright (c) 2017-2023, INTEL CORPORATION.  All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -189,7 +190,10 @@ enum rs_desc_table {
 	RS_DESC_T_FORMAT,
 	RS_DESC_T_RESOLUTION,
 	RS_DESC_T_FRAMERATE,    /* flat u16 pool */
-	RS_DESC_T_MAX = RS_DESC_T_FRAMERATE,
+	RS_DESC_T_LOGICAL_STREAM,
+	RS_DESC_T_LOGICAL_FORMAT,
+	RS_DESC_T_LOGICAL_RESOLUTION,
+	RS_DESC_T_MAX = RS_DESC_T_LOGICAL_RESOLUTION,
 };
 
 struct rs_desc_stream {
@@ -211,6 +215,26 @@ struct rs_desc_resolution {
 	u16 height;
 	u16 fps_first;         /* range into the FRAMERATE pool */
 	u16 fps_count;
+} __packed;
+
+struct d500_desc_logical_stream {
+	u16 stream_id, carrier_stream_id;
+	u16 fmt_first, fmt_count;
+	u32 metadata_type_id;
+	u16 flags, reserved;
+} __packed;
+
+struct d500_desc_logical_format {
+	u32 payload_magic;
+	u16 payload_version;
+	u8 payload_type, reserved;
+	u16 res_first, res_count;
+} __packed;
+
+struct d500_desc_logical_resolution {
+	u16 width, height;
+	u16 fps_first, fps_count;
+	u32 max_payload_bytes;
 } __packed;
 
 /* Pixel-format registry shared with firmware. */
@@ -693,7 +717,40 @@ enum {
 	DS5_AWG,
 };
 
+/* Draft direct-XU payload; keep in sync with HKR gmsl_mux_control.h. */
+struct d500_mux_control {
+	__le16 version, size;
+	__le32 transaction_id;
+	__le16 operation;
+	u8 stream_id, state;
+	__le32 result;
+	__le16 payload_version, payload_type, width, height, fps;
+	__le16 carrier_width, carrier_height, metadata_bytes;
+	__le32 max_payload_bytes;
+	__le32 reserved[7];
+} __packed;
+
+#define D500_MUX_XU_BASE 0x4590
+#define D500_MUX_VERSION 1
+#define D500_MUX_CONFIGURE 1
+#define D500_MUX_ENABLE 2
+#define D500_MUX_DISABLE 3
+#define D500_MUX_CAPTURE_START 4
+#define D500_MUX_CAPTURE_STOP 5
+#define D500_MUX_CONFIGURED 1
+#define D500_MUX_ARMED 2
+#define D500_MUX_PENDING 3
+#define D500_MUX_ACTIVE 4
+#define D500_MUX_FAULT 5
+
 struct ds5 {
+	struct mutex mux_control_lock;
+	struct d500_mux_control mux_profile;
+	struct d500_mux_control mux_status;
+	u32 mux_sequence;
+	int mux_reset_ref;
+	bool mux_configured;
+	bool mux_armed;
 	struct { struct ds5_sensor sensor; } depth;
 	struct { struct ds5_sensor sensor; } ir;
 	struct { struct ds5_sensor sensor; } rgb;
@@ -1156,6 +1213,8 @@ struct ds5_desc {
 	u32 crc;
 	u8 ver_major;
 	u8 ver_minor;
+	u8 *logical_catalog; /* validated camera snapshot, module-lifetime */
+	u16 logical_catalog_size;
 };
 
 /* A sibling subdev can outlive the primary that owns the slot (sysfs unbind),
@@ -1246,6 +1305,7 @@ static void ds5_desc_free(struct ds5_desc *desc)
 		kfree(desc->streams[s].formats);
 	}
 	kfree(desc->framerates);
+	kfree(desc->logical_catalog);
 	kfree(desc);
 }
 
@@ -1351,7 +1411,7 @@ static int ds5_desc_find_tables(struct ds5 *state, const u8 *blob,
 		}
 		tabs[type] = toc;
 	}
-	for (i = RS_DESC_T_STREAM; i <= RS_DESC_T_MAX; i++) {
+	for (i = RS_DESC_T_STREAM; i <= RS_DESC_T_FRAMERATE; i++) {
 		if (!tabs[i]) {
 			dev_warn(&state->client->dev,
 				 "format descriptor: table type %u missing\n", i);
@@ -1534,9 +1594,69 @@ static int ds5_desc_fetch(struct ds5 *state, u8 **blob)
 	return ret;
 }
 
-/* Parse a fetched, CRC-checked blob. Returns ERR_PTR on any rejection,
- * having freed whatever it had built.
- */
+/* Keep logical identities separate from the physical subdev format lists.
+ * Expose only a fully validated, immutable camera snapshot to userspace. */
+static int d500_desc_parse_logical(struct ds5_desc *desc, const u8 *blob,
+				 const struct rs_desc_toc **tabs)
+{
+	const struct rs_desc_toc *st = tabs[RS_DESC_T_LOGICAL_STREAM];
+	const struct rs_desc_toc *ft = tabs[RS_DESC_T_LOGICAL_FORMAT];
+	const struct rs_desc_toc *rt = tabs[RS_DESC_T_LOGICAL_RESOLUTION];
+	const struct rs_desc_header *header = (const void *)blob;
+	unsigned int i, j;
+
+	if (!st && !ft && !rt)
+		return 0;
+	if (!st || !ft || !rt || st->entry_size < sizeof(struct d500_desc_logical_stream) ||
+	    ft->entry_size < sizeof(struct d500_desc_logical_format) ||
+	    rt->entry_size < sizeof(struct d500_desc_logical_resolution))
+		return -EINVAL;
+	for (i = 0; i < st->n_entries; i++) {
+		struct d500_desc_logical_stream s, other;
+		const struct ds5_desc_stream *carrier;
+		bool has_rsvl = false;
+
+		ds5_desc_rec(blob, st, i, &s, sizeof(s));
+		if (!ds5_desc_stream_valid(s.carrier_stream_id) ||
+		    !s.fmt_count || s.fmt_first + s.fmt_count > ft->n_entries ||
+		    !s.metadata_type_id || s.reserved || (s.flags & ~1U))
+			return -EINVAL;
+		carrier = &desc->streams[s.carrier_stream_id];
+		for (j = 0; j < carrier->n_formats; j++)
+			if (carrier->formats[j].mbus_code == MEDIA_BUS_FMT_RS_VARLEN_1X8)
+				has_rsvl = true;
+		if (!has_rsvl)
+			return -EINVAL;
+		for (j = 0; j < i; j++) {
+			ds5_desc_rec(blob, st, j, &other, sizeof(other));
+			if (s.stream_id == other.stream_id)
+				return -EINVAL;
+		}
+	}
+	for (i = 0; i < ft->n_entries; i++) {
+		struct d500_desc_logical_format f;
+
+		ds5_desc_rec(blob, ft, i, &f, sizeof(f));
+		if (!f.payload_magic || !f.payload_version || f.reserved ||
+		    !f.res_count || f.res_first + f.res_count > rt->n_entries)
+			return -EINVAL;
+	}
+	for (i = 0; i < rt->n_entries; i++) {
+		struct d500_desc_logical_resolution r;
+
+		ds5_desc_rec(blob, rt, i, &r, sizeof(r));
+		if ((!r.width != !r.height) || !r.max_payload_bytes || !r.fps_count ||
+		    r.fps_first + r.fps_count > tabs[RS_DESC_T_FRAMERATE]->n_entries)
+			return -EINVAL;
+	}
+	desc->logical_catalog = kmemdup(blob, header->total_size, GFP_KERNEL);
+	if (!desc->logical_catalog)
+		return -ENOMEM;
+	desc->logical_catalog_size = header->total_size;
+	return 0;
+}
+
+/* Parse a fetched, CRC-checked blob. Free partial allocations on rejection. */
 static struct ds5_desc *ds5_desc_build(struct ds5 *state, const u8 *blob)
 {
 	const struct rs_desc_header *header = (const void *)blob;
@@ -1577,6 +1697,9 @@ static struct ds5_desc *ds5_desc_build(struct ds5 *state, const u8 *blob)
 			goto err;
 		}
 	}
+	ret = d500_desc_parse_logical(desc, blob, tabs);
+	if (ret)
+		goto err;
 	return desc;
 err:
 	ds5_desc_free(desc);
@@ -2914,6 +3037,12 @@ static u8 ds5_wire_data_type(const struct ds5_format *format)
 		format->data_type;
 }
 
+static bool d500_is_mux_capture(struct ds5 *state)
+{
+	return state->is_y8 && state->ir.sensor.config.format &&
+		state->ir.sensor.config.format->mbus_code == MEDIA_BUS_FMT_RS_VARLEN_1X8;
+}
+
 static int ds5_configure(struct ds5 *state)
 {
 	struct ds5_sensor *sensor;
@@ -3051,6 +3180,10 @@ static int ds5_configure(struct ds5 *state)
 	vc_id = (state->is_depth) ? 0 : (state->is_rgb) ? 1 : (state->is_y8) ? 2 : 3;
 	md_vc = vc_id;
 #endif
+
+	/* MUX camera configuration is carried by its shared XU control. */
+	if (d500_is_mux_capture(state))
+		return 0;
 
 	/* Write the DT only when it differs from the cached value: overwriting a
 	 * correct DT with 0 caused INVALID_DT on subsequent attempts.
@@ -3343,6 +3476,8 @@ enum ds5_ae_type {
 #define D500_CAMERA_CID_MINZ			(DS5_CAMERA_CID_BASE + 44)
 #define D500_CAMERA_CID_DECIMATION	(DS5_CAMERA_CID_BASE + 49)
 #define D500_CAMERA_CID_TEMPORAL	(DS5_CAMERA_CID_BASE + 51)
+#define D500_CAMERA_CID_MUX_CAPS	(DS5_CAMERA_CID_BASE + 52)
+#define D500_CAMERA_CID_MUX_CONTROL (DS5_CAMERA_CID_BASE + 53)
 #define D500_MINZ_XU_BASE		0x4500
 #define D500_DECIMATION_XU_BASE		0x4540
 #define D500_TEMPORAL_XU_BASE		0x4568
@@ -4424,6 +4559,185 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 
 static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on);
 
+/* Caller serializes SET/GET and capture transitions with mux_control_lock. */
+static int d500_mux_read(struct ds5 *state, struct d500_mux_control *reply)
+{
+	__le16 version;
+	int ret;
+
+	BUILD_BUG_ON(sizeof(*reply) != 64);
+	ret = regmap_raw_read(state->regmap, D500_MUX_XU_BASE, &version, sizeof(version));
+	if (ret)
+		return ret;
+	if (le16_to_cpu(version) != D500_MUX_VERSION)
+		return -EOPNOTSUPP;
+	ret = ds5_raw_read(state, D500_MUX_XU_BASE, reply, sizeof(*reply));
+	if (!ret && (le16_to_cpu(reply->version) != D500_MUX_VERSION ||
+		     le16_to_cpu(reply->size) != sizeof(*reply)))
+		ret = -EPROTO;
+	return ret;
+}
+
+static int d500_mux_exchange(struct ds5 *state,
+			    struct d500_mux_control *request, u16 operation)
+{
+	struct d500_mux_control reply;
+	unsigned long deadline;
+	int ret;
+
+	ret = d500_mux_read(state, &reply);
+	if (ret)
+		return ret;
+	state->mux_sequence = le32_to_cpu(reply.transaction_id) + 1;
+	if (!state->mux_sequence)
+		state->mux_sequence = 1;
+	request->version = cpu_to_le16(D500_MUX_VERSION);
+	request->size = cpu_to_le16(sizeof(*request));
+	request->transaction_id = cpu_to_le32(state->mux_sequence);
+	request->operation = cpu_to_le16(operation);
+	request->state = 0;
+	request->result = 0;
+	ret = ds5_raw_write(state, D500_MUX_XU_BASE, request, sizeof(*request));
+	if (ret)
+		return ret;
+	deadline = jiffies + msecs_to_jiffies(10000);
+	do {
+		ret = d500_mux_read(state, &reply);
+		if (ret)
+			return ret;
+		if (reply.transaction_id == request->transaction_id) {
+			if (reply.operation != request->operation ||
+			    reply.stream_id != request->stream_id)
+				return -EPROTO;
+			state->mux_status = reply;
+			if (reply.state != D500_MUX_PENDING) {
+				u8 expected = operation == D500_MUX_CAPTURE_START ? D500_MUX_ACTIVE :
+					operation == D500_MUX_ENABLE ? D500_MUX_ARMED : D500_MUX_CONFIGURED;
+
+				ret = (s32)le32_to_cpu(reply.result);
+				return ret ? ret : reply.state == expected ? 0 : -EPROTO;
+			}
+		}
+		usleep_range(5000, 6000);
+	} while (time_before(jiffies, deadline));
+	return -ETIMEDOUT;
+}
+
+static int d500_mux_validate_profile(struct ds5 *state,
+				     const struct d500_mux_control *request)
+{
+	const struct rs_desc_toc *tabs[RS_DESC_T_MAX + 1] = {};
+	const struct ds5_resolution *capacity = state->ir.sensor.config.resolution;
+	const u8 *blob;
+	unsigned int i, j, k, n;
+	int ret;
+
+	mutex_lock(&state->ds5_dev->lock);
+	blob = state->ds5_dev->desc_state == DS5_DESC_READY && state->ds5_dev->desc ?
+		state->ds5_dev->desc->logical_catalog : NULL;
+	mutex_unlock(&state->ds5_dev->lock);
+	if (!blob)
+		return -ENODATA;
+	ret = ds5_desc_find_tables(state, blob, tabs);
+	if (ret)
+		return ret;
+	if (!tabs[RS_DESC_T_LOGICAL_STREAM] || !tabs[RS_DESC_T_LOGICAL_FORMAT] ||
+	    !tabs[RS_DESC_T_LOGICAL_RESOLUTION])
+		return -ENODATA;
+	if (!d500_is_mux_capture(state) || !capacity || !state->metadata_enabled)
+		return -EINVAL;
+	if (le16_to_cpu(request->carrier_width) != capacity->width ||
+	    le16_to_cpu(request->carrier_height) != capacity->height ||
+	    le16_to_cpu(request->metadata_bytes) != 255 ||
+	    le32_to_cpu(request->max_payload_bytes) > (u32)capacity->width * capacity->height)
+		return -EOVERFLOW;
+	for (i = 0; i < tabs[RS_DESC_T_LOGICAL_STREAM]->n_entries; i++) {
+		struct d500_desc_logical_stream s;
+
+		ds5_desc_rec(blob, tabs[RS_DESC_T_LOGICAL_STREAM], i, &s, sizeof(s));
+		if (s.stream_id != request->stream_id)
+			continue;
+		if (!(s.flags & 1) || s.stream_id != 5 || s.carrier_stream_id != DS5_STREAM_IR)
+			return -EOPNOTSUPP;
+		for (j = s.fmt_first; j < s.fmt_first + s.fmt_count; j++) {
+			struct d500_desc_logical_format f;
+
+			ds5_desc_rec(blob, tabs[RS_DESC_T_LOGICAL_FORMAT], j, &f, sizeof(f));
+			if (f.payload_magic != 0x5445444f ||
+			    f.payload_version != le16_to_cpu(request->payload_version) ||
+			    f.payload_type != le16_to_cpu(request->payload_type))
+				continue;
+			for (k = f.res_first; k < f.res_first + f.res_count; k++) {
+				struct d500_desc_logical_resolution r;
+
+				ds5_desc_rec(blob, tabs[RS_DESC_T_LOGICAL_RESOLUTION], k, &r, sizeof(r));
+				if (r.width != le16_to_cpu(request->width) ||
+				    r.height != le16_to_cpu(request->height) ||
+				    r.max_payload_bytes != le32_to_cpu(request->max_payload_bytes))
+					continue;
+				for (n = r.fps_first; n < r.fps_first + r.fps_count; n++) {
+					u16 fps;
+
+					ds5_desc_rec(blob, tabs[RS_DESC_T_FRAMERATE], n, &fps, sizeof(fps));
+					if (fps == le16_to_cpu(request->fps))
+						return 0;
+				}
+			}
+		}
+	}
+	return -EINVAL;
+}
+
+static int d500_mux_set_control(struct ds5 *state, const u8 *data)
+{
+	struct d500_mux_control request;
+	u16 operation;
+	int ret = 0;
+
+	memcpy(&request, data, sizeof(request));
+	operation = le16_to_cpu(request.operation);
+	if (le16_to_cpu(request.version) != D500_MUX_VERSION ||
+	    le16_to_cpu(request.size) != sizeof(request) || request.state ||
+	    request.result || request.transaction_id ||
+	    memchr_inv(request.reserved, 0, sizeof(request.reserved)))
+		return -EINVAL;
+	if (operation < D500_MUX_CONFIGURE || operation > D500_MUX_DISABLE)
+		return -EACCES;
+	mutex_lock(&state->mux_control_lock);
+	if (operation != D500_MUX_CONFIGURE &&
+	    state->mux_reset_ref != atomic_read(ds5_get_reset_gen(state))) {
+		state->mux_configured = false;
+		state->mux_armed = false;
+		ret = -ESTALE;
+		goto out;
+	}
+	if (state->ir.sensor.streaming) {
+		ret = -EBUSY;
+		goto out;
+	}
+	ret = d500_mux_validate_profile(state, &request);
+	if (ret)
+		goto out;
+	if (operation != D500_MUX_CONFIGURE &&
+	    (!state->mux_configured ||
+	     memcmp(&request.payload_version, &state->mux_profile.payload_version, 20))) {
+		ret = -EINVAL;
+		goto out;
+	}
+	ret = d500_mux_exchange(state, &request, operation);
+	if (!ret) {
+		if (operation == D500_MUX_CONFIGURE) {
+			state->mux_profile = request;
+			state->mux_configured = true;
+			state->mux_reset_ref = atomic_read(ds5_get_reset_gen(state));
+		}
+		state->mux_armed = operation == D500_MUX_ENABLE;
+	}
+out:
+	mutex_unlock(&state->mux_control_lock);
+	return ret;
+}
+
 static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 {
 	struct ds5 *state = container_of(ctrl->handler, struct ds5,
@@ -4453,6 +4767,8 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 		}
 	}
 
+	if (ctrl->id == D500_CAMERA_CID_MUX_CONTROL)
+		return d500_mux_set_control(state, ctrl->p_new.p_u8);
 	base = state->control_base;
 	v4l2_dbg(3, 1, sd, "ctrl: %s, value: %d\n", ctrl->name, ctrl->val);
 	dev_dbg(&state->client->dev, "%s(): %s - ctrl: %s, value: %d\n",
@@ -5040,6 +5356,30 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		}
 	}
 	base = state->control_base;
+
+	if (ctrl->id == D500_CAMERA_CID_MUX_CAPS) {
+		struct ds5_dev *dd = state->ds5_dev;
+
+		mutex_lock(&dd->lock);
+		if (dd->desc_state != DS5_DESC_READY || !dd->desc ||
+		    !dd->desc->logical_catalog) {
+			ret = -ENODATA;
+		} else {
+			memset(ctrl->p_new.p_u8, 0, RS_DESC_MAX_SIZE);
+			memcpy(ctrl->p_new.p_u8, dd->desc->logical_catalog,
+			       dd->desc->logical_catalog_size);
+		}
+		mutex_unlock(&dd->lock);
+		return ret;
+	}
+	if (ctrl->id == D500_CAMERA_CID_MUX_CONTROL) {
+		mutex_lock(&state->mux_control_lock);
+		ret = d500_mux_read(state, &state->mux_status);
+		if (!ret)
+			memcpy(ctrl->p_new.p_u8, &state->mux_status, sizeof(state->mux_status));
+		mutex_unlock(&state->mux_control_lock);
+		return ret;
+	}
 
 	dev_dbg(&state->client->dev, "%s(): %s - ctrl: %s \n",
 		__func__, ds5_get_sensor_name(state), ctrl->name);
@@ -6594,6 +6934,26 @@ static const struct v4l2_ctrl_config d500_ctrl_temporal = {
 		 V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 };
 
+static const struct v4l2_ctrl_config d500_ctrl_mux_caps = {
+	.ops = &ds5_ctrl_ops,
+	.id = D500_CAMERA_CID_MUX_CAPS,
+	.name = "GMSL MUX capabilities",
+	.type = V4L2_CTRL_TYPE_U8,
+	.min = 0, .max = 0xff, .step = 1,
+	.dims = { RS_DESC_MAX_SIZE },
+	.flags = V4L2_CTRL_FLAG_READ_ONLY | V4L2_CTRL_FLAG_VOLATILE,
+};
+
+static const struct v4l2_ctrl_config d500_ctrl_mux_control = {
+	.ops = &ds5_ctrl_ops,
+	.id = D500_CAMERA_CID_MUX_CONTROL,
+	.name = "GMSL MUX XU control",
+	.type = V4L2_CTRL_TYPE_U8,
+	.min = 0, .max = 0xff, .step = 1,
+	.dims = { sizeof(struct d500_mux_control) },
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
 static int ds5_ctrl_init(struct ds5 *state, int sid)
 {
 	const struct v4l2_ctrl_ops *ops = &ds5_ctrl_ops;
@@ -6882,6 +7242,10 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 					     sensor);
 		}
 		v4l2_ctrl_new_custom(hdl, &ds5_ctrl_pwm, sensor);
+	}
+	if (sid == IR_SID && is_d58x) {
+		v4l2_ctrl_new_custom(hdl, &d500_ctrl_mux_caps, sensor);
+		v4l2_ctrl_new_custom(hdl, &d500_ctrl_mux_control, sensor);
 	}
 	// IMU custom
 	if (sid == IMU_SID) {
@@ -7453,6 +7817,100 @@ static void ds5_flush_idle_link(struct ds5 *state)
 }
 #endif
 
+static int d500_mux_capture(struct ds5 *state, bool on)
+{
+	struct ds5_sensor *sensor = &state->ir.sensor;
+	struct d500_mux_control request;
+	int ret, stop_ret;
+	int generation = atomic_read(ds5_get_reset_gen(state));
+
+	mutex_lock(&state->mux_control_lock);
+	if (state->reset_ref_ds5 != generation) {
+		ds5_invalidate_sensor(state, sensor);
+		sensor->streaming = false;
+		state->reset_ref_ds5 = generation;
+		mutex_lock(&state->ds5_dev->lock);
+		state->ds5_dev->ir_streaming = false;
+		mutex_unlock(&state->ds5_dev->lock);
+	}
+	if (state->mux_reset_ref != generation) {
+		state->mux_configured = false;
+		state->mux_armed = false;
+	}
+	if (sensor->streaming == on) {
+		ret = 0;
+		goto out;
+	}
+	request = state->mux_profile;
+	if (on) {
+		if (!state->mux_configured || !state->mux_armed) {
+			ret = -EINVAL;
+			goto out;
+		}
+		ret = d500_mux_validate_profile(state, &request);
+		if (ret)
+			goto out;
+		mutex_lock(&state->ds5_dev->lock);
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+		if (!(state->ds5_dev->depth_streaming || state->ds5_dev->rgb_streaming ||
+		      state->ds5_dev->ir_streaming || state->ds5_dev->imu_streaming))
+			state->ds5_dev->link_flush_pending = true;
+#endif
+		state->ds5_dev->ir_streaming = true;
+		mutex_unlock(&state->ds5_dev->lock);
+		ret = ds5_configure(state);
+		if (ret)
+			goto release_transport;
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+		ds5_flush_idle_link(state);
+#endif
+		/* Keep teardown possible after an uncertain device-side start. */
+		sensor->streaming = true;
+		ret = d500_mux_exchange(state, &request, D500_MUX_CAPTURE_START);
+		if (ret) {
+			/* STREAMON failure need not be followed by STREAMOFF. Stop our request. */
+			stop_ret = d500_mux_exchange(state, &request, D500_MUX_CAPTURE_STOP);
+			if (stop_ret) {
+				dev_err(&state->client->dev,
+					"MUX start failed %d; cleanup unresolved %d\n", ret, stop_ret);
+				goto out;
+			}
+			goto release_transport;
+		}
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+		if (state->dser_ops->retrigger_datapath)
+			state->dser_ops->retrigger_datapath(state->dser_dev);
+#endif
+		goto out;
+	}
+	ret = d500_mux_exchange(state, &request, D500_MUX_CAPTURE_STOP);
+	if (ret)
+		goto out;
+release_transport:
+	state->mux_armed = false;
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	mutex_lock(&serdes_lock__);
+	if (sensor->pipe_id >= 0 &&
+	    !state->dser_ops->release_pipe(state->dser_dev, sensor->pipe_id))
+		sensor->pipe_id = PIPE_NOT_CONFIGURED;
+	mutex_unlock(&serdes_lock__);
+	if (state->ser_ops->stream_stop) {
+		int vc = state->dser_ops->get_ser_vc_id ?
+			state->dser_ops->get_ser_vc_id(state->dser_dev, state->gmsl_link,
+						state->g_ctx.dst_vc) : state->g_ctx.dst_vc;
+		if (vc >= 0)
+			state->ser_ops->stream_stop(state->ser_dev, vc);
+	}
+#endif
+	sensor->streaming = false;
+	mutex_lock(&state->ds5_dev->lock);
+	state->ds5_dev->ir_streaming = false;
+	mutex_unlock(&state->ds5_dev->lock);
+out:
+	mutex_unlock(&state->mux_control_lock);
+	return ret;
+}
+
 static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 {
 	struct ds5 *state = container_of(sd, struct ds5, mux.sd.subdev);
@@ -7469,6 +7927,9 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	bool reset_invalidated = false;
 	bool *streaming_flag = NULL;
 	int cur_ds5 = atomic_read(ds5_get_reset_gen(state));
+
+	if (d500_is_mux_capture(state))
+		return d500_mux_capture(state, on);
 
 	/* Lazy invalidation after HW or deserializer reset.
 	 * Detect gen-counter bumps, clear stale streaming/config/pipe
@@ -9117,6 +9578,7 @@ static int ds5_probe(struct i2c_client *c
 		return -ENOMEM;
 
 	mutex_init(&state->lock);
+	mutex_init(&state->mux_control_lock);
 
 	state->client = c;
 
