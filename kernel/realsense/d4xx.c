@@ -727,11 +727,14 @@ struct d500_mux_control {
 	__le16 payload_version, payload_type, width, height, fps;
 	__le16 carrier_width, carrier_height, metadata_bytes;
 	__le32 max_payload_bytes;
-	__le32 reserved[7];
+	__le32 member_mask;
+	__le32 configured_mask;
+	__le32 active_mask;
+	__le32 reserved[4];
 } __packed;
 
 #define D500_MUX_XU_BASE 0x4590
-#define D500_MUX_VERSION 1
+#define D500_MUX_VERSION 2
 #define D500_MUX_CONFIGURE 1
 #define D500_MUX_ENABLE 2
 #define D500_MUX_DISABLE 3
@@ -742,11 +745,20 @@ struct d500_mux_control {
 #define D500_MUX_PENDING 3
 #define D500_MUX_ACTIVE 4
 #define D500_MUX_FAULT 5
+#define D500_MUX_STREAM_ODPD 5
+#define D500_MUX_STREAM_OCCUPANCY 7
+#define D500_MUX_MEMBER_ODPD BIT(D500_MUX_STREAM_ODPD)
+#define D500_MUX_MEMBER_OCCUPANCY BIT(D500_MUX_STREAM_OCCUPANCY)
+#define D500_MUX_SUPPORTED_MEMBERS \
+	(D500_MUX_MEMBER_ODPD | D500_MUX_MEMBER_OCCUPANCY)
+#define D500_MUX_PROFILE_COUNT 2
 
 struct ds5 {
 	struct mutex mux_control_lock;
-	struct d500_mux_control mux_profile;
+	struct d500_mux_control mux_profile[D500_MUX_PROFILE_COUNT];
 	struct d500_mux_control mux_status;
+	u32 mux_configured_mask;
+	u32 mux_selected_mask;
 	u32 mux_sequence;
 	int mux_reset_ref;
 	bool mux_configured;
@@ -4612,7 +4624,10 @@ static int d500_mux_exchange(struct ds5 *state,
 			state->mux_status = reply;
 			if (reply.state != D500_MUX_PENDING) {
 				u8 expected = operation == D500_MUX_CAPTURE_START ? D500_MUX_ACTIVE :
-					operation == D500_MUX_ENABLE ? D500_MUX_ARMED : D500_MUX_CONFIGURED;
+					operation == D500_MUX_ENABLE ? D500_MUX_ARMED :
+					(operation == D500_MUX_DISABLE &&
+					 le32_to_cpu(request->member_mask)) ?
+					 D500_MUX_ARMED : D500_MUX_CONFIGURED;
 
 				ret = (s32)le32_to_cpu(reply.result);
 				return ret ? ret : reply.state == expected ? 0 : -EPROTO;
@@ -4621,6 +4636,20 @@ static int d500_mux_exchange(struct ds5 *state,
 		usleep_range(5000, 6000);
 	} while (time_before(jiffies, deadline));
 	return -ETIMEDOUT;
+}
+
+static int d500_mux_profile_index(u8 stream_id)
+{
+	if (stream_id == D500_MUX_STREAM_ODPD)
+		return 0;
+	if (stream_id == D500_MUX_STREAM_OCCUPANCY)
+		return 1;
+	return -EINVAL;
+}
+
+static u32 d500_mux_member_bit(u8 stream_id)
+{
+	return stream_id < 32 ? BIT(stream_id) : 0;
 }
 
 static int d500_mux_validate_profile(struct ds5 *state,
@@ -4646,6 +4675,10 @@ static int d500_mux_validate_profile(struct ds5 *state,
 		return -ENODATA;
 	if (!d500_is_mux_capture(state) || !capacity || !state->metadata_enabled)
 		return -EINVAL;
+	if (!(le32_to_cpu(request->member_mask) &
+	      d500_mux_member_bit(request->stream_id)) ||
+	    (le32_to_cpu(request->member_mask) & ~D500_MUX_SUPPORTED_MEMBERS))
+		return -EINVAL;
 	if (le16_to_cpu(request->carrier_width) != capacity->width ||
 	    le16_to_cpu(request->carrier_height) != capacity->height ||
 	    le16_to_cpu(request->metadata_bytes) != 255 ||
@@ -4657,13 +4690,18 @@ static int d500_mux_validate_profile(struct ds5 *state,
 		ds5_desc_rec(blob, tabs[RS_DESC_T_LOGICAL_STREAM], i, &s, sizeof(s));
 		if (s.stream_id != request->stream_id)
 			continue;
-		if (!(s.flags & 1) || s.stream_id != 5 || s.carrier_stream_id != DS5_STREAM_IR)
+		if (!(s.flags & 1) ||
+		    (s.stream_id != D500_MUX_STREAM_ODPD &&
+		     s.stream_id != D500_MUX_STREAM_OCCUPANCY) ||
+		    s.carrier_stream_id != DS5_STREAM_IR)
 			return -EOPNOTSUPP;
 		for (j = s.fmt_first; j < s.fmt_first + s.fmt_count; j++) {
 			struct d500_desc_logical_format f;
 
 			ds5_desc_rec(blob, tabs[RS_DESC_T_LOGICAL_FORMAT], j, &f, sizeof(f));
-			if (f.payload_magic != 0x5445444f ||
+			if (f.payload_magic !=
+			    (s.stream_id == D500_MUX_STREAM_ODPD ?
+			     0x5445444f : 0x3150414d) ||
 			    f.payload_version != le16_to_cpu(request->payload_version) ||
 			    f.payload_type != le16_to_cpu(request->payload_type))
 				continue;
@@ -4691,15 +4729,24 @@ static int d500_mux_validate_profile(struct ds5 *state,
 static int d500_mux_set_control(struct ds5 *state, const u8 *data)
 {
 	struct d500_mux_control request;
+	u32 member_mask;
 	u16 operation;
-	int ret = 0;
+	int profile_index, ret = 0;
 
 	memcpy(&request, data, sizeof(request));
 	operation = le16_to_cpu(request.operation);
 	if (le16_to_cpu(request.version) != D500_MUX_VERSION ||
 	    le16_to_cpu(request.size) != sizeof(request) || request.state ||
-	    request.result || request.transaction_id ||
+	    request.result || request.transaction_id || request.configured_mask ||
+	    request.active_mask ||
 	    memchr_inv(request.reserved, 0, sizeof(request.reserved)))
+		return -EINVAL;
+	member_mask = le32_to_cpu(request.member_mask);
+	profile_index = d500_mux_profile_index(request.stream_id);
+	if (profile_index < 0 ||
+	    (member_mask & ~D500_MUX_SUPPORTED_MEMBERS) ||
+	    (operation != D500_MUX_DISABLE &&
+	     !(member_mask & d500_mux_member_bit(request.stream_id))))
 		return -EINVAL;
 	if (operation < D500_MUX_CONFIGURE || operation > D500_MUX_DISABLE)
 		return -EACCES;
@@ -4708,6 +4755,8 @@ static int d500_mux_set_control(struct ds5 *state, const u8 *data)
 	    state->mux_reset_ref != atomic_read(ds5_get_reset_gen(state))) {
 		state->mux_configured = false;
 		state->mux_armed = false;
+		state->mux_configured_mask = 0;
+		state->mux_selected_mask = 0;
 		ret = -ESTALE;
 		goto out;
 	}
@@ -4715,23 +4764,27 @@ static int d500_mux_set_control(struct ds5 *state, const u8 *data)
 		ret = -EBUSY;
 		goto out;
 	}
-	ret = d500_mux_validate_profile(state, &request);
-	if (ret)
-		goto out;
-	if (operation != D500_MUX_CONFIGURE &&
-	    (!state->mux_configured ||
-	     memcmp(&request.payload_version, &state->mux_profile.payload_version, 20))) {
+	if (operation == D500_MUX_CONFIGURE) {
+		ret = d500_mux_validate_profile(state, &request);
+		if (ret)
+			goto out;
+	} else if (!state->mux_configured ||
+		   (member_mask & state->mux_configured_mask) != member_mask) {
 		ret = -EINVAL;
 		goto out;
 	}
 	ret = d500_mux_exchange(state, &request, operation);
 	if (!ret) {
 		if (operation == D500_MUX_CONFIGURE) {
-			state->mux_profile = request;
+			state->mux_profile[profile_index] = request;
+			state->mux_configured_mask |=
+				d500_mux_member_bit(request.stream_id);
 			state->mux_configured = true;
 			state->mux_reset_ref = atomic_read(ds5_get_reset_gen(state));
 		}
-		state->mux_armed = operation == D500_MUX_ENABLE;
+		if (operation == D500_MUX_ENABLE || operation == D500_MUX_DISABLE)
+			state->mux_selected_mask = member_mask;
+		state->mux_armed = state->mux_selected_mask != 0;
 	}
 out:
 	mutex_unlock(&state->mux_control_lock);
@@ -7819,6 +7872,9 @@ static void ds5_flush_idle_link(struct ds5 *state)
 
 static int d500_mux_capture(struct ds5 *state, bool on)
 {
+	/* The IR sensor object owns the shared VC2 RSVL V4L2/SerDes transport.
+	 * ds5_configure() returns before writing the IR camera register bank for
+	 * this format; logical member lifecycle is carried only by the MUX XU. */
 	struct ds5_sensor *sensor = &state->ir.sensor;
 	struct d500_mux_control request;
 	int ret, stop_ret;
@@ -7836,20 +7892,32 @@ static int d500_mux_capture(struct ds5 *state, bool on)
 	if (state->mux_reset_ref != generation) {
 		state->mux_configured = false;
 		state->mux_armed = false;
+		state->mux_configured_mask = 0;
+		state->mux_selected_mask = 0;
 	}
 	if (sensor->streaming == on) {
 		ret = 0;
 		goto out;
 	}
-	request = state->mux_profile;
+	if (state->mux_selected_mask & D500_MUX_MEMBER_ODPD)
+		request = state->mux_profile[0];
+	else if (state->mux_selected_mask & D500_MUX_MEMBER_OCCUPANCY)
+		request = state->mux_profile[1];
+	else
+		memset(&request, 0, sizeof(request));
+	request.member_mask = cpu_to_le32(state->mux_selected_mask);
+	request.configured_mask = 0;
+	request.active_mask = 0;
 	if (on) {
 		if (!state->mux_configured || !state->mux_armed) {
 			ret = -EINVAL;
 			goto out;
 		}
-		ret = d500_mux_validate_profile(state, &request);
-		if (ret)
+		if ((state->mux_selected_mask & state->mux_configured_mask) !=
+		    state->mux_selected_mask) {
+			ret = -EINVAL;
 			goto out;
+		}
 		mutex_lock(&state->ds5_dev->lock);
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 		if (!(state->ds5_dev->depth_streaming || state->ds5_dev->rgb_streaming ||
@@ -7888,6 +7956,7 @@ static int d500_mux_capture(struct ds5 *state, bool on)
 		goto out;
 release_transport:
 	state->mux_armed = false;
+	state->mux_selected_mask = 0;
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	mutex_lock(&serdes_lock__);
 	if (sensor->pipe_id >= 0 &&
