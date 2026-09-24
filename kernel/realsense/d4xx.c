@@ -3306,6 +3306,7 @@ enum ds5_sync_mode {
 #define D500_CAMERA_CID_DEVICE_MODE	(DS5_CAMERA_CID_BASE + 36)
 #define D500_CAMERA_CID_DUAL_RGB_AE_POLICY (DS5_CAMERA_CID_BASE + 37)
 #define D500_CAMERA_CID_GYRO_SENSITIVITY (DS5_CAMERA_CID_BASE + 38)
+#define D500_CAMERA_CID_ACCEL_SENSITIVITY (DS5_CAMERA_CID_BASE + 39)
 
 enum d500_device_mode {
 	D500_DEVICE_MODE_3C = 0,
@@ -3327,9 +3328,17 @@ enum d500_gyro_sensitivity {
 	D500_GYRO_SENSITIVITY_125_DPS,
 };
 
+enum d500_accel_sensitivity {
+	D500_ACCEL_SENSITIVITY_3_G = 0,
+	D500_ACCEL_SENSITIVITY_6_G,
+	D500_ACCEL_SENSITIVITY_12_G,
+	D500_ACCEL_SENSITIVITY_24_G,
+};
+
 #define D500_DEVICE_MODE_XU_BASE		0x4528
 #define D500_DUAL_RGB_AE_XU_BASE	0x4530
 #define D500_GYRO_SENSITIVITY_XU_BASE	0x4538
+#define D500_ACCEL_SENSITIVITY_XU_BASE	0x4539
 
 /* Auto-exposure algorithm types — mirrors FW ETAeType */
 enum ds5_ae_type {
@@ -3896,6 +3905,45 @@ static int d500_set_gyro_sensitivity(struct ds5 *state, u32 sensitivity)
 		ret = -EBUSY;
 	else
 		ret = ds5_raw_write(state, D500_GYRO_SENSITIVITY_XU_BASE,
+				    &value, sizeof(value));
+	mutex_unlock(&state->ds5_dev->lock);
+
+	return ret;
+}
+
+static int d500_get_accel_sensitivity(struct ds5 *state, u32 *sensitivity)
+{
+	u8 value;
+	int ret;
+
+	if (!sensitivity)
+		return -EINVAL;
+
+	ret = ds5_raw_read(state, D500_ACCEL_SENSITIVITY_XU_BASE,
+			   &value, sizeof(value));
+	if (ret)
+		return ret;
+	if (value > D500_ACCEL_SENSITIVITY_24_G)
+		return -EBADMSG;
+
+	*sensitivity = value;
+	return 0;
+}
+
+static int d500_set_accel_sensitivity(struct ds5 *state, u32 sensitivity)
+{
+	u8 value;
+	int ret;
+
+	if (sensitivity > D500_ACCEL_SENSITIVITY_24_G)
+		return -EINVAL;
+	value = sensitivity;
+
+	mutex_lock(&state->ds5_dev->lock);
+	if (state->ds5_dev->imu_streaming)
+		ret = -EBUSY;
+	else
+		ret = ds5_raw_write(state, D500_ACCEL_SENSITIVITY_XU_BASE,
 				    &value, sizeof(value));
 	mutex_unlock(&state->ds5_dev->lock);
 
@@ -4913,6 +4961,12 @@ unlock_dpp:
 			    DS5_DEVICE_TYPE_D58X)
 			ret = d500_set_gyro_sensitivity(state, ctrl->val);
 		break;
+	case D500_CAMERA_CID_ACCEL_SENSITIVITY:
+		if (state->is_imu &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X)
+			ret = d500_set_accel_sensitivity(state, ctrl->val);
+		break;
 	case DS5_CAMERA_CID_PWM:
 		if (state->is_depth)
 			ret = ds5_write(state, base | DS5_PWM_FREQUENCY, ctrl->val);
@@ -5410,6 +5464,17 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 				*ctrl->p_new.p_s32 = sensitivity;
 		}
 		break;
+	case D500_CAMERA_CID_ACCEL_SENSITIVITY:
+		if (state->is_imu && ctrl->p_new.p_s32 &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X) {
+			u32 sensitivity;
+
+			ret = d500_get_accel_sensitivity(state, &sensitivity);
+			if (!ret)
+				*ctrl->p_new.p_s32 = sensitivity;
+		}
+		break;
 	case DS5_CAMERA_CID_PWM:
 		if (state->is_depth)
 			ds5_read(state, base | DS5_PWM_FREQUENCY, ctrl->p_new.p_u16);
@@ -5815,6 +5880,25 @@ static const struct v4l2_ctrl_config ds5_ctrl_gyro_sensitivity_d58x = {
 	.max = D500_GYRO_SENSITIVITY_125_DPS,
 	.def = D500_GYRO_SENSITIVITY_125_DPS,
 	.qmenu = d500_gyro_sensitivity_menu,
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
+static const char * const d500_accel_sensitivity_menu[] = {
+	[D500_ACCEL_SENSITIVITY_3_G] = "3 g",
+	[D500_ACCEL_SENSITIVITY_6_G] = "6 g",
+	[D500_ACCEL_SENSITIVITY_12_G] = "12 g",
+	[D500_ACCEL_SENSITIVITY_24_G] = "24 g",
+};
+
+static const struct v4l2_ctrl_config ds5_ctrl_accel_sensitivity_d58x = {
+	.ops = &ds5_ctrl_ops,
+	.id = D500_CAMERA_CID_ACCEL_SENSITIVITY,
+	.name = "Accel Sensitivity",
+	.type = V4L2_CTRL_TYPE_MENU,
+	.min = D500_ACCEL_SENSITIVITY_3_G,
+	.max = D500_ACCEL_SENSITIVITY_24_G,
+	.def = D500_ACCEL_SENSITIVITY_3_G,
+	.qmenu = d500_accel_sensitivity_menu,
 	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 };
 
@@ -6894,10 +6978,14 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 	// IMU custom
 	if (sid == IMU_SID) {
 		ctrls->fw_version = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_fw_version, sensor);
-		if (is_d58x)
+		if (is_d58x) {
 			v4l2_ctrl_new_custom(hdl,
 					     &ds5_ctrl_gyro_sensitivity_d58x,
 					     sensor);
+			v4l2_ctrl_new_custom(hdl,
+					     &ds5_ctrl_accel_sensitivity_d58x,
+					     sensor);
+		}
 	}
 
 	switch (sid) {
