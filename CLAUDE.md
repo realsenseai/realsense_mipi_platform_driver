@@ -160,6 +160,13 @@ Each MIPI segment's lane count comes from a **different** DT property, so the ca
 - The 4-lane deser output occupies a whole NVCSI brick (`1x4`, port A/C/E/G). Multi-deserializer overlays must therefore keep nvcsi `port-index` on even brick boundaries (0/2/4/6) with matching `tegra_sinterface` (`serial_a/c/e/g`). Do not change `port-index` as part of a lane-width edit.
 - 4-lane also requires the carrier to actually route 4 CSI lanes from the deserializer to the Jetson connector; the DT change alone cannot create them.
 
+## D585 I2C Fast-mode Plus scope
+
+- Enable the 980 kHz SerDes master timing only after runtime device type D58x **and** a recognized D585 GVD PID (`0x0c07` or `0x0c08`). Unknown/recovery identities and other camera models keep baseline timing; add future production PIDs explicitly after qualification.
+- Camera policy owns eligibility under `serdes_lock__`; the SerDes helpers lock their private state, preserve non-MST_BT bits and save/restore original master timing per serializer or per deserializer link. Never enable all links from shared `init_settings()`. Restore on primary teardown/probe failure, and reapply after reset only after device identity is valid again.
+- A failed optional speed-up may continue probe/reset only after both endpoints have restored baseline timing; keep failures fatal if rollback fails. During primary teardown, release `ds5_dev->lock` before I2C restoration while retaining `serdes_lock__` to exclude slot reuse.
+- Keep the host-adapter DFU request at its baseline 400 kHz. The adapter clock is bus-wide, so a D585 PID check alone cannot isolate a 980 kHz host request from D400 devices on the same bus. Recovery without a confirmed PID stays at baseline; DT compatibility identifies topology, not camera identity.
+
 ## Kernel ABI / module compatibility notes
 
 - Never add a member to a public kernel struct referenced by exported symbols (e.g. `struct i2c_adapter` in `include/linux/i2c.h`). genksyms recomputes the CRC of every exported symbol referencing that struct, so prebuilt out-of-tree modules built against the unpatched headers — notably the BSP NVIDIA display stack (`nvidia.ko`/`nvidia-modeset.ko`/`nvidia-drm.ko`) — fail to load with "disagrees about version of symbol". Add only new exported functions; keep private state out of public headers. After any kernel-header patch, diff the rebuilt `vmlinux.symvers`/`Module.symvers` against what the BSP modules require (`modprobe --dump-modversions <module>.ko`).

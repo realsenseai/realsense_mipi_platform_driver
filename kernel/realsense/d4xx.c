@@ -87,6 +87,7 @@ struct dser_interface {
 	int (*power_on)(struct device *dev);
 	void (*power_off)(struct device *dev);
 	int (*init_settings)(struct device *dev);
+	int (*set_i2c_fast_mode)(struct device *dev, u32 link, bool enable);
 
 	/* Identification */
 	const char *name;
@@ -104,6 +105,7 @@ struct ser_interface {
 	int (*setup_control)(struct device *dev);
 	int (*reset_control)(struct device *dev);
 	int (*init_settings)(struct device *dev);
+	int (*set_i2c_fast_mode)(struct device *dev, bool enable);
 
 	/* Device pairing */
 	int (*sdev_pair)(struct device *dev, struct gmsl_link_ctx *g_ctx);
@@ -879,6 +881,7 @@ static const struct dser_interface max96712_interface = {
 	.power_on = max96712_power_on,
 	.power_off = max96712_power_off,
 	.init_settings = max96712_init_settings,
+	.set_i2c_fast_mode = max96712_set_i2c_fast_mode,
 	.name = "max96712",
 };
 
@@ -900,6 +903,7 @@ static const struct dser_interface max96724_interface = {
 	.power_on = max96724_power_on,
 	.power_off = max96724_power_off,
 	.init_settings = max96724_init_settings,
+	.set_i2c_fast_mode = max96724_set_i2c_fast_mode,
 	.name = "max96724",
 };
 
@@ -923,6 +927,7 @@ static const struct ser_interface max96717_interface = {
 	.setup_control = max96717_setup_control,
 	.reset_control = max96717_reset_control,
 	.init_settings = max96717_init_settings,
+	.set_i2c_fast_mode = max96717_set_i2c_fast_mode,
 	.sdev_pair = max96717_sdev_pair,
 	.sdev_unpair = max96717_sdev_unpair,
 	.enable_gpio_tunneling = max96717_enable_gpio_tunneling,
@@ -974,6 +979,51 @@ static inline bool ds5_is_d58x(struct ds5 *state)
 		READ_ONCE(state->ds5_dev->cached_device_type) ==
 			DS5_DEVICE_TYPE_D58X;
 }
+
+static inline bool ds5_is_d585_proto(struct ds5 *state)
+{
+	u16 pid = READ_ONCE(state->ds5_dev->d585_product_id);
+
+	return pid == D585_2C_PROTO_PID || pid == D585_3C_PROTO_PID;
+}
+
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+/* Caller holds serdes_lock__; zero also means a successful baseline fallback. */
+static int ds5_configure_d585_i2c(struct ds5 *state, bool enable)
+{
+	int ret, dser_ret, restore_ret;
+
+	if (!state->ser_ops->set_i2c_fast_mode ||
+	    !state->dser_ops->set_i2c_fast_mode)
+		return 0;
+	if (enable && (!ds5_is_d58x(state) || !ds5_is_d585_proto(state)))
+		return 0;
+
+	ret = state->ser_ops->set_i2c_fast_mode(state->ser_dev, enable);
+	if (!ret || !enable) {
+		dser_ret = state->dser_ops->set_i2c_fast_mode(state->dser_dev,
+							state->gmsl_link, enable);
+		if (!ret)
+			ret = dser_ret;
+	}
+	if (ret && enable) {
+		restore_ret = state->ser_ops->set_i2c_fast_mode(state->ser_dev, false);
+		dser_ret = state->dser_ops->set_i2c_fast_mode(state->dser_dev,
+							state->gmsl_link, false);
+		if (restore_ret || dser_ret) {
+			dev_warn(&state->client->dev,
+				 "D585 I2C timing rollback failed: serializer=%d deserializer=%d\n",
+				 restore_ret, dser_ret);
+		} else {
+			dev_warn(&state->client->dev,
+				 "D585 I2C acceleration failed (%d); restored baseline timing\n",
+				 ret);
+			ret = 0;
+		}
+	}
+	return ret;
+}
+#endif
 
 static int ds5_hw_init(struct i2c_client *c, struct ds5 *state);
 
@@ -4102,9 +4152,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	bool rgb_streaming;
 	bool ir_streaming;
 	bool imu_streaming;
-	u16 d585_product_id = READ_ONCE(state->ds5_dev->d585_product_id);
-	bool d585_proto_reset = d585_product_id == D585_2C_PROTO_PID ||
-				 d585_product_id == D585_3C_PROTO_PID;
+	bool d585_proto_reset = ds5_is_d585_proto(state);
 	bool post_dfu_reset = d585_proto_reset &&
 		READ_ONCE(state->dfu_dev.manifest_complete);
 	unsigned long ds5_last_reset_jiffies = READ_ONCE(state->ds5_dev->last_reset_jiffies);
@@ -4349,6 +4397,16 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	dev_info(&state->client->dev,
 		"%s(): GMSL link recovered (device type 0x%04x)\n",
 		__func__, dev_type);
+
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	if (state->ser_primary) {
+		mutex_lock(&serdes_lock__);
+		ret = ds5_configure_d585_i2c(state, true);
+		mutex_unlock(&serdes_lock__);
+		if (ret)
+			return ret;
+	}
+#endif
 
 	/* 8. Verify device is operational by reading firmware version */
 	ret = ds5_read(state, DS5_FW_VERSION, &state->fw_version);
@@ -4827,11 +4885,7 @@ unlock_dpp:
 			u16 size = 0;
 			struct hwm_cmd *cmd = (struct hwm_cmd *)ctrl->p_new.p_u8;
 
-			u16 pid = READ_ONCE(state->ds5_dev->d585_product_id);
-
-			if (cmd->opcode == 0x20 &&
-			    (pid == D585_2C_PROTO_PID ||
-			     pid == D585_3C_PROTO_PID)) {
+			if (cmd->opcode == 0x20 && ds5_is_d585_proto(state)) {
 				ret = ds5_hw_reset_with_recovery(state);
 				break;
 			}
@@ -5894,13 +5948,13 @@ static void ds5_init_ds5_dev(struct ds5 *state, struct ds5_dev *ds5_dev)
 	ds5_reset_streaming_flags(ds5_dev);
 }
 
-/* Caller must hold serdes_lock__. */
+/* Takes serdes_lock__ internally to exclude slot reuse during timing restore. */
 static bool ds5_release_slot(struct ds5 *state)
 {
 	struct dser_control *dser_control;
 	bool has_other_users = false;
 	bool released = false;
-	int i;
+	int i, ret;
 
 	if (!state->ds5_dev)
 		return false;
@@ -5918,6 +5972,13 @@ static bool ds5_release_slot(struct ds5 *state)
 		dser_control = NULL;
 	}
 	mutex_unlock(&state->ds5_dev->lock);
+
+	if (released) {
+		ret = ds5_configure_d585_i2c(state, false);
+		if (ret)
+			dev_warn(&state->client->dev,
+				 "D585 I2C timing restore failed: %d\n", ret);
+	}
 
 	if (!released || !dser_control) {
 		mutex_unlock(&serdes_lock__);
@@ -9305,6 +9366,16 @@ static int ds5_probe(struct i2c_client *c
 			(state->fw_version >> 8) & 0xff, state->fw_version & 0xff,
 			(state->fw_build >> 8) & 0xff, state->fw_build & 0xff);
 
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	if (state->ser_primary) {
+		mutex_lock(&serdes_lock__);
+		ret = ds5_configure_d585_i2c(state, true);
+		mutex_unlock(&serdes_lock__);
+		if (ret)
+			goto e_chardev;
+	}
+#endif
+
 	ret = ds5_v4l_init(c, state);
 	if (ret < 0)
 		goto e_chardev;
@@ -9320,6 +9391,15 @@ static int ds5_probe(struct i2c_client *c
 	return 0;
 
 e_chardev:
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	if (state->ser_primary) {
+		mutex_lock(&serdes_lock__);
+		err = ds5_configure_d585_i2c(state, false);
+		mutex_unlock(&serdes_lock__);
+		if (err)
+			dev_warn(&c->dev, "D585 I2C timing restore failed: %d\n", err);
+	}
+#endif
 	if (state->dfu_dev.ds5_class)
 		ds5_chrdev_remove(state);
 e_regulator:
