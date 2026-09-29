@@ -378,6 +378,101 @@ class TestDepthRGBIRConcurrent:
                 f"IR seq not monotonic: {ir_seqs[i-1]} -> {ir_seqs[i]}"
 
 
+D401_DUAL_RGB_RAW_FOURCCS = {
+    ioctls.V4L2_PIX_FMT_SBGGR8,    # BA81, pre-1.0.6.10: native size 1612x808
+    ioctls.V4L2_PIX_FMT_SBGGR10P,  # pBAA, 1.0.6.10+: native size 1288x808
+}
+
+
+def _raw_bayer_format(device_path):
+    """Return (fourcc, width, height) for the raw Bayer dual-RGB row.
+
+    The native size differs by fourcc (772df55 changed BA81's 1612x808 to
+    pBAA's 1288x808), so read it from the format's own frame sizes rather
+    than assuming one -- that assumption was wrong on the first pass of this
+    test (OSError EINVAL setting pBAA's 1288x808 against a BA81-era node).
+    """
+    with V4L2Device(device_path) as dev:
+        formats = dev.enum_formats()
+        pixfmts = {f.pixelformat for f in formats}
+        raw = pixfmts & D401_DUAL_RGB_RAW_FOURCCS
+        if not raw:
+            pytest.skip("No raw Bayer dual-RGB row on this node "
+                         "(not a D401 dual-RGB build)")
+        fourcc = next(iter(raw))
+
+        sizes = dev.enum_framesizes(fourcc)
+        if not sizes or sizes[0].type != ioctls.V4L2_FRMSIZE_TYPE_DISCRETE:
+            pytest.skip("No discrete frame size for the raw Bayer row")
+        return fourcc, sizes[0].discrete.width, sizes[0].discrete.height
+
+
+@pytest.mark.d401
+class TestD401DualRGBConcurrent:
+    """D401 GMSL dual-RGB: stream both raw Bayer pins (Color/EP4, Color1/EP3)
+    concurrently. This is a driver-only check -- it validates the CSI-PT dual
+    path itself (both GMSL links, both serializer pipes, format negotiation)
+    without depending on librealsense recognizing the fourcc. RSDEV-14662 was
+    an SDK-side fourcc gap, invisible to this test on its own; pairing it with
+    TestD401DualRGB's format-symmetry checks is what isolates "driver is fine"
+    from "SDK doesn't know this format" per Evgeni Raikhel's request on that
+    ticket for dedicated D401/dual-RGB CI coverage.
+    """
+
+    def test_dual_rgb_concurrent(self, camera):
+        rgb_fourcc, rgb_w, rgb_h = _raw_bayer_format(camera.rgb_path)
+        ir_fourcc, ir_w, ir_h = _raw_bayer_format(camera.ir_path)
+
+        rgb_dev = V4L2Device(camera.rgb_path)
+        ir_dev = V4L2Device(camera.ir_path)
+        rgb_dev.open()
+        ir_dev.open()
+
+        try:
+            rgb_dev.set_format(rgb_w, rgb_h, rgb_fourcc)
+            rgb_dev.set_parm(30)
+            ir_dev.set_format(ir_w, ir_h, ir_fourcc)
+            ir_dev.set_parm(30)
+
+            rgb_stream = StreamContext(rgb_dev, buf_count=4)
+            ir_stream = StreamContext(ir_dev, buf_count=4)
+
+            rgb_stream.__enter__()
+            ir_stream.__enter__()
+
+            try:
+                rgb_frames = []
+                ir_frames = []
+                per_frame_timeout = 2.0
+                start = time.monotonic()
+
+                while time.monotonic() - start < CONCURRENT_MIN_DURATION:
+                    rbuf, rdata = rgb_stream.dequeue(timeout=per_frame_timeout)
+                    rgb_frames.append((rbuf, rdata))
+                    rgb_stream.requeue(rbuf)
+
+                    ibuf, idata = ir_stream.dequeue(timeout=per_frame_timeout)
+                    ir_frames.append((ibuf, idata))
+                    ir_stream.requeue(ibuf)
+            finally:
+                ir_stream.__exit__(None, None, None)
+                rgb_stream.__exit__(None, None, None)
+        finally:
+            ir_dev.close()
+            rgb_dev.close()
+
+        assert len(rgb_frames) > 0, "No Color (EP4) frames"
+        assert len(ir_frames) > 0, "No Color1 (EP3) frames"
+
+        nonzero_rgb = sum(1 for _, d in rgb_frames if len(d) > 0)
+        assert nonzero_rgb == len(rgb_frames), \
+            f"{len(rgb_frames) - nonzero_rgb} empty Color frames"
+
+        nonzero_ir = sum(1 for _, d in ir_frames if len(d) > 0)
+        assert nonzero_ir == len(ir_frames), \
+            f"{len(ir_frames) - nonzero_ir} empty Color1 frames"
+
+
 @pytest.mark.d457
 class TestStreamStartStop:
     """Stream start/stop cycling."""

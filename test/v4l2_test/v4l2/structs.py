@@ -51,9 +51,48 @@ class v4l2_meta_format(ctypes.Structure):
     ]
 
 
+class v4l2_rect(ctypes.Structure):
+    _fields_ = [
+        ("left", ctypes.c_int32),
+        ("top", ctypes.c_int32),
+        ("width", ctypes.c_uint32),
+        ("height", ctypes.c_uint32),
+    ]
+
+
+class v4l2_clip(ctypes.Structure):
+    pass
+
+
+v4l2_clip._fields_ = [
+    ("c", v4l2_rect),
+    ("next", ctypes.POINTER(v4l2_clip)),
+]
+
+
+class v4l2_window(ctypes.Structure):
+    """Unused directly, but its pointer fields (clips, bitmap) are the reason
+    the kernel's real struct v4l2_format is 8-byte aligned/208 bytes on LP64
+    -- omitting it here silently shrank our v4l2_format to 204 bytes, which
+    corrupts the _IOWR-encoded VIDIOC_S_FMT/G_FMT ioctl numbers (the size is
+    baked into the request code) and makes the kernel return ENOTTY for a
+    request it doesn't recognize.
+    """
+    _fields_ = [
+        ("w", v4l2_rect),
+        ("field", ctypes.c_uint32),
+        ("chromakey", ctypes.c_uint32),
+        ("clips", ctypes.POINTER(v4l2_clip)),
+        ("clipcount", ctypes.c_uint32),
+        ("bitmap", ctypes.c_void_p),
+        ("global_alpha", ctypes.c_uint8),
+    ]
+
+
 class _v4l2_format_fmt(ctypes.Union):
     _fields_ = [
         ("pix", v4l2_pix_format),
+        ("win", v4l2_window),
         ("meta", v4l2_meta_format),
         ("raw_data", ctypes.c_uint8 * 200),
     ]

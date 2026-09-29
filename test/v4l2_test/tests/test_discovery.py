@@ -104,6 +104,56 @@ class TestFormatEnumeration:
         assert pixfmts & ir_fmts, f"IR device missing GREY/Y8I/Y12I: {pixfmts}"
 
 
+D401_DUAL_RGB_RAW_FOURCCS = {
+    ioctls.V4L2_PIX_FMT_SBGGR8,    # BA81, pre-1.0.6.10
+    ioctls.V4L2_PIX_FMT_SBGGR10P,  # pBAA, 1.0.6.10+
+}
+
+
+@pytest.mark.d401
+class TestD401DualRGB:
+    """D401 GMSL dual-RGB: EP4 (Color) and EP3 (Color1) both carry a raw Bayer
+    CSI-PT passthrough row alongside their normal format. RSDEV-14662 regressed
+    when the driver-side fourcc for this row changed (BA81 -> pBAA in 1.0.6.10)
+    without a matching librealsense update, silently dropping Color1. These
+    tests check driver-side symmetry only -- they cannot see the librealsense
+    fourcc map gap, which is exactly the point: a driver-only CI leg that
+    passes here still isolates the bug to the SDK side, per RSDEV-14662.
+    """
+
+    def _raw_bayer_fourcc(self, device):
+        formats = device.enum_formats()
+        pixfmts = {f.pixelformat for f in formats}
+        raw = pixfmts & D401_DUAL_RGB_RAW_FOURCCS
+        if not raw:
+            pytest.skip("No raw Bayer dual-RGB row on this node "
+                         "(not a D401 dual-RGB build)")
+        return raw
+
+    def test_rgb_node_has_raw_bayer_row(self, rgb_device):
+        self._raw_bayer_fourcc(rgb_device)
+
+    def test_ir_node_has_raw_bayer_row(self, ir_device):
+        self._raw_bayer_fourcc(ir_device)
+
+    def test_dual_rgb_fourcc_matches_across_nodes(self, rgb_device, ir_device):
+        """EP4 and EP3 must advertise the SAME raw Bayer fourcc.
+
+        A future format change landed on only one of the two rows (e.g. a
+        patch that edits ds5_40x_rgb_formats but misses ds5_y_formats_40x, or
+        vice versa) would desync Color vs Color1 the same way RSDEV-14662 did,
+        just from the opposite direction -- one node moves format, the other
+        does not, and whichever loses librealsense recognition silently drops.
+        """
+        rgb_raw = self._raw_bayer_fourcc(rgb_device)
+        ir_raw = self._raw_bayer_fourcc(ir_device)
+        assert rgb_raw == ir_raw, (
+            f"Color (EP4) advertises raw fourcc(s) {rgb_raw} but "
+            f"Color1 (EP3) advertises {ir_raw} -- dual-RGB rows have "
+            f"desynced formats"
+        )
+
+
 @pytest.mark.d457
 class TestDFUDevice:
     """Verify the DFU character device exists."""

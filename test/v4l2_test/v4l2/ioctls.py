@@ -104,6 +104,11 @@ V4L2_PIX_FMT_Y8I = v4l2_fourcc("Y", "8", "I", " ")
 V4L2_PIX_FMT_Y12I = v4l2_fourcc("Y", "1", "2", "I")
 V4L2_PIX_FMT_RGB24 = v4l2_fourcc("R", "G", "B", "3")
 
+# D401 GMSL dual-RGB CSI-PT raw Bayer: SBGGR8/BA81 pre-1.0.6.10, SBGGR10P/pBAA from
+# 1.0.6.10 onward (RSDEV-14662) -- the fourcc a given driver build advertises varies.
+V4L2_PIX_FMT_SBGGR8 = v4l2_fourcc("B", "A", "8", "1")
+V4L2_PIX_FMT_SBGGR10P = v4l2_fourcc("p", "B", "A", "A")
+
 # Metadata format used by D4XX
 V4L2_META_FMT_D4XX = v4l2_fourcc("D", "4", "X", "X")
 
@@ -166,5 +171,7 @@ FOURCC_TO_NAME = {
     V4L2_PIX_FMT_Y8I: "Y8I",
     V4L2_PIX_FMT_Y12I: "Y12I",
     V4L2_PIX_FMT_RGB24: "RGB3",
+    V4L2_PIX_FMT_SBGGR8: "BA81",
+    V4L2_PIX_FMT_SBGGR10P: "pBAA",
     V4L2_META_FMT_D4XX: "D4XX",
 }
