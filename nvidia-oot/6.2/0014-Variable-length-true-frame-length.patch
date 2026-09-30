@@ -1,0 +1,519 @@
+From: Inga Pilchin <inga.pilchin@realsenseai.com>
+Date: Sun, 27 Sep 2026 14:30:00 +0300
+Subject: [PATCH] media: tegra: report the true length of a variable-length frame
+
+The VI cannot count what arrived, so a compressed frame was delivered at
+its configured size and the application had to find the real length. The
+camera puts the encoder's exact byte count in a block of the per-frame
+embedded metadata; read it back and report it as the payload length.
+
+A frame whose length cannot be established is errored, never delivered
+at the configured size. Established means: the identifier chain, walked
+within the line, reaches the byte-count block, which has the expected
+identifier and version and a size of at least 20 B, the count is
+non-zero and within the committed buffer, and the camera's frame counter
+is strictly ahead of the last accepted one. A frame captured while the
+channel reports an error is errored too. The metadata buffer is released
+for every captured frame, including one the check errors.
+
+The length is read at dequeue, before the capture's descriptor can be
+re-armed. Each frame's metadata slot is cleared once the frame has been
+read, so a later capture the VI does not write reads as empty rather than
+as an earlier frame's metadata.
+Stream start and error recovery clear every slot and the counter. Once the
+frame-counter rejections since the last accepted frame outnumber the
+capture queue, the counter alone is forgotten, since the VI is still
+writing slots then. Other rejections neither count toward that run nor
+reset it.
+
+A compressed frame travels as rows of one fixed carrier width whatever the
+picture resolution, so its transport geometry is substituted rather than
+scaled. The three sites that need the committed size share one helper.
+
+Two rows are added, H.264 and JPEG, keyed on the carrier row width so the
+generic variable-length row keeps its behaviour.
+
+Both rows report bytesperline 0, as V4L2 requires for compressed formats.
+Streaming one on a sensor mode without embedded metadata fails at stream
+start instead of erroring every frame.
+
+Signed-off-by: Inga Pilchin <inga.pilchin@realsenseai.com>
+---
+diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
+index fa7c7f1b4b91..e45252d6c474 100644
+--- a/drivers/media/platform/tegra/camera/vi/channel.c
++++ b/drivers/media/platform/tegra/camera/vi/channel.c
+@@ -302,6 +302,18 @@ static void tegra_channel_update_format(struct tegra_channel *chan,
+ 	/* Transport rows may exceed V4L2 rows (tegra_camera_core.h). */
+ 	chan->format.sizeimage = tegra_frac_scale(chan->format.sizeimage,
+ 					&chan->fmtinfo->frame_y_scale);
++
++	/* Carrier-shaped: geometry is substituted, not scaled - the row width
++	 * does not follow the picture. Compressed, so bytesperline is 0. */
++	if (chan->fmtinfo->carrier_row_bytes) {
++		u32 rows = tegra_varlen_rows(chan->format.width,
++					     chan->format.height,
++					     chan->fmtinfo->carrier_row_bytes);
++
++		chan->format.bytesperline = 0;
++		chan->format.sizeimage =
++			chan->fmtinfo->carrier_row_bytes * rows;
++	}
+ }
+ 
+ static void tegra_channel_fmts_bitmap_init(struct tegra_channel *chan)
+@@ -2140,6 +2152,16 @@ __tegra_channel_try_format(struct tegra_channel *chan,
+ 	pix->sizeimage = tegra_frac_scale(pix->sizeimage,
+ 					  &vfmt->frame_y_scale);
+ 
++	/* Same substitution as tegra_channel_update_format, or try and set
++	 * disagree on the buffer size. */
++	if (vfmt->carrier_row_bytes) {
++		u32 rows = tegra_varlen_rows(pix->width, pix->height,
++					     vfmt->carrier_row_bytes);
++
++		pix->bytesperline = 0;
++		pix->sizeimage = vfmt->carrier_row_bytes * rows;
++	}
++
+ 	return ret;
+ }
+ 
+diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+index 4aca8007160c..3c807cd7a359 100644
+--- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
++++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+@@ -21,6 +21,7 @@
+ #include <linux/sched/task.h>
+ #include <linux/semaphore.h>
+ #include <linux/syscalls.h>
++#include <asm/unaligned.h>
+ #include <media/fusa-capture/capture-vi-channel.h>
+ #include <media/fusa-capture/capture-vi.h>
+ #include <media/mc_common.h>
+@@ -419,6 +420,16 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+ 		width = roundup(width, chan->fmtinfo->frame_x_align);
+ 	height = tegra_frac_scale(height, &chan->fmtinfo->frame_y_scale);
+ 
++	/* Carrier-shaped frame: programmed from the carrier, via the same helpers
++	 * as the format path. After the gang substitution, so it wins over gang. */
++	if (chan->fmtinfo->carrier_row_bytes) {
++		width = chan->fmtinfo->carrier_row_bytes;
++		height = tegra_varlen_rows(chan->format.width,
++					   chan->format.height,
++					   chan->fmtinfo->carrier_row_bytes);
++		bpl = chan->fmtinfo->carrier_row_bytes;
++	}
++
+ 	memcpy(desc, &capture_template, sizeof(capture_template));
+ 	memset(desc_memoryinfo, 0, sizeof(*desc_memoryinfo));
+ 
+@@ -447,7 +458,7 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+ 	}
+ 
+ 	desc_memoryinfo->surface[0].base_address = offset;
+-	desc_memoryinfo->surface[0].size = chan->format.bytesperline * height;
++	desc_memoryinfo->surface[0].size = bpl * height;
+ 	desc->ch_cfg.atomp.surface_stride[0] = bpl;
+ 	if (chan->fmtinfo->fourcc == V4L2_PIX_FMT_NV16) {
+ 		desc_memoryinfo->surface[1].base_address = offset + chan->format.sizeimage / 2;
+@@ -526,17 +537,230 @@ static void vi5_release_metadata_buffer(struct tegra_channel *chan,
+ 	vb2_buffer_done(evb, VB2_BUF_STATE_DONE);
+ }
+ 
++/* Variable-length capture: the VI cannot count bytes, so the true length comes
++ * from the camera's compressed-frame metadata block. */
++#define RS_META_HEADER_BYTES		12U
++#define RS_META_LINE_BYTES		D4XX_META_BUFSIZE
++#define RS_META_BLOCK_HEADER_BYTES	8U
++#define RS_META_BLOCK_SIZE_OFF		4U
++#define RS_META_MAX_BLOCKS	(RS_META_LINE_BYTES / RS_META_BLOCK_HEADER_BYTES)
++
++/* Vendor-range identifiers, matching the camera's metadata definitions. */
++#define RS_META_ID_CAPTURE_TIMING	0x80000001U
++#define RS_META_ID_COMPRESSED_FRAME	0x80000026U
++#define RS_META_COMPRESSED_VERSION	0x2U
++
++/* Field offsets inside their own blocks. */
++#define RS_META_TIMING_FRAME_COUNTER	16U
++#define RS_META_COMPRESSED_VERSION_OFF	8U
++#define RS_META_COMPRESSED_BYTES_OFF	12U
++#define RS_META_COMPRESSED_BLOCK_BYTES	20U
++
++static u32 rs_meta_u32(const u8 *buf, u32 off)
++{
++	return get_unaligned_le32(buf + off);
++}
++
++/* Walk the identifier chain: the compressed layout moves blocks, so fixed
++ * offsets would mis-read it. */
++static bool rs_meta_find(const u8 *buf, u32 want_id, u32 need, u32 *out_off)
++{
++	u32 off = RS_META_HEADER_BYTES;
++	u32 block;
++
++	for (block = 0; block < RS_META_MAX_BLOCKS &&
++	     off <= RS_META_LINE_BYTES - RS_META_BLOCK_HEADER_BYTES; block++) {
++		u32 id = rs_meta_u32(buf, off);
++		u32 size = rs_meta_u32(buf, off + RS_META_BLOCK_SIZE_OFF);
++
++		if (size < RS_META_BLOCK_HEADER_BYTES ||
++		    size > RS_META_LINE_BYTES - off)
++			return false;
++		if (id == want_id) {
++			if (size < need)
++				return false;
++			*out_off = off;
++			return true;
++		}
++		off += size;
++	}
++	return false;
++}
++
++/* The metadata slot of one capture descriptor, bounded as the copy above. */
++static u8 *rs_meta_slot(const struct tegra_channel *chan,
++			unsigned int descr_index)
++{
++	unsigned int emb_offset;
++
++	if (!chan->emb_buf_addr || !chan->emb_buf_stride ||
++	    chan->emb_buf_size < RS_META_LINE_BYTES ||
++	    descr_index >= chan->capture_queue_depth ||
++	    check_mul_overflow(descr_index, chan->emb_buf_stride,
++			       &emb_offset) ||
++	    emb_offset > chan->emb_buf_size - RS_META_LINE_BYTES)
++		return NULL;
++
++	return (u8 *)chan->emb_buf_addr + emb_offset;
++}
++
++/* Forget the last accepted counter: the next frame is taken as the first. */
++static void rs_varlen_forget_counter(struct tegra_channel *chan)
++{
++	chan->varlen_have_counter = false;
++	chan->varlen_stale_run = 0;
++}
++
++/* Stream start or error recovery, VI idle: also clear every slot, so nothing
++ * from before can pass as this stream's metadata. */
++static void rs_varlen_reset(struct tegra_channel *chan)
++{
++	rs_varlen_forget_counter(chan);
++	if (chan->fmtinfo->carrier_row_bytes && chan->emb_buf_addr)
++		memset(chan->emb_buf_addr, 0, chan->emb_buf_size);
++}
++
++/* A carrier format's length travels only in the embedded metadata, so it
++ * cannot stream on a sensor mode that provides none. */
++static int rs_varlen_check_embedded(struct tegra_channel *chan)
++{
++	if (!chan->fmtinfo->carrier_row_bytes)
++		return 0;
++	if (chan->embedded_data_height && chan->emb_buf_addr)
++		return 0;
++	dev_err(chan->vi->dev,
++		"%s: compressed format needs embedded metadata on this sensor mode\n",
++		__func__);
++	return -EINVAL;
++}
++
++/* A counter restart would fail every later frame: after more rejections since
++ * the last accepted frame than descriptors in flight, drop the counter only. */
++static const char *rs_varlen_not_ahead(struct tegra_channel *chan)
++{
++	if (++chan->varlen_stale_run > chan->capture_queue_depth)
++		rs_varlen_forget_counter(chan);
++	return "frame counter not ahead";
++}
++
++/* Clear a carrier slot once its frame is read, so a later capture the VI does
++ * not write reads as empty rather than as an earlier frame's metadata. */
++static void rs_varlen_clear_slot(struct tegra_channel *chan,
++				 unsigned int descr_index)
++{
++	u8 *meta;
++
++	if (!chan->fmtinfo->carrier_row_bytes)
++		return;
++	meta = rs_meta_slot(chan, descr_index);
++	if (!meta)
++		return;
++	memset(meta, 0, RS_META_LINE_BYTES);
++}
++
++/* This frame's true length, or the reason it cannot be established; the
++ * caller errors the frame on a reason. */
++static const char *rs_varlen_frame_length(struct tegra_channel *chan,
++					  unsigned int descr_index,
++					  u32 *out_len)
++{
++	const u8 *meta = rs_meta_slot(chan, descr_index);
++	u32 off, counter, len;
++
++	if (!meta)
++		return "no metadata slot";
++	if (!rs_meta_find(meta, RS_META_ID_COMPRESSED_FRAME,
++			  RS_META_COMPRESSED_BLOCK_BYTES, &off))
++		return "no byte-count block";
++	if (rs_meta_u32(meta, off + RS_META_COMPRESSED_VERSION_OFF) !=
++	    RS_META_COMPRESSED_VERSION)
++		return "byte-count block version";
++
++	len = rs_meta_u32(meta, off + RS_META_COMPRESSED_BYTES_OFF);
++	if (!len || len > chan->format.sizeimage)
++		return "byte count out of range";
++
++	if (!rs_meta_find(meta, RS_META_ID_CAPTURE_TIMING,
++			  RS_META_TIMING_FRAME_COUNTER + sizeof(u32), &off))
++		return "no timing block";
++	counter = rs_meta_u32(meta, off + RS_META_TIMING_FRAME_COUNTER);
++	/* Strictly ahead, wrap-aware: a repeat or an older (stale) slot fails,
++	 * a gap from frames the camera dropped passes. */
++	if (chan->varlen_have_counter &&
++	    (s32)(counter - chan->varlen_last_counter) <= 0)
++		return rs_varlen_not_ahead(chan);
++
++	chan->varlen_stale_run = 0;
++	chan->varlen_have_counter = true;
++	chan->varlen_last_counter = counter;
++	*out_len = len;
++	return NULL;
++}
++
++/* Set the delivered length of a carrier-shaped frame. Only a captured frame
++ * is failed here; other states (timeout requeue) pass through unchanged. */
++static void rs_varlen_set_payload(struct tegra_channel *chan,
++				  struct tegra_channel_buffer *buf)
++{
++	struct vb2_v4l2_buffer *vbuf = &buf->buf;
++	const char *why = buf->varlen_why;
++
++	vb2_set_plane_payload(&vbuf->vb2_buf, 0, 0);
++	if (buf->vb2_state != VB2_BUF_STATE_DONE)
++		return;
++
++	if (why) {
++		dev_warn_ratelimited(chan->vi->dev,
++				     "variable-length frame errored: %s\n",
++				     why);
++		buf->vb2_state = VB2_BUF_STATE_ERROR;
++		return;
++	}
++	vb2_set_plane_payload(&vbuf->vb2_buf, 0, buf->varlen_len);
++}
++
++/* Before the in-flight count drops: the enqueue thread may then re-arm this
++ * descriptor, and the VI write another frame's metadata into its slot. */
++static void rs_varlen_read(struct tegra_channel *chan,
++			   struct tegra_channel_buffer *buf)
++{
++	const struct capture_descriptor *descr =
++		&chan->request[0][buf->capture_descr_index[0]];
++
++	if (!chan->fmtinfo->carrier_row_bytes)
++		return;
++	buf->varlen_len = 0;
++	/* The channel-error path leaves the frame DONE; its data is not trusted. */
++	if (descr->status.status != CAPTURE_STATUS_SUCCESS &&
++	    (descr->status.flags & CAPTURE_STATUS_FLAG_CHANNEL_IN_ERROR)) {
++		buf->varlen_why = "channel in error";
++		return;
++	}
++	buf->varlen_why = rs_varlen_frame_length(chan, buf->capture_descr_index[0],
++						  &buf->varlen_len);
++}
++
+ static void vi5_release_buffer(struct tegra_channel *chan,
+ 	struct tegra_channel_buffer *buf)
+ {
+ 	struct vb2_v4l2_buffer *vbuf = &buf->buf;
++	bool captured;
+ 
+ 	vbuf->sequence = chan->sequence++;
+ 	vbuf->field = V4L2_FIELD_NONE;
+-	vb2_set_plane_payload(&vbuf->vb2_buf, 0, chan->format.sizeimage);
+ 
+-	if (chan->embedded_data_height == 1 && buf->vb2_state == VB2_BUF_STATE_DONE)
++	/* Captured-ness is decided before the length check, so the metadata
++	 * buffer is released even for a frame the check then errors. */
++	captured = buf->vb2_state == VB2_BUF_STATE_DONE;
++	if (chan->fmtinfo->carrier_row_bytes)
++		rs_varlen_set_payload(chan, buf);
++	else
++		vb2_set_plane_payload(&vbuf->vb2_buf, 0, chan->format.sizeimage);
++
++	if (chan->embedded_data_height == 1 && captured)
+ 		vi5_release_metadata_buffer(chan, buf);
++	/* After the metadata copy: the enqueue thread may already have re-armed it. */
++	rs_varlen_clear_slot(chan, buf->capture_descr_index[0]);
+ 
+ 	vb2_buffer_done(&vbuf->vb2_buf, buf->vb2_state);
+ }
+@@ -660,6 +884,9 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
+ 			goto uncorr_err;
+ 		}
+ 
++		if (!vi_port && !frame_err)
++			rs_varlen_read(chan, buf);
++
+ 		spin_lock_irqsave(&chan->capture_state_lock, flags);
+ 		if (chan->capture_state != CAPTURE_ERROR) {
+ 			chan->capture_reqs_enqueued -= 1;
+@@ -780,6 +1007,7 @@ static int vi5_channel_error_recover(struct tegra_channel *chan,
+ 	}
+ 
+ 	chan->sequence = 0;
++	rs_varlen_reset(chan);
+ 	tegra_channel_init_ring_buffer(chan);
+ 
+ 	chan->capture_reqs_enqueued = 0;
+@@ -1090,12 +1318,16 @@ static int vi5_channel_start_streaming(struct vb2_queue *vq, u32 count)
+ 						ret);
+ 					goto err_setup;
+ 				}
++				ret = rs_varlen_check_embedded(chan);
++				if (ret)
++					goto err_setup;
+ 			}
+ 			ret = tegra_channel_capture_setup(chan, vi_port);
+ 			if (ret < 0)
+ 				goto err_setup;
+ 		}
+ 		chan->sequence = 0;
++		rs_varlen_reset(chan);
+ 		tegra_channel_init_ring_buffer(chan);
+ 
+ 		ret = vi5_channel_start_kthreads(chan);
+diff --git a/drivers/media/platform/tegra/camera/vi/vi5_formats.h b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
+index 45904df4aafd..9381ae92d844 100644
+--- a/drivers/media/platform/tegra/camera/vi/vi5_formats.h
++++ b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
+@@ -76,6 +76,10 @@ enum tegra_image_format {
+ 	TEGRA_IMAGE_FORMAT_T_DPCM_RAW20,
+ };
+ 
++/* Carrier row width in bytes, the same for every compressed profile. Must equal
++ * the camera's; a cross-repository check asserts it. */
++#define RS_CARRIER_ROW_BYTES	1280U
++
+ static const struct tegra_video_format vi5_video_formats[] = {
+ 	/* RAW 6: TODO */
+ 
+@@ -202,6 +206,24 @@ static const struct tegra_video_format vi5_video_formats[] = {
+ 				1, 1,			/* frame_y scale */
+ 				0,			/* frame_x align */
+ 				TEGRA_VIDEO_FORMAT_FLAG_VARIABLE_HEIGHT),	/* flags */
++	// H.264 and JPEG on the 8-bit carrier: own rows so each stays selectable;
++	// their true length is read from the embedded metadata.
++	TEGRA_VIDEO_FORMAT_CARRIER(RAW8, 8, RS_H264_1X8, 1, 1, T_R8,
++				RAW8, H264, "H.264 over RAW8",
++				0, 0,			/* no dt/pixfmt override */
++				1, 1,			/* frame_x scale */
++				1, 1,			/* frame_y scale */
++				0,			/* frame_x align */
++				TEGRA_VIDEO_FORMAT_FLAG_VARIABLE_HEIGHT,
++				RS_CARRIER_ROW_BYTES),	/* carrier row */
++	TEGRA_VIDEO_FORMAT_CARRIER(RAW8, 8, JPEG_1X8, 1, 1, T_R8,
++				RAW8, MJPEG, "JPEG over RAW8",
++				0, 0,			/* no dt/pixfmt override */
++				1, 1,			/* frame_x scale */
++				1, 1,			/* frame_y scale */
++				0,			/* frame_x align */
++				TEGRA_VIDEO_FORMAT_FLAG_VARIABLE_HEIGHT,
++				RS_CARRIER_ROW_BYTES),	/* carrier row */
+ 
+ };
+ 
+diff --git a/include/media/mc_common.h b/include/media/mc_common.h
+index cea3ca26bcab..d467076612d4 100644
+--- a/include/media/mc_common.h
++++ b/include/media/mc_common.h
+@@ -92,6 +92,9 @@ struct tegra_channel_buffer {
+ 	u32 thresh[TEGRA_CSI_BLOCKS];
+ 	int version;
+ 	int state;
++	/* Carrier frame: its length, or why it has none, read at dequeue. */
++	u32 varlen_len;
++	const char *varlen_why;
+ };
+ 
+ #define to_tegra_channel_buffer(vb) \
+@@ -297,6 +300,11 @@ struct tegra_channel {
+ 	void *emb_buf_addr;
+ 	unsigned int emb_buf_stride;
+ 	unsigned int emb_buf_size;
++	/* Camera frame counter of the last accepted variable-length frame;
++	 * a slot not strictly ahead of it is stale. */
++	bool varlen_have_counter;
++	u32 varlen_last_counter;
++	u32 varlen_stale_run;
+ };
+ 
+ #define to_tegra_channel(vdev) \
+diff --git a/include/media/tegra_camera_core.h b/include/media/tegra_camera_core.h
+index 944739642706..07ac7d8fcc0b 100644
+--- a/include/media/tegra_camera_core.h
++++ b/include/media/tegra_camera_core.h
+@@ -150,12 +150,29 @@ struct tegra_video_format {
+ 	struct tegra_frac frame_y_scale;
+ 	u8 frame_x_align;
+ 	u32 flags;
++	/* Fixed row width of the transport carrier, in bytes. Zero for an
++	 * ordinary format, whose row width follows the picture. */
++	u32 carrier_row_bytes;
+ };
+ 
+ /* Frames may carry fewer lines than frame_y; the VI PIXEL_INCOMPLETE
+  * fault is then delivered as a good frame (payload carries its length). */
+ #define TEGRA_VIDEO_FORMAT_FLAG_VARIABLE_HEIGHT		BIT(0)
+ 
++/* Committed size and row count of a carrier-shaped frame, computed as the
++ * camera does. Every site that sizes one uses these, so they cannot disagree. */
++#define TEGRA_VARLEN_ROW_ALIGN 64U
++
++static inline u32 tegra_varlen_ceiling(u32 width, u32 height)
++{
++	return roundup(width, TEGRA_VARLEN_ROW_ALIGN) * height;
++}
++
++static inline u32 tegra_varlen_rows(u32 width, u32 height, u32 row_bytes)
++{
++	return DIV_ROUND_UP(tegra_varlen_ceiling(width, height), row_bytes);
++}
++
+ #define	TEGRA_VIDEO_FORMAT(VF_CODE, BPP, MBUS_CODE, FRAC_BPP_NUM,	\
+ 	FRAC_BPP_DEN, FORMAT, DATA_TYPE, FOURCC, DESCRIPTION)		\
+ {									\
+@@ -191,6 +208,31 @@ struct tegra_video_format {
+ 	FLAGS,								\
+ }
+ 
++/* A carrier-shaped format: rows of CARRIER_ROW_BYTES, true length in the
++ * embedded metadata. Existing rows zero-fill carrier_row_bytes. */
++#define	TEGRA_VIDEO_FORMAT_CARRIER(VF_CODE, BPP, MBUS_CODE,		\
++	FRAC_BPP_NUM, FRAC_BPP_DEN, FORMAT, DATA_TYPE, FOURCC,		\
++	DESCRIPTION, DT_OVERRIDE, PIXFMT_OVERRIDE,			\
++	FRAME_X_NUM, FRAME_X_DEN, FRAME_Y_NUM, FRAME_Y_DEN,		\
++	FRAME_X_ALIGN, FLAGS, CARRIER_ROW_BYTES)			\
++{									\
++	.vf_code = TEGRA_VF_##VF_CODE,					\
++	.width = BPP,							\
++	.code = MEDIA_BUS_FMT_##MBUS_CODE,				\
++	.bpp = {FRAC_BPP_NUM, FRAC_BPP_DEN},				\
++	.img_fmt = TEGRA_IMAGE_FORMAT_##FORMAT,				\
++	.img_dt = TEGRA_IMAGE_DT_##DATA_TYPE,				\
++	.fourcc = V4L2_PIX_FMT_##FOURCC,				\
++	.description = DESCRIPTION,					\
++	.dt_override = DT_OVERRIDE,					\
++	.pixfmt_override = PIXFMT_OVERRIDE,				\
++	.frame_x_scale = {FRAME_X_NUM, FRAME_X_DEN},			\
++	.frame_y_scale = {FRAME_Y_NUM, FRAME_Y_DEN},			\
++	.frame_x_align = FRAME_X_ALIGN,					\
++	.flags = FLAGS,							\
++	.carrier_row_bytes = CARRIER_ROW_BYTES,				\
++}
++
+ u32 tegra_core_get_word_count(unsigned int frame_width,
+ 		const struct tegra_video_format *fmt);
+ u32 tegra_core_bytes_per_line(unsigned int width, unsigned int align,

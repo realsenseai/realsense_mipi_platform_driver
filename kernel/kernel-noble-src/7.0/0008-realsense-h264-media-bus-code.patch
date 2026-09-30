@@ -1,0 +1,26 @@
+From: Inga Pilchin <inga.pilchin@realsenseai.com>
+Date: Sun, 27 Sep 2026 14:20:00 +0300
+Subject: [PATCH] realsense: media-bus code for H.264 over the 8-bit carrier
+
+H.264 rides the same opaque 8-bit CSI carrier as the variable-length row
+added by the previous patch, but keeps a code of its own so the capture
+node offers H.264 and JPEG as distinct, selectable formats. JPEG reuses
+MEDIA_BUS_FMT_JPEG_1X8, and both use standard pixel formats.
+
+Signed-off-by: Inga Pilchin <inga.pilchin@realsenseai.com>
+---
+diff --git a/include/uapi/linux/media-bus-format.h b/include/uapi/linux/media-bus-format.h
+index 2e03e14bbc60..4db3bce0d1a5 100644
+--- a/include/uapi/linux/media-bus-format.h
++++ b/include/uapi/linux/media-bus-format.h
+@@ -179,6 +179,10 @@
+  * up to the declared height, over an opaque 8-bit CSI carrier */
+ #define MEDIA_BUS_FMT_RS_VARLEN_1X8		0x500a
+ 
++/* RealSense H.264 over the opaque 8-bit carrier: own code so H.264 and JPEG
++ * stay separately selectable at the capture node. */
++#define MEDIA_BUS_FMT_RS_H264_1X8		0x500b
++
+ /* HSV - next is	0x6002 */
+ #define MEDIA_BUS_FMT_AHSV8888_1X32		0x6001
+ 

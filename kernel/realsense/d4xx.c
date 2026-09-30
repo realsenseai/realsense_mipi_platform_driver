@@ -125,6 +125,11 @@ struct ser_interface {
 #define GMSL_CSI_DT_EMBED 0x12
 #endif
 
+/* CSI-2 user-defined types 7 and 8: SOURCE types that select the encoder over
+ * the control bus, never on the wire (the wire type is the 8-bit carrier). */
+#define GMSL_CSI_DT_UED_U7 0x36
+#define GMSL_CSI_DT_UED_U8 0x37
+
 /* D40x FW CSI-PT mode selector for the OV9782 (not a MIPI wire DT). */
 #define DS5_FW_CSI_PT	0x2E
 
@@ -225,6 +230,8 @@ enum rs_pixfmt {
 	RS_PIXFMT_GRBG16,
 	RS_PIXFMT_SBGGR10P,
 	RS_PIXFMT_IMU,
+	RS_PIXFMT_H264,
+	RS_PIXFMT_JPEG,
 };
 /*
  * FW version major byte identifies the family in recovery, where DEVICE_TYPE
@@ -1187,6 +1194,14 @@ static const struct {
 	/* D401 CSI passthrough: 10bit data riding an opeque 8-bit carrier. */
 	{ RS_PIXFMT_SBGGR10P,   MEDIA_BUS_FMT_RS_SBGGR10P_1X8, GMSL_CSI_DT_RAW_8 },
 	{ RS_PIXFMT_IMU,        MEDIA_BUS_FMT_Y8_1X8 },
+#ifdef MEDIA_BUS_FMT_RS_H264_1X8
+	/* Compressed colour on the RAW8 carrier; only kernels carrying the H.264
+	 * code also carry the capture-side true-length support (JP6.0-7.2). */
+	{ .pixfmt = RS_PIXFMT_H264, .mbus_code = MEDIA_BUS_FMT_RS_H264_1X8,
+	  .wire_dt = GMSL_CSI_DT_RAW_8 },
+	{ .pixfmt = RS_PIXFMT_JPEG, .mbus_code = MEDIA_BUS_FMT_JPEG_1X8,
+	  .wire_dt = GMSL_CSI_DT_RAW_8 },
+#endif
 };
 
 /* Probed a word at a time: legacy FW loads one 16-bit word for an unmapped
@@ -2371,6 +2386,19 @@ static const struct ds5_resolution d58x_rgb_sizes[] = {
 	DS5_RES(424, 240, ds5_framerate_to_90)
 };
 
+#ifdef MEDIA_BUS_FMT_RS_H264_1X8
+/* The colour sizes at the rates H.264 level 4.0 can carry, as on USB. */
+static const struct ds5_resolution d58x_h264_sizes[] = {
+	DS5_RES(640, 360, ds5_framerate_to_90)
+	DS5_RES(1280, 960, ds5_depth_framerate_to_30)
+	DS5_RES(1280, 720, ds5_framerate_to_60)
+	DS5_RES(848, 480, ds5_framerate_to_60)
+	DS5_RES(640, 480, ds5_framerate_to_90)
+	DS5_RES(480, 270, ds5_framerate_to_90)
+	DS5_RES(424, 240, ds5_framerate_to_90)
+};
+#endif
+
 static const struct ds5_format ds5_depth_formats_d58x[] = {
 	{
 		.data_type = DS5_FW_DT_Z16,		/* Z16 */
@@ -2429,6 +2457,23 @@ static const struct ds5_format ds5_rgb_formats_d58x[] = {
 		.mbus_code = MEDIA_BUS_FMT_SGRBG16_1X16,
 		.n_resolutions = ARRAY_SIZE(d58x_calibration_sizes),
 		.resolutions = d58x_calibration_sizes,
+#ifdef MEDIA_BUS_FMT_RS_H264_1X8
+	}, {
+		/* H.264 on the 8-bit carrier. Image resolutions are advertised
+		 * for profile selection; capture uses the carrier geometry. */
+		.data_type = GMSL_CSI_DT_UED_U7,
+		.override_data_type = GMSL_CSI_DT_RAW_8,
+		.mbus_code = MEDIA_BUS_FMT_RS_H264_1X8,
+		.n_resolutions = ARRAY_SIZE(d58x_h264_sizes),
+		.resolutions = d58x_h264_sizes,
+	}, {
+		/* JPEG bitstream: same carrier, different source type. */
+		.data_type = GMSL_CSI_DT_UED_U8,
+		.override_data_type = GMSL_CSI_DT_RAW_8,
+		.mbus_code = MEDIA_BUS_FMT_JPEG_1X8,
+		.n_resolutions = ARRAY_SIZE(d58x_rgb_sizes),
+		.resolutions = d58x_rgb_sizes,
+#endif
 	},
 };
 
@@ -2755,6 +2800,16 @@ static const struct ds5_format *ds5_sensor_find_format(
 
 static u16 __ds5_probe_framerate(const struct ds5_resolution *res, u16 target);
 
+/* Compressed colour carries its exact length only in the embedded metadata. */
+static bool ds5_mbus_is_compressed(u32 code)
+{
+#ifdef MEDIA_BUS_FMT_RS_H264_1X8
+	if (code == MEDIA_BUS_FMT_RS_H264_1X8)
+		return true;
+#endif
+	return code == MEDIA_BUS_FMT_JPEG_1X8;
+}
+
 static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
 		struct v4l2_subdev_pad_config *cfg,
@@ -2774,6 +2829,16 @@ static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 
 	if (fmt->pad)
 		return -EINVAL;
+
+	/* Refuse rather than fall back to raw colour. Userspace reaches this
+	 * on every TRY/S_FMT, so the log is rate-limited.
+	 */
+	if (!state->metadata_enabled && ds5_mbus_is_compressed(mf->code)) {
+		dev_warn_ratelimited(sensor->sd.dev,
+				     "%s(): compressed format 0x%x needs embedded metadata\n",
+				     __func__, mf->code);
+		return -EINVAL;
+	}
 
 	mutex_lock(&state->lock);
 
@@ -7071,6 +7136,13 @@ static int ds5_mux_enum_mbus_code(struct v4l2_subdev *sd,
 		remote_sd = &state->imu.sensor.sd;
 		break;
 	case DS5_MUX_PAD_EXTERNAL:
+		/* The colour node may list more formats than IR plus depth, so it
+		 * is bounded by its own enumerator. */
+		if (state->is_rgb) {
+			remote_sd = &state->rgb.sensor.sd;
+			break;
+		}
+
 		if (mce->index >= state->ir.sensor.n_formats +
 				state->depth.sensor.n_formats)
 			return -EINVAL;
