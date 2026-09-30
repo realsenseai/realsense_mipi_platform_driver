@@ -128,9 +128,10 @@ struct ser_interface {
 /* D40x FW CSI-PT mode selector for the OV9782 (not a MIPI wire DT). */
 #define DS5_FW_CSI_PT	0x2E
 
-/* FW tokens that ask for the 16-bit depth formats. Not MIPI wire DTs: both are
+/* FW tokens that ask for the 16-bit formats. Not MIPI wire DTs: all are
  * transmitted as YUV422-8, because Tegra VI throttles a user-defined DT.
  */
+#define DS5_FW_DT_IR_UYVY	0x2F
 #define DS5_FW_DT_Z16	0x31
 #define DS5_FW_DT_R8L8	0x32
 
@@ -225,6 +226,7 @@ enum rs_pixfmt {
 	RS_PIXFMT_GRBG16,
 	RS_PIXFMT_SBGGR10P,
 	RS_PIXFMT_IMU,
+	RS_PIXFMT_IR_UYVY,
 };
 /*
  * FW version major byte identifies the family in recovery, where DEVICE_TYPE
@@ -1187,6 +1189,8 @@ static const struct {
 	/* D401 CSI passthrough: 10bit data riding an opeque 8-bit carrier. */
 	{ RS_PIXFMT_SBGGR10P,   MEDIA_BUS_FMT_RS_SBGGR10P_1X8, GMSL_CSI_DT_RAW_8 },
 	{ RS_PIXFMT_IMU,        MEDIA_BUS_FMT_Y8_1X8 },
+	/* D40x colored IR, asked for with its own FW token, sent as YUV422-8 */
+	{ RS_PIXFMT_IR_UYVY,    MEDIA_BUS_FMT_UYVY8_2X8, GMSL_CSI_DT_YUV422_8 },
 };
 
 /* Probed a word at a time: legacy FW loads one 16-bit word for an unmapped
@@ -2239,6 +2243,15 @@ static const struct ds5_format ds5_y_formats_40x[] = {
 		.data_type = DS5_FW_DT_R8L8,		/* Y8I */
 		.override_data_type = GMSL_CSI_DT_YUV422_8,
 		.mbus_code = MEDIA_BUS_FMT_VYUY8_1X16,
+		.n_resolutions = ARRAY_SIZE(d40x_y8_sizes),
+		.resolutions = d40x_y8_sizes,
+	}, {
+		/* Colored IR: FW "16-bit RGB from left IR" token. Plain 0x1E
+		 * would select the RGB endpoint on D401.
+		 */
+		.data_type = DS5_FW_DT_IR_UYVY,
+		.override_data_type = GMSL_CSI_DT_YUV422_8,
+		.mbus_code = MEDIA_BUS_FMT_UYVY8_2X8,
 		.n_resolutions = ARRAY_SIZE(d40x_y8_sizes),
 		.resolutions = d40x_y8_sizes,
 	}, {

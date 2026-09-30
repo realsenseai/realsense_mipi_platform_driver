@@ -36,7 +36,7 @@ Example setup build workspace for JetPack 5.0.2:
 Apply D457 patches for kernel image, dtb and D457 driver.
 
 ```
-./apply_patches.sh [--one-cam | --dual-cam] apply [JetPack_version]
+./apply_patches.sh [--one-cam | --dual-cam] [JetPack_version]
 ```
 Reset D457 patches (and any other changes) for kernel image, dtb and D457 driver.
 ```

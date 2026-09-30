@@ -31,7 +31,7 @@ CI runs these three steps for each JetPack version (see `.github/workflows/build
 
 `apply_patches.sh` applies patches and resets them:
 ```bash
-./apply_patches.sh [--one-cam | --dual-cam] apply <version>  # Apply patches
+./apply_patches.sh [--one-cam | --dual-cam] <version>        # Apply patches (no `apply` keyword)
 ./apply_patches.sh reset <version>                            # Reset all patches
 ```
 `reset` must come **before** the version — the arg loop `break`s on the first non-flag token, so `apply_patches.sh <version> reset` silently runs an *apply* instead (and then fails every hunk against an already-patched tree).
@@ -99,7 +99,8 @@ Each camera creates 7 V4L2 video devices — every stream except IMU has a metad
 (udev role symlinks `/dev/video-rs-{role}-N`):
 - Depth (Z16) + Depth metadata (`depth`, `depth-md`)
 - Color RGB (RGB888/YUV422) + Color metadata (`color`, `color-md`)
-- IR (GREY, Y8I, Y12I) + IR metadata (`ir`, `ir-md`)
+- IR (GREY, Y8I, Y12I; D401 also advertises UYVY for colored IR) + IR metadata (`ir`, `ir-md`)
+  On descriptor-serving FW the static `ds5_y_formats_40x` UYVY entry is bypassed: the format must also be in the FW descriptor (pixfmt `RS_PIXFMT_IR_UYVY`, FW token `0x2F`, wire DT YUV422-8).
 - IMU (`imu`) — no metadata node
 
 Whether a stream's metadata is captured is decided host-side per node by the DT

@@ -50,7 +50,7 @@ Before building, verify the workspace is ready for the given JetPack version.
 2. Reset any existing patches first, then apply fresh patches.
    IMPORTANT: `apply_patches.sh` may prompt with `Continue (y/N)?` if the repo has uncommitted changes. Pipe `y` to accept non-interactively:
    ```bash
-   echo y | ./apply_patches.sh $VERSION reset
+   echo y | ./apply_patches.sh reset $VERSION
    echo y | ./apply_patches.sh $VERSION
    ```
 3. If patch application fails, report the error and stop.

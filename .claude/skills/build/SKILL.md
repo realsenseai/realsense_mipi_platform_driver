@@ -28,7 +28,7 @@ Requires `git config user.name` and `git config user.email` to be set.
 
 Always reset patches before re-applying:
 ```bash
-./apply_patches.sh $VERSION reset
+./apply_patches.sh reset $VERSION
 ./apply_patches.sh $VERSION
 ```
 
@@ -112,7 +112,7 @@ Native builds on aarch64 skip toolchain setup. Cross-compilation toolchains are 
 
 ## Common Issues
 
-- **Patches fail to apply**: Run `./apply_patches.sh $VERSION reset` first, then re-apply.
+- **Patches fail to apply**: Run `./apply_patches.sh reset $VERSION` first, then re-apply.
 - **Missing git identity**: Set `git config user.name` and `git config user.email` before `apply_patches.sh`.
 - **Workspace not set up**: Run `./setup_workspace.sh $VERSION` first (downloads NVIDIA sources + toolchain).
 - **BUILD_NUMBER set**: If `BUILD_NUMBER` env var is set (common in CI), it changes the kernel vermagic string.
