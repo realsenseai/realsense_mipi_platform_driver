@@ -225,6 +225,7 @@ enum rs_pixfmt {
 	RS_PIXFMT_GRBG16,
 	RS_PIXFMT_SBGGR10P,
 	RS_PIXFMT_IMU,
+	RS_PIXFMT_RSVL,
 };
 /*
  * FW version major byte identifies the family in recovery, where DEVICE_TYPE
@@ -1187,6 +1188,8 @@ static const struct {
 	/* D401 CSI passthrough: 10bit data riding an opeque 8-bit carrier. */
 	{ RS_PIXFMT_SBGGR10P,   MEDIA_BUS_FMT_RS_SBGGR10P_1X8, GMSL_CSI_DT_RAW_8 },
 	{ RS_PIXFMT_IMU,        MEDIA_BUS_FMT_Y8_1X8 },
+	/* RSVL is the shared VC2 queue geometry, not a PD/OCC selector. */
+	{ RS_PIXFMT_RSVL,       MEDIA_BUS_FMT_RS_VARLEN_1X8, GMSL_CSI_DT_RAW_8 },
 };
 
 /* Probed a word at a time: legacy FW loads one 16-bit word for an unmapped
@@ -2776,6 +2779,14 @@ static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 		return -EINVAL;
 
 	mutex_lock(&state->lock);
+	/* IR and RSVL share VC2; keep its selected route stable while streaming. */
+	if (sensor == &state->ir.sensor && sensor->streaming &&
+	    ((sensor->config.format &&
+	      sensor->config.format->mbus_code == MEDIA_BUS_FMT_RS_VARLEN_1X8) ||
+	     mf->code == MEDIA_BUS_FMT_RS_VARLEN_1X8)) {
+		mutex_unlock(&state->lock);
+		return -EBUSY;
+	}
 
 	sensor->config.format = ds5_sensor_find_format(sensor, mf,
 						&sensor->config.resolution);
@@ -2909,6 +2920,13 @@ static u8 ds5_wire_data_type(const struct ds5_format *format)
 {
 	return format->override_data_type ? format->override_data_type :
 		format->data_type;
+}
+
+static bool d500_is_mux_capture(const struct ds5 *state)
+{
+	return state->is_y8 && state->ir.sensor.config.format &&
+		state->ir.sensor.config.format->mbus_code ==
+			MEDIA_BUS_FMT_RS_VARLEN_1X8;
 }
 
 static int ds5_configure(struct ds5 *state)
@@ -3048,6 +3066,11 @@ static int ds5_configure(struct ds5 *state)
 	vc_id = (state->is_depth) ? 0 : (state->is_rgb) ? 1 : (state->is_y8) ? 2 : 3;
 	md_vc = vc_id;
 #endif
+
+	/* RSVL geometry configures VI capacity; its RAW8 and metadata routes
+	 * are prepared above before the shared capture is started. */
+	if (d500_is_mux_capture(state))
+		return 0;
 
 	/* Write the DT only when it differs from the cached value: overwriting a
 	 * correct DT with 0 caused INVALID_DT on subsequent attempts.
@@ -3306,6 +3329,8 @@ enum ds5_sync_mode {
 #define D500_CAMERA_CID_DEVICE_MODE	(DS5_CAMERA_CID_BASE + 36)
 #define D500_CAMERA_CID_DUAL_RGB_AE_POLICY (DS5_CAMERA_CID_BASE + 37)
 #define D500_CAMERA_CID_GYRO_SENSITIVITY (DS5_CAMERA_CID_BASE + 38)
+/* USB Inference XU 0x01: single R/W control. */
+#define D500_CAMERA_CID_OD_DISTANCE	(DS5_CAMERA_CID_BASE + 39)
 
 enum d500_device_mode {
 	D500_DEVICE_MODE_3C = 0,
@@ -3330,6 +3355,7 @@ enum d500_gyro_sensitivity {
 #define D500_DEVICE_MODE_XU_BASE		0x4528
 #define D500_DUAL_RGB_AE_XU_BASE	0x4530
 #define D500_GYRO_SENSITIVITY_XU_BASE	0x4538
+#define D500_OD_DISTANCE_XU_BASE	0x4598
 
 /* Auto-exposure algorithm types — mirrors FW ETAeType */
 enum ds5_ae_type {
@@ -3762,6 +3788,48 @@ static int ds5_hwmc_send(struct ds5 *state,
 	return 0;
 }
 
+/* The physical RSVL lifecycle uses the existing HWMC mailbox. SDK member
+ * control uses generic HWMC_RW and is opaque to this driver. */
+#define D500_MUX_CONTROL_OPCODE	0xC0U
+#define D500_MUX_CONTROL_VERSION	1U
+#define D500_MUX_CAPTURE_START		3U
+#define D500_MUX_CAPTURE_STOP		4U
+
+static DEFINE_MUTEX(d500_mux_hwmc_lock);
+
+static int d500_mux_capture_command(struct ds5 *state, u32 action,
+				    bool *capture_active)
+{
+	const struct hwm_cmd cmd = {
+		.header = 0x14,
+		.magic_word = 0xCDAB,
+		.opcode = D500_MUX_CONTROL_OPCODE,
+		.param1 = D500_MUX_CONTROL_VERSION,
+		.param2 = action,
+		.param3 = 0,
+		.param4 = 0,
+	};
+	u32 response[4] = {};
+	u16 length = 0;
+	int ret;
+
+	/* STREAMON/OFF must observe the device's applied capture state. */
+	mutex_lock(&d500_mux_hwmc_lock);
+	ret = ds5_raw_write(state, DS5_HWMC_DATA, &cmd, sizeof(cmd));
+	if (!ret)
+		ret = ds5_write(state, DS5_HWMC_EXEC, 1);
+	if (!ret)
+		ret = ds5_get_hwmc(state, (u8 *)response, sizeof(response),
+				   &length);
+	mutex_unlock(&d500_mux_hwmc_lock);
+	if (ret)
+		return ret < 0 ? ret : -EIO;
+	if (length != sizeof(response) || response[0] != D500_MUX_CONTROL_OPCODE)
+		return -EBADMSG;
+	*capture_active = !!response[3];
+	return 0;
+}
+
 /* Caller must hold state->ds5_dev->lock. */
 static bool d500_camera_is_idle_locked(struct ds5 *state)
 {
@@ -3899,6 +3967,40 @@ static int d500_set_gyro_sensitivity(struct ds5 *state, u32 sensitivity)
 				    &value, sizeof(value));
 	mutex_unlock(&state->ds5_dev->lock);
 
+	return ret;
+}
+
+/* One-byte window; a one-byte read is safe on FW that lacks it. */
+static int d500_get_od_distance(struct ds5 *state, s32 *val)
+{
+	u8 value;
+	int ret;
+
+	ret = ds5_raw_read(state, D500_OD_DISTANCE_XU_BASE, &value,
+			   sizeof(value));
+	if (ret)
+		return ret;
+	if (value > 1)
+		return -EBADMSG;
+
+	*val = value;
+	return 0;
+}
+
+static int d500_set_od_distance(struct ds5 *state, s32 val)
+{
+	u8 value = val ? 1 : 0;
+	s32 applied;
+	int ret;
+
+	ret = ds5_raw_write(state, D500_OD_DISTANCE_XU_BASE, &value,
+			    sizeof(value));
+	if (ret)
+		return ret;
+	/* The camera applies it only while PD streams; report a refused write. */
+	ret = d500_get_od_distance(state, &applied);
+	if (!ret && applied != value)
+		ret = -EBUSY;
 	return ret;
 }
 
@@ -4913,6 +5015,12 @@ unlock_dpp:
 			    DS5_DEVICE_TYPE_D58X)
 			ret = d500_set_gyro_sensitivity(state, ctrl->val);
 		break;
+	case D500_CAMERA_CID_OD_DISTANCE:
+		if (state->is_depth &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X)
+			ret = d500_set_od_distance(state, ctrl->val);
+		break;
 	case DS5_CAMERA_CID_PWM:
 		if (state->is_depth)
 			ret = ds5_write(state, base | DS5_PWM_FREQUENCY, ctrl->val);
@@ -5076,7 +5184,6 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 	}
 
 	switch (ctrl->id) {
-
 	case V4L2_CID_ANALOGUE_GAIN:
 		if (state->is_imu)
 			return -EINVAL;
@@ -5409,6 +5516,12 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			if (!ret)
 				*ctrl->p_new.p_s32 = sensitivity;
 		}
+		break;
+	case D500_CAMERA_CID_OD_DISTANCE:
+		if (state->is_depth &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X)
+			ret = d500_get_od_distance(state, &ctrl->val);
 		break;
 	case DS5_CAMERA_CID_PWM:
 		if (state->is_depth)
@@ -5815,6 +5928,18 @@ static const struct v4l2_ctrl_config ds5_ctrl_gyro_sensitivity_d58x = {
 	.max = D500_GYRO_SENSITIVITY_125_DPS,
 	.def = D500_GYRO_SENSITIVITY_125_DPS,
 	.qmenu = d500_gyro_sensitivity_menu,
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
+static const struct v4l2_ctrl_config d500_ctrl_od_distance = {
+	.ops = &ds5_ctrl_ops,
+	.id = D500_CAMERA_CID_OD_DISTANCE,
+	.name = "Detection Distance",
+	.type = V4L2_CTRL_TYPE_BOOLEAN,
+	.min = 0,
+	.max = 1,
+	.step = 1,
+	.def = 1,
 	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 };
 
@@ -6885,6 +7010,7 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 			ctrls->minz = v4l2_ctrl_new_custom(hdl, &d500_ctrl_minz, sensor);
 			v4l2_ctrl_new_custom(hdl, &d500_ctrl_decimation, sensor);
 			v4l2_ctrl_new_custom(hdl, &d500_ctrl_temporal, sensor);
+			v4l2_ctrl_new_custom(hdl, &d500_ctrl_od_distance, sensor);
 		} else {
 			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_readout_shaping,
 					     sensor);
@@ -7461,6 +7587,92 @@ static void ds5_flush_idle_link(struct ds5 *state)
 }
 #endif
 
+static int d500_mux_capture_stream(struct ds5 *state, bool on)
+{
+	struct ds5_sensor *sensor = &state->ir.sensor;
+	bool capture_active;
+	int reset_gen = atomic_read(ds5_get_reset_gen(state));
+	int ret;
+
+	/* The shared VC2 node owns capture readiness; logical member gates use
+	 * the generic HWMC control in the SDK owner. */
+	if (state->mux.last_set != sensor)
+		return -EINVAL;
+	if (state->reset_ref_ds5 != reset_gen) {
+		/* Match the ordinary stream path: a reset kills the old capture
+		 * even if V4L2 still has an open file handle. */
+		ds5_invalidate_sensor(state, sensor);
+		sensor->streaming = false;
+		mutex_lock(&state->ds5_dev->lock);
+		state->ds5_dev->ir_streaming = false;
+		mutex_unlock(&state->ds5_dev->lock);
+		state->reset_ref_ds5 = reset_gen;
+	}
+	if (sensor->streaming == on)
+		return 0;
+	if (on) {
+		/* Metadata identity is mandatory for one-node demux. */
+		if (!state->metadata_enabled)
+			return -EOPNOTSUPP;
+		mutex_lock(&state->ds5_dev->lock);
+		if (state->ds5_dev->ir_streaming) {
+			mutex_unlock(&state->ds5_dev->lock);
+			return -EBUSY;
+		}
+		mutex_unlock(&state->ds5_dev->lock);
+		ret = ds5_configure(state);
+		if (ret)
+			return ret;
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+		mutex_lock(&state->ds5_dev->lock);
+		if (!state->ds5_dev->depth_streaming &&
+		    !state->ds5_dev->rgb_streaming &&
+		    !state->ds5_dev->imu_streaming)
+			state->ds5_dev->link_flush_pending = true;
+		mutex_unlock(&state->ds5_dev->lock);
+		ds5_flush_idle_link(state);
+#endif
+	}
+	ret = d500_mux_capture_command(state, on ? D500_MUX_CAPTURE_START :
+					D500_MUX_CAPTURE_STOP, &capture_active);
+	if (ret)
+		return ret;
+	if (capture_active != on)
+		return -EIO;
+
+	mutex_lock(&state->ds5_dev->lock);
+	state->ds5_dev->ir_streaming = on;
+	mutex_unlock(&state->ds5_dev->lock);
+	sensor->streaming = on;
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	if (on && state->dser_ops->retrigger_datapath)
+		state->dser_ops->retrigger_datapath(state->dser_dev);
+	if (!on && sensor->pipe_id >= 0) {
+		mutex_lock(&serdes_lock__);
+		ret = state->dser_ops->release_pipe(state->dser_dev,
+						   sensor->pipe_id);
+		mutex_unlock(&serdes_lock__);
+		if (ret < 0)
+			dev_warn(&state->client->dev,
+				 "release RSVL pipe %d failed: %d\n",
+				 sensor->pipe_id, ret);
+		else
+			sensor->pipe_id = PIPE_NOT_CONFIGURED;
+	}
+	if (!on && state->ser_ops->stream_stop) {
+		int ser_vc_id = state->dser_ops->get_ser_vc_id ?
+			state->dser_ops->get_ser_vc_id(state->dser_dev,
+						       state->gmsl_link,
+						       state->g_ctx.dst_vc) :
+			(int)state->g_ctx.dst_vc;
+
+		if (ser_vc_id >= 0)
+			state->ser_ops->stream_stop(state->ser_dev, ser_vc_id);
+	}
+#endif
+	return ret;
+}
+
 static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 {
 	struct ds5 *state = container_of(sd, struct ds5, mux.sd.subdev);
@@ -7477,6 +7689,10 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	bool reset_invalidated = false;
 	bool *streaming_flag = NULL;
 	int cur_ds5 = atomic_read(ds5_get_reset_gen(state));
+
+	if (d500_is_mux_capture(state)) {
+		return d500_mux_capture_stream(state, !!on);
+	}
 
 	/* Lazy invalidation after HW or deserializer reset.
 	 * Detect gen-counter bumps, clear stale streaming/config/pipe
