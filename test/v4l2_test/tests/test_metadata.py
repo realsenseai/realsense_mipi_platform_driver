@@ -6,7 +6,11 @@ import pytest
 
 from ..d4xx import constants as C
 from ..d4xx.metadata import (
+    MD_COMPRESSED_BLOCK_BYTES,
+    MD_COMPRESSED_VERSION,
+    MD_LINE_BYTES,
     STMetaDataExtMipiDepthIR,
+    parse_compressed_frame,
     parse_metadata,
     validate_crc32,
 )
@@ -16,24 +20,45 @@ from ..v4l2.stream import StreamContext
 
 
 METADATA_FRAMES = 30
+COMPRESSED_FPS = 30
 
 
 def _capture_depth_with_metadata(camera, width=848, height=480, fps=30):
-    """Capture depth frames and corresponding metadata simultaneously.
+    """Capture depth frames and corresponding metadata simultaneously."""
+    return _capture_with_metadata(camera.depth_path, camera.depth_md_path,
+                                  ioctls.V4L2_PIX_FMT_Z16, width, height, fps)
 
-    Opens both the depth device and metadata device, streams both,
-    and returns paired (depth_frames, metadata_frames).
+
+def _read_to_row_end(stream, buf, row_bytes):
+    """Mapped buffer from its start to the end of the row holding bytesused."""
+    _, mm = stream.buffers[buf.index]
+    end = -(-buf.bytesused // row_bytes) * row_bytes
+    return mm[:min(end, len(mm))]
+
+
+def _capture_with_metadata(video_path, md_path, pixfmt, width, height, fps,
+                           read_last_row=False):
+    """Capture video frames and corresponding metadata simultaneously.
+
+    Opens both the video device and metadata device, streams both,
+    and returns paired (video_frames, metadata_frames). With read_last_row,
+    each frame is read up to the end of its last carrier row, not bytesused.
     """
-    depth_dev = V4L2Device(camera.depth_path)
-    md_dev = V4L2Device(camera.depth_md_path)
+    video_dev = V4L2Device(video_path)
+    md_dev = V4L2Device(md_path)
 
-    depth_dev.open()
+    video_dev.open()
     md_dev.open()
 
     try:
-        # Configure depth
-        depth_dev.set_format(width, height, ioctls.V4L2_PIX_FMT_Z16)
-        depth_dev.set_parm(fps)
+        # Configure the video stream
+        fmt = video_dev.set_format(width, height, pixfmt)
+        assert fmt.fmt.pix.pixelformat == pixfmt, "S_FMT changed the pixel format"
+        # Compressed: V4L2 wants bytesperline 0, the rows are the carrier's.
+        assert not read_last_row or fmt.fmt.pix.bytesperline == 0, \
+            "compressed format reports a bytesperline"
+        row_bytes = C.COMPRESSED_CARRIER_ROW_BYTES if read_last_row else 0
+        video_dev.set_parm(fps)
 
         # Configure metadata — try D4XX format; tegra-embedded has a fixed
         # format and rejects S_FMT/G_FMT, so just skip format configuration
@@ -47,26 +72,28 @@ def _capture_depth_with_metadata(camera, width=848, height=480, fps=30):
 
         timeout = max(5.0, 4.0 * METADATA_FRAMES / fps)
 
-        # Start metadata stream first, then depth (matching test_metadata.c order)
+        # Start metadata stream first, then video (matching test_metadata.c order)
         md_stream = StreamContext(
             md_dev,
             buf_type=ioctls.V4L2_BUF_TYPE_META_CAPTURE,
             buf_count=4,
         )
-        depth_stream = StreamContext(depth_dev, buf_count=4)
+        video_stream = StreamContext(video_dev, buf_count=4)
 
         md_stream.__enter__()
-        depth_stream.__enter__()
+        video_stream.__enter__()
 
         try:
-            depth_frames = []
+            video_frames = []
             md_frames = []
 
             for _ in range(METADATA_FRAMES):
-                # Dequeue depth frame
-                dbuf, ddata = depth_stream.dequeue(timeout=timeout)
-                depth_frames.append((dbuf, ddata))
-                depth_stream.requeue(dbuf)
+                # Dequeue video frame
+                vbuf, vdata = video_stream.dequeue(timeout=timeout)
+                if row_bytes:
+                    vdata = _read_to_row_end(video_stream, vbuf, row_bytes)
+                video_frames.append((vbuf, vdata))
+                video_stream.requeue(vbuf)
 
                 # Dequeue metadata frame
                 try:
@@ -76,12 +103,12 @@ def _capture_depth_with_metadata(camera, width=848, height=480, fps=30):
                 except (TimeoutError, OSError):
                     md_frames.append((None, None))
 
-            return depth_frames, md_frames
+            return video_frames, md_frames
         finally:
-            depth_stream.__exit__(None, None, None)
+            video_stream.__exit__(None, None, None)
             md_stream.__exit__(None, None, None)
     finally:
-        depth_dev.close()
+        video_dev.close()
         md_dev.close()
 
 
@@ -181,3 +208,46 @@ class TestMetadataCRC:
         # Allow some CRC failures (transient), but majority should pass
         assert passed >= checked * 0.8, \
             f"CRC failures: {checked - passed}/{checked}"
+
+
+@pytest.mark.d585
+class TestCompressedByteCount:
+    """D58x compressed colour: bytesused is the byte count in the metadata
+    block, and the rest of the last carrier row reads zero."""
+
+    @pytest.mark.parametrize("pixfmt", [ioctls.V4L2_PIX_FMT_H264, ioctls.V4L2_PIX_FMT_MJPEG],
+                             ids=lambda f: ioctls.FOURCC_TO_NAME[f])
+    def test_bytesused_matches_block(self, d58x_encoder_camera, pixfmt):
+        name = ioctls.FOURCC_TO_NAME[pixfmt]
+        with V4L2Device(d58x_encoder_camera.rgb_path) as dev:
+            sizes = sorted(((fs.discrete.width, fs.discrete.height)
+                            for fs in dev.enum_framesizes(pixfmt)
+                            if fs.type == ioctls.V4L2_FRMSIZE_TYPE_DISCRETE),
+                           key=lambda wh: wh[0] * wh[1])
+        assert sizes, f"RGB device lists no {name} frame sizes"
+        width, height = sizes[0]
+        frames, md_frames = _capture_with_metadata(
+            d58x_encoder_camera.rgb_path, d58x_encoder_camera.rgb_md_path, pixfmt,
+            width, height, COMPRESSED_FPS, read_last_row=True)
+
+        md_by_seq = {buf.sequence: data for buf, data in md_frames
+                     if data is not None}
+        if md_by_seq and max(map(len, md_by_seq.values())) < MD_LINE_BYTES:
+            pytest.skip("Metadata node publishes a short line; block not visible")
+
+        checked = 0
+        for buf, data in frames:
+            if buf.flags & ioctls.V4L2_BUF_FLAG_ERROR or buf.sequence not in md_by_seq:
+                continue
+            block = parse_compressed_frame(md_by_seq[buf.sequence])
+            assert block is not None, f"No byte-count block, frame {buf.sequence}"
+            assert block.version == MD_COMPRESSED_VERSION
+            assert block.size >= MD_COMPRESSED_BLOCK_BYTES
+            assert buf.bytesused == block.encoded_bytes, \
+                f"bytesused {buf.bytesused} != block {block.encoded_bytes}"
+            tail = data[buf.bytesused:]
+            nonzero = next((i for i, b in enumerate(tail) if b), None)
+            assert nonzero is None, \
+                f"Last-row byte {buf.bytesused + nonzero} non-zero, frame {buf.sequence}"
+            checked += 1
+        assert checked > 0, f"No good {name} frame paired with its metadata"

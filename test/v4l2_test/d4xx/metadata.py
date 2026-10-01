@@ -1,7 +1,23 @@
 """Metadata ctypes structs mirroring metadata.h, with CRC32 validation."""
 
 import ctypes
+import struct
 import zlib
+from typing import NamedTuple, Optional
+
+# Embedded metadata line as the host driver walks it: a line header, then a
+# chain of blocks, each starting with (id, size).
+MD_LINE_BYTES = 255
+MD_LINE_HEADER_BYTES = 12
+MD_BLOCK_HEADER_BYTES = 8
+MD_BLOCK_SIZE_OFF = 4
+
+# Compressed-frame (byte-count) block: id, version, minimum size, field offsets.
+MD_ID_COMPRESSED_FRAME = 0x80000026
+MD_COMPRESSED_VERSION = 2
+MD_COMPRESSED_BLOCK_BYTES = 20
+MD_COMPRESSED_VERSION_OFF = 8
+MD_COMPRESSED_BYTES_OFF = 12
 
 
 class STMetaDataIdHeader(ctypes.LittleEndianStructure):
@@ -174,3 +190,40 @@ def validate_crc32(data, struct_instance, struct_type):
     expected_crc = struct_instance.crc32
     computed_crc = zlib.crc32(payload) & 0xFFFFFFFF
     return computed_crc == expected_crc
+
+
+def find_block(data, block_id):
+    """Offset of block `block_id` found by walking the block-ID chain, or None.
+
+    Stops at the first block whose size is under a header or runs past the data.
+    """
+    off = MD_LINE_HEADER_BYTES
+    while off + MD_BLOCK_HEADER_BYTES <= len(data):
+        bid, size = struct.unpack_from("<II", data, off)
+        if size < MD_BLOCK_HEADER_BYTES or off + size > len(data):
+            return None
+        if bid == block_id:
+            return off
+        off += size
+    return None
+
+
+class CompressedFrameBlock(NamedTuple):
+    size: int
+    version: int
+    encoded_bytes: int
+
+
+def parse_compressed_frame(data) -> Optional[CompressedFrameBlock]:
+    """The byte-count block of a compressed colour frame, or None if absent."""
+    off = find_block(data, MD_ID_COMPRESSED_FRAME)
+    if off is None:
+        return None
+    size = struct.unpack_from("<I", data, off + MD_BLOCK_SIZE_OFF)[0]
+    if size < MD_COMPRESSED_BLOCK_BYTES:
+        return None
+    return CompressedFrameBlock(
+        size=size,
+        version=struct.unpack_from("<I", data, off + MD_COMPRESSED_VERSION_OFF)[0],
+        encoded_bytes=struct.unpack_from("<I", data, off + MD_COMPRESSED_BYTES_OFF)[0],
+    )
