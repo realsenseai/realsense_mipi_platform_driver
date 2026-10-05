@@ -33,6 +33,27 @@ DS5_CAMERA_CID_READOUT_SHAPING = DS5_CAMERA_CID_BASE + 34
 # Single read/write control for depth AE mode (XU depth selector 0x11).
 DS5_CAMERA_CID_AE_MODE = DS5_CAMERA_CID_BASE + 35
 
+# D58x FW reports major 7 or 8 (d4xx.c DS5_D58X_FW_MAJOR_MIN/MAX); D4xx reports 5.
+D58X_FW_MAJORS = {7, 8}
+
+# Compressed colour needs the JetPack 6+ kernel patches; JetPack 5 is 5.10.
+COMPRESSED_MIN_KERNEL = (5, 15)
+
+# D58x GVD control length and the USB PID in it (d4xx DS5_GVD_LEN_D5XX,
+# D585_GVD_PID_OFFSET, D585_2C_PROTO_PID). FW reports 0x0C07 on 2C, no encoder.
+D58X_GVD_LEN = 606
+D58X_GVD_PID_OFFSET = 18
+D58X_GVD_PID_LEN = 2
+D585_2C_PROTO_PID = 0x0C07
+
+# H.264 level 4.0 MaxMBPS (ITU-T H.264 Table A-1): macroblocks per second,
+# 16x16 pixels each. The D58x encoder's ceiling; USB applies the same rule.
+H264_LEVEL40_MAX_MBPS = 245760
+H264_MACROBLOCK_EDGE_PX = 16
+
+# Compressed frames travel as rows of this width (RS_CARRIER_ROW_BYTES in the 0015 patches).
+COMPRESSED_CARRIER_ROW_BYTES = 1280
+
 # Device type codes from d4xx.c:71-75
 DS5_DEVICE_TYPE_D40X = 8
 DS5_DEVICE_TYPE_D41X = 7

@@ -1,0 +1,295 @@
+From: Inga Pilchin <inga.pilchin@realsenseai.com>
+Date: Sun, 4 Oct 2026 18:00:00 +0300
+Subject: [PATCH] media: tegra: carrier rows for compressed colour, cleared buffers
+
+A compressed frame travels as rows of one fixed carrier width whatever the
+picture resolution, so its transport geometry is substituted rather than
+scaled. The three sites that need the committed size share one helper.
+
+Two rows are added, H.264 and JPEG, on private RealSense media-bus codes,
+so no other sensor matches them and the generic variable-length row keeps
+its behaviour. Both report bytesperline 0, as V4L2 requires for compressed
+formats, and accept a short frame through the variable-height flag.
+
+The VI writes only the rows that arrive and never touches the rest of the
+buffer, so a short frame was followed by whatever an earlier, larger frame
+left there, which broke H.264 decoding. Every buffer of these rows is now
+cleared when it is queued, before the capture can be armed: driver
+buffers through their kernel mapping, user memory in the caller's context,
+shared buffers through their mapping inside a CPU-access bracket. A buffer
+that cannot be cleared is refused at queue time. The frame is then
+followed only by zeros and is reported at the buffer size, like every
+other row.
+
+A capture that reports its channel in error is delivered by the stock
+path; for these rows it is failed, since the frame's end is known only
+from its data.
+
+Signed-off-by: Inga Pilchin <inga.pilchin@realsenseai.com>
+---
+diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
+index fa7c7f1b..21f2d6d7 100644
+--- a/drivers/media/platform/tegra/camera/vi/channel.c
++++ b/drivers/media/platform/tegra/camera/vi/channel.c
+@@ -10,6 +10,7 @@
+ #include <linux/bitmap.h>
+ #include <linux/clk.h>
+ #include <linux/delay.h>
++#include <linux/dma-buf.h>
+ #include <linux/nvhost.h>
+ #include <linux/lcm.h>
+ #include <linux/list.h>
+@@ -19,6 +20,7 @@
+ #include <linux/sched.h>
+ #include <linux/slab.h>
+ #include <linux/semaphore.h>
++#include <linux/uaccess.h>
+ #include <linux/arm64-barrier.h>
+ #include <media/v4l2-ctrls.h>
+ #include <media/v4l2-event.h>
+@@ -302,6 +304,18 @@ static void tegra_channel_update_format(struct tegra_channel *chan,
+ 	/* Transport rows may exceed V4L2 rows (tegra_camera_core.h). */
+ 	chan->format.sizeimage = tegra_frac_scale(chan->format.sizeimage,
+ 					&chan->fmtinfo->frame_y_scale);
++
++	/* Carrier-shaped: geometry is substituted, not scaled - the row width
++	 * does not follow the picture. Compressed, so bytesperline is 0. */
++	if (chan->fmtinfo->carrier_row_bytes) {
++		u32 rows = tegra_varlen_rows(chan->format.width,
++					     chan->format.height,
++					     chan->fmtinfo->carrier_row_bytes);
++
++		chan->format.bytesperline = 0;
++		chan->format.sizeimage =
++			chan->fmtinfo->carrier_row_bytes * rows;
++	}
+ }
+ 
+ static void tegra_channel_fmts_bitmap_init(struct tegra_channel *chan)
+@@ -773,12 +787,62 @@ void tegra_channel_dealloc_buffer_queue(struct tegra_channel *chan)
+ 		devm_kfree(vi_unit_dev, chan->buffers);
+ }
+ 
++/* A carrier frame fills only the rows it needs and the VI never touches the
++ * rest, so clear the buffer at every queue: the frame is then followed by
++ * zeros, never by an earlier frame. vb2 calls this after mapping the buffer
++ * and syncs USERPTR caches right after it; MMAP is coherent; a DMABUF syncs here. */
++static int tegra_channel_clear_carrier_buffer(struct tegra_channel *chan,
++					      struct vb2_buffer *vb)
++{
++	size_t len = min_t(size_t, chan->format.sizeimage,
++			   vb2_plane_size(vb, 0));
++	struct dma_buf *dbuf = vb->planes[0].dbuf;
++	void *vaddr;
++	int err;
++
++	/* Process context of the QBUF caller, whose memory this is. */
++	if (vb->memory == VB2_MEMORY_USERPTR) {
++		if (clear_user((void __user *)vb->planes[0].m.userptr, len))
++			return -EFAULT;
++		return 0;
++	}
++
++	vaddr = vb2_plane_vaddr(vb, 0);
++	if (!vaddr)
++		return -EFAULT;
++
++	if (vb->memory != VB2_MEMORY_DMABUF) {
++		memset(vaddr, 0, len);
++		/* Coherent MMAP is not synced by vb2: make the zeros visible. */
++		wmb();
++		return 0;
++	}
++
++	err = dma_buf_begin_cpu_access(dbuf, DMA_BIDIRECTIONAL);
++	if (err)
++		return err;
++	memset(vaddr, 0, len);
++	return dma_buf_end_cpu_access(dbuf, DMA_BIDIRECTIONAL);
++}
++
+ static int tegra_channel_buffer_prepare(struct vb2_buffer *vb)
+ {
+ 	struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb);
+ 	struct tegra_channel *chan = vb2_get_drv_priv(vb->vb2_queue);
+ 	struct tegra_channel_buffer *buf = to_tegra_channel_buffer(vbuf);
+ 
++	/* Refused when it cannot be cleared, never captured into uncleared. */
++	if (chan->fmtinfo->carrier_row_bytes) {
++		int err = tegra_channel_clear_carrier_buffer(chan, vb);
++
++		if (err) {
++			dev_err_ratelimited(chan->vi->dev,
++				"compressed buffer %u not cleared: %d\n",
++				vb->index, err);
++			return err;
++		}
++	}
++
+ 	buf->chan = chan;
+ 	vb2_set_plane_payload(&vbuf->vb2_buf, 0, chan->format.sizeimage);
+ #if IS_ENABLED(CONFIG_VIDEOBUF2_DMA_CONTIG)
+@@ -2140,6 +2204,16 @@ __tegra_channel_try_format(struct tegra_channel *chan,
+ 	pix->sizeimage = tegra_frac_scale(pix->sizeimage,
+ 					  &vfmt->frame_y_scale);
+ 
++	/* Same substitution as tegra_channel_update_format, or try and set
++	 * disagree on the buffer size. */
++	if (vfmt->carrier_row_bytes) {
++		u32 rows = tegra_varlen_rows(pix->width, pix->height,
++					     vfmt->carrier_row_bytes);
++
++		pix->bytesperline = 0;
++		pix->sizeimage = vfmt->carrier_row_bytes * rows;
++	}
++
+ 	return ret;
+ }
+ 
+diff --git a/drivers/media/platform/tegra/camera/vi/vi5_fops.c b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+index 4aca8007..35ca74b0 100644
+--- a/drivers/media/platform/tegra/camera/vi/vi5_fops.c
++++ b/drivers/media/platform/tegra/camera/vi/vi5_fops.c
+@@ -419,6 +419,16 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+ 		width = roundup(width, chan->fmtinfo->frame_x_align);
+ 	height = tegra_frac_scale(height, &chan->fmtinfo->frame_y_scale);
+ 
++	/* Carrier-shaped frame: programmed from the carrier, via the same helpers
++	 * as the format path. After the gang substitution, so it wins over gang. */
++	if (chan->fmtinfo->carrier_row_bytes) {
++		width = chan->fmtinfo->carrier_row_bytes;
++		height = tegra_varlen_rows(chan->format.width,
++					   chan->format.height,
++					   chan->fmtinfo->carrier_row_bytes);
++		bpl = chan->fmtinfo->carrier_row_bytes;
++	}
++
+ 	memcpy(desc, &capture_template, sizeof(capture_template));
+ 	memset(desc_memoryinfo, 0, sizeof(*desc_memoryinfo));
+ 
+@@ -447,7 +457,7 @@ static void vi5_setup_surface(struct tegra_channel *chan,
+ 	}
+ 
+ 	desc_memoryinfo->surface[0].base_address = offset;
+-	desc_memoryinfo->surface[0].size = chan->format.bytesperline * height;
++	desc_memoryinfo->surface[0].size = bpl * height;
+ 	desc->ch_cfg.atomp.surface_stride[0] = bpl;
+ 	if (chan->fmtinfo->fourcc == V4L2_PIX_FMT_NV16) {
+ 		desc_memoryinfo->surface[1].base_address = offset + chan->format.sizeimage / 2;
+@@ -636,6 +646,10 @@ static void vi5_capture_dequeue(struct tegra_channel *chan,
+ 				chan->queue_error = true;
+ 				dev_err(vi->dev, "uncorr_err: flags %d, err_data %d\n",
+ 					descr->status.flags, descr->status.err_data);
++				/* Stock delivers this frame; a carrier frame's end is
++				 * only known from its data, so it is failed instead. */
++				if (chan->fmtinfo->carrier_row_bytes)
++					frame_err = true;
+ 			} else if ((chan->fmtinfo->flags &
+ 				    TEGRA_VIDEO_FORMAT_FLAG_VARIABLE_HEIGHT) &&
+ 				   descr->status.err_data ==
+diff --git a/drivers/media/platform/tegra/camera/vi/vi5_formats.h b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
+index 45904df4..ff60d9d3 100644
+--- a/drivers/media/platform/tegra/camera/vi/vi5_formats.h
++++ b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
+@@ -76,6 +76,10 @@ enum tegra_image_format {
+ 	TEGRA_IMAGE_FORMAT_T_DPCM_RAW20,
+ };
+ 
++/* Carrier row width in bytes, the same for every compressed profile. Must equal
++ * the camera's; a cross-repository check asserts it. */
++#define RS_CARRIER_ROW_BYTES	1280U
++
+ static const struct tegra_video_format vi5_video_formats[] = {
+ 	/* RAW 6: TODO */
+ 
+@@ -202,6 +206,24 @@ static const struct tegra_video_format vi5_video_formats[] = {
+ 				1, 1,			/* frame_y scale */
+ 				0,			/* frame_x align */
+ 				TEGRA_VIDEO_FORMAT_FLAG_VARIABLE_HEIGHT),	/* flags */
++	// H.264 and JPEG on the 8-bit carrier: own rows so each stays selectable;
++	// each buffer is cleared before its capture, so the frame ends in zeros.
++	TEGRA_VIDEO_FORMAT_CARRIER(RAW8, 8, RS_H264_1X8, 1, 1, T_R8,
++				RAW8, H264, "H.264 over RAW8",
++				0, 0,			/* no dt/pixfmt override */
++				1, 1,			/* frame_x scale */
++				1, 1,			/* frame_y scale */
++				0,			/* frame_x align */
++				TEGRA_VIDEO_FORMAT_FLAG_VARIABLE_HEIGHT,
++				RS_CARRIER_ROW_BYTES),	/* carrier row */
++	TEGRA_VIDEO_FORMAT_CARRIER(RAW8, 8, RS_JPEG_1X8, 1, 1, T_R8,
++				RAW8, MJPEG, "JPEG over RAW8",
++				0, 0,			/* no dt/pixfmt override */
++				1, 1,			/* frame_x scale */
++				1, 1,			/* frame_y scale */
++				0,			/* frame_x align */
++				TEGRA_VIDEO_FORMAT_FLAG_VARIABLE_HEIGHT,
++				RS_CARRIER_ROW_BYTES),	/* carrier row */
+ 
+ };
+ 
+diff --git a/include/media/tegra_camera_core.h b/include/media/tegra_camera_core.h
+index 94473964..7e4f0926 100644
+--- a/include/media/tegra_camera_core.h
++++ b/include/media/tegra_camera_core.h
+@@ -150,12 +150,29 @@ struct tegra_video_format {
+ 	struct tegra_frac frame_y_scale;
+ 	u8 frame_x_align;
+ 	u32 flags;
++	/* Fixed row width of the transport carrier, in bytes. Zero for an
++	 * ordinary format, whose row width follows the picture. */
++	u32 carrier_row_bytes;
+ };
+ 
+ /* Frames may carry fewer lines than frame_y; the VI PIXEL_INCOMPLETE
+  * fault is then delivered as a good frame (payload carries its length). */
+ #define TEGRA_VIDEO_FORMAT_FLAG_VARIABLE_HEIGHT		BIT(0)
+ 
++/* Committed size and row count of a carrier-shaped frame, computed as the
++ * camera does. Every site that sizes one uses these, so they cannot disagree. */
++#define TEGRA_VARLEN_ROW_ALIGN 64U
++
++static inline u32 tegra_varlen_ceiling(u32 width, u32 height)
++{
++	return roundup(width, TEGRA_VARLEN_ROW_ALIGN) * height;
++}
++
++static inline u32 tegra_varlen_rows(u32 width, u32 height, u32 row_bytes)
++{
++	return DIV_ROUND_UP(tegra_varlen_ceiling(width, height), row_bytes);
++}
++
+ #define	TEGRA_VIDEO_FORMAT(VF_CODE, BPP, MBUS_CODE, FRAC_BPP_NUM,	\
+ 	FRAC_BPP_DEN, FORMAT, DATA_TYPE, FOURCC, DESCRIPTION)		\
+ {									\
+@@ -191,6 +208,31 @@ struct tegra_video_format {
+ 	FLAGS,								\
+ }
+ 
++/* A carrier-shaped format: rows of CARRIER_ROW_BYTES, buffer cleared before
++ * every capture. Existing rows zero-fill carrier_row_bytes. */
++#define	TEGRA_VIDEO_FORMAT_CARRIER(VF_CODE, BPP, MBUS_CODE,		\
++	FRAC_BPP_NUM, FRAC_BPP_DEN, FORMAT, DATA_TYPE, FOURCC,		\
++	DESCRIPTION, DT_OVERRIDE, PIXFMT_OVERRIDE,			\
++	FRAME_X_NUM, FRAME_X_DEN, FRAME_Y_NUM, FRAME_Y_DEN,		\
++	FRAME_X_ALIGN, FLAGS, CARRIER_ROW_BYTES)			\
++{									\
++	.vf_code = TEGRA_VF_##VF_CODE,					\
++	.width = BPP,							\
++	.code = MEDIA_BUS_FMT_##MBUS_CODE,				\
++	.bpp = {FRAC_BPP_NUM, FRAC_BPP_DEN},				\
++	.img_fmt = TEGRA_IMAGE_FORMAT_##FORMAT,				\
++	.img_dt = TEGRA_IMAGE_DT_##DATA_TYPE,				\
++	.fourcc = V4L2_PIX_FMT_##FOURCC,				\
++	.description = DESCRIPTION,					\
++	.dt_override = DT_OVERRIDE,					\
++	.pixfmt_override = PIXFMT_OVERRIDE,				\
++	.frame_x_scale = {FRAME_X_NUM, FRAME_X_DEN},			\
++	.frame_y_scale = {FRAME_Y_NUM, FRAME_Y_DEN},			\
++	.frame_x_align = FRAME_X_ALIGN,					\
++	.flags = FLAGS,							\
++	.carrier_row_bytes = CARRIER_ROW_BYTES,				\
++}
++
+ u32 tegra_core_get_word_count(unsigned int frame_width,
+ 		const struct tegra_video_format *fmt);
+ u32 tegra_core_bytes_per_line(unsigned int width, unsigned int align,

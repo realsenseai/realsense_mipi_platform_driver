@@ -229,6 +229,8 @@ enum rs_pixfmt {
 	RS_PIXFMT_GRBG16,
 	RS_PIXFMT_SBGGR10P,
 	RS_PIXFMT_IMU,
+	RS_PIXFMT_H264,
+	RS_PIXFMT_JPEG,
 };
 /*
  * FW version major byte identifies the family in recovery, where DEVICE_TYPE
@@ -1196,6 +1198,14 @@ static const struct {
 	/* D401 CSI passthrough: 10bit data riding an opeque 8-bit carrier. */
 	{ RS_PIXFMT_SBGGR10P,   MEDIA_BUS_FMT_RS_SBGGR10P_1X8, GMSL_CSI_DT_RAW_8 },
 	{ RS_PIXFMT_IMU,        MEDIA_BUS_FMT_Y8_1X8 },
+#ifdef MEDIA_BUS_FMT_RS_H264_1X8
+	/* Compressed colour on the RAW8 carrier; only kernels carrying the H.264
+	 * code also carry the capture-side carrier support (JP6.0-7.2). */
+	{ .pixfmt = RS_PIXFMT_H264, .mbus_code = MEDIA_BUS_FMT_RS_H264_1X8,
+	  .wire_dt = GMSL_CSI_DT_RAW_8 },
+	{ .pixfmt = RS_PIXFMT_JPEG, .mbus_code = MEDIA_BUS_FMT_RS_JPEG_1X8,
+	  .wire_dt = GMSL_CSI_DT_RAW_8 },
+#endif
 };
 
 /* Probed a word at a time: legacy FW loads one 16-bit word for an unmapped
@@ -7399,6 +7409,13 @@ static int ds5_mux_enum_mbus_code(struct v4l2_subdev *sd,
 		remote_sd = &state->imu.sensor.sd;
 		break;
 	case DS5_MUX_PAD_EXTERNAL:
+		/* The colour node may list more formats than IR plus depth, so it
+		 * is bounded by its own enumerator. */
+		if (state->is_rgb) {
+			remote_sd = &state->rgb.sensor.sd;
+			break;
+		}
+
 		/* Snapshot the counts; the forwarded call re-locks and
 		 * re-checks its own bounds.
 		 */
