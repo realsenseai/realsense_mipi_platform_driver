@@ -138,6 +138,17 @@ The build system cross-compiles for ARM64. Toolchains vary by JetPack:
 
 - A control that librealsense reaches through a **USB depth XU selector** must be a **single read/write V4L2 control**, not a split get/set pair. The MIPI backend's `xu_to_cid()` maps one selector to one CID, and both `get_xu()` and `set_xu()` use that same CID — so a read-only "get" CID plus a separate "set" CID cannot be reached by a single selector. Expose one control with flags `V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE` (do **not** set `READ_ONLY`): `VOLATILE` routes each read to `ds5_g_volatile_ctrl`, `EXECUTE_ON_WRITE` routes each write to `ds5_s_ctrl`. `DS5_CAMERA_CID_AE_MODE` (depth AE regular/accelerated, HWMC SETAETYPE 0x87 / GETAETYPE 0x88, XU selector 0x11) is the reference example.
 - Split get/set CID pairs (e.g. `ae_roi_get/set`, `ae_setpoint_get/set`) are only appropriate for controls librealsense drives via the HWMC blob passthrough (`RS_HWMONITOR → RS_CAMERA_CID_HWMC`), never via a direct XU selector. Adding a matching `case` in librealsense's `xu_to_cid()` is still required for the selector to resolve.
+- **A write to a D58x one-byte XU register is not proof it landed.** HKR's GMSL I2C target ACKs a write to a register its FW does not implement, and answers a read of one with fill byte `0xFF`. Such a SET must read the register back under `ds5_dev->lock` before returning success. Use `d500_set_imu_xu_byte()`, as both IMU sensitivity setters (gyro `0x4538`, accel `0x4539`) do. Gyro needs it too: FW only gained `0x4538` on 2026-09-03 (HKR io #601), so older D585 FW ACKs the gyro write and ignores it. `D500_CAMERA_CID_ACCEL_SENSITIVITY` (`DS5_CAMERA_CID_BASE + 39`, reg `0x4539`, one byte, index 0..3 = ±3/6/12/24 g, D58x IMU subdev only) is the reference:
+
+  | Case | Errno |
+  |---|---|
+  | Index > 3 | `-ERANGE` from the V4L2 core menu check; the driver's `-EINVAL` guard is defensive |
+  | IMU streaming | `-EBUSY`, nothing written |
+  | Read-back `0xFF` (FW without the register, or a failed FW GET) | `-EOPNOTSUPP` |
+  | Read-back of another valid index (FW rejected the write, e.g. a SET racing STREAMOFF) | `-EIO`, retryable |
+  | GET of a value > 3 | `-EBADMSG` |
+
+  The read-back proves FW accepted and cached the index, not that the sensor has it: HKR programs the BMI088 at the next IMU stream start. The control stays registered on every D58x, as the gyro one is. Hiding it at probe would go stale after a DFU or HW reset, neither of which re-runs `ds5_ctrl_init()`. Old FW is detected through the GET/SET errnos instead.
 - A `V4L2_CTRL_TYPE_U32` array whose slots have different ranges, steps, or defaults needs custom `v4l2_ctrl_type_ops`: use `.init` for per-slot defaults and `.validate` for per-slot clamping and rounding. The scalar `v4l2_ctrl_config` fields cannot describe heterogeneous slots. For this repo's supported kernels, gate the indexed JP5/JP6 callback signatures and the array-wide JP7 signatures at Linux 6.8.
 
 ## MIPI lane configuration (hybrid 2-lane camera / 4-lane deserializer)
