@@ -3357,8 +3357,9 @@ enum ds5_ae_type {
 #define D500_MINZ_XU_BASE		0x4500
 #define D500_DECIMATION_XU_BASE		0x4540
 #define D500_TEMPORAL_XU_BASE		0x4568
-/* PROVISIONAL: 1-byte window pending the FW allocation in RSDEV-14699. */
-#define D500_ALIGNED_DEPTH_XU_BASE	0x4588
+/* PROVISIONAL pending RSDEV-14699: first byte past the 38-byte temporal
+ * window (0x4568..0x458D); FW already owns 0x4590 (IMU batching). */
+#define D500_ALIGNED_DEPTH_XU_BASE	0x458E
 #define D500_DPP_XU_VERSION		1
 #define D500_DPP_XU_DECIMATION_CONTROL_ID	BIT(0)
 #define D500_DPP_XU_TEMPORAL_CONTROL_ID		BIT(1)
@@ -4024,14 +4025,15 @@ unlock:
 	return ret;
 }
 
-/* Lock-free like ds5_v4l2_ctrl_set_disabled(): the post-reset caller runs in
- * ds5_s_ctrl() under state->lock, so taking a handler lock here would invert.
+/* Probe-time only, on the depth instance whose handler is exposed: the FW
+ * default does not change across a HW reset.
  */
 static void d500_refresh_aligned_depth_default(struct ds5 *state)
 {
 	s32 val;
 
-	if (!state->ctrls.aligned_depth || d500_get_aligned_depth(state, &val))
+	if (!state->is_depth || !state->ctrls.aligned_depth ||
+	    d500_get_aligned_depth(state, &val))
 		return;
 
 	WRITE_ONCE(state->ctrls.aligned_depth->default_value, val);
@@ -4550,7 +4552,6 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 			dev_warn(&state->client->dev,
 				 "%s(): D58x device-mode refresh after HW reset failed (%d)\n",
 				 __func__, mode_ret);
-		d500_refresh_aligned_depth_default(owner);
 	}
 
 	WRITE_ONCE(state->ds5_dev->last_reset_jiffies, jiffies);
