@@ -32,6 +32,9 @@ DS5_CAMERA_CID_HW_RESET = DS5_CAMERA_CID_BASE + 33
 DS5_CAMERA_CID_READOUT_SHAPING = DS5_CAMERA_CID_BASE + 34
 # Single read/write control for depth AE mode (XU depth selector 0x11).
 DS5_CAMERA_CID_AE_MODE = DS5_CAMERA_CID_BASE + 35
+# D58x depth "Enable Aligned Depth" (USB depth XU 0x10), d4xx.c
+# D500_CAMERA_CID_ALIGNED_DEPTH. Registered on the D58x depth node only.
+D500_CAMERA_CID_ALIGNED_DEPTH = DS5_CAMERA_CID_BASE + 55
 
 # Device type codes from d4xx.c:71-75
 DS5_DEVICE_TYPE_D40X = 8
