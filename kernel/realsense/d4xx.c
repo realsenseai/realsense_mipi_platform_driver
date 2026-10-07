@@ -609,6 +609,7 @@ struct ds5_ctrls {
 		struct v4l2_ctrl *device_mode;
 		struct v4l2_ctrl *dual_rgb_ae_policy;
 		struct v4l2_ctrl *minz;
+		struct v4l2_ctrl *aligned_depth;
 		/* RGB-only ISP controls. Only ae_priority needs a stored
 		 * pointer because it must be disabled per-SKU after probe
 		 * (D40X/D401 does not support it). The remaining controls
@@ -3351,9 +3352,13 @@ enum ds5_ae_type {
 #define D500_CAMERA_CID_MINZ			(DS5_CAMERA_CID_BASE + 44)
 #define D500_CAMERA_CID_DECIMATION	(DS5_CAMERA_CID_BASE + 49)
 #define D500_CAMERA_CID_TEMPORAL	(DS5_CAMERA_CID_BASE + 51)
+/* USB depth XU 0x10: single R/W control. */
+#define D500_CAMERA_CID_ALIGNED_DEPTH	(DS5_CAMERA_CID_BASE + 55)
 #define D500_MINZ_XU_BASE		0x4500
 #define D500_DECIMATION_XU_BASE		0x4540
 #define D500_TEMPORAL_XU_BASE		0x4568
+/* PROVISIONAL: 1-byte window pending the FW allocation in RSDEV-14699. */
+#define D500_ALIGNED_DEPTH_XU_BASE	0x4588
 #define D500_DPP_XU_VERSION		1
 #define D500_DPP_XU_DECIMATION_CONTROL_ID	BIT(0)
 #define D500_DPP_XU_TEMPORAL_CONTROL_ID		BIT(1)
@@ -3962,6 +3967,76 @@ static int d500_set_accel_sensitivity(struct ds5 *state, u32 sensitivity)
 				    sensitivity);
 }
 
+/* Caller must hold state->ds5_dev->lock. One-byte read is safe on FW that
+ * lacks the window; such FW reads it back as 0xFF. */
+static int d500_read_aligned_depth_locked(struct ds5 *state, u8 *value)
+{
+	int ret;
+
+	ret = ds5_raw_read(state, D500_ALIGNED_DEPTH_XU_BASE, value,
+			   sizeof(*value));
+	if (ret)
+		return ret;
+	if (*value == D500_GMSL_READ_FILL_BYTE)
+		return -EOPNOTSUPP;
+	if (*value > 1)
+		return -EBADMSG;
+
+	return 0;
+}
+
+static int d500_get_aligned_depth(struct ds5 *state, s32 *val)
+{
+	u8 value;
+	int ret;
+
+	mutex_lock(&state->ds5_dev->lock);
+	ret = d500_read_aligned_depth_locked(state, &value);
+	mutex_unlock(&state->ds5_dev->lock);
+	if (!ret)
+		*val = value;
+
+	return ret;
+}
+
+static int d500_set_aligned_depth(struct ds5 *state, s32 val)
+{
+	u8 value = val ? 1 : 0;
+	u8 applied;
+	int ret;
+
+	mutex_lock(&state->ds5_dev->lock);
+	if (!d500_camera_is_idle_locked(state)) {
+		ret = -EBUSY;
+		goto unlock;
+	}
+	ret = ds5_raw_write(state, D500_ALIGNED_DEPTH_XU_BASE, &value,
+			    sizeof(value));
+	if (ret)
+		goto unlock;
+	/* A refused write still ACKs on I2C; only the readback shows it. */
+	ret = d500_read_aligned_depth_locked(state, &applied);
+	if (!ret && applied != value)
+		ret = -EIO;
+unlock:
+	mutex_unlock(&state->ds5_dev->lock);
+
+	return ret;
+}
+
+/* Lock-free like ds5_v4l2_ctrl_set_disabled(): the post-reset caller runs in
+ * ds5_s_ctrl() under state->lock, so taking a handler lock here would invert.
+ */
+static void d500_refresh_aligned_depth_default(struct ds5 *state)
+{
+	s32 val;
+
+	if (!state->ctrls.aligned_depth || d500_get_aligned_depth(state, &val))
+		return;
+
+	WRITE_ONCE(state->ctrls.aligned_depth->default_value, val);
+}
+
 /* DISABLED has no framework toggle. Mirror v4l2_ctrl_activate()'s lock-free bit
  * twiddling: callers may already hold the handler lock via ds5_s_ctrl().
  */
@@ -4475,6 +4550,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 			dev_warn(&state->client->dev,
 				 "%s(): D58x device-mode refresh after HW reset failed (%d)\n",
 				 __func__, mode_ret);
+		d500_refresh_aligned_depth_default(owner);
 	}
 
 	WRITE_ONCE(state->ds5_dev->last_reset_jiffies, jiffies);
@@ -4978,6 +5054,12 @@ unlock_dpp:
 		    READ_ONCE(state->ds5_dev->cached_device_type) ==
 			    DS5_DEVICE_TYPE_D58X)
 			ret = d500_set_accel_sensitivity(state, ctrl->val);
+		break;
+	case D500_CAMERA_CID_ALIGNED_DEPTH:
+		if (state->is_depth &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X)
+			ret = d500_set_aligned_depth(state, ctrl->val);
 		break;
 	case DS5_CAMERA_CID_PWM:
 		if (state->is_depth)
@@ -5487,6 +5569,12 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 				*ctrl->p_new.p_s32 = sensitivity;
 		}
 		break;
+	case D500_CAMERA_CID_ALIGNED_DEPTH:
+		if (state->is_depth &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X)
+			ret = d500_get_aligned_depth(state, &ctrl->val);
+		break;
 	case DS5_CAMERA_CID_PWM:
 		if (state->is_depth)
 			ds5_read(state, base | DS5_PWM_FREQUENCY, ctrl->p_new.p_u16);
@@ -5911,6 +5999,20 @@ static const struct v4l2_ctrl_config ds5_ctrl_accel_sensitivity_d58x = {
 	.max = D500_ACCEL_SENSITIVITY_24_G,
 	.def = D500_ACCEL_SENSITIVITY_3_G,
 	.qmenu = d500_accel_sensitivity_menu,
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
+/* FW emits aligned depth at the configured depth WxH and Z16 on the same VC,
+ * so the existing depth formats and frame sizes serve both settings. */
+static const struct v4l2_ctrl_config d500_ctrl_aligned_depth = {
+	.ops = &ds5_ctrl_ops,
+	.id = D500_CAMERA_CID_ALIGNED_DEPTH,
+	.name = "Enable Aligned Depth",
+	.type = V4L2_CTRL_TYPE_BOOLEAN,
+	.min = 0,
+	.max = 1,
+	.step = 1,
+	.def = 0,
 	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 };
 
@@ -6981,6 +7083,9 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 			ctrls->minz = v4l2_ctrl_new_custom(hdl, &d500_ctrl_minz, sensor);
 			v4l2_ctrl_new_custom(hdl, &d500_ctrl_decimation, sensor);
 			v4l2_ctrl_new_custom(hdl, &d500_ctrl_temporal, sensor);
+			ctrls->aligned_depth =
+				v4l2_ctrl_new_custom(hdl, &d500_ctrl_aligned_depth,
+						     sensor);
 		} else {
 			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_readout_shaping,
 					     sensor);
@@ -8840,6 +8945,7 @@ static void d500_adjust_device_mode_controls(struct i2c_client *client,
 		dev_warn(&client->dev,
 			 "%s(): failed to read D58x device mode; 2C AE Policy remains inactive (%d)\n",
 			 __func__, ret);
+	d500_refresh_aligned_depth_default(state);
 }
 
 /* Per-SKU adjustment of the RGB ISP controls registered in ds5_ctrl_init().
