@@ -904,6 +904,11 @@
 							external_addr_reassign;
 						};
 
+						/* Sensor endpoint widths configure camera MIPI TX in d4xx.
+						 * D4xx/MAX9295 inputs use 2 lanes; VI/NVCSI and mode0
+						 * retain the 4-lane MAX96712 output towards the host.
+						 */
+
 						/* ---------------- Link 3: D4xx (max9295), vc-id 12..15 ---------------- */
 
 						ds5_15: ds5@4d {
@@ -925,7 +930,7 @@
 									ds5_15_out: endpoint {
 										vc-id = <15>;
 										port-index = <2>;
-										bus-width = <4>;
+										bus-width = <2>;
 										remote-endpoint = <&d4xx_csi_in15>;
 									};
 								};
@@ -973,7 +978,7 @@
 									ds5_14_out: endpoint {
 										vc-id = <14>;
 										port-index = <2>;
-										bus-width = <4>;
+										bus-width = <2>;
 										remote-endpoint = <&d4xx_csi_in14>;
 									};
 								};
@@ -1022,7 +1027,7 @@
 									ds5_13_out: endpoint {
 										vc-id = <13>;
 										port-index = <2>;
-										bus-width = <4>;
+										bus-width = <2>;
 										remote-endpoint = <&d4xx_csi_in13>;
 									};
 								};
@@ -1069,7 +1074,7 @@
 									ds5_12_out: endpoint {
 										vc-id = <12>;
 										port-index = <2>;
-										bus-width = <4>;
+										bus-width = <2>;
 										remote-endpoint = <&d4xx_csi_in12>;
 									};
 								};
@@ -1119,7 +1124,7 @@
 									ds5_11_out: endpoint {
 										vc-id = <11>;
 										port-index = <2>;
-										bus-width = <4>;
+										bus-width = <2>;
 										remote-endpoint = <&d4xx_csi_in11>;
 									};
 								};
@@ -1167,7 +1172,7 @@
 									ds5_10_out: endpoint {
 										vc-id = <10>;
 										port-index = <2>;
-										bus-width = <4>;
+										bus-width = <2>;
 										remote-endpoint = <&d4xx_csi_in10>;
 									};
 								};
@@ -1216,7 +1221,7 @@
 									ds5_9_out: endpoint {
 										vc-id = <9>;
 										port-index = <2>;
-										bus-width = <4>;
+										bus-width = <2>;
 										remote-endpoint = <&d4xx_csi_in9>;
 									};
 								};
@@ -1263,7 +1268,7 @@
 									ds5_8_out: endpoint {
 										vc-id = <8>;
 										port-index = <2>;
-										bus-width = <4>;
+										bus-width = <2>;
 										remote-endpoint = <&d4xx_csi_in8>;
 									};
 								};
@@ -1313,7 +1318,7 @@
 									ds5_7_out: endpoint {
 										vc-id = <7>;
 										port-index = <2>;
-										bus-width = <4>;
+										bus-width = <2>;
 										remote-endpoint = <&d4xx_csi_in7>;
 									};
 								};
@@ -1361,7 +1366,7 @@
 									ds5_6_out: endpoint {
 										vc-id = <6>;
 										port-index = <2>;
-										bus-width = <4>;
+										bus-width = <2>;
 										remote-endpoint = <&d4xx_csi_in6>;
 									};
 								};
@@ -1410,7 +1415,7 @@
 									ds5_5_out: endpoint {
 										vc-id = <5>;
 										port-index = <2>;
-										bus-width = <4>;
+										bus-width = <2>;
 										remote-endpoint = <&d4xx_csi_in5>;
 									};
 								};
@@ -1457,7 +1462,7 @@
 									ds5_4_out: endpoint {
 										vc-id = <4>;
 										port-index = <2>;
-										bus-width = <4>;
+										bus-width = <2>;
 										remote-endpoint = <&d4xx_csi_in4>;
 									};
 								};
