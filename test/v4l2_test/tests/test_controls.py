@@ -782,3 +782,22 @@ class TestAlignedDepth:
         measured = (len(stamps) - 1) / span
         assert abs(measured - self.FPS) <= self.FPS * self.FPS_TOLERANCE, \
             f"FPS {measured:.2f} outside {self.FPS} +/- {self.FPS_TOLERANCE:.0%}"
+
+
+@pytest.mark.d457
+@pytest.mark.d401
+class TestErrorCode:
+    """Depth FW error code (librealsense XU 0x07): read-to-clear, FW-gated on D4xx."""
+
+    def test_error_code_read_clears(self, depth_device, fw_version):
+        raw, version_str = fw_version
+        if raw < C.DS5_FW_ERROR_CODE_MIN:
+            with pytest.raises(OSError) as exc:
+                read_int_control(depth_device, C.DS5_CAMERA_CID_ERROR_CODE)
+            assert exc.value.errno == errno.EOPNOTSUPP, \
+                f"FW {version_str}: expected EOPNOTSUPP, got {exc.value}"
+            return
+        first = read_int_control(depth_device, C.DS5_CAMERA_CID_ERROR_CODE)
+        assert 0 <= first <= 255
+        assert read_int_control(depth_device, C.DS5_CAMERA_CID_ERROR_CODE) == 0, \
+            "error code did not clear on read"

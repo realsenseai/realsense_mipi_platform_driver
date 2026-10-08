@@ -31,7 +31,7 @@ CI runs these three steps for each JetPack version (see `.github/workflows/build
 
 `apply_patches.sh` applies patches and resets them:
 ```bash
-./apply_patches.sh [--one-cam | --dual-cam] apply <version>  # Apply patches
+./apply_patches.sh [--one-cam | --dual-cam] <version>        # Apply patches (default action; there is no `apply` keyword)
 ./apply_patches.sh reset <version>                            # Reset all patches
 ```
 `reset` must come **before** the version — the arg loop `break`s on the first non-flag token, so `apply_patches.sh <version> reset` silently runs an *apply* instead (and then fails every hunk against an already-patched tree).
@@ -149,6 +149,7 @@ The build system cross-compiles for ARM64. Toolchains vary by JetPack:
   | GET of a value > 3 | `-EBADMSG` |
 
   The read-back proves FW accepted and cached the index, not that the sensor has it: HKR programs the BMI088 at the next IMU stream start. The control stays registered on every D58x, as the gyro one is. Hiding it at probe would go stale after a DFU or HW reset, neither of which re-runs `ds5_ctrl_init()`. Old FW is detected through the GET/SET errnos instead.
+- **`DS5_CAMERA_CID_ERROR_CODE` (librealsense XU `0x07`, error polling) is read-to-clear in FW at `0x413C`**: every G_CTRL consumes the latched error, `v4l2-ctl -l`/`--all` included, so nothing in the driver may read it implicitly. It is registered on every depth subdev; on D4xx it returns `-EOPNOTSUPP` below `DS5_FW_ERROR_CODE_MIN` (5.17.6, compared as major.minor.patch; the build field is ignored), because older D4xx FW answers `0x413C` with the manual-exposure register (a fake non-zero error). While `cached_device_type` is `DS5_DEVICE_TYPE_UNKNOWN` (mid HW reset, primary-slot re-init) it returns `-EBUSY`, since the D4xx/D58x branch cannot be chosen yet. The gate is checked at read time via `ds5_fw_at_least()`, since a DFU refreshes `fw_version` without re-running `ds5_ctrl_init()`. librealsense's D400 MIPI polling gate must use the same FW version, or old FW spams `polling_error_handler` once a second. Because the control stays registered, a bulk `VIDIOC_G_EXT_CTRLS` that includes it fails as a whole on old D4xx FW (the V4L2 core stops at the first failing volatile control); per-control reads, as librealsense does, are unaffected.
 - A `V4L2_CTRL_TYPE_U32` array whose slots have different ranges, steps, or defaults needs custom `v4l2_ctrl_type_ops`: use `.init` for per-slot defaults and `.validate` for per-slot clamping and rounding. The scalar `v4l2_ctrl_config` fields cannot describe heterogeneous slots. For this repo's supported kernels, gate the indexed JP5/JP6 callback signatures and the array-wide JP7 signatures at Linux 6.8.
 
 ## MIPI lane configuration (hybrid 2-lane camera / 4-lane deserializer)

@@ -331,14 +331,20 @@ enum rs_pixfmt {
 #define DS5_RGB_CONTRAST		0x0028
 #define DS5_RGB_GAMMA			0x002C
 
-/* D58x-only telemetry offsets relative to DS5_DEPTH_CONTROL_BASE.
+/* Telemetry offsets relative to DS5_DEPTH_CONTROL_BASE (temperatures: D58x only).
  * DS5_SOC_PVT_TEMPERATURE overlaps the D4xx readout-shaping offset, so
  * ds5_ctrl_init() registers exactly one interpretation per detected SKU.
  */
 #define DS5_SOC_PVT_TEMPERATURE		0x0030
 #define DS5_OHM_TEMPERATURE		0x0034
 #define DS5_PROJECTOR_TEMPERATURE	0x0038
+/* Read-to-clear on D58x and on D4xx FW >= DS5_FW_ERROR_CODE_MIN. */
 #define DS5_ERROR_CODE			0x003C
+
+#define DS5_FW_VER(major, minor, patch) \
+	((u32)(major) << 16 | (u32)(minor) << 8 | (patch))
+/* Older D4xx FW answers DS5_ERROR_CODE with the manual-exposure register. */
+#define DS5_FW_ERROR_CODE_MIN		DS5_FW_VER(5, 17, 6)
 
 /* D58x RGB controls use a separate extension window. The same offsets in the
  * depth block carry temperature and error telemetry.
@@ -986,6 +992,12 @@ static inline bool ds5_is_d58x(struct ds5 *state)
 }
 
 static int ds5_hw_init(struct i2c_client *c, struct ds5 *state);
+
+/* Compares major.minor.patch (fw_build's high byte); refreshed on DFU and HW reset. */
+static inline bool ds5_fw_at_least(struct ds5 *state, u32 fw_ver)
+{
+	return ((u32)state->fw_version << 8 | state->fw_build >> 8) >= fw_ver;
+}
 
 static inline u16 ds5_rgb_ctrl_offset(struct ds5 *state, u16 d4xx_offset,
 				      u16 d58x_offset)
@@ -1764,7 +1776,8 @@ static void ds5_desc_reload_after_reset(struct ds5 *state, u16 dev_type)
 	fw_changed = false;
 	for (pad = DS5_MUX_PAD_DEPTH; pad < DS5_MUX_PAD_COUNT; pad++)
 		if (dd->role_inst[pad] &&
-		    dd->role_inst[pad]->fw_version != state->fw_version)
+		    (dd->role_inst[pad]->fw_version != state->fw_version ||
+		     dd->role_inst[pad]->fw_build != state->fw_build))
 			fw_changed = true;
 	if (!changed && !fw_changed) {
 		mutex_unlock(&dd->lock);
@@ -1801,8 +1814,9 @@ static void ds5_desc_reload_after_reset(struct ds5 *state, u16 dev_type)
 
 		if (!inst)
 			continue;
-		/* Share the post-reset FW version; only @state re-read it. */
+		/* Share the post-reset FW version/build; only @state re-read it. */
 		inst->fw_version = state->fw_version;
+		inst->fw_build = state->fw_build;
 		if (!have_desc || !__ds5_desc_apply(inst))
 			ds5_apply_builtin_tables(inst, dev_type);
 		ds5_mark_channel_fmts_dirty(inst);
@@ -5741,10 +5755,22 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 	case DS5_CAMERA_CID_ERROR_CODE:
 		if (!state->is_depth)
 			return -EINVAL;
-		ret = ds5_read(state, base | DS5_ERROR_CODE, &reg);
-		if (!ret)
-			*ctrl->p_new.p_s32 = reg & 0xff;
-		break;
+		{
+			u16 dev_type = state->ds5_dev ?
+				READ_ONCE(state->ds5_dev->cached_device_type) :
+				DS5_DEVICE_TYPE_UNKNOWN;
+
+			/* UNKNOWN (mid-reset): a read could hit the D4xx exposure alias. */
+			if (dev_type == DS5_DEVICE_TYPE_UNKNOWN)
+				return -EBUSY;
+			if (dev_type != DS5_DEVICE_TYPE_D58X &&
+			    !ds5_fw_at_least(state, DS5_FW_ERROR_CODE_MIN))
+				return -EOPNOTSUPP;
+			ret = ds5_read(state, base | DS5_ERROR_CODE, &reg);
+			if (!ret)
+				*ctrl->p_new.p_s32 = reg & 0xff;
+			break;
+		}
 	case DS5_CAMERA_CID_SYNC_MODE:
 		if (state->is_depth)
 			ds5_read(state, base | DS5_CAMERA_SYNC_MODE, ctrl->p_new.p_u16);
@@ -7307,7 +7333,6 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 					     sensor);
 			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_projector_temperature,
 					     sensor);
-			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_error_code, sensor);
 			ctrls->minz = v4l2_ctrl_new_custom(hdl, &d500_ctrl_minz, sensor);
 			v4l2_ctrl_new_custom(hdl, &d500_ctrl_decimation, sensor);
 			v4l2_ctrl_new_custom(hdl, &d500_ctrl_temporal, sensor);
@@ -7319,6 +7344,7 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 					     sensor);
 		}
 		v4l2_ctrl_new_custom(hdl, &ds5_ctrl_pwm, sensor);
+		v4l2_ctrl_new_custom(hdl, &ds5_ctrl_error_code, sensor);
 	}
 	// IMU custom
 	if (sid == IMU_SID) {
