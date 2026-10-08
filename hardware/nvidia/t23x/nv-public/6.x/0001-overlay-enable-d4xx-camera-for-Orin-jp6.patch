@@ -5,14 +5,14 @@ Subject: [PATCH] overlay: enable d4xx camera for Orin jp6
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- overlay/Makefile | 32 ++++++++++++++++++++++++++++++++
- 1 file changed, 32 insertions(+)
+ overlay/Makefile | 33 +++++++++++++++++++++++++++++++++
+ 1 file changed, 33 insertions(+)
 
 diff --git a/overlay/Makefile b/overlay/Makefile
 index c88bbe2..fe442b5 100644
 --- a/overlay/Makefile
 +++ b/overlay/Makefile
-@@ -60,6 +60,38 @@ dtbo-y += tegra234-p3767-camera-p3768-imx219-A.dtbo
+@@ -60,6 +60,39 @@ dtbo-y += tegra234-p3767-camera-p3768-imx219-A.dtbo
  dtbo-y += tegra234-p3767-camera-p3768-imx219-imx477.dtbo
  dtbo-y += tegra234-p3767-camera-p3768-imx477-C.dtbo
  dtbo-y += tegra234-p3767-camera-p3768-imx477-A.dtbo
@@ -23,6 +23,7 @@ index c88bbe2..fe442b5 100644
 +dtbo-y += tegra234-camera-d4xx-overlay-fg12-4ch.dtbo
 +dtbo-y += tegra234-camera-d4xx-overlay-fg12-4ch-d5xx.dtbo
 +dtbo-y += tegra234-camera-d4xx-overlay-fg12-4ch-cams-0-1-2-3.dtbo
++dtbo-y += tegra234-camera-d4xx-overlay-fg12-4ch-cams-0-1-2-3-d5xx-3d4xx.dtbo
 +dtbo-y += tegra234-camera-d4xx-overlay-fg12-12ch.dtbo
 +dtbo-y += tegra234-camera-d4xx-overlay-fg12-12ch-d5xx.dtbo
 +dtbo-y += tegra234-camera-d4xx-overlay-fg12-12ch-cams-0-1.dtbo
