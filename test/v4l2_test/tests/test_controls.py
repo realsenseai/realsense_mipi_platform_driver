@@ -478,11 +478,35 @@ class TestSyncMode:
 
     Public values: 0=Default, 1=Master, 2=External Sync.
     FW maps External Sync to Slave (D401) or SlaveFull (D457) internally.
+    D58x has no master role, so the driver skip-masks Master there
+    (RSDEV-14614); the accepted values are chosen per SKU below.
     """
 
     SYNC_MODE_DEFAULT  = 0
     SYNC_MODE_MASTER   = 1
     SYNC_MODE_EXTERNAL = 2
+
+    @staticmethod
+    def _is_d58x(dev):
+        """Aligned depth is registered on the D58x depth node only."""
+        try:
+            dev.query_ctrl(C.D500_CAMERA_CID_ALIGNED_DEPTH)
+            return True
+        except OSError:
+            return False
+
+    @classmethod
+    def _valid_modes(cls, dev):
+        if cls._is_d58x(dev):
+            return (cls.SYNC_MODE_DEFAULT, cls.SYNC_MODE_EXTERNAL)
+        return (cls.SYNC_MODE_DEFAULT, cls.SYNC_MODE_MASTER,
+                cls.SYNC_MODE_EXTERNAL)
+
+    @classmethod
+    def _non_default_mode(cls, dev):
+        """A mode that is valid on this SKU and is not DEFAULT."""
+        return (cls.SYNC_MODE_EXTERNAL if cls._is_d58x(dev)
+                else cls.SYNC_MODE_MASTER)
 
     def test_sync_mode_range(self, depth_device):
         """Control must advertise min=0, max=2."""
@@ -495,9 +519,7 @@ class TestSyncMode:
         """SET/GET roundtrip for each valid public value."""
         original = read_int_control(depth_device, C.DS5_CAMERA_CID_SYNC_MODE)
         try:
-            for mode in (self.SYNC_MODE_DEFAULT,
-                         self.SYNC_MODE_MASTER,
-                         self.SYNC_MODE_EXTERNAL):
+            for mode in self._valid_modes(depth_device):
                 write_int_control(depth_device, C.DS5_CAMERA_CID_SYNC_MODE, mode)
                 val = read_int_control(depth_device, C.DS5_CAMERA_CID_SYNC_MODE)
                 assert val == mode, f"SET {mode} → GET returned {val}"
@@ -508,12 +530,22 @@ class TestSyncMode:
     def test_sync_mode_default_after_reset(self, depth_device):
         """After writing DEFAULT, readback must be DEFAULT."""
         write_int_control(depth_device, C.DS5_CAMERA_CID_SYNC_MODE,
-                          self.SYNC_MODE_MASTER)
+                          self._non_default_mode(depth_device))
         write_int_control(depth_device, C.DS5_CAMERA_CID_SYNC_MODE,
                           self.SYNC_MODE_DEFAULT)
         val = read_int_control(depth_device, C.DS5_CAMERA_CID_SYNC_MODE)
         assert val == self.SYNC_MODE_DEFAULT, \
             f"Expected DEFAULT(0) after reset, got {val}"
+
+    def test_sync_mode_master_rejected_on_d58x(self, depth_device):
+        """D58x must reject Master; the menu entry is skip-masked."""
+        if not self._is_d58x(depth_device):
+            pytest.skip("Master is a valid mode on D4xx")
+        with pytest.raises(OSError) as exc:
+            write_int_control(depth_device, C.DS5_CAMERA_CID_SYNC_MODE,
+                              self.SYNC_MODE_MASTER)
+        assert exc.value.errno == errno.EINVAL, \
+            f"Expected EINVAL setting Master on D58x, got {exc.value.errno}"
 
 
 @pytest.mark.d457
