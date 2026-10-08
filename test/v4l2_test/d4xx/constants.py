@@ -1,6 +1,23 @@
 """D4XX camera CID definitions, device type codes, and stream layout constants."""
 
+import re
+from pathlib import Path
+
 from ..v4l2.ioctls import V4L2_CTRL_CLASS_CAMERA
+
+_D4XX_C = Path(__file__).resolve().parents[3] / "kernel" / "realsense" / "d4xx.c"
+
+
+def _fw_error_code_min(src=_D4XX_C):
+    """Parse DS5_FW_ERROR_CODE_MIN (major.minor.patch) from d4xx.c, as a FW_VERSION-control value."""
+    try:
+        m = re.search(r"#define\s+DS5_FW_ERROR_CODE_MIN\s+DS5_FW_VER\(\s*(\d+)\s*,\s*(\d+)\s*,"
+                      r"\s*(\d+)\s*\)", Path(src).read_text())
+    except OSError:
+        m = None
+    a, b, c = map(int, m.groups()) if m else (5, 17, 6)
+    return (a << 24) | (b << 16) | (c << 8)
+
 
 # DS5_DEPTH_STREAM_DT from d4xx.c:96
 DS5_DEPTH_STREAM_DT = 0x4000
@@ -27,6 +44,9 @@ DS5_CAMERA_CID_EWB = DS5_CAMERA_CID_BASE + 14
 DS5_CAMERA_CID_HWMC = DS5_CAMERA_CID_BASE + 15
 DS5_CAMERA_CID_SYNC_MODE = DS5_CAMERA_CID_BASE + 16
 DS5_CAMERA_CID_PWM = DS5_CAMERA_CID_BASE + 22
+DS5_CAMERA_CID_ERROR_CODE = DS5_CAMERA_CID_BASE + 27
+# First D4xx FW serving the read-to-clear error code; value comes from d4xx.c
+DS5_FW_ERROR_CODE_MIN = _fw_error_code_min()
 DS5_CAMERA_CID_HWMC_RW = DS5_CAMERA_CID_BASE + 32
 DS5_CAMERA_CID_HW_RESET = DS5_CAMERA_CID_BASE + 33
 DS5_CAMERA_CID_READOUT_SHAPING = DS5_CAMERA_CID_BASE + 34
