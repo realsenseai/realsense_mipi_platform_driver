@@ -1,4 +1,4 @@
-"""StreamContext: buffer management, mmap, streamon/streamoff, frame capture."""
+"""StreamContext: buffer management, mmap or user memory, streamon/streamoff, frame capture."""
 
 import ctypes
 import mmap
@@ -9,19 +9,31 @@ from . import structs as S
 
 
 class StreamContext:
-    """Context manager for V4L2 streaming I/O with mmap buffers."""
+    """Context manager for V4L2 streaming I/O.
+
+    MMAP maps the driver's buffers; USERPTR queues page-aligned anonymous
+    mappings of `buf_size` bytes (the format's sizeimage).
+    """
 
     def __init__(self, device, buf_type=ioctls.V4L2_BUF_TYPE_VIDEO_CAPTURE,
-                 buf_count=4):
+                 buf_count=4, memory=ioctls.V4L2_MEMORY_MMAP, buf_size=0):
+        if memory == ioctls.V4L2_MEMORY_USERPTR and buf_size <= 0:
+            raise ValueError("USERPTR streaming needs buf_size")
         self.device = device
         self.buf_type = buf_type
         self.buf_count = buf_count
+        self.memory = memory
+        self.buf_size = buf_size
         self.buffers = []
+        self._userptr = []
         self._streaming = False
 
     def __enter__(self):
         self._reqbufs()
-        self._mmap_buffers()
+        if self.memory == ioctls.V4L2_MEMORY_USERPTR:
+            self._alloc_user_buffers()
+        else:
+            self._mmap_buffers()
         self._queue_all()
         self._streamon()
         return self
@@ -36,7 +48,7 @@ class StreamContext:
         req = S.v4l2_requestbuffers()
         req.count = self.buf_count
         req.type = self.buf_type
-        req.memory = ioctls.V4L2_MEMORY_MMAP
+        req.memory = self.memory
         self.device.ioctl(ioctls.VIDIOC_REQBUFS, req)
         self.buf_count = req.count
 
@@ -44,7 +56,7 @@ class StreamContext:
         req = S.v4l2_requestbuffers()
         req.count = 0
         req.type = self.buf_type
-        req.memory = ioctls.V4L2_MEMORY_MMAP
+        req.memory = self.memory
         try:
             self.device.ioctl(ioctls.VIDIOC_REQBUFS, req)
         except OSError:
@@ -67,18 +79,36 @@ class StreamContext:
             )
             self.buffers.append((buf, mm))
 
+    def _alloc_user_buffers(self):
+        for i in range(self.buf_count):
+            buf = S.v4l2_buffer()
+            buf.index = i
+            buf.length = self.buf_size
+            mm = mmap.mmap(-1, self.buf_size)
+            # The ctypes view pins the mapping and gives the address to queue.
+            view = ctypes.c_char.from_buffer(mm)
+            self._userptr.append(view)
+            self.buffers.append((buf, mm))
+
     def _unmap_buffers(self):
+        self._userptr.clear()
         for _, mm in self.buffers:
             mm.close()
         self.buffers.clear()
 
+    def _qbuf(self, index):
+        buf = S.v4l2_buffer()
+        buf.type = self.buf_type
+        buf.memory = self.memory
+        buf.index = index
+        if self.memory == ioctls.V4L2_MEMORY_USERPTR:
+            buf.m.userptr = ctypes.addressof(self._userptr[index])
+            buf.length = self.buf_size
+        self.device.ioctl(ioctls.VIDIOC_QBUF, buf)
+
     def _queue_all(self):
         for i in range(self.buf_count):
-            buf = S.v4l2_buffer()
-            buf.type = self.buf_type
-            buf.memory = ioctls.V4L2_MEMORY_MMAP
-            buf.index = i
-            self.device.ioctl(ioctls.VIDIOC_QBUF, buf)
+            self._qbuf(i)
 
     def _streamon(self):
         buf_type = ctypes.c_int(self.buf_type)
@@ -102,7 +132,7 @@ class StreamContext:
 
         buf = S.v4l2_buffer()
         buf.type = self.buf_type
-        buf.memory = ioctls.V4L2_MEMORY_MMAP
+        buf.memory = self.memory
         self.device.ioctl(ioctls.VIDIOC_DQBUF, buf)
 
         _, mm = self.buffers[buf.index]
@@ -112,11 +142,7 @@ class StreamContext:
 
     def requeue(self, buf):
         """Re-queue a dequeued buffer."""
-        qbuf = S.v4l2_buffer()
-        qbuf.type = self.buf_type
-        qbuf.memory = ioctls.V4L2_MEMORY_MMAP
-        qbuf.index = buf.index
-        self.device.ioctl(ioctls.VIDIOC_QBUF, qbuf)
+        self._qbuf(buf.index)
 
     def capture_frames(self, count, timeout=5.0):
         """Capture `count` frames, returning list of (v4l2_buffer, data)."""

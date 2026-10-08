@@ -169,10 +169,10 @@ means "switch the sensor pipeline to CSI passthrough", not "send RAW10".
 
 > [!NOTE]
 > **The request token is also the wire datatype — unless the driver says otherwise.** That is
-> the firmware's default, and for six of the ten pixel formats it is the whole story: ask with
+> the firmware's default, and for six of the twelve pixel formats it is the whole story: ask with
 > `0x1E` and the packets are labelled `0x1E`.
 >
-> The other four are a *second* instruction the driver chooses to issue. For flat NV12 the
+> The other six are a *second* instruction the driver chooses to issue. For flat NV12 the
 > exchange reads:
 >
 > ```text
@@ -184,12 +184,13 @@ means "switch the sensor pipeline to CSI passthrough", not "send RAW10".
 > the MAX96717 pixel pipe forwards standard 8-bit datatypes and silently drops user-defined
 > ones. Leave the override unwritten and the wire datatype would simply be `0x18`.
 >
-> The other three are the same move for the same kind of reason. The D401 passthrough entry
+> The other five are the same move for the same kind of reason. The D401 passthrough entry
 > requests the mode and instructs RAW8. Depth and the interleaved-IR format are asked for with
 > the firmware's own 16-bit tokens, `0x31` for Z16 and `0x32` for R8L8, and both are
 > instructed onto YUV422-8 because Tegra VI throttles a user-defined datatype — a driver
 > comment recording the resulting frame-rate drop is what put the two tokens in the code to
-> begin with.
+> begin with. H.264 and JPEG ask for 0x36/0x37 and are instructed onto RAW8, the compressed
+> carrier.
 
 So the wire label is not something the camera reports. It is a host decision about host
 hardware, and on the two formats where it differs from the request it follows the pixel
@@ -266,22 +267,28 @@ longer. Framerate lists dedupe even harder, because `{5,15,30,60}` is a *prefix*
 
 ```mermaid
 flowchart LR
-  rgb["stream[2] rgb<br/>fmt_first 4<br/>fmt_count 3"]
+  rgb["stream[2] rgb<br/>fmt_first 4<br/>fmt_count 5"]
 
   f4["format[4] UYVY<br/>DT 1E<br/>res_first 0, count 7"]
   f5["format[5] NV12_FLAT<br/>DT 18<br/>res_first 0, count 7"]
   f6["format[6] GRBG16<br/>DT 2E<br/>res_first 8, count 1"]
+  f7["format[7] H264<br/>DT 36<br/>res_first 10, count 7"]
+  f8["format[8] JPEG<br/>DT 37<br/>res_first 0, count 7"]
 
-  res["RESOLUTION POOL<br/>[0] 640×360<br/>[1] 1280×960<br/>[2] 1280×720<br/>[3] 848×480<br/>[4] 640×480<br/>[5] 480×270<br/>[6] 424×240<br/>[7] 256×144 depth and IR only<br/>[8] 1600×1300 calibration<br/>[9] 38×1 IMU record"]
+  res["RESOLUTION POOL<br/>[0] 640×360<br/>[1] 1280×960<br/>[2] 1280×720<br/>[3] 848×480<br/>[4] 640×480<br/>[5] 480×270<br/>[6] 424×240<br/>[7] 256×144 depth and IR only<br/>[8] 1600×1300 calibration<br/>[9] 38×1 IMU record<br/>[10..16] H.264 run, 1280×960 to 30 fps"]
 
-  fps["FRAMERATE POOL<br/>[0..4] 5 15 30 60 90<br/>[5..6] 15 25<br/>[7..9] 100 200 400"]
+  fps["FRAMERATE POOL<br/>[0..4] 5 15 30 60 90<br/>[5..6] 15 25<br/>[7..9] 100 200 400<br/>[10..14] 5 15 25 30 60 (2C video)"]
 
   rgb --> f4
   rgb --> f5
   rgb --> f6
+  rgb --> f7
+  rgb --> f8
   f4 -- "[0..6]" --> res
   f5 -- "[0..6]" --> res
   f6 -- "[8]" --> res
+  f7 -- "[10..16]" --> res
+  f8 -- "[0..6]" --> res
   res --> fps
 
   classDef calib stroke:#C25E00,stroke-width:2px,color:#C25E00
@@ -291,8 +298,9 @@ flowchart LR
 **Figure 2.** The D585 RGB node, fully resolved, from the blob the HKR firmware serves.
 RGB stops at resolution 6; depth and IR carry one more, the 256×144 entry at 7, which is why
 the video run is two ranges rather than one. The 1600×1300 calibration entry and its 15/25
-fps run are specific to one branch, and the IMU record (38×1 or 256×1 by link mode) has the
-pool's last entry and framerate run to itself.
+fps run are specific to one branch, and the IMU record (38×1 or 256×1 by link mode) has an
+entry and framerate run to itself. H.264 takes its own run because level 4.0 caps 1280×960
+at 30 fps; JPEG shares the raw colour run.
 
 ### Ranges are contiguous — sharing is an optimisation, not a guarantee
 
@@ -431,7 +439,7 @@ format bytes and the `0x0404` write:
 |---|---|---|---|
 | depth | `ds5_depth_formats_d58x` | **1 of 2** — `n_formats = 1` | `d58x_depth_sizes` · 7 |
 | IR | `ds5_y_formats_d58x` | 3 — Y8, Y8I, Y16I calib | `d58x_y8_sizes` · 7, plus `d58x_calibration_sizes` · 1 |
-| RGB | `ds5_rgb_formats_d58x` | 3 — UYVY, NV12 flat *(override)*, GRBG16 calib | `d58x_rgb_sizes` · 7, plus `d58x_calibration_sizes` · 1 |
+| RGB | `ds5_rgb_formats_d58x` | 3 — UYVY, NV12 flat *(override)*, GRBG16 calib; H.264 and JPEG come only from the descriptor | `d58x_rgb_sizes` · 7, plus `d58x_calibration_sizes` · 1 |
 | IMU | `d58x_imu_formats_extended_tunnel_mode`<br>or `ds5_imu_formats_extended_d58x_pixel_mode` | 1 | 38×1, or 256×1 when `d58x_pixel_mode` |
 
 > [!NOTE]
@@ -442,19 +450,20 @@ format bytes and the `0x0404` write:
 > 256×144. The IMU branch on `d58x_pixel_mode` is
 > a host decision, so it does not appear in the blob at all: the host writes
 > `DS5_MIPI_SERDES_PIXEL_MODE` and the camera publishes one of two blobs that differ in a
-> single width. And NV12 is the one record on any SKU where the two datatype bytes differ.
+> single width. And Z16, Y8I, NV12, H.264 and JPEG are the records whose two datatype bytes
+> differ.
 
 ### The same camera, as a descriptor
 
 ```text
-header      magic RSDS   ver 1.0   header_size 16   total_size 236   crc32 ...
-toc         STREAM 4×6 @48   FORMAT 8×8 @72   RESOLUTION 10×8 @136   FRAMERATE 10×2 @216
+header      magic RSDS   ver 1.0   header_size 16   total_size 318   crc32 ...
+toc         STREAM 4×6 @48   FORMAT 10×8 @72   RESOLUTION 17×8 @152   FRAMERATE 15×2 @288
 
                stream_id   fmt_first   fmt_count
 stream[0]              0           0           1    depth
 stream[1]              4           1           3    ir
-stream[2]              1           4           3    rgb
-stream[3]              2           7           1    imu
+stream[2]              1           4           5    rgb
+stream[3]              2           9           1    imu
 
                pixfmt_id   src_data_type   res_first   res_count
 format[0]              1            0x31           0           8    Z16
@@ -464,10 +473,12 @@ format[3]              5            0x2e           8           1    Y16I
 format[4]              6            0x1e           0           7    UYVY
 format[5]              7            0x18           0           7    NV12_FLAT
 format[6]              8            0x2e           8           1    GRBG16
-format[7]             10            0x2a           9           1    IMU
+format[7]             11            0x36          10           7    H264
+format[8]             12            0x37           0           7    JPEG
+format[9]             10            0x2a           9           1    IMU
 
                width   height   fps_first   fps_count    pool values
-                                                         used by format[0] [1] [2] [4] [5]
+                                                         used by format[0] [1] [2] [4] [5] [8]
 res[0]           640      360           0           5    5 15 30 60 90
 res[1]          1280      960           0           4    5 15 30 60
 res[2]          1280      720           0           4
@@ -476,20 +487,29 @@ res[4]           640      480           0           5
 res[5]           480      270           0           5
 res[6]           424      240           0           5
                                                          used by format[0] [1] [2]
-res[7]           256      144           0           5
+res[7]           256      144           4           1    90
                                                          used by format[3] Y16I, format[6] GRBG16
 res[8]          1600     1300           5           2    15 25
-                                                         used by format[7] IMU
+                                                         used by format[9] IMU
 res[9]            38        1           7           3    100 200 400   (256×1 in the pixel-mode blob)
+                                                         used by format[7] H264
+res[10]          640      360           0           5
+res[11]         1280      960           0           3    5 15 30
+res[12]         1280      720           0           4
+res[13]          848      480           0           4
+res[14]          640      480           0           5
+res[15]          480      270           0           5
+res[16]          424      240           0           5
 
                flat u16 pool, indexed by fps_first
-framerate   [0] 5 15 30 60 90   [5] 15 25   [7] 100 200 400
+framerate   [0] 5 15 30 60 90   [5] 15 25   [7] 100 200 400   [10] 5 15 25 30 60 (2C video)
 ```
 
-Ten resolution records where the D457 needed 23. The video run is two ranges rather than one
-only because 256×144 is offered on depth and IR but not RGB; everything else is shared. The
-pixel-mode blob is this one byte-for-byte except `res[9].width` and
-the CRC.
+Seventeen resolution records where the D457 needed 23. The video run is two ranges rather than
+one only because 256×144 is offered on depth and IR but not RGB; H.264 has its own run because
+level 4.0 caps 1280×960 at 30 fps. The pixel-mode blob is this one byte-for-byte except
+`res[9].width` and the CRC. On 2C hardware the RGB stream lists three formats (no H.264 or JPEG)
+and 1280×960 and 1280×720 take the 2C rate list at `[10]`.
 
 ### What the driver does with the NV12 record
 
@@ -501,8 +521,10 @@ label matters — the firmware's DT-override register, the serializer and deseri
 routing, and the VI channel's datatype match. Those four writes have to agree, which is the
 point of resolving the label in one place.
 
-Three more formats on this SKU are relabelled the same way: depth and the interleaved-IR
-format onto YUV422-8, for the Tegra VI reason above. For the remaining four the registry
+Four more formats on this SKU are relabelled the same way: depth and the interleaved-IR
+format onto YUV422-8, for the Tegra VI reason above. H.264 and JPEG are relabelled onto RAW8:
+they ask for user-defined types 0x36/0x37 and travel as rows of the compressed carrier.
+For the remaining five the registry
 says nothing, no override is written, and the firmware's default applies: the packets carry
 the datatype that was requested.
 
@@ -512,19 +534,19 @@ which is exactly the geometry section 3 keeps out of the blob.
 
 Byte accounting for this blob is in section 7.
 
-## 7 · Cost: 236 bytes for a D585
+## 7 · Cost: 318 bytes for a D585
 
-As generated by the HKR firmware, identical in size for either link mode:
+As generated by the HKR firmware, identical in size for either link mode and on 2C:
 
 | Table | Entries | Stride | Bytes | Contents |
 |---|---|---|---|---|
 | Header | — | — | 16 | magic, sizes, version, CRC32 |
 | TOC | 4 | 8 | 32 | stream, format, resolution, framerate |
 | Stream | 4 | 6 | 24 | depth, IR, RGB, IMU |
-| Format | 8 | 8 | 64 | 1 depth, 3 IR, 3 RGB, 1 IMU |
-| Resolution | 10 | 8 | 80 | 7 shared video + 1 depth/IR only + 1 calibration + 1 IMU record |
-| Framerate | 10 | 2 | 20 | 5/15/30/60/90 + 15/25 + 100/200/400 |
-| **Total** |  |  | **236** | **one 256-byte read** |
+| Format | 10 | 8 | 80 | 1 depth, 3 IR, 5 RGB, 1 IMU |
+| Resolution | 17 | 8 | 136 | 7 shared video + 1 depth/IR only + 1 calibration + 1 IMU + 7 H.264 records |
+| Framerate | 15 | 2 | 30 | 5/15/30/60/90 + 15/25 + 100/200/400 + the 2C video list |
+| **Total** |  |  | **318** | **two 256-byte reads** |
 
 The D457 above is 334 bytes on the same encoding. Across the RS400 firmware the tables run
 from 248 bytes (D40x) to 364 (D41x, the SKU with the most IR and RGB formats). All of them
@@ -602,8 +624,9 @@ handle comfortably, and makes a partial failure cheap to retry.
 > 2-byte dummy, so the driver's magic check fails cleanly there.
 >
 > The D585 (HKR) firmware serves the same aperture from
-> `io/gmsl/hwlib/src/gmsl_format_desc.c`: one 236-byte blob per serdes link mode for device
-> type 9 — identical except for the IMU record (38×1 tunnel, 256×1 pixel) — republished
+> `io/gmsl/hwlib/src/gmsl_format_desc.c`: one 318-byte blob per serdes link mode for device
+> type 9 — identical except for the IMU record (38×1 tunnel, 256×1 pixel); 2C hardware hides
+> H.264 and JPEG — republished
 > whenever the host writes `0x0404`. Its I2C HAL pads over-reads with `0xFF`, so a D585
 > without the feature also fails the magic probe cleanly.
 
