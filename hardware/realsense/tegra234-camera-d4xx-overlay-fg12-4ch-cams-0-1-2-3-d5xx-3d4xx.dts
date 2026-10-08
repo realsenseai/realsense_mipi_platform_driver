@@ -858,6 +858,8 @@
 							link-mask = <0xf>;
 							channel = "a";
 							fangzhu,fg12-reverse-lane-polarity;
+							/* Support driver versions using either PoC binding. */
+							fangzhu,fg12-poc-enable;
 							fangzhu,fg12-4ch-poc-enable;
 							/* <serializer-vc deserializer-vc> */
 							maxim,link0-vc-remap = <0 0>, <1 1>, <2 2>, <3 3>;
