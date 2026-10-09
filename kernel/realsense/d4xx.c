@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
+// Copyright (c) 2026 RealSense, Inc.
 /*
  * ds5.c - Intel(R) RealSense(TM) D4XX camera driver
  *
@@ -747,6 +748,9 @@ struct ds5 {
 	const struct ser_interface *ser_ops;
 	bool ser_primary; /* true for the first instance per serializer (first stream of a specific camera) */
 	bool dser_primary; /* true for the first instance per deserializer (first camera of a specific dser) */
+	bool ser_paired;
+	bool dser_registered;
+	bool dser_powered;
 #endif
 	struct ds5_dev *ds5_dev; /* pointer to DS5 device struct */
 };
@@ -6431,7 +6435,7 @@ static void ds5_init_ds5_dev(struct ds5 *state, struct ds5_dev *ds5_dev)
 	ds5_reset_streaming_flags(ds5_dev);
 }
 
-/* Caller must hold serdes_lock__. */
+/* Acquires serdes_lock__ to release camera and deserializer ownership together. */
 static bool ds5_release_slot(struct ds5 *state)
 {
 	struct dser_control *dser_control;
@@ -6486,6 +6490,46 @@ static bool ds5_release_slot(struct ds5 *state)
 }
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
+static void ds5_serdes_probe_cleanup(struct ds5 *state)
+{
+	struct device *dev = &state->client->dev;
+	int ret;
+
+	if (!state->ser_primary)
+		return;
+
+	mutex_lock(&serdes_lock__);
+	if (state->ds5_dev) {
+		mutex_lock(&state->ds5_dev->lock);
+		if (state->ds5_dev->ds5_primary == state)
+			state->ds5_dev->serdes_setup_complete = false;
+		mutex_unlock(&state->ds5_dev->lock);
+	}
+
+	/* Only unwind registrations acquired by this probe; a failed pair may
+	 * belong to a different live instance. */
+	if (state->ser_paired) {
+		state->ser_ops->reset_control(state->ser_dev);
+		ret = state->ser_ops->sdev_unpair(state->ser_dev, state->g_ctx.s_dev);
+		if (ret)
+			dev_warn(dev, "probe cleanup: serializer unpair failed: %d\n", ret);
+		state->ser_paired = false;
+	}
+	if (state->dser_registered) {
+		state->dser_ops->reset_control(state->dser_dev, state->g_ctx.s_dev);
+		ret = state->dser_ops->sdev_unregister(state->dser_dev, state->g_ctx.s_dev);
+		if (ret)
+			dev_warn(dev, "probe cleanup: deserializer unregister failed: %d\n", ret);
+		state->dser_registered = false;
+	}
+	if (state->dser_powered) {
+		state->dser_ops->power_off(state->dser_dev);
+		state->dser_powered = false;
+	}
+	mutex_unlock(&serdes_lock__);
+	ds5_release_slot(state);
+}
+
 static int ds5_setup_and_link(struct ds5 *state)
 {
 	int i;
@@ -6952,7 +6996,10 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 	if (state->dser_primary) {
 		state->dser_ops->power_off(state->dser_dev);
 		/* For now no separate power on required for serializer device */
-		state->dser_ops->power_on(state->dser_dev);
+		err = state->dser_ops->power_on(state->dser_dev);
+		if (err)
+			goto error;
+		state->dser_powered = true;
 		/* Allow deserializer to stabilize after power cycle before I2C access.
 		 * With REGCACHE_NONE the first register write goes straight to I2C;
 		 * if the chip is still booting after XCLR deassert the write fails.
@@ -7033,6 +7080,7 @@ static int ds5_serdes_setup(struct ds5 *state)
 		dev_err(&c->dev, "gmsl ser pairing failed\n");
 		goto serdes_setup_end;
 	}
+	state->ser_paired = true;
 
 	/* Register sensor to deserializer dev */
 	ret = state->dser_ops->sdev_register(state->dser_dev, &state->g_ctx);
@@ -7040,6 +7088,7 @@ static int ds5_serdes_setup(struct ds5 *state)
 		dev_err(&c->dev, "gmsl deserializer register failed\n");
 		goto serdes_setup_end;
 	}
+	state->dser_registered = true;
 
 	ret = ds5_gmsl_serdes_setup(state);
 	if (ret) {
@@ -7064,21 +7113,8 @@ static int ds5_serdes_setup(struct ds5 *state)
 	}
 
 serdes_setup_end:
-	/* Set/clear serdes_setup_complete from the same exit gate: error branch
-	 * clears it, success branch sets it. This ensures flag state is
-	 * synchronized with actual setup completion status.
-	 */
-	if (ret) {
-		state->ser_ops->sdev_unpair(state->ser_dev, state->g_ctx.s_dev);
-		state->dser_ops->sdev_unregister(state->dser_dev, state->g_ctx.s_dev);
-		if (state->ser_primary)
-			ds5_release_slot(state);
-	} else if (state->ser_primary) {
-		mutex_lock(&state->ds5_dev->lock);
-		if (state->ds5_dev->ds5_primary == state)
-			state->ds5_dev->serdes_setup_complete = true;
-		mutex_unlock(&state->ds5_dev->lock);
-	}
+	if (ret)
+		ds5_serdes_probe_cleanup(state);
 
 	return ret;
 }
@@ -9679,6 +9715,7 @@ static int ds5_probe(struct i2c_client *c
 		of_node_put(mode0_node);
 	} else {
 		dev_err(&state->client->dev, "No mode0 provided\n");
+		ret = -EINVAL;
 		goto e_regulator;
 	}
 
@@ -9716,6 +9753,14 @@ static int ds5_probe(struct i2c_client *c
 		state->dfu_dev.dfu_state_flag = DS5_DFU_RECOVERY;
 		/* Override I2C drvdata with state for use in remove function */
 		i2c_set_clientdata(c, state);
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+		if (state->ser_primary) {
+			mutex_lock(&state->ds5_dev->lock);
+			if (state->ds5_dev->ds5_primary == state)
+				state->ds5_dev->serdes_setup_complete = true;
+			mutex_unlock(&state->ds5_dev->lock);
+		}
+#endif
 		return 0;
 	}
 
@@ -9774,6 +9819,11 @@ static int ds5_probe(struct i2c_client *c
 		if (role_pad >= DS5_MUX_PAD_DEPTH && role_pad < DS5_MUX_PAD_COUNT) {
 			mutex_lock(&state->ds5_dev->lock);
 			state->ds5_dev->role_inst[role_pad] = state;
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+			/* Siblings may use the primary only after its entire probe succeeds. */
+			if (state->ser_primary && state->ds5_dev->ds5_primary == state)
+				state->ds5_dev->serdes_setup_complete = true;
+#endif
 			mutex_unlock(&state->ds5_dev->lock);
 		}
 	}
@@ -9792,6 +9842,10 @@ e_chardev:
 	if (state->dfu_dev.ds5_class)
 		ds5_chrdev_remove(state);
 e_regulator:
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	/* Probe failure frees state, so SerDes must release its g_ctx first. */
+	ds5_serdes_probe_cleanup(state);
+#endif
 	if (state->vcc)
 		regulator_disable(state->vcc);
 #ifdef CONFIG_VIDEO_D4XX_SERDES

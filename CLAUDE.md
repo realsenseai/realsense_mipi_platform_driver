@@ -93,6 +93,44 @@ RealSense D4XX camera module
 - **`utilities/streamApp/`** — C++ streaming application with V4L2 interface (`v4l2_ds5_mipi.cpp`), camera capabilities enumeration, GUI, and firmware logging.
 - **`utilities/JsonToBin/`** — Python tool to convert JSON camera presets to binary register configs.
 
+### NVIDIA patch index (apply order, not driver IDs)
+
+Numeric prefixes are local to each JP directory. Two subjects can share a
+prefix (JP7 `0009`); the complete filename determines lexical apply order.
+Fold changes to an existing driver into its existing subject patch rather than
+adding a second patch over the same driver. Preserve tracked symlinks.
+
+| Subject | JP5.0.2 | JP5.1.2 | JP5.1.6 | JP6.0–6.2.2 | JP7.0–7.2 |
+|---|---|---|---|---|---|
+| Initial driver / metadata / VI integration | 0001 | 0001 | 0001 | 0001 | 0001 |
+| MAX9295 / MAX9296 core | 0003, 0005–0012 | bundled in 0001 | bundled in 0001 | 0002 | bundled in 0001 |
+| `G_PARM` fix | 0002 | bundled in 0001 | bundled in 0001 | bundled in 0001 | bundled in 0001 |
+| VI cleanup | 0004 | bundled in 0001 | bundled in 0001 | bundled in 0001 | bundled in 0001 |
+| VI high-CPU fix | 0013 | 0002 | 0002 | bundled in 0001 | bundled in 0001 |
+| VI S/G callback validation | bundled in 0001 | 0003 | 0003 | bundled in 0001 | bundled in 0001 |
+| Y12I calibration | bundled in 0001 | bundled in 0001 | bundled in 0001 | 0004 | 0003 |
+| MAX9295 external sync | 0015 | 0005 | 0005 | bundled in 0002 | 0004 |
+| MAX9296 external sync | 0016 | 0006 | 0006 | bundled in 0002 | 0005 |
+| **MAX96712 (including lifecycle cleanup)** | **0017** | **0007** | **0007** | **0003** | **0006** |
+| MAX9295 external address assignment | 0018 | 0008 | 0008 | bundled in 0002 | 0007 |
+| MAX9296 API alignment | 0019 | 0009 | 0009 | bundled in 0002 | 0008 |
+| MAX9295/MAX9296 regmap cache | 0020 | 0010 | 0010 | bundled in 0002 | 0009-media-i2c… |
+| YUV422 VI format mapping | 0021 | 0011 | 0011 | 0010 | 0009-Fix-vi5… |
+| Backend timestamp / runtime TSC rate | 0022 | 0004 | 0004 | 0005 | 0010 |
+| Preserve RCE error configuration | — | — | 0012 | — | — |
+| VI file lifecycle recovery | — | — | 0013 | — | — |
+| VI worker task reference lifetime | 0023 | 0012 | 0014 | 0011 | 0011 |
+| VI failed-request buffer cleanup | 0024 | 0013 | 0015 | 0012 | 0012 |
+| VI transport geometry / DT override | 0025 | 0014 | 0016 | 0013 | 0013 |
+| Runtime VI format bitmap refresh | 0026 | 0015 | 0017 | 0014 | 0014 |
+
+Here `—` means no separately numbered subject patch, not an absent kernel
+capability. These indices cover `kernel/nvidia/<JP>/` and `nvidia-oot/<JP>/`, not the
+separate kernel/UAPI or device-tree patch directories. JP5.1.6 symlinks the
+JP5.1.2 MAX96712 carrier; JP6.1/6.2 symlink JP6.0 `0003`; JP6.2.1/6.2.2
+symlink the whole `6.2` directory. JP7 `0006` also resolves to JP6.0 `0003`.
+MAX96717/MAX96724 are shared source files, not numbered patch carriers.
+
 ### Video device layout (per camera)
 
 Each camera creates 7 V4L2 video devices — every stream except IMU has a metadata node
@@ -194,6 +232,16 @@ Each MIPI segment's lane count comes from a **different** DT property, so the ca
 - Protect per-camera mutable slot state (`ds5_primary`, `depth/rgb/ir/imu_streaming`) with `struct ds5_dev::lock`.
 - Protect per-deserializer slot assignment (`dser_dev`) with `struct dser_control::lock`.
 - Any path that releases a primary camera slot must clear both camera-slot ownership and deserializer-slot ownership together; do not clear only `ds5_primary`. Use a shared helper so teardown/error paths stay symmetric. The `ds5_release_slot()` helper always acquires and releases `serdes_lock__` internally; callers must not hold the lock when calling it.
+- SerDes probe rollback must track successful pair/register/power acquisitions.
+  Every later d4xx probe error calls `ds5_serdes_probe_cleanup()` before devm
+  releases the embedded `g_ctx`; a rejected pair must leave its existing owner
+  untouched. Cleanup marks setup incomplete under the slot lock before unwinding;
+  operational probe publishes readiness with the per-role instance after V4L2
+  init; successful DFU-recovery binding publishes readiness on its early exit.
+- I2C `remove()` tears down driver-owned resources; the bound client belongs to
+  the I2C core. MAX96712 removes debugfs and drains/clears exported global slots
+  before freeing its instance. MAX96724 balances its one regulator enable even
+  when several logical power references remain at unbind.
 - For sibling-health checks, snapshot pointers/flags under lock and perform I2C probing after unlocking.
 - `ds5_s_ctrl()` holds `ds5_dev->lock` across the MinZ XU read/write so the streaming-state check and wire transaction stay atomic against sibling stream transitions; this is the exception to snapshot-then-unlock.
 - A multiplexed carrier (D58x `RSVL` on VC2) is an ordinary descriptor format of its node: d4xx configures and starts/stops it through the standard per-stream registers and `ds5_mux_s_stream()`, exactly like Y8. The camera maps that start/stop to its member capture gate; members are switched by the SDK through opaque `HWMC_RW`. Do not add member- or MUX-protocol knowledge (opcodes, stream ids, capture actions) to d4xx, and do not issue HWMC from the stream path: the camera has one HWMC mailbox and the `HWMC_RW` SET/GET pair spans two ioctls, so a driver-internal HWMC can land between a client's request and response.
