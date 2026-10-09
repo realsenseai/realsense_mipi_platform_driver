@@ -260,6 +260,10 @@ struct ds5 {
 	const struct ser_interface *ser_ops;
 	bool ser_primary; /* true for the first instance per serializer (first stream of a specific camera) */
 	bool dser_primary; /* true for the first instance per deserializer (first camera of a specific dser) */
+	bool ser_paired;
+	bool dser_registered;
+	bool ser_control_setup;
+	bool dser_control_setup;
 #endif
 	struct ds5_dev *ds5_dev; /* pointer to DS5 device struct */
 };
