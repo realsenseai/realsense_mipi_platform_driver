@@ -31,6 +31,11 @@
 #define MAX96724_ERRCH_D_ADDR		0x1749
 #define MAX96724_ERRCH_FORCE_ON		0x75
 #define MAX96724_SRAM_LCRC_ERR_ADDR	0x0458
+#define MAX96724_I2C_P0_LINK_A_MASTER_ADDR	0x0641
+#define MAX96724_I2C_LINK_STRIDE			0x0010
+#define MAX96724_I2C_P0_MASTER_ADDR(link) \
+	(MAX96724_I2C_P0_LINK_A_MASTER_ADDR + \
+	 (link) * MAX96724_I2C_LINK_STRIDE)
 
 /* Video pipe registers. */
 #define MAX96724_PIPE_SEL0_ADDR		0xF0
@@ -106,6 +111,8 @@
 #define MAX96724_ALL_MAP_CTRL1		0x55
 #define MAX96724_MAP3_CTRL1		0x15
 #define MAX96724_LINK_EN_BASE		0xF0
+#define MAX96724_I2C_MST_BT_MASK		0x70
+#define MAX96724_I2C_FAST_PLUS_MST_BT	0x70
 
 #define MAX96717_DEFAULT_ADDR		0x40
 #define MAX96717_DEV_ADDR		0x0000
@@ -140,6 +147,8 @@ struct pipe_ctx {
 };
 
 struct max96724 {
+	bool i2c_fast_mode[MAX96724_MAX_LINKS];
+	u8 i2c_saved_mst_bt[MAX96724_MAX_LINKS];
 	struct i2c_client *i2c_client;
 	struct regmap *regmap;
 	u32 num_src;
@@ -192,6 +201,46 @@ static int max96724_write_reg(struct device *dev, u16 addr, u8 val)
 
 	return err;
 }
+
+/* Retain the original timing for teardown and failed-enable rollback. */
+int max96724_set_i2c_fast_mode(struct device *dev, u32 link, bool enable)
+{
+	struct max96724 *priv;
+	unsigned int value;
+	int err = 0;
+
+	if (!dev)
+		return -EINVAL;
+
+	priv = dev_get_drvdata(dev);
+	if (!priv || !priv->regmap)
+		return -ENODEV;
+
+	if (link >= MAX96724_MAX_LINKS)
+		return -EINVAL;
+
+	mutex_lock(&priv->lock);
+	if (!enable && !priv->i2c_fast_mode[link])
+		goto out;
+
+	err = regmap_read(priv->regmap, MAX96724_I2C_P0_MASTER_ADDR(link), &value);
+	if (err)
+		goto out;
+	if (enable && !priv->i2c_fast_mode[link]) {
+		priv->i2c_saved_mst_bt[link] = value & MAX96724_I2C_MST_BT_MASK;
+		priv->i2c_fast_mode[link] = true;
+	}
+	value = (value & ~MAX96724_I2C_MST_BT_MASK) |
+		(enable ? MAX96724_I2C_FAST_PLUS_MST_BT :
+		 priv->i2c_saved_mst_bt[link]);
+	err = max96724_write_reg(dev, MAX96724_I2C_P0_MASTER_ADDR(link), value);
+	if (!err && !enable)
+		priv->i2c_fast_mode[link] = false;
+out:
+	mutex_unlock(&priv->lock);
+	return err;
+}
+EXPORT_SYMBOL(max96724_set_i2c_fast_mode);
 
 static int max96724_set_registers(struct device *dev, struct reg_pair *map,
 				  u32 count)

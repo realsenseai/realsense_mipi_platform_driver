@@ -7,14 +7,14 @@ Add MAX96712 deserializer driver support for D4XX/D5XX cameras.
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- drivers/media/i2c/max96712.c | 1263 ++++++++++++++++++++++++++++++++++++++++--
- 1 file changed, 1228 insertions(+), 35 deletions(-)
+ drivers/media/i2c/max96712.c | 1309 ++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 1274 insertions(+), 35 deletions(-)
 
 diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
-index 8e237ee..a44cbab 100644
+index 8e237eef049896820fa58cacbac1cfe7c26fbf43..bb62c3f97e11b0bb524d9949319123ed5b69d4de 100644
 --- a/drivers/media/i2c/max96712.c
 +++ b/drivers/media/i2c/max96712.c
-@@ -16,32 +16,193 @@
+@@ -16,32 +16,199 @@
  #include <linux/gpio.h>
  #include <linux/of.h>
  #include <linux/of_gpio.h>
@@ -44,6 +44,10 @@ index 8e237ee..a44cbab 100644
 +#define MAX96712_PWR1_ADDR 0x13
 +#define MAX96712_PWR1_RESET_ALL_VAL 0x40
 +#define MAX96712_CTRL1_ADDR 0x18
++
++#define MAX96712_I2C_P0_MASTER_ADDR(link) (0x0641 + (link) * 0x10)
++#define MAX96712_I2C_MST_BT_MASK 0x70
++#define MAX96712_I2C_FAST_PLUS_MST_BT 0x70
 +
 +#define MAX96712_LINK_A_LOCK_ADDR	0x001A
 +#define MAX96712_LINK_B_LOCK_ADDR	0x000A
@@ -162,6 +166,8 @@ index 8e237ee..a44cbab 100644
 +}
  
  struct max96712 {
++	bool i2c_fast_mode[MAX96712_MAX_LINKS];
++	u8 i2c_saved_mst_bt[MAX96712_MAX_LINKS];
  	struct i2c_client *i2c_client;
  	struct regmap *regmap;
  	const char *channel;
@@ -213,7 +219,7 @@ index 8e237ee..a44cbab 100644
  	i2c_client = global_priv[channel]->i2c_client;
  	bak = i2c_client->addr;
  
-@@ -53,7 +214,6 @@ int max96712_write_reg_Dser(int slaveAddr, int channel,
+@@ -53,7 +220,6 @@ int max96712_write_reg_Dser(int slaveAddr, int channel,
  		dev_err(&i2c_client->dev, "%s: addr = 0x%x, val = 0x%x\n",
  				__func__, addr, val);
  	}
@@ -221,7 +227,7 @@ index 8e237ee..a44cbab 100644
  	return err;
  }
  EXPORT_SYMBOL(max96712_write_reg_Dser);
-@@ -68,8 +228,6 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
+@@ -68,8 +234,6 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
  
  	if (channel > 3 || channel < 0 || global_priv[channel] == NULL)
  		return -1;
@@ -230,7 +236,7 @@ index 8e237ee..a44cbab 100644
  	i2c_client = global_priv[channel]->i2c_client;
  	bak = i2c_client->addr;
  	i2c_client->addr = slaveAddr / 2;
-@@ -80,11 +238,56 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
+@@ -80,11 +244,56 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
  		dev_err(&i2c_client->dev, "%s: addr = 0x%x, val = 0x%x\n",
  				__func__, addr, *val);
  	}
@@ -288,7 +294,7 @@ index 8e237ee..a44cbab 100644
  static int max96712_read_reg(struct max96712 *priv,
  			u16 addr, unsigned int *val)
  {
-@@ -99,6 +302,20 @@ static int max96712_read_reg(struct max96712 *priv,
+@@ -99,6 +308,60 @@ static int max96712_read_reg(struct max96712 *priv,
  	return err;
  }
  
@@ -306,10 +312,50 @@ index 8e237ee..a44cbab 100644
 +	usleep_range(100, 110);
 +	return err;
 +}
++
++/* Retain the original timing for teardown and failed-enable rollback. */
++int max96712_set_i2c_fast_mode(struct device *dev, u32 link, bool enable)
++{
++	struct max96712 *priv;
++	unsigned int value;
++	int err = 0;
++
++	if (!dev)
++		return -EINVAL;
++
++	priv = dev_get_drvdata(dev);
++	if (!priv || !priv->regmap)
++		return -ENODEV;
++
++	if (link >= MAX96712_MAX_LINKS)
++		return -EINVAL;
++
++	mutex_lock(&priv->lock);
++	if (!enable && !priv->i2c_fast_mode[link])
++		goto out;
++
++	err = max96712_read_reg(priv, MAX96712_I2C_P0_MASTER_ADDR(link), &value);
++	if (err)
++		goto out;
++	if (enable && !priv->i2c_fast_mode[link]) {
++		priv->i2c_saved_mst_bt[link] = value & MAX96712_I2C_MST_BT_MASK;
++		priv->i2c_fast_mode[link] = true;
++	}
++	value = (value & ~MAX96712_I2C_MST_BT_MASK) |
++		(enable ? MAX96712_I2C_FAST_PLUS_MST_BT :
++		 priv->i2c_saved_mst_bt[link]);
++	err = max96712_write_reg(priv, MAX96712_I2C_P0_MASTER_ADDR(link), value);
++	if (!err && !enable)
++		priv->i2c_fast_mode[link] = false;
++out:
++	mutex_unlock(&priv->lock);
++	return err;
++}
++EXPORT_SYMBOL(max96712_set_i2c_fast_mode);
  
  static int max96712_stats_show(struct seq_file *s, void *data)
  {
-@@ -153,24 +370,6 @@ static const struct file_operations max96712_debugfs_fops = {
+@@ -153,24 +416,6 @@ static const struct file_operations max96712_debugfs_fops = {
  	.release = single_release,
  };
  
@@ -334,7 +380,7 @@ index 8e237ee..a44cbab 100644
  static int max96712_debugfs_init(const char *dir_name,
  				struct dentry **d_entry,
  				struct dentry **f_entry,
-@@ -225,9 +424,106 @@ static int max96712_debugfs_init(const char *dir_name,
+@@ -225,9 +470,106 @@ static int max96712_debugfs_init(const char *dir_name,
  static  struct regmap_config max96712_regmap_config = {
  	.reg_bits = 16,
  	.val_bits = 8,
@@ -442,7 +488,7 @@ index 8e237ee..a44cbab 100644
  #if defined(NV_I2C_DRIVER_STRUCT_PROBE_WITHOUT_I2C_DEVICE_ID_ARG) /* Linux 6.3 */
  static int max96712_probe(struct i2c_client *client)
  #else
-@@ -237,10 +533,16 @@ static int max96712_probe(struct i2c_client *client,
+@@ -237,10 +579,16 @@ static int max96712_probe(struct i2c_client *client,
  {
  	struct max96712 *priv;
  	int err = 0;
@@ -459,7 +505,7 @@ index 8e237ee..a44cbab 100644
  	priv->i2c_client = client;
  	priv->regmap = devm_regmap_init_i2c(priv->i2c_client,
  				&max96712_regmap_config);
-@@ -249,15 +551,68 @@ static int max96712_probe(struct i2c_client *client,
+@@ -249,15 +597,68 @@ static int max96712_probe(struct i2c_client *client,
  			"regmap init failed: %ld\n", PTR_ERR(priv->regmap));
  		return -ENODEV;
  	}
@@ -533,7 +579,7 @@ index 8e237ee..a44cbab 100644
  	err = max96712_debugfs_init(NULL, NULL, NULL, priv);
  	if (err)
  		return err;
-@@ -274,8 +629,11 @@ static int max96712_remove(struct i2c_client *client)
+@@ -274,8 +675,11 @@ static int max96712_remove(struct i2c_client *client)
  static void max96712_remove(struct i2c_client *client)
  #endif
  {
@@ -546,7 +592,7 @@ index 8e237ee..a44cbab 100644
  		i2c_unregister_device(client);
  		client = NULL;
  	}
-@@ -284,13 +642,847 @@ static void max96712_remove(struct i2c_client *client)
+@@ -284,13 +688,847 @@ static void max96712_remove(struct i2c_client *client)
  #endif
  }
  
@@ -1395,7 +1441,7 @@ index 8e237ee..a44cbab 100644
  	{ },
  };
  
-@@ -300,6 +1492,7 @@ static struct i2c_driver max96712_i2c_driver = {
+@@ -300,6 +1538,7 @@ static struct i2c_driver max96712_i2c_driver = {
  	.driver = {
  		.name = "max96712",
  		.owner = THIS_MODULE,
@@ -1403,3 +1449,5 @@ index 8e237ee..a44cbab 100644
  	},
  	.probe = max96712_probe,
  	.remove = max96712_remove,
+-- 
+2.25.1
