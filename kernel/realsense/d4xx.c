@@ -34,6 +34,7 @@
 #include <linux/videodev2.h>
 #include <linux/version.h>
 #include <linux/mutex.h>
+#include <linux/rwsem.h>
 #include <media/media-entity.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
@@ -823,6 +824,11 @@ struct ds5_dev {
 	struct ds5 *role_inst[DS5_MUX_PAD_COUNT];
 };
 
+/* A deserializer one-shot drops every tunneled link it resets for ~100 ms and has
+ * wedged the whole bus when tunneled I2C raced it (RSDSO-21907): tunneled
+ * accesses hold this for read, one-shot resets hold it for write. */
+static DECLARE_RWSEM(gmsl_link_rwsem__);
+
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 static DEFINE_MUTEX(serdes_lock__);
 static bool ds5_slots_inited;
@@ -1045,6 +1051,7 @@ static int ds5_write(struct ds5 *state, u16 reg, u16 val)
 			"%s(): writing to register: 0x%04x, value1: 0x%x, value2:0x%x\n",
 			__func__, reg, value[1], value[0]);
 
+	down_read(&gmsl_link_rwsem__);
 	for (retry = 0; retry < DS5_I2C_RETRY_COUNT; retry++) {
 		ret = regmap_raw_write(state->regmap, reg, value, sizeof(value));
 		if (ret == 0)
@@ -1057,6 +1064,7 @@ static int ds5_write(struct ds5 *state, u16 reg, u16 val)
 				     DS5_I2C_RETRY_DELAY_US + 500);
 		}
 	}
+	up_read(&gmsl_link_rwsem__);
 	if (ret < 0)
 		dev_err(&state->client->dev,
 			"%s(): i2c write failed after %d retries, 0x%04x = 0x%x, err %d\n",
@@ -1074,6 +1082,7 @@ static int ds5_raw_write(struct ds5 *state, u16 reg,
 	int ret;
 	int retry;
 
+	down_read(&gmsl_link_rwsem__);
 	for (retry = 0; retry < DS5_I2C_RETRY_COUNT; retry++) {
 		ret = regmap_raw_write(state->regmap, reg, val, val_len);
 		if (ret == 0)
@@ -1086,6 +1095,7 @@ static int ds5_raw_write(struct ds5 *state, u16 reg,
 				     DS5_I2C_RETRY_DELAY_US + 500);
 		}
 	}
+	up_read(&gmsl_link_rwsem__);
 	if (ret < 0)
 		dev_err(&state->client->dev,
 			"%s(): i2c raw write failed after %d retries, 0x%04x size(%d), err %d\n",
@@ -1103,6 +1113,7 @@ static int ds5_read(struct ds5 *state, u16 reg, u16 *val)
 	int ret;
 	int retry;
 
+	down_read(&gmsl_link_rwsem__);
 	for (retry = 0; retry < DS5_I2C_RETRY_COUNT; retry++) {
 		ret = regmap_raw_read(state->regmap, reg, val, 2);
 		if (ret == 0)
@@ -1115,6 +1126,7 @@ static int ds5_read(struct ds5 *state, u16 reg, u16 *val)
 				     DS5_I2C_RETRY_DELAY_US + 500);
 		}
 	}
+	up_read(&gmsl_link_rwsem__);
 	if (ret < 0)
 		dev_err(&state->client->dev,
 			"%s(): i2c read failed after %d retries, 0x%04x, err %d\n",
@@ -1136,6 +1148,7 @@ static int ds5_raw_read(struct ds5 *state, u16 reg, void *val, size_t val_len)
 	int ret;
 	int retry;
 
+	down_read(&gmsl_link_rwsem__);
 	for (retry = 0; retry < DS5_I2C_RETRY_COUNT; retry++) {
 		ret = regmap_raw_read(state->regmap, reg, val, val_len);
 		if (ret == 0)
@@ -1148,6 +1161,7 @@ static int ds5_raw_read(struct ds5 *state, u16 reg, void *val, size_t val_len)
 				     DS5_I2C_RETRY_DELAY_US + 500);
 		}
 	}
+	up_read(&gmsl_link_rwsem__);
 	if (ret < 0)
 		dev_err(&state->client->dev,
 			"%s(): i2c raw read failed after %d retries, 0x%04x size(%d), err %d\n",
@@ -3109,6 +3123,7 @@ static int ds5_setup_pipeline(struct ds5 *state, u8 data_type1, u8 data_type2,
 	 * (see serdes_get_ser_pipe_id()). */
 	int ser_pipe_id = serdes_get_ser_pipe_id(state, pipe_id, ser_vc_id);
 
+	down_read(&gmsl_link_rwsem__);
 	ret |= state->dser_ops->bind_ser_to_dser_pipe(state->dser_dev, pipe_id, ser_pipe_id,
 				state->gmsl_link);
 	dev_dbg(&state->client->dev,
@@ -3119,6 +3134,7 @@ static int ds5_setup_pipeline(struct ds5 *state, u8 data_type1, u8 data_type2,
 				data_type1, data_type2, ser_vc_id);
 	ret |= state->dser_ops->set_pipe(state->dser_dev, pipe_id,
 				data_type1, data_type2, state->gmsl_link, ser_vc_id);
+	up_read(&gmsl_link_rwsem__);
 	if (ret)
 		dev_warn(&state->client->dev,
 			 "failed to set pipe %d, data_type1: 0x%x, data_type2: 0x%x, vc_id: %u\n",
@@ -3275,8 +3291,11 @@ static int ds5_configure(struct ds5 *state)
 		ret = ds5_setup_pipeline(state, data_type1, data_type2,
 					 sensor->pipe_id, vc_id, ser_vc_id);
 		// reset data path when switching to Y12I
-		if (is_calib)
+		if (is_calib) {
+			down_write(&gmsl_link_rwsem__);
 			state->dser_ops->reset_oneshot(state->dser_dev);
+			up_write(&gmsl_link_rwsem__);
+		}
 		mutex_unlock(&serdes_lock__);
 		if (ret < 0)
 			return ret;
@@ -4488,6 +4507,7 @@ static int ds5_set_ser_esync_tunneling(struct ds5 *state, bool enable)
 		"%s(): serializer ESYNC %s requested\n",
 		__func__, enable ? "enable" : "disable");
 
+	down_read(&gmsl_link_rwsem__);
 	if (enable)
 		ret = state->ser_ops->enable_gpio_tunneling(state->ser_dev);
 	else
@@ -4500,6 +4520,7 @@ static int ds5_set_ser_esync_tunneling(struct ds5 *state, bool enable)
 			state->dser_ops->setup_fsync(state->dser_dev, fps) :
 			state->dser_ops->disable_fsync(state->dser_dev);
 	}
+	up_read(&gmsl_link_rwsem__);
 
 	if (ret)
 		dev_warn(&state->client->dev,
@@ -4829,8 +4850,11 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 
 	/* RSDEV-12608: drop the stale partial frame a mid-stream camera reset leaves
 	 * in this link's line buffer (NULL-safe; max9296 leaves none). */
-	if (state->dser_ops->reset_oneshot_link)
+	if (state->dser_ops->reset_oneshot_link) {
+		down_write(&gmsl_link_rwsem__);
 		state->dser_ops->reset_oneshot_link(state->dser_dev, state->gmsl_link);
+		up_write(&gmsl_link_rwsem__);
+	}
 
 	/* Re-apply ESYNC tunneling to match cached sync_mode control */
 	if (state->ctrls.sync_mode) {
@@ -7993,9 +8017,9 @@ static int ds5_mux_s_frame_interval(struct v4l2_subdev *sd,
 }
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
-/* RSDSO-21786: fire the link flush at most once per cold bring-up. The flag is
- * consumed under ds5_dev->lock, but the op itself (CTRL1 write plus a 100 ms
- * settle) must run unlocked so it cannot stall a sibling's start. */
+/* RSDSO-21786: fire the link flush at most once per cold bring-up. The op (CTRL1
+ * write plus a 100 ms settle) runs outside ds5_dev->lock, but under the link
+ * rwsem so tunneled I2C waits it out instead of failing. */
 static void ds5_flush_idle_link(struct ds5 *state)
 {
 	bool flush;
@@ -8008,8 +8032,11 @@ static void ds5_flush_idle_link(struct ds5 *state)
 	state->ds5_dev->link_flush_pending = false;
 	mutex_unlock(&state->ds5_dev->lock);
 
-	if (flush)
+	if (flush) {
+		down_write(&gmsl_link_rwsem__);
 		state->dser_ops->reset_oneshot_link(state->dser_dev, state->gmsl_link);
+		up_write(&gmsl_link_rwsem__);
+	}
 }
 #endif
 
@@ -8292,7 +8319,9 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		if (state->is_y8
 			&& (state->ir.sensor.config.format->data_type == GMSL_CSI_DT_RGB_888))
 		{
+			down_write(&gmsl_link_rwsem__);
 			state->dser_ops->reset_oneshot(state->dser_dev);
+			up_write(&gmsl_link_rwsem__);
 		}
 		mutex_unlock(&serdes_lock__);
 		/* Tell the serializer this stream stopped. On the last stream it
@@ -8304,8 +8333,11 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 							       state->gmsl_link, vc_id) :
 				(int)vc_id;
 
-			if (ser_vc_id >= 0)
+			if (ser_vc_id >= 0) {
+				down_read(&gmsl_link_rwsem__);
 				state->ser_ops->stream_stop(state->ser_dev, ser_vc_id);
+				up_read(&gmsl_link_rwsem__);
+			}
 		}
 		msleep_range(100);
 #endif
