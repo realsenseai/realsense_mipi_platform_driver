@@ -766,6 +766,7 @@ struct ds5_dev {
 	struct mutex lock;
 	struct mutex v2_lock;
 	struct ds5 *v2_owner;
+	u64 v2_quarantine_boot;
 
 	/*
 	* Per-camera reset generation counter.

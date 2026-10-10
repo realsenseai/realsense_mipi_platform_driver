@@ -147,7 +147,7 @@ static int d585_v2_begin_session(struct ds5 *state, unsigned long arg)
     u8 ack[64];
     unsigned long deadline = jiffies + msecs_to_jiffies(5000);
     int ret;
-    if (state->dfu_v2 || state->ds5_dev->v2_owner) return -EBUSY;
+    if (state->dfu_v2) return -EBUSY;
     if (copy_from_user(&begin, (void __user *)arg, sizeof(begin))) return -EFAULT;
     if (begin.version != 2 || begin.flags || !begin.size || begin.size > 25524288) return -EINVAL;
     v = kzalloc(sizeof(*v), GFP_KERNEL);
@@ -160,6 +160,16 @@ static int d585_v2_begin_session(struct ds5 *state, unsigned long arg)
         begin.size > get_unaligned_le32(v->cap + 20)) { ret = -EINVAL; goto free_context; }
     v->boot = get_unaligned_le64(v->cap + 8);
     if (!v->boot) { ret = -EINVAL; goto free_context; }
+    /* Only a CRC-valid CAP from a different firmware boot releases an
+     * uncertain/Flash-started session. HWMC rst can recover without reload. */
+    if (state->ds5_dev->v2_owner) {
+        if (!state->ds5_dev->v2_quarantine_boot ||
+            state->ds5_dev->v2_quarantine_boot == v->boot) {
+            ret = -EBUSY; goto free_context;
+        }
+        state->ds5_dev->v2_owner = NULL;
+        state->ds5_dev->v2_quarantine_boot = 0;
+    }
     do { v->session = get_random_u64(); } while (!v->session);
     v->total = begin.size;
     v->receive_deadline = jiffies + msecs_to_jiffies(max_t(u64, 300,
@@ -278,8 +288,9 @@ static void d585_v2_close(struct ds5 *state)
     if (!state->dfu_v2) return;
     mutex_lock(&state->ds5_dev->v2_lock);
     (void)d585_v2_abort_locked(state); /* never free/reset Firmware worker */
+    state->ds5_dev->v2_quarantine_boot = state->ds5_dev->v2_owner ?
+        state->dfu_v2->boot : 0;
     kfree(state->dfu_v2); state->dfu_v2 = NULL;
     mutex_unlock(&state->ds5_dev->v2_lock);
-    /* v2_owner remains quarantined when Flash may have started; test requires
-     * verified UART reset/module reload before another session. */
+    /* A subsequent BEGIN must prove a new firmware boot before reuse. */
 }
