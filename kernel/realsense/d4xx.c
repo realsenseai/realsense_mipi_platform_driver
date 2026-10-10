@@ -7587,7 +7587,21 @@ static int ds5_imu_init(struct i2c_client *c, struct ds5 *state)
 		       &ds5_subdev_ops, "imu");
 }
 
-/* Takes ds5_dev->lock for the EXTERNAL-pad format-count snapshot only. */
+/* The sensor a node streams from, per its DT cam-type; NULL without one. */
+static struct v4l2_subdev *ds5_role_sd(struct ds5 *state)
+{
+	if (state->is_imu)
+		return &state->imu.sensor.sd;
+	if (state->is_y8)
+		return &state->ir.sensor.sd;
+	if (state->is_depth)
+		return &state->depth.sensor.sd;
+	if (state->is_rgb)
+		return &state->rgb.sensor.sd;
+	return NULL;
+}
+
+/* Every pad lists the node's own sensor; a mux without a role has none. */
 static int ds5_mux_enum_mbus_code(struct v4l2_subdev *sd,
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
 				     struct v4l2_subdev_pad_config *cfg,
@@ -7598,61 +7612,14 @@ static int ds5_mux_enum_mbus_code(struct v4l2_subdev *sd,
 {
 	struct ds5 *state = container_of(sd, struct ds5, mux.sd.subdev);
 	struct v4l2_subdev_mbus_code_enum tmp = *mce;
-	struct v4l2_subdev *remote_sd;
-	unsigned int n_ir, n_depth;
-	int ret = -1;
+	struct v4l2_subdev *remote_sd = ds5_role_sd(state);
+	int ret;
 
 	dev_dbg(&state->client->dev, "%s(): %s \n", __func__, sd->name);
-	switch (mce->pad) {
-	case DS5_MUX_PAD_IR:
-		remote_sd = &state->ir.sensor.sd;
-		break;
-	case DS5_MUX_PAD_DEPTH:
-		remote_sd = &state->depth.sensor.sd;
-		break;
-	case DS5_MUX_PAD_RGB:
-		remote_sd = &state->rgb.sensor.sd;
-		break;
-	case DS5_MUX_PAD_IMU:
-		remote_sd = &state->imu.sensor.sd;
-		break;
-	case DS5_MUX_PAD_EXTERNAL:
-		/* Snapshot the counts; the forwarded call re-locks and
-		 * re-checks its own bounds.
-		 */
-		mutex_lock(&state->ds5_dev->lock);
-		n_ir = state->ir.sensor.n_formats;
-		n_depth = state->depth.sensor.n_formats;
-		mutex_unlock(&state->ds5_dev->lock);
-		if (mce->index >= n_ir + n_depth)
-			return -EINVAL;
-
-		/*
-		 * First list Left node / Motion Tracker formats, then depth.
-		 * This should also help because D16 doesn't have a direct
-		 * analog in MIPI CSI-2.
-		 */
-		if (mce->index < n_ir) {
-			remote_sd = &state->ir.sensor.sd;
-		} else {
-			tmp.index = mce->index - n_ir;
-			remote_sd = &state->depth.sensor.sd;
-		}
-
-		break;
-	default:
+	if (!remote_sd)
 		return -EINVAL;
-	}
 
 	tmp.pad = 0;
-	if (state->is_rgb)
-		remote_sd = &state->rgb.sensor.sd;
-	if (state->is_depth)
-		remote_sd = &state->depth.sensor.sd;
-	if (state->is_y8)
-		remote_sd = &state->ir.sensor.sd;
-	if (state->is_imu)
-		remote_sd = &state->imu.sensor.sd;
 	/* Locks internally */
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
 	ret = ds5_sensor_enum_mbus_code(remote_sd, cfg, &tmp);
