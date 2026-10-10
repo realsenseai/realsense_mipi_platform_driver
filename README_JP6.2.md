@@ -176,6 +176,7 @@ sudo ln -s /boot/initrd.img-5.15.148-tegra /boot/initrd
     | `tegra234-camera-d4xx-overlay-max96712-EVB.dtbo` | max96712 evaluation board |
     | `tegra234-camera-d4xx-overlay-max96712-EVB-cams-0-1.dtbo` | max96712 evaluation board w/ two connected cameras |
     | `tegra234-camera-d4xx-overlay-fg12-4ch-d5xx.dtbo` | Fangzhu fg12-4ch board with a single D5xx camera (max96717 serializer, 4-lane) connected to link A |
+    | `tegra234-camera-d4xx-overlay-fg12-4ch-cams-0-1-2-3-d5xx-3d4xx.dtbo` | Fangzhu FG12-4CH: D5xx on A + three D4xx on B/C/D; 4-lane 2.2 Gbps/lane host output with deskew |
     | `tegra234-camera-d4xx-overlay-fg12-12ch.dtbo` | Fangzhu fg12-12ch board with a single D4xx/D457 camera connected to cam0 (link 0 of the first deserializer) |
     | `tegra234-camera-d4xx-overlay-fg12-12ch-d5xx.dtbo` | Fangzhu fg12-12ch board with a single D5xx camera (max96717 serializer, 4-lane) connected to cam0 |
     | `tegra234-camera-d4xx-overlay-fg12-12ch-cams-0-1.dtbo` | Fangzhu fg12-12ch board with two D4xx/D457 cameras on cam0 & cam1 (links 0 & 1) sharing one deserializer |
