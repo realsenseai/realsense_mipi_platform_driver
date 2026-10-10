@@ -49,6 +49,7 @@ fi
 
 # For JP5 we override the i2c driver and ignore the previous that was created from patches
 cp kernel/realsense/d4xx.c "$TARGET/${D4XX_SRC_DST}/drivers/media/i2c/"
+cp kernel/realsense/d585_dfu_v2_bench.h "$TARGET/${D4XX_SRC_DST}/drivers/media/i2c/"
 if [[ "$JETPACK_VERSION" == "6.x" ]]; then
     # jp6 overlay
     cp hardware/realsense/tegra234-camera-d4xx-overlay*.dts "$TARGET/hardware/nvidia/t23x/nv-public/overlay/"
