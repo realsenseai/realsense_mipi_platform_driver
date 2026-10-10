@@ -1,0 +1,16 @@
+diff --git a/devicetree/Makefile.generic b/devicetree/Makefile.generic
+index 0b30dd5a5..8498bcb50 100644
+--- a/devicetree/Makefile.generic
++++ b/devicetree/Makefile.generic
+@@ -128,8 +128,10 @@ DTB_NEW_RULE_LIST := $(call replace_ddot,$(DTB_NEW_RULE_LIST))
+ $(DTB_NEW_RULE_LIST):
+ 	$(call if_changed_dep,dtc)
+ 
++dtbo-source = $(if $(wildcard $(src)/$(patsubst %.dtbo,%.dts,$(1))),$(src)/$(patsubst %.dtbo,%.dts,$(1)),$(src)/$(patsubst %.dtbo,%.dtso,$(1)))
++
+ define _define_dtbo_rule
+-$(obj)/$(call replace_ddot,$(1)): $(src)/$(patsubst %.dtbo,%.dts,$(1)) FORCE
++$(obj)/$(call replace_ddot,$(1)): $(call dtbo-source,$(1)) FORCE
+ endef
+ 
+ $(foreach _dtbo, $(DTBO_NEW_RULE_LIST), $(eval $(call _define_dtbo_rule,$(_dtbo))))
