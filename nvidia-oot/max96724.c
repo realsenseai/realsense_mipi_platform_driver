@@ -548,13 +548,10 @@ ret:
 }
 EXPORT_SYMBOL(max96724_power_on);
 
-void max96724_power_off(struct device *dev)
+static void max96724_power_off_locked(struct max96724 *priv)
 {
-	struct max96724 *priv = dev_get_drvdata(dev);
-
-	mutex_lock(&priv->lock);
 	if (!priv->pw_ref || --priv->pw_ref)
-		goto out;
+		return;
 
 	usleep_range(1, 2);
 	if (priv->reset_gpio)
@@ -562,7 +559,14 @@ void max96724_power_off(struct device *dev)
 
 	if (priv->vdd_cam_1v2)
 		regulator_disable(priv->vdd_cam_1v2);
-out:
+}
+
+void max96724_power_off(struct device *dev)
+{
+	struct max96724 *priv = dev_get_drvdata(dev);
+
+	mutex_lock(&priv->lock);
+	max96724_power_off_locked(priv);
 	mutex_unlock(&priv->lock);
 }
 EXPORT_SYMBOL(max96724_power_off);
@@ -1573,6 +1577,13 @@ static void max96724_remove(struct i2c_client *client)
 {
 	struct max96724 *priv = dev_get_drvdata(&client->dev);
 
+	/* All logical power users share one regulator enable owned by this bind. */
+	mutex_lock(&priv->lock);
+	if (priv->pw_ref) {
+		priv->pw_ref = 1;
+		max96724_power_off_locked(priv);
+	}
+	mutex_unlock(&priv->lock);
 	mutex_destroy(&priv->lock);
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 12)
