@@ -1,0 +1,199 @@
+From 73a5151efd5cfa7ee1a83b1284a036f1c65d2fc7 Mon Sep 17 00:00:00 2001
+From: pinquanw <pinquan.wang@realsenseai.com>
+Date: Thu, 17 Sep 2026 14:16:16 +0800
+Subject: [PATCH] media: tegra: request a VI clock floor for active D5xx
+ streams
+
+The throughput-only policy can select a low VI clock for RealSense
+video/IMU capture. Request 550.4 MHz while a realsense,d5xx sensor
+is streaming, using the rate selected in manual Orin Nano receive-latency
+experiments. This is a tunable default, not a universal hardware minimum
+or a guarantee of frame delivery. Deployment validation is still needed.
+
+D4xx-only capture retains the throughput policy. Mixed D4xx/D5xx capture
+shares the VI clock until the last D5xx stream stops.
+
+Recompute the floor under device_list_mutex, retain higher throughput
+votes, and let the VI clock provider round the request. A read-only
+load-time parameter allows opting out with zero. The floor is released
+when the last D5xx stream stops.
+
+Keep per-device policy state in a private allocation and expose new
+sensor-registration function. Apply the floor directly in the locked
+clock policy, keeping private allocation access inside its owning module.
+Preserve the public
+tegra_camera_dev_info layout and existing exported signatures/CRCs; the
+new NVIDIA module pair must still be built and installed together.
+
+Preserve existing failed-start handling: releasing a vote is unsafe until
+all partially started subdevices have been stopped successfully.
+
+Signed-off-by: pinquanw <pinquan.wang@realsenseai.com>
+---
+ drivers/media/platform/tegra/camera/vi/channel.c   |  6 ++-
+ drivers/video/tegra/camera/tegra_camera_platform.c | 56 ++++++++++++++++++++--
+ include/media/tegra_camera_platform.h              |  3 ++
+ 3 files changed, 58 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
+index 2cf1a5a1b8a18dea6ab32a1000c2921681ae142a..19dc605bd418857b7f3c3a062efeb0e7b23c2b47 100644
+--- a/drivers/media/platform/tegra/camera/vi/channel.c
++++ b/drivers/media/platform/tegra/camera/vi/channel.c
+@@ -2044,7 +2044,8 @@ int tegra_channel_init_subdevices(struct tegra_channel *chan)
+ 	if (strstr(chan->subdev_on_csi->name, "nvcsi") != NULL ||
+ 			chan->pg_mode) {
+ 		tegra_channel_populate_dev_info(&camdev_info, chan);
+-		ret = tegra_camera_device_register(&camdev_info, chan);
++		ret = tegra_camera_device_register_sensor(&camdev_info, chan,
++			chan->subdev_on_csi->dev->of_node);
+ 		return ret;
+ 	}
+ 
+@@ -2064,7 +2065,8 @@ int tegra_channel_init_subdevices(struct tegra_channel *chan)
+ 	}
+ 
+ 	tegra_channel_populate_dev_info(&camdev_info, chan);
+-	ret = tegra_camera_device_register(&camdev_info, chan);
++	ret = tegra_camera_device_register_sensor(&camdev_info, chan,
++			chan->subdev_on_csi->dev->of_node);
+ 
+ 	return ret;
+ fail:
+diff --git a/drivers/video/tegra/camera/tegra_camera_platform.c b/drivers/video/tegra/camera/tegra_camera_platform.c
+index b2b55100fb935469441affb976ddc4b1b89d7be5..c07963ff2887781a4ff439eca245c96c248798ec 100644
+--- a/drivers/video/tegra/camera/tegra_camera_platform.c
++++ b/drivers/video/tegra/camera/tegra_camera_platform.c
+@@ -23,6 +23,19 @@
+ #include <soc/tegra/fuse.h>
+ #define CAMDEV_NAME "tegra_camera_ctrl"
+ 
++/* Selected from manual Orin Nano video/IMU receive-latency experiments. */
++#define D5XX_VI_DEFAULT_MIN_RATE_HZ 550400000UL
++
++static unsigned long d5xx_vi_min_rate = D5XX_VI_DEFAULT_MIN_RATE_HZ;
++module_param(d5xx_vi_min_rate, ulong, 0444);
++MODULE_PARM_DESC(d5xx_vi_min_rate,
++	"VI clock floor in Hz while a D5xx stream is active (0 disables)");
++
++struct tegra_camera_device {
++	struct tegra_camera_dev_info info;
++	bool needs_d5xx_floor;
++};
++
+ /* Peak BPP for any of the YUV/Bayer formats */
+ #define CAMERA_PEAK_BPP 2
+ 
+@@ -485,10 +498,11 @@ static int remove_nvhost_client(struct tegra_camera_dev_info *cdev)
+ 	return 0;
+ }
+ 
+-int tegra_camera_device_register(struct tegra_camera_dev_info *cdev_info,
+-					void *priv)
++static int camera_device_register(struct tegra_camera_dev_info *cdev_info,
++		void *priv, bool needs_d5xx_floor)
+ {
+ 	int err = 0;
++	struct tegra_camera_device *device;
+ 	struct tegra_camera_dev_info *cdev;
+ 	struct tegra_camera_info *info;
+ 
+@@ -509,10 +523,12 @@ int tegra_camera_device_register(struct tegra_camera_dev_info *cdev_info,
+ 	if (!info)
+ 		return -EINVAL;
+ 
+-	cdev = kzalloc(sizeof(struct tegra_camera_dev_info), GFP_KERNEL);
+-	if (!cdev)
++	device = kzalloc(sizeof(*device), GFP_KERNEL);
++	if (!device)
+ 		return -ENOMEM;
+ 
++	device->needs_d5xx_floor = needs_d5xx_floor;
++	cdev = &device->info;
+ 	*cdev = *cdev_info;
+ 
+ 	INIT_LIST_HEAD(&cdev->device_node);
+@@ -532,8 +548,24 @@ int tegra_camera_device_register(struct tegra_camera_dev_info *cdev_info,
+ 
+ 	return err;
+ }
++
++int tegra_camera_device_register(struct tegra_camera_dev_info *cdev_info,
++					void *priv)
++{
++	return camera_device_register(cdev_info, priv, false);
++}
+ EXPORT_SYMBOL(tegra_camera_device_register);
+ 
++int tegra_camera_device_register_sensor(struct tegra_camera_dev_info *cdev_info,
++		void *priv, const struct device_node *sensor_node)
++{
++	bool needs_d5xx_floor = of_device_is_compatible(sensor_node,
++		"realsense,d5xx");
++
++	return camera_device_register(cdev_info, priv, needs_d5xx_floor);
++}
++EXPORT_SYMBOL(tegra_camera_device_register_sensor);
++
+ int tegra_camera_device_unregister(void *priv)
+ {
+ 	struct tegra_camera_dev_info *cdev, *tmp;
+@@ -565,7 +597,7 @@ int tegra_camera_device_unregister(void *priv)
+ 	if (found) {
+ 		remove_nvhost_client(cdev);
+ 		update_platform_data(cdev, info, false);
+-		kfree(cdev);
++		kfree(container_of(cdev, struct tegra_camera_device, info));
+ 	}
+ 	mutex_unlock(&info->device_list_mutex);
+ 
+@@ -672,6 +704,7 @@ static int calculate_and_set_device_clock(struct tegra_camera_info *info,
+ 	u64 clk_rate = 0;
+ 	u64 final_pr = (cdev->use_max) ? phy_pr : active_pr;
+ 	bool set_clk = true;
++	struct tegra_camera_dev_info *sensor;
+ 
+ 	if (cdev->hw_type == HWTYPE_NONE)
+ 		return 0;
+@@ -720,6 +753,19 @@ static int calculate_and_set_device_clock(struct tegra_camera_info *info,
+ 			cdev->pg_clk_rate : DEFAULT_PG_CLK_RATE;
+ 	}
+ 
++	/* List entries are private allocations; device_list_mutex protects them. */
++	if (cdev->hw_type == HWTYPE_VI && info->num_active_streams) {
++		list_for_each_entry(sensor, &info->device_list, device_node) {
++			struct tegra_camera_device *sensor_device = container_of(sensor,
++					struct tegra_camera_device, info);
++
++			if (sensor_device->needs_d5xx_floor && sensor->stream_on) {
++				clk_rate = max(clk_rate, (u64)d5xx_vi_min_rate);
++				break;
++			}
++		}
++	}
++
+ 	/* no stream active, set to 0 */
+ 	if (info->num_active_streams == 0)
+ 		clk_rate = 0;
+diff --git a/include/media/tegra_camera_platform.h b/include/media/tegra_camera_platform.h
+index 5b367497f33dcfd728348a63ebab3f05c53b70de..ffea0a2e488c43711faea2e9f0c9445edc439f10 100644
+--- a/include/media/tegra_camera_platform.h
++++ b/include/media/tegra_camera_platform.h
+@@ -39,6 +39,7 @@ enum tegra_camera_sensor_type {
+ };
+ 
+ struct tegra_camera_dev_info;
++struct device_node;
+ 
+ /**
+  * struct tegra_camera_dev_ops - camera device operations
+@@ -94,6 +95,8 @@ int tegra_camera_emc_clk_enable(void);
+ int tegra_camera_emc_clk_disable(void);
+ int tegra_camera_device_register(struct tegra_camera_dev_info *cdev_info,
+ 					void *priv);
++int tegra_camera_device_register_sensor(struct tegra_camera_dev_info *cdev_info,
++		void *priv, const struct device_node *sensor_node);
+ int tegra_camera_device_unregister(void *priv);
+ int tegra_camera_get_device_list_entry(const u32 hw_type, const void *priv,
+ 		struct tegra_camera_dev_info *cdev_info);
+-- 
+2.25.1
