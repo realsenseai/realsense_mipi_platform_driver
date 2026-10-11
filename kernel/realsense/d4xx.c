@@ -3607,9 +3607,7 @@ enum ds5_ae_type {
 #define D500_MINZ_XU_BASE		0x4500
 #define D500_DECIMATION_XU_BASE		0x4540
 #define D500_TEMPORAL_XU_BASE		0x4568
-/* PROVISIONAL pending RSDEV-14699: first byte past the 38-byte temporal
- * window (0x4568..0x458D); FW already owns 0x4590 (IMU batching). */
-#define D500_ALIGNED_DEPTH_XU_BASE	0x458E
+#define D500_ALIGNED_DEPTH_XU_BASE	0x4599
 #define D500_DPP_XU_VERSION		1
 #define D500_DPP_XU_DECIMATION_CONTROL_ID	BIT(0)
 #define D500_DPP_XU_TEMPORAL_CONTROL_ID		BIT(1)
