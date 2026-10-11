@@ -52,10 +52,14 @@ class v4l2_meta_format(ctypes.Structure):
 
 
 class _v4l2_format_fmt(ctypes.Union):
+    # The kernel union holds a pointer member, so it is pointer-aligned and
+    # struct v4l2_format is 208 bytes on 64-bit. The size is part of the ioctl
+    # number: at 204, S_FMT and G_FMT return ENOTTY.
     _fields_ = [
         ("pix", v4l2_pix_format),
         ("meta", v4l2_meta_format),
         ("raw_data", ctypes.c_uint8 * 200),
+        ("_align", ctypes.c_void_p),
     ]
 
 

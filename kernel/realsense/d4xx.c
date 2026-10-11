@@ -230,6 +230,8 @@ enum rs_pixfmt {
 	RS_PIXFMT_SBGGR10P,
 	RS_PIXFMT_IMU,
 	RS_PIXFMT_RSVL,
+	RS_PIXFMT_H264,
+	RS_PIXFMT_JPEG,
 };
 /*
  * FW version major byte identifies the family in recovery, where DEVICE_TYPE
@@ -1214,6 +1216,11 @@ static const struct {
 #ifdef MEDIA_BUS_FMT_RS_VARLEN_1X8
 	{ RS_PIXFMT_RSVL,       MEDIA_BUS_FMT_RS_VARLEN_1X8, GMSL_CSI_DT_RAW_8 },
 #endif
+	/* Compressed colour on the RAW8 carrier. */
+	{ .pixfmt = RS_PIXFMT_H264, .mbus_code = MEDIA_BUS_FMT_RS_H264_1X8,
+	  .wire_dt = GMSL_CSI_DT_RAW_8 },
+	{ .pixfmt = RS_PIXFMT_JPEG, .mbus_code = MEDIA_BUS_FMT_RS_JPEG_1X8,
+	  .wire_dt = GMSL_CSI_DT_RAW_8 },
 };
 
 /* Probed a word at a time: legacy FW loads one 16-bit word for an unmapped
