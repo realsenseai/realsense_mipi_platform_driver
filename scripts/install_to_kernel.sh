@@ -75,6 +75,9 @@ if [ "${IS_JP5}" = "1" ]; then
             exit 1
         fi
     done
+    # A fresh flash has no updates/ directory; without it every cp below fails.
+    echo "sudo mkdir -p /lib/modules/$(uname -r)/updates"
+          sudo mkdir -p /lib/modules/$(uname -r)/updates
     echo "sudo cp tegra194-p2888-0001-p2822-0000.dtb /boot/${FOLDER}/"
           sudo cp tegra194-p2888-0001-p2822-0000.dtb /boot/${FOLDER}/
     echo "sudo cp d4xx.ko /lib/modules/$(uname -r)/updates/"
