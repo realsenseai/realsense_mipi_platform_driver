@@ -60,6 +60,13 @@ fi
 
 echo "Copying kernel files for JetPack ${JETPACK_VERSION}..."
 if [ "${IS_JP5}" = "1" ]; then
+    # Fail before copying any kernel file if a required artifact is missing.
+    for f in tegra194-p2888-0001-p2822-0000.dtb d4xx.ko uvcvideo.ko videobuf-core.ko videobuf-vmalloc.ko; do
+        if [ ! -f "${f}" ]; then
+            echo "Error: ${f} not found; not modifying kernel files, DON'T REBOOT"
+            exit 1
+        fi
+    done
     echo "sudo cp tegra194-p2888-0001-p2822-0000.dtb /boot/${FOLDER}/"
           sudo cp tegra194-p2888-0001-p2822-0000.dtb /boot/${FOLDER}/
     echo "sudo cp d4xx.ko /lib/modules/$(uname -r)/updates/"
@@ -120,9 +127,6 @@ elif [ "${JETPACK_VERSION}" = "6.0" ] || [ "${JETPACK_VERSION}" = "6.1" ] || [ "
         echo "sudo cp boot/dtb/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/dtb/."
               sudo cp boot/dtb/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/dtb/.
     fi
-else
-    echo "Error: unsupported JetPack version '${JETPACK_VERSION}'; nothing installed."
-    exit 1
 fi
 
 if [ -f boot/Image ]; then
