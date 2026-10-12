@@ -7,7 +7,7 @@ if [ "$#" -lt 1 ] || [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
       echo "Update the kernel modules and boot files on the local device for a specific JetPack version."
       echo ""
       echo "Arguments:"
-      echo "  JETPACK_VERSION   JetPack version (e.g., 5.0.2, 5.1.2, 6.0, 6.1, 6.2, 6.2.1, 7.0, 7.1, 7.2)"
+      echo "  JETPACK_VERSION   JetPack version (e.g., 5.0.x, 5.1.x, 6.0, 6.1, 6.2, 6.2.1, 7.0, 7.1, 7.2)"
       echo "  BOOT_FOLDER       Folder name under /boot to copy Image (default: dev)"
       echo "  DELAY_SECONDS     Delay before reboot in seconds (default: 0)"
       echo ""
@@ -20,6 +20,13 @@ JETPACK_VERSION="$1"
 FOLDER="${2:-dev}"
 DELAY="${3:-0}"
 
+# JetPack 5 family: any 5.0.x / 5.1.x release (5.0.2, 5.1.2, 5.1.6, ...)
+# shares the same install layout.
+IS_JP5=0
+if [[ "${JETPACK_VERSION}" =~ ^5\.[01](\.[0-9]+)?$ ]]; then
+    IS_JP5=1
+fi
+
 # Validate DELAY is a non-negative integer
 if ! [[ "${DELAY}" =~ ^[0-9]+$ ]]; then
     echo "Error: DELAY_SECONDS must be a non-negative integer"
@@ -30,8 +37,8 @@ if [ ! -d /boot/${FOLDER} ]; then
     sudo mkdir /boot/${FOLDER}
 fi
 
-# Only extract and use rootfs.tar.gz for 5.0.2 and 5.1.2
-if [ "${JETPACK_VERSION}" = "5.0.2" ] || [ "${JETPACK_VERSION}" = "5.1.2" ]; then
+# Only extract and use rootfs.tar.gz for JetPack 5.x
+if [ "${IS_JP5}" = "1" ]; then
     if [ -f rootfs.tar.gz ]; then
         tar xf rootfs.tar.gz
     fi
@@ -40,7 +47,7 @@ fi
 # JetPack 5.x installs only a few .ko into /lib/modules/$(uname -r), so the new
 # Image must match the running kernel; a mismatched-JetPack Image boots without
 # modules and can latch the bootloader into recovery. Override: SKIP_KERNEL_CHECK=1.
-if [ "${JETPACK_VERSION}" = "5.0.2" ] || [ "${JETPACK_VERSION}" = "5.1.2" ]; then
+if [ "${IS_JP5}" = "1" ]; then
     NEW_IMAGE=$(ls boot/Image Image 2>/dev/null | head -n1)
     if [ -n "${NEW_IMAGE}" ] && [ "${SKIP_KERNEL_CHECK:-0}" != "1" ]; then
         NEW_KVER=$(grep -a -m1 -oE 'Linux version [0-9][^ ]+' "${NEW_IMAGE}" | awk '{print $3}')
@@ -52,7 +59,7 @@ if [ "${JETPACK_VERSION}" = "5.0.2" ] || [ "${JETPACK_VERSION}" = "5.1.2" ]; the
 fi
 
 echo "Copying kernel files for JetPack ${JETPACK_VERSION}..."
-if [ "${JETPACK_VERSION}" = "5.0.2" ] || [ "${JETPACK_VERSION}" = "5.1.2" ]; then
+if [ "${IS_JP5}" = "1" ]; then
     echo "sudo cp tegra194-p2888-0001-p2822-0000.dtb /boot/${FOLDER}/"
           sudo cp tegra194-p2888-0001-p2822-0000.dtb /boot/${FOLDER}/
     echo "sudo cp d4xx.ko /lib/modules/$(uname -r)/updates/"
@@ -113,6 +120,9 @@ elif [ "${JETPACK_VERSION}" = "6.0" ] || [ "${JETPACK_VERSION}" = "6.1" ] || [ "
         echo "sudo cp boot/dtb/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/dtb/."
               sudo cp boot/dtb/tegra234-p3737-0000+p3701-0005-nv.dtb /boot/dtb/.
     fi
+else
+    echo "Error: unsupported JetPack version '${JETPACK_VERSION}'; nothing installed."
+    exit 1
 fi
 
 if [ -f boot/Image ]; then
