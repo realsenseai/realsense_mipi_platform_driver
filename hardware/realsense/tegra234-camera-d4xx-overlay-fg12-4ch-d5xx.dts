@@ -152,6 +152,11 @@
 			};
 
 			bus@0 {
+				i2c@3180000 {
+					/* D5xx-only profile: Fast-mode Plus on the physical Host bus. */
+					clock-frequency = <980000>;
+				};
+
 				host1x@13e00000 {
 					nvcsi@15a00000 {
 						num-channels = <4>;

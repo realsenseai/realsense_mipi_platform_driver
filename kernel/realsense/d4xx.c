@@ -416,6 +416,7 @@ enum ds5_mux_pad {
 #ifdef CONFIG_TEGRA_CAMERA_PLATFORM
 #define DFU_I2C_STANDARD_MODE		100000
 #define DFU_I2C_FAST_MODE			400000
+#define DFU_I2C_FAST_MODE_PLUS		980000
 #define DFU_I2C_BUS_CLK_RATE		DFU_I2C_FAST_MODE
 #endif
 #define ds5_read_with_check(state, addr, val) {\
@@ -674,6 +675,8 @@ struct ds5_variant {
 	unsigned int n_formats;
 };
 
+struct ds5_dfu_i2c_clock;
+
 struct ds5_dfu_dev {
 	struct cdev ds5_cdev;
 	struct class *ds5_class;
@@ -684,7 +687,7 @@ struct ds5_dfu_dev {
 	unsigned char *dfu_msg;
 	u16 msg_write_once;
 	// unsigned char init_v4l_f; // need refactoring
-	u32 bus_clk_rate;
+	struct ds5_dfu_i2c_clock *i2c_clock;
 };
 
 enum {
@@ -8659,54 +8662,156 @@ dfu_write_error:
 	return ret;
 };
 
+#if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)
+/* Keep one original clock across DFU opens on every mux branch.
+ * The configured Fast-mode Plus bus stays fast during DFU as well.
+ */
+struct ds5_dfu_i2c_clock {
+	struct list_head node;
+	struct i2c_adapter *adapter;
+	u32 saved_rate;
+	unsigned int users;
+};
+
+static DEFINE_MUTEX(ds5_dfu_i2c_clock_lock);
+static LIST_HEAD(ds5_dfu_i2c_clocks);
+
+static int ds5_dfu_host_clock_rate(struct i2c_adapter *adapter)
+{
+	u32 rate;
+
+	/* Host timing is selected by the physical-bus DT, not camera PID. */
+	if (!of_property_read_u32(adapter->dev.of_node, "clock-frequency", &rate) &&
+	    rate == DFU_I2C_FAST_MODE_PLUS)
+		return DFU_I2C_FAST_MODE_PLUS;
+	return DFU_I2C_BUS_CLK_RATE;
+}
+
+/* Caller holds state->lock; the core clock helpers take the root bus lock. */
+static int ds5_dfu_host_clock_acquire(struct ds5 *state)
+{
+	struct ds5_dfu_i2c_clock *clock, *active;
+	struct i2c_adapter *adapter = state->client->adapter;
+	struct i2c_adapter *parent;
+	int saved_rate, rate, ret;
+
+	if (state->dfu_dev.i2c_clock)
+		return -EBUSY;
+	while ((parent = i2c_parent_is_i2c_adapter(adapter)))
+		adapter = parent;
+	clock = kzalloc(sizeof(*clock), GFP_KERNEL);
+	if (!clock)
+		return -ENOMEM;
+
+	mutex_lock(&ds5_dfu_i2c_clock_lock);
+	list_for_each_entry(active, &ds5_dfu_i2c_clocks, node) {
+		if (active->adapter != adapter)
+			continue;
+		active->users++;
+		state->dfu_dev.i2c_clock = active;
+		mutex_unlock(&ds5_dfu_i2c_clock_lock);
+		kfree(clock);
+		return 0;
+	}
+
+	saved_rate = i2c_get_adapter_bus_clk_rate(adapter);
+	if (saved_rate <= 0) {
+		ret = saved_rate ? saved_rate : -EINVAL;
+		goto out_free;
+	}
+	rate = ds5_dfu_host_clock_rate(adapter);
+	ret = i2c_set_adapter_bus_clk_rate(adapter, rate);
+	if (ret)
+		goto out_free;
+
+	get_device(&adapter->dev);
+	clock->adapter = adapter;
+	clock->saved_rate = saved_rate;
+	clock->users = 1;
+	list_add(&clock->node, &ds5_dfu_i2c_clocks);
+	state->dfu_dev.i2c_clock = clock;
+	dev_info(&state->client->dev,
+		 "DFU host i2c-%d requested %d Hz (restore %d Hz)\n",
+		 i2c_adapter_id(adapter), rate, saved_rate);
+	mutex_unlock(&ds5_dfu_i2c_clock_lock);
+	return 0;
+
+out_free:
+	mutex_unlock(&ds5_dfu_i2c_clock_lock);
+	kfree(clock);
+	return ret;
+}
+
+static int ds5_dfu_host_clock_release(struct ds5 *state)
+{
+	struct ds5_dfu_i2c_clock *clock = state->dfu_dev.i2c_clock;
+	int ret;
+
+	if (!clock)
+		return 0;
+	mutex_lock(&ds5_dfu_i2c_clock_lock);
+	state->dfu_dev.i2c_clock = NULL;
+	if (--clock->users) {
+		mutex_unlock(&ds5_dfu_i2c_clock_lock);
+		return 0;
+	}
+	ret = i2c_set_adapter_bus_clk_rate(clock->adapter, clock->saved_rate);
+	if (ret)
+		dev_err(&state->client->dev,
+			"DFU host I2C clock restore failed: %d\n", ret);
+	else
+		dev_info(&state->client->dev,
+			 "DFU host i2c-%d restored %u Hz\n",
+			 i2c_adapter_id(clock->adapter), clock->saved_rate);
+	list_del(&clock->node);
+	put_device(&clock->adapter->dev);
+	kfree(clock);
+	mutex_unlock(&ds5_dfu_i2c_clock_lock);
+	return ret;
+}
+#else
+static int ds5_dfu_host_clock_acquire(struct ds5 *state)
+{
+	return 0;
+}
+
+static int ds5_dfu_host_clock_release(struct ds5 *state)
+{
+	return 0;
+}
+#endif
+
 static int ds5_dfu_device_open(struct inode *inode, struct file *file)
 {
 	struct ds5 *state = container_of(inode->i_cdev, struct ds5,
 			dfu_dev.ds5_cdev);
-#if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)
-	struct i2c_adapter *parent = i2c_parent_is_i2c_adapter(
-			state->client->adapter);
-#endif
+	int ret;
+
 	mutex_lock(&state->lock);
 	if (state->dfu_dev.device_open_count) {
 		mutex_unlock(&state->lock);
 		return -EBUSY;
 	}
-	state->dfu_dev.device_open_count++;
-	WRITE_ONCE(state->dfu_dev.manifest_complete, false);
-	if (state->dfu_dev.dfu_state_flag != DS5_DFU_RECOVERY)
-		state->dfu_dev.dfu_state_flag = DS5_DFU_OPEN;
-	/*
-	 * Operational probe has an authoritative type; recovery defaults to the
-	 * D4xx terminal state until ds5_dfu_detach() obtains a D58x-only hint.
-	 */
-	state->dfu_dev.manifest_state = ds5_is_d58x(state) ?
-		dfuMANIFEST_WAIT_RESET : dfuMANIFEST;
 	state->dfu_dev.dfu_msg = devm_kzalloc(&state->client->dev,
 			DFU_BLOCK_SIZE, GFP_KERNEL);
 	if (!state->dfu_dev.dfu_msg) {
 		mutex_unlock(&state->lock);
 		return -ENOMEM;
 	}
-	file->private_data = state;
-#if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)
-	/* get i2c controller and set dfu bus clock rate */
-	while (parent && i2c_parent_is_i2c_adapter(parent))
-		parent = i2c_parent_is_i2c_adapter(parent);
-
-	if (!parent) {
+	ret = ds5_dfu_host_clock_acquire(state);
+	if (ret) {
+		devm_kfree(&state->client->dev, state->dfu_dev.dfu_msg);
+		state->dfu_dev.dfu_msg = NULL;
 		mutex_unlock(&state->lock);
-		return 0;
+		return ret;
 	}
-	dev_dbg(&state->client->dev, "%s(): i2c-%d bus_clk = %d, set %d\n",
-			__func__,
-			i2c_adapter_id(parent),
-			i2c_get_adapter_bus_clk_rate(parent),
-			DFU_I2C_BUS_CLK_RATE);
-
-	state->dfu_dev.bus_clk_rate = i2c_get_adapter_bus_clk_rate(parent);
-	i2c_set_adapter_bus_clk_rate(parent, DFU_I2C_BUS_CLK_RATE);
-#endif
+	state->dfu_dev.device_open_count++;
+	WRITE_ONCE(state->dfu_dev.manifest_complete, false);
+	if (state->dfu_dev.dfu_state_flag != DS5_DFU_RECOVERY)
+		state->dfu_dev.dfu_state_flag = DS5_DFU_OPEN;
+	state->dfu_dev.manifest_state = ds5_is_d58x(state) ?
+		dfuMANIFEST_WAIT_RESET : dfuMANIFEST;
+	file->private_data = state;
 	mutex_unlock(&state->lock);
 	return 0;
 };
@@ -8885,11 +8990,7 @@ e_depth:
 static int ds5_dfu_device_release(struct inode *inode, struct file *file)
 {
 	struct ds5 *state = container_of(inode->i_cdev, struct ds5, dfu_dev.ds5_cdev);
-#if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)
-	struct i2c_adapter *parent = i2c_parent_is_i2c_adapter(
-			state->client->adapter);
-#endif
-	int ret = 0, retry = 10;
+	int ret = 0, clock_ret, retry = 10;
 	mutex_lock(&state->lock);
 	state->dfu_dev.device_open_count--;
 	if (state->dfu_dev.dfu_state_flag != DS5_DFU_RECOVERY)
@@ -8903,21 +9004,7 @@ static int ds5_dfu_device_release(struct inode *inode, struct file *file)
 	if (state->dfu_dev.dfu_msg)
 		devm_kfree(&state->client->dev, state->dfu_dev.dfu_msg);
 	state->dfu_dev.dfu_msg = NULL;
-#if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)
-	/* get i2c controller and restore bus clock rate */
-	while (parent && i2c_parent_is_i2c_adapter(parent))
-		parent = i2c_parent_is_i2c_adapter(parent);
-	if (!parent) {
-		mutex_unlock(&state->lock);
-		return 0;
-	}
-	dev_dbg(&state->client->dev, "%s(): i2c-%d bus_clk %d, restore to %d\n",
-			__func__, i2c_adapter_id(parent),
-			i2c_get_adapter_bus_clk_rate(parent),
-			state->dfu_dev.bus_clk_rate);
-
-	i2c_set_adapter_bus_clk_rate(parent, state->dfu_dev.bus_clk_rate);
-#endif
+	clock_ret = ds5_dfu_host_clock_release(state);
 	/* Verify communication */
 	do {
 		ret = ds5_read(state, DS5_FW_VERSION, &state->fw_version);
@@ -8932,7 +9019,7 @@ static int ds5_dfu_device_release(struct inode *inode, struct file *file)
 	}
 	ret = ds5_read(state, DS5_FW_BUILD, &state->fw_build);
 	mutex_unlock(&state->lock);
-	return ret;
+	return ret ? ret : clock_ret;
 };
 
 static const struct file_operations ds5_device_file_ops = {
