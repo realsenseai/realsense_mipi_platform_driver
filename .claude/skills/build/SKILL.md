@@ -17,10 +17,10 @@ All commands run from the repository root. The `$VERSION` placeholder below refe
 
 ### Step 1: Ask whether to apply patches
 
-Ask the user whether they need to apply patches or just copy `d4xx.c` and build.
+Ask the user whether they need to apply patches or just copy the driver sources and build.
 
 - **Apply patches** — Full reset and re-apply of all patches. Required after a fresh workspace setup, when kernel/DT patches changed, or when the user explicitly asks for it.
-- **Copy d4xx.c only** — Quick path when only the d4xx driver source changed. Skips patch reset/apply and just copies the driver file to the build tree.
+- **Copy driver sources only** — Quick path when only the d4xx driver source changed. Skips patch reset/apply and just copies the driver files to the build tree.
 
 #### Option A: Full patch apply
 
@@ -32,17 +32,23 @@ Always reset patches before re-applying:
 ./apply_patches.sh $VERSION
 ```
 
-#### Option B: Copy d4xx.c only (skip patches)
+#### Option B: Copy driver sources only (skip patches)
 
-Copy the driver source directly to the build tree:
+d4xx.ko is built from `d4xx_main.c` + `d4xx_desc.c` (plus `d4xx.h` / `d4xx_desc.h`), so copy all four.
+
+On a tree prepared by `apply_patches.sh` these four paths are already symlinks back to `kernel/realsense/`, so editing the canonical file *is* the update and the `cp` below would fail with `are the same file`. Use it only on a tree populated by `apply_patches_ext.sh`, which copies.
 
 - **JP 6.x (Orin):**
   ```bash
-  cp kernel/realsense/d4xx.c sources_$VERSION/nvidia-oot/drivers/media/i2c/d4xx.c
+  cp kernel/realsense/d4xx_main.c kernel/realsense/d4xx_desc.c \
+     kernel/realsense/d4xx.h kernel/realsense/d4xx_desc.h \
+     sources_$VERSION/nvidia-oot/drivers/media/i2c/
   ```
 - **JP 4.x / 5.x (Xavier):**
   ```bash
-  cp kernel/realsense/d4xx.c sources_$VERSION/kernel/nvidia/drivers/media/i2c/d4xx.c
+  cp kernel/realsense/d4xx_main.c kernel/realsense/d4xx_desc.c \
+     kernel/realsense/d4xx.h kernel/realsense/d4xx_desc.h \
+     sources_$VERSION/kernel/nvidia/drivers/media/i2c/
   ```
 
 Where `$VERSION` is the actual JetPack version (e.g., `6.2`, `5.1.2`), matching the `sources_*` directory name.
@@ -61,7 +67,7 @@ Output directory: `images/$VERSION/` (normalized: `images/6.x/` for JP 6.x, `ima
 
 ### Step 3 (optional): Overlay-only rebuild
 
-When only a device-tree overlay changed (new/edited `tegra234-camera-d4xx-overlay*.dts`) and the kernel/modules are already built, skip the full `build_all.sh` and rebuild just the DTBs — far faster, and it does NOT recompile `d4xx.c` (safe when the build tree sits on an unrelated WIP branch).
+When only a device-tree overlay changed (new/edited `tegra234-camera-d4xx-overlay*.dts`) and the kernel/modules are already built, skip the full `build_all.sh` and rebuild just the DTBs — far faster, and it does NOT recompile the driver sources (safe when the build tree sits on an unrelated WIP branch).
 
 Prerequisite: the workspace was built at least once (`out` symlink + kernel image present in `sources_$VERSION/`).
 
@@ -106,7 +112,7 @@ Native builds on aarch64 skip toolchain setup. Cross-compilation toolchains are 
 
 ### Key files copied during patch application
 
-- `kernel/realsense/d4xx.c` → `sources_*/nvidia-oot/drivers/media/i2c/` (JP 6.x) or `sources_*/kernel/nvidia/drivers/media/i2c/` (JP 4/5)
+- `kernel/realsense/{d4xx_main.c,d4xx_desc.c,d4xx.h,d4xx_desc.h}` → `sources_*/nvidia-oot/drivers/media/i2c/` (JP 6.x) or `sources_*/kernel/nvidia/drivers/media/i2c/` (JP 4/5)
 - `hardware/realsense/tegra234-camera-d4xx-overlay*.dts` → overlay dir (JP 6.x)
 - `hardware/realsense/tegra194-camera-d4xx-*.dtsi` → DT dir (JP 4/5)
 

@@ -65,7 +65,7 @@ Analyze all available logs. For each error or warning found:
 Use the error patterns from Phase 1 to drive targeted code search. Follow this priority:
 
 **1. Log-Driven Search (if logs available):**
-- `Grep` for each extracted error string in `kernel/realsense/d4xx.c`
+- `Grep` for each extracted error string in `kernel/realsense/d4xx_main.c`
 - Read 50-100 lines around each match to understand the code path
 - Trace the call chain: which function produces this error? What calls it? What conditions trigger it?
 
@@ -91,7 +91,7 @@ Use the error patterns from Phase 1 to drive targeted code search. Follow this p
 **3. History-Driven Search:**
 Run one Bash call to check git history for related fixes:
 ```bash
-git log --oneline --all -30 -- kernel/realsense/d4xx.c
+git log --oneline --all -30 -- kernel/realsense/d4xx_main.c
 ```
 Look for commits that touched the same functions or fixed similar bugs.
 
@@ -113,7 +113,7 @@ Output a structured report. Every finding must cite specific file:line reference
 **Status:** INVESTIGATION COMPLETE
 
 ### Log Analysis
-- [FOUND] "error string" — maps to `d4xx.c:NNNN` in function `func_name()`
+- [FOUND] "error string" — maps to `d4xx_main.c:NNNN` in function `func_name()`
 - [FOUND] "warning string" — related to [subsystem]
 - [NOT FOUND] No errors related to [subsystem] (ruled out)
 
@@ -127,11 +127,11 @@ Output a structured report. Every finding must cite specific file:line reference
 
 #### Solution 1: [Short title] (Recommended)
 **Risk:** Low / Medium / High
-**Files:** kernel/realsense/d4xx.c (line NNNN)
+**Files:** kernel/realsense/d4xx_main.c (line NNNN)
 **Changes:**
 ```diff
---- a/kernel/realsense/d4xx.c
-+++ b/kernel/realsense/d4xx.c
+--- a/kernel/realsense/d4xx_main.c
++++ b/kernel/realsense/d4xx_main.c
 @@ -NNNN,N +NNNN,N @@
 - old code
 + new code
@@ -162,7 +162,7 @@ If TARGET was provided, the fix will also be deployed to the Jetson after buildi
 1. Read the approved solution from your previous investigation context.
 2. Apply the fix to the **canonical source** first:
    ```
-   kernel/realsense/d4xx.c
+   kernel/realsense/d4xx_main.c
    ```
    Use the Edit tool with the exact old_string/new_string from the proposed diff.
 
@@ -170,8 +170,8 @@ If TARGET was provided, the fix will also be deployed to the Jetson after buildi
 
    | JetPack | Build Directory Copy |
    |---------|---------------------|
-   | 6.x | `sources_*/nvidia-oot/drivers/media/i2c/d4xx.c` |
-   | 4.x / 5.x | `sources_*/kernel/nvidia/drivers/media/i2c/d4xx.c` |
+   | 6.x | `sources_*/nvidia-oot/drivers/media/i2c/d4xx_main.c` |
+   | 4.x / 5.x | `sources_*/kernel/nvidia/drivers/media/i2c/d4xx_main.c` |
 
 4. Find the actual sources directory:
    ```bash
@@ -198,7 +198,7 @@ For each build attempt:
 
 3. **Extract errors:**
    - Look for lines containing `error:` (GCC compilation errors)
-   - Focus on errors in `d4xx.c` or `drivers/media/i2c/`
+   - Focus on errors in `d4xx_main.c` or `drivers/media/i2c/`
    - Also check for linker errors (`undefined reference`, `multiple definition`)
 
 4. **Fix compilation errors:**
@@ -292,8 +292,8 @@ ssh -o ControlPath="/tmp/debug-ssh-${USERNAME}-${TARGET}" -O exit ${USERNAME}@${
 
 ### Fix Applied
 - **Solution:** #N — [title]
-- **Canonical:** kernel/realsense/d4xx.c (lines NNNN)
-- **Build copy:** sources_*/[path]/d4xx.c
+- **Canonical:** kernel/realsense/d4xx_main.c (lines NNNN)
+- **Build copy:** sources_*/[path]/d4xx_main.c
 
 ### Build
 - **Attempts:** N
@@ -343,7 +343,7 @@ Quick reference for navigating the ~6260-line driver.
 
 1. **Mode 1 is READ-ONLY.** Do not edit any files during investigation. Only propose changes in the report.
 2. **Mode 2 requires explicit user approval.** Only proceed with fixes when resumed with a clear approval.
-3. **Always fix canonical source first** (`kernel/realsense/d4xx.c`), then propagate to the build directory copy.
+3. **Always fix canonical source first** (`kernel/realsense/d4xx_main.c`), then propagate to the build directory copy.
 4. **Never modify build or deploy scripts** (`build_all.sh`, `apply_patches.sh`, `deploy_kernel.sh`, `install_to_kernel.sh`).
 5. **Conservative fixes only.** Make the minimal change needed to fix the bug. No refactoring, no cleanup, no feature additions.
 6. **Cite evidence.** Every conclusion in the investigation report must reference specific file:line locations and log excerpts.
@@ -352,4 +352,4 @@ Quick reference for navigating the ~6260-line driver.
 9. **Build errors during Mode 2** should be auto-fixed (up to 3 attempts). If still failing, report errors and stop.
 10. **Deploy is optional.** Only deploy if `TARGET` parameter was provided. Otherwise report build artifacts location.
 11. **SSH cleanup is mandatory.** Always remove `DEBUG-AGENT-BEGIN/END` block from `~/.ssh/config` on completion or failure.
-12. **Do not re-apply patches.** Assume patches are already applied. Only edit the d4xx.c files (canonical + copy).
+12. **Do not re-apply patches.** Assume patches are already applied. Only edit the d4xx_main.c / d4xx_desc.c files (canonical + copy).

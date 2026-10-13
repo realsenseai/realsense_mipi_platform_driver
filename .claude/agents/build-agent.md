@@ -71,15 +71,15 @@ For each build attempt:
 
 3. **Extract errors:**
    - Look for lines containing `error:` in the build output (these are GCC compilation errors)
-   - Focus on errors in `d4xx.c` or files under `drivers/media/i2c/`
+   - Focus on errors in `d4xx_main.c` or files under `drivers/media/i2c/`
    - Also check for linker errors (`undefined reference`, `multiple definition`)
    - Note warnings too, but only fix errors
 
 4. **Analyze and fix errors:**
    - Read the relevant source file(s) to understand the context around each error
-   - The main driver file is `kernel/realsense/d4xx.c` — this is the canonical source
-   - After patching, it gets copied to `sources_*/nvidia-oot/drivers/media/i2c/d4xx.c` (JP 6.x) or `sources_*/kernel/nvidia/drivers/media/i2c/d4xx.c` (JP 4/5)
-   - **Fix errors in BOTH locations**: the canonical `kernel/realsense/d4xx.c` AND the copied file in the sources directory
+   - The main driver file is `kernel/realsense/d4xx_main.c` — this is the canonical source
+   - After patching, it gets copied to `sources_*/nvidia-oot/drivers/media/i2c/d4xx_main.c` (JP 6.x) or `sources_*/kernel/nvidia/drivers/media/i2c/d4xx_main.c` (JP 4/5)
+   - **Fix errors in BOTH locations**: the canonical `kernel/realsense/d4xx_main.c` AND the copied file in the sources directory
    - For device tree errors, the canonical files are in `hardware/realsense/` and copies go to the sources overlay/DT directories
    - Common error categories:
      - **Undeclared identifier**: Missing variable/function declaration or wrong name
@@ -107,10 +107,10 @@ After the build succeeds or after 5 failed attempts, output a structured summary
 ### Attempt 1
 - **Status:** FAILED
 - **Errors (N):**
-  - `d4xx.c:1234: error: undeclared identifier 'foo'`
-  - `d4xx.c:5678: error: implicit declaration of function 'bar'`
+  - `d4xx_main.c:1234: error: undeclared identifier 'foo'`
+  - `d4xx_main.c:5678: error: implicit declaration of function 'bar'`
 - **Fixes applied:**
-  - Added missing declaration for `foo` in d4xx.c:1230
+  - Added missing declaration for `foo` in d4xx_main.c:1230
   - Added `#include <linux/bar.h>` at line 45
 
 ### Attempt 2
@@ -118,13 +118,13 @@ After the build succeeds or after 5 failed attempts, output a structured summary
 - **Errors:** None
 
 ### Files Modified
-- `kernel/realsense/d4xx.c` — <description of all changes>
+- `kernel/realsense/d4xx_main.c` — <description of all changes>
 - (any other files)
 ```
 
 ## Important Rules
 
-1. **Always fix the canonical source first** (`kernel/realsense/d4xx.c`), then copy or edit the version in the sources directory.
+1. **Always fix the canonical source first** (`kernel/realsense/d4xx_main.c`), then copy or edit the version in the sources directory.
 2. **Never modify build scripts** (`build_all.sh`, `apply_patches.sh`, `setup-common`). Only modify driver source, device tree, or Makefile/Kconfig files within the source tree.
 3. **Do not re-apply patches between attempts** — patches are applied once in Phase 1. Subsequent builds use the already-patched sources with your fixes on top.
 4. **Track your attempt count** — stop after 5 attempts even if errors remain.
@@ -139,20 +139,20 @@ After the build succeeds or after 5 failed attempts, output a structured summary
 
 ### JP 6.x (Orin) — Out-of-tree module build
 - Sources directory: `sources_6.x/` (or `sources_6.0/`, `sources_6.1/`, `sources_6.2/`, `sources_6.2.1/`, `sources_6.2.1`)
-- D4XX source destination: `sources_*/nvidia-oot/drivers/media/i2c/d4xx.c`
+- D4XX source destination: `sources_*/nvidia-oot/drivers/media/i2c/d4xx_main.c`
 - Kernel headers: `sources_*/kernel/kernel-jammy-src/`
 - Build command: `./build_all.sh $VERSION` (runs `make ARCH=arm64 modules` which includes d4xx)
 - Key compile flags: `-DCONFIG_VIDEO_D4XX_SERDES -DCONFIG_TEGRA_CAMERA_PLATFORM`
 
 ### JP 5.x (Xavier) — In-tree kernel build
 - Sources directory: `sources_5.x/`
-- D4XX source destination: `sources_*/kernel/nvidia/drivers/media/i2c/d4xx.c`
+- D4XX source destination: `sources_*/kernel/nvidia/drivers/media/i2c/d4xx_main.c`
 - Kernel: `kernel/kernel-5.10`
 - Build: `make ARCH=arm64 O=$TEGRA_KERNEL_OUT -j$(nproc)`
 
 ### JP 4.6.1 (Xavier) — In-tree kernel build
 - Sources directory: `sources_4.6.1/`
-- D4XX source destination: `sources_*/kernel/nvidia/drivers/media/i2c/d4xx.c`
+- D4XX source destination: `sources_*/kernel/nvidia/drivers/media/i2c/d4xx_main.c`
 - Kernel: `kernel/kernel-4.9`
 - Build: `make ARCH=arm64 O=$TEGRA_KERNEL_OUT -j$(nproc)`
 

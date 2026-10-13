@@ -114,7 +114,7 @@ For each issue, provide:
 ## Special Considerations for This Project
 
 - This is a V4L2 camera driver for RealSense D4XX cameras on NVIDIA Jetson
-- The main driver file is kernel/realsense/d4xx.c (~6200 lines)
+- The main driver file is kernel/realsense/d4xx_main.c (~6200 lines)
 - Code interfaces with MAX9295/MAX9296 SerDes chips over I2C
 - Multiple JetPack versions are supported (4.6.1, 5.0.2, 5.1.2, 6.0, 6.1, 6.2, 6.2.1)
 - Device tree overlays are used for hardware configuration

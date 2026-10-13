@@ -11,7 +11,7 @@ Add a new XU-style control in the D4XX stack with consistent driver wiring, test
 
 Use this skill when implementing a new XU/extended control path that maps to D4XX firmware command/register behavior and is exposed as a V4L2 control.
 
-- Primary implementation file: `kernel/realsense/d4xx.c`
+- Primary implementation file: `kernel/realsense/d4xx_main.c`
 - Test constants mirror: `test/v4l2_test/d4xx/constants.py`
 - Control tests: `test/v4l2_test/tests/test_controls.py`
 - Optional app-side selector mapping: `utilities/streamApp/camera_sub_system/include/CSSTypes.h`
@@ -33,7 +33,7 @@ If any of these are missing, ask concise clarifying questions before implementat
 
 ### 1. Allocate a control ID
 
-In `kernel/realsense/d4xx.c`:
+In `kernel/realsense/d4xx_main.c`:
 
 1. Add a new `DS5_CAMERA_CID_*` define near the existing `DS5_CAMERA_CID_BASE` list.
 2. Keep offsets unique and compact.
@@ -89,7 +89,7 @@ In `ds5_ctrl_init()`:
 
 Update `test/v4l2_test/d4xx/constants.py`:
 
-1. Add `DS5_CAMERA_CID_* = DS5_CAMERA_CID_BASE + <offset>` with the same offset as `d4xx.c`.
+1. Add `DS5_CAMERA_CID_* = DS5_CAMERA_CID_BASE + <offset>` with the same offset as `d4xx_main.c`.
 2. Keep numbering synchronized with the driver file to avoid test drift.
 
 ### 6. Write tests (mandatory)
@@ -138,7 +138,7 @@ Run these checks after coding:
 
 ## Code Style and Safety Rules
 
-1. Follow Linux kernel style in `d4xx.c`.
+1. Follow Linux kernel style in `d4xx_main.c`.
 2. Keep changes minimal; avoid broad refactors for a single control addition.
 3. Reuse existing helper and error-handling paths.
 4. Avoid adding duplicate readiness/recovery logic if an existing path already covers it.

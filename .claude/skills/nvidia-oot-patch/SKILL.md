@@ -57,7 +57,7 @@ existing `${NEXT}` prior to creating the patch.
 
 Validation (recommended)
 
-After generating the patch, validate it does not touch kernel tree files (for example `kernel/realsense/d4xx.c`). The
+After generating the patch, validate it does not touch kernel tree files (for example `kernel/realsense/d4xx_main.c`). The
 `apply_patches.sh` flow expects only the external `nvidia-oot` drivers/header changes under `drivers/` and `include/`.
 Add this quick check to the script to avoid accidentally generating patches from the main repo:
 
@@ -68,9 +68,9 @@ if grep -qE '^diff --git (a|b)/kernel/' "${PATCHPATH}"; then
 	exit 1
 fi
 
-# More specific guard for the known problematic file
-if grep -q 'kernel/realsense/d4xx.c' "${PATCHPATH}"; then
-	echo "ERROR: patch contains d4xx.c; aborting to avoid applying kernel changes into nvidia-oot."
+# More specific guard for the known problematic sources
+if grep -qE 'kernel/realsense/d4xx[._]' "${PATCHPATH}"; then
+	echo "ERROR: patch contains d4xx driver sources; aborting to avoid applying kernel changes into nvidia-oot."
 	exit 1
 fi
 ```
@@ -104,5 +104,5 @@ echo "Patch copied to nvidia-oot/6.0 and symlink created in nvidia-oot/6.2 (unst
 ```
 
 This keeps the patch series discoverable in the repository root (so `apply_patches.sh` can find it) while giving you a manual
-checkpoint to inspect the generated contents and remove or adjust any kernel-sourced hunks (for example `kernel/realsense/d4xx.c`)
+checkpoint to inspect the generated contents and remove or adjust any kernel-sourced hunks (for example `kernel/realsense/d4xx_main.c`)
 before committing.
