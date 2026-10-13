@@ -586,11 +586,13 @@ handle comfortably, and makes a partial failure cheap to retry.
   `module_exit`, never on slot re-init: a sibling subdev can outlive the primary that owns
   the `ds5_dev` slot (sysfs unbind) while its `sensor->formats` still points into them.
   The field was already `const struct ds5_format *`, so nothing downstream changed.
-- **After a HW reset the descriptor is re-probed, not re-applied.** `ds5_desc_recheck()`
-  runs once `ds5_hw_init()` has re-written the link mode, and compares the header CRC with
-  the tables in use. A changed or newly present descriptor is logged with "reload d4xx to
-  apply"; formats are never swapped underneath registered V4L2 nodes (see section 12).
-- **Never on the stream-start path.** Probe only.
+- **After a HW reset the descriptor is re-probed and re-applied in place.**
+  `ds5_desc_reload_after_reset()` runs once `ds5_hw_init()` has re-written the link mode,
+  compares the header CRC with the tables in use, and on any change re-fetches the blob and
+  swaps every node's tables (or reverts to built-ins if the descriptor is gone) — safe under
+  concurrent readers because tables are module-lifetime. See section 12 for how the V4L2
+  format lists follow without a driver reload.
+- **Never on the stream-start path.** Probe and post-reset recovery only.
 
 > [!NOTE]
 > **Firmware side.** The RS400 firmware serves the blob at `REG_BASE_MIPI_FORMAT_DESC` =
@@ -659,25 +661,46 @@ makes.
 Still open: streaming a D585 on a rig with the new HKR build, so the descriptor path is
 exercised end to end for both link modes rather than only against the host tests.
 
-## 12 · Follow-up: Re-request the descriptor after a HW reset
+## 12 · Reloading the descriptor after a HW reset
 
-Today the descriptor is fetched once, at probe. After a HW reset — and after a DFU, which is
-the case where the descriptor can legitimately change — `ds5_desc_recheck()` only compares
-the header CRC and asks for a module reload. The formats a camera advertises are therefore
-those of the firmware it booted with, until `d4xx` is reloaded.
+A HW reset — the case a DFU/FW update ends in — can leave the camera serving a *different*
+descriptor. `ds5_desc_reload_after_reset()` re-reads it in the recovery path (after
+`ds5_hw_init()` has re-asserted the link mode) and refreshes what each node advertises **in
+place**, so a FW update's new formats appear on `/dev/videoN` without an `rmmod`/`modprobe`.
 
-Re-reading and re-applying the blob in the driver is the easy half. The hard half is that
-the formats are already *published*: the Tegra VI channel builds its format bitmap from the
-subdev's mbus codes once, when the video node is registered, so a refreshed
-`sensor->formats` is not seen by user space until the node is re-created. A V4L2 patch that
-allowed the published format list to be refreshed in place was written for this driver in
-the past and abandoned; this follow-up is what would justify reviving it.
+The formats are already *published*, which is the part that needed kernel help: the Tegra VI
+channel builds its format bitmap from the subdev's mbus codes once, when the video node is
+registered, so a refreshed `sensor->formats` is otherwise invisible until the node is
+re-created. The VI patch (`0014-Tegra_channel_runtime_format_changes.patch` on JetPack
+6.x/7.x, `5.0.2/0026` + `5.1.2/0015` of the same name on JetPack 5, since one `d4xx.c` builds
+against every carrier) exports `tegra_channel_mark_fmts_dirty()` — a lock-free flag — and rebuilds the
+bitmap lazily on the next format ioctl, skipping the rebuild while the node streams or holds
+buffers. The rebuild is bitmap-only: `chan->format`/`fmtinfo` are saved and restored across
+it, so a format a client negotiated before `REQBUFS` is never re-picked underneath a
+`G_FMT`/`TRY_FMT` (the stock init re-selects `fmtinfo` first-match by mbus code, which is
+lossy for formats sharing a code).
 
-- Driver side: reload the blob in the recovery path (after `ds5_hw_init()` has re-written
-  the link mode), and swap `sensor->formats` only while no stream is active — the
-  module-lifetime table list already makes the old tables safe to keep.
-- Kernel side: revive the VI/V4L2 refresh patch across every JetPack carrier, since one
-  `d4xx.c` builds against all of them.
+The reload only fires when the header CRC actually changed across the reset (an unchanged FW
+is a no-op). By the time it runs the recovery path has stopped the camera's FW streams and
+cleared the driver's streaming flags; per node, each of the camera's four per-role probe
+instances re-applies its table (inline) and then *marks its channel's format list stale*
+(`tegra_channel_mark_fmts_dirty`), reached through `ds5_dev->role_inst[]`. The mark is not a direct refresh
+because the reload executes in the reset node's `s_ctrl`, under the `video_lock` that a
+rebuild needs — rebuilding that node inline would deadlock it against its own ioctl, and a
+deferred (workqueue) rebuild would not be complete when the reset control returns. Instead the
+VI rebuilds the bitmap lazily on the next format ioctl (enum/get/set/try/framesizes/
+frameintervals), which already holds `video_lock`, so the **first** post-reset query
+deterministically sees the fresh list. The rebuild is skipped while a node streams or holds
+buffers, so a client's negotiated format is never changed underneath it. The transition
+runs both ways: a
+FW *upgrade* that adds a descriptor (or changes it) re-applies the descriptor formats
+(`ds5_desc_apply`), while a *downgrade* below descriptor support reverts every node to the
+built-in per-SKU tables (`ds5_apply_builtin_tables`, the same ones probe uses). A *transient*
+fetch/parse failure is neither: the magic already matched, so the camera does serve a
+descriptor — the reload restores the previous `desc`/`desc_state` and returns, keeping the
+current tables rather than latching a false "descriptor gone" onto every node. The
+module-lifetime table list makes swapping `sensor->formats` under a concurrent reader safe —
+both the old and new tables stay live.
 
 ---
 

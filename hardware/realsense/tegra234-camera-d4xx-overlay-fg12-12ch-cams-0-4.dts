@@ -410,7 +410,7 @@
 										reg = <0>;
 										ds5_3_out: endpoint {
 											vc-id = <3>;
-											port-index = <4>;
+											port-index = <3>;
 											bus-width = <2>;
 											remote-endpoint = <&d4xx_csi_in3>;
 										};
@@ -459,7 +459,7 @@
 										reg = <0>;
 										ds5_2_out: endpoint {
 											vc-id = <2>;
-											port-index = <4>;
+											port-index = <2>;
 											bus-width = <2>;
 											remote-endpoint = <&d4xx_csi_in2>;
 										};
@@ -509,7 +509,7 @@
 										reg = <0>;
 										ds5_1_out: endpoint {
 											vc-id = <1>;
-											port-index = <4>;
+											port-index = <1>;
 											bus-width = <2>;
 											remote-endpoint = <&d4xx_csi_in1>;
 										};
@@ -557,7 +557,7 @@
 										reg = <0>;
 										ds5_0_out: endpoint {
 											vc-id = <0>;
-											port-index = <4>;
+											port-index = <0>;
 											bus-width = <2>;
 											remote-endpoint = <&d4xx_csi_in0>;
 										};
@@ -634,7 +634,7 @@
 										reg = <0>;
 										ds5_7_out: endpoint {
 											vc-id = <3>;
-											port-index = <0>;
+											port-index = <7>;
 											bus-width = <2>;
 											remote-endpoint = <&d4xx_csi_in7>;
 										};
@@ -683,7 +683,7 @@
 										reg = <0>;
 										ds5_6_out: endpoint {
 											vc-id = <2>;
-											port-index = <0>;
+											port-index = <6>;
 											bus-width = <2>;
 											remote-endpoint = <&d4xx_csi_in6>;
 										};
@@ -733,7 +733,7 @@
 										reg = <0>;
 										ds5_5_out: endpoint {
 											vc-id = <1>;
-											port-index = <0>;
+											port-index = <5>;
 											bus-width = <2>;
 											remote-endpoint = <&d4xx_csi_in5>;
 										};
@@ -781,7 +781,7 @@
 										reg = <0>;
 										ds5_4_out: endpoint {
 											vc-id = <0>;
-											port-index = <0>;
+											port-index = <4>;
 											bus-width = <2>;
 											remote-endpoint = <&d4xx_csi_in4>;
 										};
