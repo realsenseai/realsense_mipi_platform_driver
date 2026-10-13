@@ -5,11 +5,11 @@ from pathlib import Path
 
 from ..v4l2.ioctls import V4L2_CTRL_CLASS_CAMERA
 
-_D4XX_C = Path(__file__).resolve().parents[3] / "kernel" / "realsense" / "d4xx.c"
+_D4XX_C = Path(__file__).resolve().parents[3] / "kernel" / "realsense" / "d4xx_main.c"
 
 
 def _fw_error_code_min(src=_D4XX_C):
-    """Parse DS5_FW_ERROR_CODE_MIN (major.minor.patch) from d4xx.c, as a FW_VERSION-control value."""
+    """Parse DS5_FW_ERROR_CODE_MIN (major.minor.patch) from d4xx_main.c, as a FW_VERSION-control value."""
     try:
         m = re.search(r"#define\s+DS5_FW_ERROR_CODE_MIN\s+DS5_FW_VER\(\s*(\d+)\s*,\s*(\d+)\s*,"
                       r"\s*(\d+)\s*\)", Path(src).read_text())
@@ -19,13 +19,13 @@ def _fw_error_code_min(src=_D4XX_C):
     return (a << 24) | (b << 16) | (c << 8)
 
 
-# DS5_DEPTH_STREAM_DT from d4xx.c:96
+# DS5_DEPTH_STREAM_DT from d4xx_main.c
 DS5_DEPTH_STREAM_DT = 0x4000
 
 # CID base: V4L2_CTRL_CLASS_CAMERA | DS5_DEPTH_STREAM_DT
 DS5_CAMERA_CID_BASE = V4L2_CTRL_CLASS_CAMERA | DS5_DEPTH_STREAM_DT
 
-# CID offsets from d4xx.c:2124-2151
+# CID offsets from d4xx_main.c
 DS5_CAMERA_CID_LOG = DS5_CAMERA_CID_BASE + 0
 DS5_CAMERA_CID_LASER_POWER = DS5_CAMERA_CID_BASE + 1
 DS5_CAMERA_CID_MANUAL_LASER_POWER = DS5_CAMERA_CID_BASE + 2
@@ -45,18 +45,18 @@ DS5_CAMERA_CID_HWMC = DS5_CAMERA_CID_BASE + 15
 DS5_CAMERA_CID_SYNC_MODE = DS5_CAMERA_CID_BASE + 16
 DS5_CAMERA_CID_PWM = DS5_CAMERA_CID_BASE + 22
 DS5_CAMERA_CID_ERROR_CODE = DS5_CAMERA_CID_BASE + 27
-# First D4xx FW serving the read-to-clear error code; value comes from d4xx.c
+# First D4xx FW serving the read-to-clear error code; value comes from d4xx_main.c
 DS5_FW_ERROR_CODE_MIN = _fw_error_code_min()
 DS5_CAMERA_CID_HWMC_RW = DS5_CAMERA_CID_BASE + 32
 DS5_CAMERA_CID_HW_RESET = DS5_CAMERA_CID_BASE + 33
 DS5_CAMERA_CID_READOUT_SHAPING = DS5_CAMERA_CID_BASE + 34
 # Single read/write control for depth AE mode (XU depth selector 0x11).
 DS5_CAMERA_CID_AE_MODE = DS5_CAMERA_CID_BASE + 35
-# D58x depth "Enable Aligned Depth" (USB depth XU 0x10), d4xx.c
+# D58x depth "Enable Aligned Depth" (USB depth XU 0x10), d4xx_main.c
 # D500_CAMERA_CID_ALIGNED_DEPTH. Registered on the D58x depth node only.
 D500_CAMERA_CID_ALIGNED_DEPTH = DS5_CAMERA_CID_BASE + 55
 
-# D58x FW reports major 7 or 8 (d4xx.c DS5_D58X_FW_MAJOR_MIN/MAX); D4xx reports 5.
+# D58x FW reports major 7 or 8 (d4xx_main.c DS5_D58X_FW_MAJOR_MIN/MAX); D4xx reports 5.
 D58X_FW_MAJORS = {7, 8}
 
 # Compressed colour needs the JetPack 6+ kernel patches; JetPack 5 is 5.10.
@@ -77,7 +77,7 @@ H264_MACROBLOCK_EDGE_PX = 16
 # Compressed frames travel as rows of this width (RS_CARRIER_ROW_BYTES in the 0015 patches).
 COMPRESSED_CARRIER_ROW_BYTES = 1280
 
-# Device type codes from d4xx.c:71-75
+# Device type codes from d4xx_main.c
 DS5_DEVICE_TYPE_D40X = 8
 DS5_DEVICE_TYPE_D41X = 7
 DS5_DEVICE_TYPE_D45X = 6
