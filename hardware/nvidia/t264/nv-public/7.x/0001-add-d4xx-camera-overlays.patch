@@ -1,0 +1,20 @@
+diff --git a/overlay/Makefile b/overlay/Makefile
+index df091c76e..c88403935 100644
+--- a/overlay/Makefile
++++ b/overlay/Makefile
+@@ -41,6 +41,15 @@ dtbo-y += tegra264-p4071-0000+p3834-xxxx-dynamic.dtbo
+ dtbo-y += tegra264-ufs-provision.dtbo
+ dtbo-y += tegra264-p4071-0000+p3834-0008-as-p5767-0000.dtbo
+ 
++dtbo-y += tegra264-camera-d4xx-overlay-advantech-cams-0-1-2-3-4-5-6-7.dtbo
++dtbo-y += tegra264-camera-d4xx-overlay-advantech-cams-0-1-2-3-4-5.dtbo
++dtbo-y += tegra264-camera-d4xx-overlay-advantech-cams-0-1-2-3.dtbo
++dtbo-y += tegra264-camera-d4xx-overlay-advantech-cams-4-5-6-7.dtbo
++dtbo-y += tegra264-camera-d4xx-overlay-advantech-cams-4-5.dtbo
++dtbo-y += tegra264-camera-d4xx-overlay-advantech.dtbo
++dtbo-y += tegra264-camera-d4xx-overlay-max96712-EVB.dtbo
++dtbo-y += tegra264-camera-d4xx-overlay.dtbo
++
+ ifneq ($(dtb-y),)
+ dtb-y := $(addprefix $(makefile-path)/,$(dtb-y))
+ endif

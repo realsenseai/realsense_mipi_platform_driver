@@ -32,6 +32,12 @@ fi
 TARGET="sources_${JP_INPUT_VERSION}"
 [[ -n "$2" ]] && TARGET="$2"
 
+# the kernel src folder is kernel-noble, if decompressed from public-src.tbz2
+# Ensure kernel-noble-src exists as a symlink to kernel-noble
+if [[ ! -d "$TARGET/$KERNEL_DIR" ]]; then
+    ln -s "kernel-noble" "$TARGET/$KERNEL_DIR"
+fi
+
 apply_external_patches() {
     ls -Ld "${PWD}/$2/$1"
     ls -Lw1 "${PWD}/$2/$1"
@@ -41,15 +47,37 @@ apply_external_patches() {
 apply_external_patches "$1" "${D4XX_SRC_DST}"
 apply_external_patches "$1" "${KERNEL_DIR}"
 
-if [[ "$JETPACK_VERSION" == "6.x" ]]; then
+if [[ "$JETPACK_VERSION" == "7.x" ]]; then
+    apply_external_patches "$JETPACK_VERSION" "build/nvidia-public" "$2"
+
     apply_external_patches "$JETPACK_VERSION" "hardware/nvidia/t23x/nv-public" "$2"
-elif [[ "$JETPACK_VERSION" != "7.x" ]]; then
+    apply_external_patches "$JETPACK_VERSION" "hardware/nvidia/t264/nv-public" "$2"
+elif [[ "$JETPACK_VERSION" == "6.x" ]]; then
+    apply_external_patches "$JETPACK_VERSION" "hardware/nvidia/t23x/nv-public" "$2"
+elif [[ "$JETPACK_VERSION" == "5.x" ]]; then
     apply_external_patches "$JETPACK_VERSION" "hardware/nvidia/platform/t19x/galen/kernel-dts" "$2"
 fi
 
 # For JP5 we override the i2c driver and ignore the previous that was created from patches
 cp kernel/realsense/d4xx.c "$TARGET/${D4XX_SRC_DST}/drivers/media/i2c/"
-if [[ "$JETPACK_VERSION" == "6.x" ]]; then
+if [[ "$JETPACK_VERSION" == "7.x" ]]; then
+    # Copy tegra264-gpio.h for Thor overlay compilation if not already present
+    if [[ ! -f "${TARGET}/$KERNEL_DIR/include/dt-bindings/gpio/tegra264-gpio.h" ]]; then
+        ln -f "${TARGET}/$KERNEL_DIR/3rdparty/canonical/linux-noble/include/dt-bindings/gpio/tegra264-gpio.h" \
+            "${TARGET}/$KERNEL_DIR/include/dt-bindings/gpio/" 2>/dev/null || true
+    fi
+    # jp7 overlay
+    cp hardware/realsense/tegra234-camera-d4xx-overlay*.dtso "$TARGET/hardware/nvidia/t23x/nv-public/overlay/"
+    cp hardware/realsense/tegra264-camera-d4xx-overlay*.dtso "$TARGET/hardware/nvidia/t264/nv-public/overlay/"
+    # max96712 header
+    cp nvidia-oot/max96712.h "$TARGET/nvidia-oot/include/media/"
+    # max96717 header and source
+    cp nvidia-oot/max96717.h "$TARGET/nvidia-oot/include/media/"
+    cp nvidia-oot/max96717.c "$TARGET/nvidia-oot/drivers/media/i2c/"
+    # max96724 tunnel-mode deserializer header and source
+    cp nvidia-oot/max96724.h "$TARGET/nvidia-oot/include/media/"
+    cp nvidia-oot/max96724.c "$TARGET/nvidia-oot/drivers/media/i2c/"
+elif [[ "$JETPACK_VERSION" == "6.x" ]]; then
     # jp6 overlay
     cp hardware/realsense/tegra234-camera-d4xx-overlay*.dts "$TARGET/hardware/nvidia/t23x/nv-public/overlay/"
     # max96712 header
