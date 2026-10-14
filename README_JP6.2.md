@@ -176,6 +176,8 @@ sudo ln -s /boot/initrd.img-5.15.148-tegra /boot/initrd
     | `tegra234-camera-d4xx-overlay-max96712-EVB.dtbo` | max96712 evaluation board |
     | `tegra234-camera-d4xx-overlay-max96712-EVB-cams-0-1.dtbo` | max96712 evaluation board w/ two connected cameras |
     | `tegra234-camera-d4xx-overlay-fg12-4ch-d5xx.dtbo` | Fangzhu fg12-4ch board with a single D5xx camera (max96717 serializer, 4-lane) connected to link A |
+    | `tegra234-camera-d4xx-overlay-fg12-4ch-cams-0-1-d5xx.dtbo` | Fangzhu fg12-4ch board (Orin Nano) with two D5xx cameras on links A & B (4-lane, max96717 serializers) sharing one deserializer |
+    | `tegra234-camera-d4xx-overlay-fg12-4ch-cams-0-1-2-3-d5xx.dtbo` | Fangzhu fg12-4ch board (Orin Nano) with four D5xx cameras on links A, B, C & D (4-lane, max96717 serializers) - all four links of the deserializer |
     | `tegra234-camera-d4xx-overlay-fg12-12ch.dtbo` | Fangzhu fg12-12ch board with a single D4xx/D457 camera connected to cam0 (link 0 of the first deserializer) |
     | `tegra234-camera-d4xx-overlay-fg12-12ch-d5xx.dtbo` | Fangzhu fg12-12ch board with a single D5xx camera (max96717 serializer, 4-lane) connected to cam0 |
     | `tegra234-camera-d4xx-overlay-fg12-12ch-cams-0-1.dtbo` | Fangzhu fg12-12ch board with two D4xx/D457 cameras on cam0 & cam1 (links 0 & 1) sharing one deserializer |
@@ -189,6 +191,7 @@ sudo ln -s /boot/initrd.img-5.15.148-tegra /boot/initrd
     | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-4.dtbo` | Fangzhu fg12-16ch board with two cameras connected to cam0 & cam4 (one camera per deserializer) |
     | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-4-8-12.dtbo` | Fangzhu fg12-16ch board with four cameras connected to cam0,4,8 & 12 (one camera per deserializer) |
     | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-1-d5xx.dtbo` | Fangzhu fg12-16ch board with two D5xx cameras on cam0 & cam1 (links 0 & 1, 4-lane, max96717 serializers) sharing one deserializer |
+    | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-1-2-3-d5xx.dtbo` | Fangzhu fg12-16ch board with four D5xx cameras on cam0, cam1, cam2 & cam3 (links 0-3, 4-lane, max96717 serializers) - all four links of the first deserializer |
     | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-1-d5xx-d4xx.dtbo` | Fangzhu fg12-16ch board with a D5xx on cam0 (link 0, 4-lane) and a D4xx/D457 on cam1 (link 1, mixed 2-lane camera / 4-lane deserializer-to-Jetson) sharing one deserializer |
     | `tegra234-camera-d4xx-overlay-fg12-16ch-cams-0-1-2-3-d5xx-3d4xx.dtbo` | Fangzhu fg12-16ch board with a D5xx on cam0 (link 0, 4-lane, max96717 serializer) and three D4xx/D457 on cam1, cam2 & cam3 (links 1-3, mixed 2-lane camera / 4-lane deserializer-to-Jetson) - all four links of the first deserializer |
     | `tegra234-camera-d4xx-overlay-fg12-16ch-PWR-only.dtbo` | Fangzhu fg12-16ch board ONLY POWER GPIOS (driver will not be probed) - for development use |
