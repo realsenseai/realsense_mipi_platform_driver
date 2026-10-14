@@ -12,7 +12,7 @@
  * Targets JetPack 7.2 (L4T R39.2, noble 6.8 kernel) running on an Orin dev kit.
  * The board compatible string is hardcoded (rather than via JETSON_COMPATIBLE)
  * because the p3737 platform dt-bindings header is not present in the noble tree;
- * the value matches fw-orin-2's live /proc/device-tree/compatible. The sync
+ * the value matches a live rig's /proc/device-tree/compatible. The sync
  * fragments below depend only on tegra234-gpio.h / pinctrl-tegra.h, both present
  * in the noble tree, so they need no platform header.
  */

@@ -8,7 +8,7 @@
  * (four D457 on a single MAX96712, link-mask 0xf, 16 VCs) — the JP7 (.dtso) form
  * differs only in that the p3737 platform dt-bindings header is absent from the
  * noble 6.8 tree, so the JETSON_COMPATIBLE macro is replaced by the hardcoded
- * board compatible string (matching fw-orin-2's live /proc/device-tree/compatible).
+ * board compatible string (matching a live rig's /proc/device-tree/compatible).
  * Same convention as the one-camera tegra234-camera-d4xx-overlay-fg12-16ch.dtso.
  */
 

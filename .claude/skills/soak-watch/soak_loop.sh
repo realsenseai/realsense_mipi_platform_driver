@@ -12,7 +12,7 @@
 # with `kill -0` instead of a fragile pgrep.
 #
 # Usage (on the rig):
-#   SOAK_CYCLES=5000 SOAK_PROGRESS_EVERY=100 SOAK_LOG=/tmp/rsdso-20058.log \
+#   SOAK_CYCLES=5000 SOAK_PROGRESS_EVERY=100 SOAK_LOG=/tmp/soak-run.log \
 #     nohup bash soak_loop.sh python3 /tmp/one_cycle.py >/dev/null 2>&1 &
 # where the per-cycle command is ONE customer-faithful iteration (open ->
 # set_option -> stream -> close) and exits non-zero only on the symptom.

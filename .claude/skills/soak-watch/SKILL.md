@@ -70,7 +70,7 @@ it's not stuck?". Any of them wakes you exactly once.
 
 ### 1. Stage the scripts on the rig (once per rig)
 Copy `soak_loop.sh` + `soak_probe.sh` into `REMOTE_DIR` (default `~/soak`). On a rig where
-`scp` is flaky (e.g. rslnxrvp2's newer sftp), pipe base64 over ssh stdin — see `hub-control`'s
+`scp` is flaky (e.g. a newer-sftp host), pipe base64 over ssh stdin — see `hub-control`'s
 "STAGE_VIA = base64" note.
 
 ### 2. Launch the loop detached on the rig

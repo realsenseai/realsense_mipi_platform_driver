@@ -23,7 +23,7 @@ permissions:
 
 jobs:
   gated:
-    # runs on the self-hosted runner on rslnx-kernel, which can reach internal Jenkins
+    # runs on the self-hosted runner, which can reach internal Jenkins
     runs-on: [self-hosted, rsjenkins-bridge]
     timeout-minutes: 240
     env:

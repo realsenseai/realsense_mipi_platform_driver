@@ -26,7 +26,7 @@ Defaults: USERNAME=`administrator`, REMOTE_PATH='git.USER.NAME', REMOTE_BOOT_FOL
 `REMOTE_BOOT_FOLDER` selects which `/boot/<folder>` receives the kernel `Image`; rigs whose `extlinux.conf` boots a non-default folder need it set explicitly. Known-good example:
 
 ```bash
-./scripts/deploy_kernel.sh 6.2 fw-orin-3 nvidia drgb_poc dev
+./scripts/deploy_kernel.sh 6.2 <RIG_HOST> nvidia drgb_poc dev
 ```
 
 This script is the **only** supported way to deploy a driver build — it replaces the whole `/lib/modules/$(uname -r)` tree, so every module stays ABI-consistent. Never hand-copy individual `.ko` files: `tegra-camera.ko` exports `camera_common_*` to `d4xx.ko` and `tegra_csi_*`/`csi5_fops` to `nvhost-nvcsi*`, so a partial copy strands the other consumers ("disagrees about version of symbol"), NVCSI fails to load, and no `/dev/video*` are created at all.
@@ -59,18 +59,29 @@ If `dmesg` shows no d4xx messages or `/dev/video*` devices are missing, the driv
 
 Some GMSL carriers boot a **custom base FDT + boot-time device-tree overlays** chosen in `/boot/extlinux/extlinux.conf`, not the standard NVIDIA kernel/DTB layout. `deploy_kernel.sh` does not model this. For an overlay-only change on such a rig:
 
+**An overlay only brings up the GMSL links it declares. A camera on a link the active overlay does not enable is invisible to every check below (`rs-fw-update -l`, `/dev/video-rs-*`, `dmesg`, `i2cdetect`), so "not listed" does not mean "not connected". Never conclude a rig has fewer cameras than it has from one overlay's view, and never switch overlays in a way that can hide one.**
+
+0. **Record what is connected before touching anything.** Save the output as the "before" list:
+   ```bash
+   rs-fw-update -l                       # type + serial of every camera the current overlay brings up
+   ls /dev/video-rs-*                    # one set per camera
+   sudo dmesg | grep -E "d4xx 9-00|device type|PID"   # per-subdevice probe lines
+   ```
+   Also read which links the current and the target overlay enable (decompile with `dtc -I dtb -O dts <overlay>.dtbo` and look at the link mask / camera nodes), and compare with what is physically cabled. If the rig owner or the rig notes say more cameras are cabled than the "before" list shows, the active overlay is hiding some: pick an overlay that enables those links.
 1. Copy the built `.dtbo` to the Jetson `/boot` (two hops if build host and Jetson aren't directly reachable):
    ```bash
    scp <build-host>:.../generic-dts/dtbs/<overlay>.dtbo <local>
    scp <local> <user>@<jetson>:/tmp/
    ssh <user>@<jetson> "sudo cp /tmp/<overlay>.dtbo /boot/"
    ```
-2. Point a boot label at the overlay in `/boot/extlinux/extlinux.conf` (back it up first). Each `LABEL` block has `LINUX/INITRD/APPEND/FDT` + an `OVERLAYS /boot/<overlay>.dtbo` line; mirror an existing camera label, change only `OVERLAYS` and the menu text, then set `DEFAULT <label>`.
+2. **Add a new boot label; do not edit the existing `DEFAULT` label in place.** Back up first (`sudo cp /boot/extlinux/extlinux.conf /boot/extlinux/extlinux.conf.bak-<date>`). Mirror an existing camera label, change only `OVERLAYS` and the menu text, then set `DEFAULT <new label>`. The previous label stays intact as the fallback. The target overlay must enable every link that shows a camera in the "before" list (a superset); if you cannot tell which links are populated, start with the widest overlay (all links).
 3. Reboot — GMSL is boot-probe only, no hotplug:
    ```bash
    ssh <user>@<jetson> "sudo reboot"
    ```
-4. After reboot verify (per verify-deploy) and confirm the links: i2c groups `2-00N[abcd]` (link N), `/dev/video-rs-*` symlinks, and **no `-121`** (serdes no-response) in `dmesg` for links that should be empty.
+4. After reboot verify (per verify-deploy) and **compare with the "before" list: every camera serial in it must still be present.** If one is missing, set `DEFAULT` back to the previous label, reboot, and stop; do not burn firmware or run tests on a rig that lost a camera. Also confirm the links: i2c groups `2-00N[abcd]` (link N), `/dev/video-rs-*` symlinks, and **no `-121`** (serdes no-response) in `dmesg` for links that should be empty.
+5. Burn or flash only the camera you mean: select it by serial number, and check that the device listed under that serial is the model the firmware is for (a D585 and a D401 on neighbouring links take different firmware).
+6. When the work is done, restore the previous `DEFAULT` label unless the rig's owner asks to keep the new one, and note the overlay and the camera list in the rig's own notes.
 
 Notes:
 - Non-interactive sudo with a payload file: `echo $PW | sudo -S bash -c 'cmd < /tmp/file'`. Do NOT pipe file content into `sudo -S tee` — sudo eats the first line as the password.

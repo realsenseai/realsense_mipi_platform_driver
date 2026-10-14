@@ -63,7 +63,7 @@ picture size. It is independent of the flags: a fixed line length does
 not imply a variable height. The row macro now fills the struct by field
 name.
 
-HW-verified before the BA10 rename (JP6.2, fw-orin-5, D585):
+HW-verified before the BA10 rename (JP6.2, D585 rig):
 RGB calibration 30/30 clean frames, Y16I
 5/5, LE payload on both, coexists with concurrent embedded-metadata
 capture; NV12 10/10 @640x360 and 5/5 @1280x720, exact 1.5*bpl*H frames.

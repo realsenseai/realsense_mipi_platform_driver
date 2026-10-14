@@ -26,10 +26,14 @@ Ask the user whether they need to apply patches or just copy `d4xx.c` and build.
 
 Requires `git config user.name` and `git config user.email` to be set.
 
-Always reset patches before re-applying:
+Always reset patches before re-applying. **`reset` must come before `$VERSION`, not after** —
+`apply_patches.sh`'s own argument loop stops parsing at the first token it doesn't recognize as
+a flag, and `$VERSION` (e.g. `6.2`) isn't one, so `./apply_patches.sh $VERSION reset` never
+reaches `reset` at all and silently runs a plain `apply` instead. Also pipe `yes` so the
+"changes will be hard reset, continue?" prompt doesn't stall non-interactively:
 ```bash
-./apply_patches.sh $VERSION reset
-./apply_patches.sh $VERSION
+yes | ./apply_patches.sh reset $VERSION
+yes | ./apply_patches.sh $VERSION
 ```
 
 #### Option B: Copy d4xx.c only (skip patches)
@@ -58,6 +62,13 @@ Flags:
 - `--dev-dbg` — enable `CONFIG_DYNAMIC_DEBUG` and `CONFIG_DYNAMIC_DEBUG_CORE` in kernel
 
 Output directory: `images/$VERSION/` (normalized: `images/6.x/` for JP 6.x, `images/5.x/` for JP 5.x).
+
+**This build takes several minutes (kernel Image + OOT modules + DTBs) — run it with your
+tool's own backgrounding, plain, with no output redirection.** Do not wrap it in your own
+`nohup ... &`: if your tool call already backgrounds the command for you, adding your own `&`
+on top makes the wrapper return the moment the child is launched, so the tool thinks the
+command finished instantly while the real build keeps running as an untracked orphan — no
+completion signal will ever fire for it.
 
 ### Step 3 (optional): Overlay-only rebuild
 
