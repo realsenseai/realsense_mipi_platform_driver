@@ -7,14 +7,14 @@ Add MAX96712 deserializer driver support for D4XX/D5XX cameras.
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- drivers/media/i2c/max96712.c | 1273 ++++++++++++++++++++++++++++++++++++++++--
- 1 file changed, 1238 insertions(+), 35 deletions(-)
+ drivers/media/i2c/max96712.c | 1326 ++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 1291 insertions(+), 35 deletions(-)
 
 diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
 index 8e237ee..de77d2b 100644
 --- a/drivers/media/i2c/max96712.c
 +++ b/drivers/media/i2c/max96712.c
-@@ -16,32 +16,193 @@
+@@ -16,32 +16,198 @@
  #include <linux/gpio.h>
  #include <linux/of.h>
  #include <linux/of_gpio.h>
@@ -50,6 +50,10 @@ index 8e237ee..de77d2b 100644
 +#define MAX96712_LINK_C_LOCK_ADDR	0x000B
 +#define MAX96712_LINK_D_LOCK_ADDR	0x000C
 +#define MAX96712_LINK_LOCKED		0x08
++
++#define MAX96712_TX1_DESKEW_INITIAL_ADDR 0x943
++#define MAX96712_TX1_DESKEW_PERIODIC_ADDR 0x944
++#define MAX96712_DESKEW_ENABLE BIT(7)
 +
 +#define MAX96712_BACKTOP25_ADDR 0x418
 +#define MAX96712_BACKTOP25_PHY1_SW_OVRR_OFFS 0x5
@@ -187,6 +191,7 @@ index 8e237ee..de77d2b 100644
 +	u8 vc_remap[MAX96712_MAX_LINKS][MAX96712_MAX_SER_VCS];
 +	bool force_clk0;
 +	int lane_cnt;
++	u32 csi_output_rate_mbps;
 +	bool fangzhu_fg12_reverse_lane_polarity;
 +	bool fangzhu_fg12_4ch_poc_enable;
 +	bool fangzhu_fg12_12ch_poc_enable;
@@ -213,7 +218,7 @@ index 8e237ee..de77d2b 100644
  	i2c_client = global_priv[channel]->i2c_client;
  	bak = i2c_client->addr;
  
-@@ -53,7 +214,6 @@ int max96712_write_reg_Dser(int slaveAddr, int channel,
+@@ -53,7 +219,6 @@ int max96712_write_reg_Dser(int slaveAddr, int channel,
  		dev_err(&i2c_client->dev, "%s: addr = 0x%x, val = 0x%x\n",
  				__func__, addr, val);
  	}
@@ -221,7 +226,7 @@ index 8e237ee..de77d2b 100644
  	return err;
  }
  EXPORT_SYMBOL(max96712_write_reg_Dser);
-@@ -68,8 +228,6 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
+@@ -68,8 +233,6 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
  
  	if (channel > 3 || channel < 0 || global_priv[channel] == NULL)
  		return -1;
@@ -230,7 +235,7 @@ index 8e237ee..de77d2b 100644
  	i2c_client = global_priv[channel]->i2c_client;
  	bak = i2c_client->addr;
  	i2c_client->addr = slaveAddr / 2;
-@@ -80,11 +238,56 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
+@@ -80,11 +243,56 @@ int max96712_read_reg_Dser(int slaveAddr, int channel,
  		dev_err(&i2c_client->dev, "%s: addr = 0x%x, val = 0x%x\n",
  				__func__, addr, *val);
  	}
@@ -288,7 +293,7 @@ index 8e237ee..de77d2b 100644
  static int max96712_read_reg(struct max96712 *priv,
  			u16 addr, unsigned int *val)
  {
-@@ -99,6 +302,20 @@ static int max96712_read_reg(struct max96712 *priv,
+@@ -99,6 +307,20 @@ static int max96712_read_reg(struct max96712 *priv,
  	return err;
  }
  
@@ -309,7 +314,7 @@ index 8e237ee..de77d2b 100644
  
  static int max96712_stats_show(struct seq_file *s, void *data)
  {
-@@ -153,24 +370,6 @@ static const struct file_operations max96712_debugfs_fops = {
+@@ -153,24 +375,6 @@ static const struct file_operations max96712_debugfs_fops = {
  	.release = single_release,
  };
  
@@ -334,7 +339,7 @@ index 8e237ee..de77d2b 100644
  static int max96712_debugfs_init(const char *dir_name,
  				struct dentry **d_entry,
  				struct dentry **f_entry,
-@@ -225,9 +424,106 @@ static int max96712_debugfs_init(const char *dir_name,
+@@ -225,9 +429,130 @@ static int max96712_debugfs_init(const char *dir_name,
  static  struct regmap_config max96712_regmap_config = {
  	.reg_bits = 16,
  	.val_bits = 8,
@@ -439,10 +444,34 @@ index 8e237ee..de77d2b 100644
 +	return 0;
 +}
 +
++static int max96712_parse_output_rate(struct max96712 *priv,
++				     struct device_node *np)
++{
++	u32 rate;
++	int err;
++
++	if (!of_find_property(np, "maxim,csi-output-rate-mbps", NULL))
++		return 0;
++
++	err = of_property_read_u32(np, "maxim,csi-output-rate-mbps", &rate);
++	if (err)
++		return err;
++
++	/* These presets describe the qualified four-lane host connection. */
++	if (priv->lane_cnt != 4 || (rate != 1300 && rate != 2200)) {
++		dev_err(&priv->i2c_client->dev,
++			"csi-output-rate-mbps requires 4 lanes and 1300 or 2200 Mbps\n");
++		return -EINVAL;
++	}
++
++	priv->csi_output_rate_mbps = rate;
++	return 0;
++}
++
  #if defined(NV_I2C_DRIVER_STRUCT_PROBE_WITHOUT_I2C_DEVICE_ID_ARG) /* Linux 6.3 */
  static int max96712_probe(struct i2c_client *client)
  #else
-@@ -237,10 +533,16 @@ static int max96712_probe(struct i2c_client *client,
+@@ -237,10 +562,16 @@ static int max96712_probe(struct i2c_client *client,
  {
  	struct max96712 *priv;
  	int err = 0;
@@ -459,7 +488,7 @@ index 8e237ee..de77d2b 100644
  	priv->i2c_client = client;
  	priv->regmap = devm_regmap_init_i2c(priv->i2c_client,
  				&max96712_regmap_config);
-@@ -249,15 +551,68 @@ static int max96712_probe(struct i2c_client *client,
+@@ -249,15 +580,72 @@ static int max96712_probe(struct i2c_client *client,
  			"regmap init failed: %ld\n", PTR_ERR(priv->regmap));
  		return -ENODEV;
  	}
@@ -509,6 +538,10 @@ index 8e237ee..de77d2b 100644
 +			priv->lane_cnt = value;
 +		}
 +
++		err = max96712_parse_output_rate(priv, np);
++		if (err)
++			return err;
++
 +		priv->fangzhu_fg12_reverse_lane_polarity =
 +			of_property_read_bool(np, "fangzhu,fg12-reverse-lane-polarity");
 +		priv->fangzhu_fg12_4ch_poc_enable =
@@ -533,7 +566,7 @@ index 8e237ee..de77d2b 100644
  	err = max96712_debugfs_init(NULL, NULL, NULL, priv);
  	if (err)
  		return err;
-@@ -274,8 +629,11 @@ static int max96712_remove(struct i2c_client *client)
+@@ -274,8 +662,11 @@ static int max96712_remove(struct i2c_client *client)
  static void max96712_remove(struct i2c_client *client)
  #endif
  {
@@ -546,7 +579,7 @@ index 8e237ee..de77d2b 100644
  		i2c_unregister_device(client);
  		client = NULL;
  	}
-@@ -284,13 +642,857 @@ static void max96712_remove(struct i2c_client *client)
+@@ -284,13 +675,877 @@ static void max96712_remove(struct i2c_client *client)
  #endif
  }
  
@@ -1047,8 +1080,10 @@ index 8e237ee..de77d2b 100644
 +		{MAX96712_VIDEO_PIPE_EN_ADDR, 0x00}, //0xF4, Disable all pipes for now
 +	};
 +
-+	/* 1300Mbps per lane for 4 lanes, 2500Mbps per lane for 2 lanes */
-+	uint8_t lane_rate = (priv->lane_cnt == 4) ? MAX96712_BACKTOP25_1300Mbps : MAX96712_BACKTOP25_2500Mbps;
++	uint8_t lane_rate = priv->csi_output_rate_mbps ?
++		priv->csi_output_rate_mbps / 100 :
++		(priv->lane_cnt == 4 ? MAX96712_BACKTOP25_1300Mbps :
++		 MAX96712_BACKTOP25_2500Mbps);
 +
 +	struct reg_pair map_phy_opt[] =
 +	{
@@ -1080,19 +1115,37 @@ index 8e237ee..de77d2b 100644
 +
 +	mutex_lock(&priv->lock);
 +
-+	err |= max96712_set_registers(priv, map_pipe_opt, ARRAY_SIZE(map_pipe_opt));
-+	err |= max96712_set_registers(priv, map_phy_opt, ARRAY_SIZE(map_phy_opt));
++	if (priv->csi_output_rate_mbps) {
++		/* Keep the output quiet until its rate and calibration are ready. */
++		err = max96712_write_reg(priv,
++				MAX96712_BACKTOP12_CSI_OUT_EN_ADDR, 0);
++		if (err)
++			goto out;
 +
-+	/*
-+	 * map_pipe_opt just disabled every video pipe (PIPE_EN = 0), so any
-+	 * previously written multi-VC mapping is now void. Forget the
-+	 * configure-once state so the next max96712_set_pipe() re-applies the
-+	 * multi-VC mapping instead of short-circuiting on a stale flag. Pipe
-+	 * ownership (link_multi_vc_pipe / video_pipe_alloc) is intentionally
-+	 * left intact, matching how the dynamic allocation state persists here.
-+	 */
++		if (priv->csi_output_rate_mbps > 1500) {
++			err = regmap_update_bits(priv->regmap,
++				MAX96712_TX1_DESKEW_INITIAL_ADDR,
++				MAX96712_DESKEW_ENABLE, MAX96712_DESKEW_ENABLE);
++			if (err)
++				goto out;
++			err = regmap_update_bits(priv->regmap,
++				MAX96712_TX1_DESKEW_PERIODIC_ADDR,
++				MAX96712_DESKEW_ENABLE, MAX96712_DESKEW_ENABLE);
++			if (err)
++				goto out;
++		}
++	}
++
++	/* Pipe disable may partially succeed even if an I2C write fails. */
 +	memset(priv->multi_vc_configured, 0, sizeof(priv->multi_vc_configured));
++	err = max96712_set_registers(priv, map_pipe_opt, ARRAY_SIZE(map_pipe_opt));
++	if (err)
++		goto out;
++	err = max96712_set_registers(priv, map_phy_opt, ARRAY_SIZE(map_phy_opt));
++	if (err)
++		goto out;
 +
++out:
 +	mutex_unlock(&priv->lock);
 +
 +	return err;
@@ -1405,7 +1458,7 @@ index 8e237ee..de77d2b 100644
  	{ },
  };
  
-@@ -300,6 +1502,7 @@ static struct i2c_driver max96712_i2c_driver = {
+@@ -300,6 +1555,7 @@ static struct i2c_driver max96712_i2c_driver = {
  	.driver = {
  		.name = "max96712",
  		.owner = THIS_MODULE,
