@@ -1,6 +1,5 @@
 """Device enumeration, format listing, and firmware version tests."""
 
-import errno
 import os
 
 import pytest
@@ -9,9 +8,10 @@ from ..d4xx import constants as C
 from ..d4xx.discovery import discover_cameras
 from ..v4l2 import ioctls
 from ..v4l2.device import V4L2Device
-from ..v4l2.stream import StreamContext
 
-REFUSAL_FPS = 30
+# 2C advertises 25 fps colour at these sizes; 3C has no 25 fps video profile.
+TWO_C_25FPS_SIZES = ((1280, 720), (1280, 960))
+TWO_C_EXTRA_FPS = 25
 
 
 @pytest.mark.d457
@@ -108,28 +108,6 @@ class TestFormatEnumeration:
         assert pixfmts & ir_fmts, f"IR device missing GREY/Y8I/Y12I: {pixfmts}"
 
 
-def _stream_refused(path, pixfmt, width, height):
-    """True if STREAMON fails with EAGAIN, d4xx's code for a camera refusal.
-    Host-side steps and any other STREAMON error raise."""
-    with V4L2Device(path) as dev:
-        dev.set_format(width, height, pixfmt)
-        dev.set_parm(REFUSAL_FPS)
-        stream = StreamContext(dev)
-        try:
-            stream._reqbufs()
-            stream._mmap_buffers()
-            stream._queue_all()
-            try:
-                stream._streamon()
-            except OSError as err:
-                if err.errno != errno.EAGAIN:
-                    raise
-                return True
-            return False
-        finally:
-            stream.__exit__(None, None, None)
-
-
 def _discrete_fps(intervals):
     """Frame rates of the discrete intervals, in fps."""
     return [fi.discrete.denominator / fi.discrete.numerator for fi in intervals
@@ -144,8 +122,7 @@ def _macroblocks(pixels):
 
 @pytest.mark.d585
 class TestCompressedColourFormats:
-    """3C lists H.264/MJPEG with frame sizes; on 2C (no colour encoder) a listed
-    format must be refused at STREAMON with EAGAIN, and any other result fails."""
+    """3C and 2C list H.264/MJPEG with frame sizes; 2C adds its 25 fps rate."""
 
     @pytest.mark.parametrize("pixfmt", [ioctls.V4L2_PIX_FMT_H264,
                                         ioctls.V4L2_PIX_FMT_MJPEG])
@@ -153,25 +130,23 @@ class TestCompressedColourFormats:
         with V4L2Device(d58x_camera.rgb_path) as dev:
             pixfmts = {f.pixelformat for f in dev.enum_formats()}
             sizes = dev.enum_framesizes(pixfmt) if pixfmt in pixfmts else []
+            dims = {(fs.discrete.width, fs.discrete.height) for fs in sizes
+                    if fs.type == ioctls.V4L2_FRMSIZE_TYPE_DISCRETE}
+            rates = {wh: _discrete_fps(dev.enum_frameintervals(pixfmt, *wh))
+                     for wh in dims & set(TWO_C_25FPS_SIZES)}
         name = ioctls.FOURCC_TO_NAME[pixfmt]
-        dims = sorted(((fs.discrete.width, fs.discrete.height) for fs in sizes
-                       if fs.type == ioctls.V4L2_FRMSIZE_TYPE_DISCRETE),
-                      key=lambda wh: wh[0] * wh[1])
-        if not d58x_is_2c:
-            assert pixfmt in pixfmts, f"RGB device missing {name}: {pixfmts}"
-            assert len(sizes) > 0, f"No frame sizes for {name}"
-            return
-        if pixfmt not in pixfmts:
-            return
-        assert dims, f"2C D585 lists {name} with no frame sizes"
-        width, height = dims[0]
-        assert _stream_refused(d58x_camera.rgb_path, pixfmt, width, height), \
-            f"2C D585 accepted a {name} {width}x{height} stream"
+        assert pixfmt in pixfmts, f"RGB device missing {name}: {pixfmts}"
+        assert len(sizes) > 0, f"No frame sizes for {name}"
+        for (width, height) in TWO_C_25FPS_SIZES:
+            listed = TWO_C_EXTRA_FPS in rates.get((width, height), [])
+            assert listed == d58x_is_2c, (
+                f"{name} {width}x{height} {TWO_C_EXTRA_FPS} fps listed={listed} "
+                f"on {'2C' if d58x_is_2c else '3C'}")
 
-    def test_h264_rates_within_level40(self, d58x_encoder_camera):
+    def test_h264_rates_within_level40(self, d58x_camera):
         """Every offered H.264 size and rate fits level 4.0's MB rate."""
         pixfmt = ioctls.V4L2_PIX_FMT_H264
-        with V4L2Device(d58x_encoder_camera.rgb_path) as dev:
+        with V4L2Device(d58x_camera.rgb_path) as dev:
             listed = [f.pixelformat for f in dev.enum_formats()]
             sizes = [(fs.discrete.width, fs.discrete.height)
                      for fs in dev.enum_framesizes(pixfmt)
