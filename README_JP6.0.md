@@ -178,6 +178,7 @@ sudo ln -s /boot/initrd.img-5.15.136-tegra /boot/initrd
     | `tegra234-camera-d4xx-overlay-fg12-4ch-d5xx.dtbo` | Fangzhu fg12-4ch board with a single D5xx camera (max96717 serializer, 4-lane) connected to link A |
     | `tegra234-camera-d4xx-overlay-fg12-4ch-cams-0-1-d5xx.dtbo` | Fangzhu fg12-4ch board (Orin Nano) with two D5xx cameras on links A & B (4-lane, max96717 serializers) sharing one deserializer |
     | `tegra234-camera-d4xx-overlay-fg12-4ch-cams-0-1-2-3-d5xx.dtbo` | Fangzhu fg12-4ch board (Orin Nano) with four D5xx cameras on links A, B, C & D (4-lane, max96717 serializers) - all four links of the deserializer |
+    | `tegra234-camera-d4xx-overlay-fg12-4ch-cams-0-1-2-3-d5xx-3d4xx.dtbo` | Fangzhu fg12-4ch board (Orin Nano) with a D5xx on cam0 (link A, 4-lane, max96717 serializer) and three D4xx/D457 on cam1, cam2 & cam3 (links B, C & D, mixed 2-lane camera / 4-lane deserializer-to-Jetson) - all four links of the deserializer |
     | `tegra234-camera-d4xx-overlay-fg12-12ch.dtbo` | Fangzhu fg12-12ch board with a single D4xx/D457 camera connected to cam0 (link 0 of the first deserializer) |
     | `tegra234-camera-d4xx-overlay-fg12-12ch-d5xx.dtbo` | Fangzhu fg12-12ch board with a single D5xx camera (max96717 serializer, 4-lane) connected to cam0 |
     | `tegra234-camera-d4xx-overlay-fg12-12ch-cams-0-1.dtbo` | Fangzhu fg12-12ch board with two D4xx/D457 cameras on cam0 & cam1 (links 0 & 1) sharing one deserializer |
