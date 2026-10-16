@@ -1,0 +1,54 @@
+From 1c375f0c0fd3af5c0861b6bf511ebbacb75bb470 Mon Sep 17 00:00:00 2001
+From: Yogev Modlin <yogev.modlin@realsenseai.com>
+Date: Mon, 28 Sep 2026 13:25:58 +0300
+Subject: [PATCH] media: tegra: keep a failed VI5 capture setup from releasing
+ a foreign channel
+
+When tegra_capture_ivc_notify_chan_id() fails, vi_capture_setup() frees
+unpins_list but leaves capture->channel_id set. The following shutdown
+then releases and unregisters that id on behalf of the stream that owns
+it and dereferences the NULL unpins_list in vi_capture_request_unpin().
+
+Reset channel_id on the setup failure path and make request unpin
+tolerate a missing unpins list. This tree's notify_chan_id() already
+waits for the channel id to be released.
+
+Signed-off-by: Yogev Modlin <yogev.modlin@realsenseai.com>
+---
+ .../platform/tegra/camera/fusa-capture/capture-vi-channel.c  | 5 +++++
+ .../media/platform/tegra/camera/fusa-capture/capture-vi.c    | 3 +++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/drivers/media/platform/tegra/camera/fusa-capture/capture-vi-channel.c b/drivers/media/platform/tegra/camera/fusa-capture/capture-vi-channel.c
+index 3414026..f3d8b7a 100644
+--- a/drivers/media/platform/tegra/camera/fusa-capture/capture-vi-channel.c
++++ b/drivers/media/platform/tegra/camera/fusa-capture/capture-vi-channel.c
+@@ -206,6 +206,11 @@ void vi_capture_request_unpin(
+ 	}
+ 
+ 	mutex_lock(&capture->unpins_list_lock);
++	if (capture->unpins_list == NULL ||
++	    buffer_index >= capture->queue_depth) {
++		mutex_unlock(&capture->unpins_list_lock);
++		return;
++	}
+ 	unpins = &capture->unpins_list[buffer_index];
+ 
+ 	if (unpins->num_unpins != 0) {
+diff --git a/drivers/media/platform/tegra/camera/fusa-capture/capture-vi.c b/drivers/media/platform/tegra/camera/fusa-capture/capture-vi.c
+index 36c5110..2cc7558 100644
+--- a/drivers/media/platform/tegra/camera/fusa-capture/capture-vi.c
++++ b/drivers/media/platform/tegra/camera/fusa-capture/capture-vi.c
+@@ -1056,6 +1056,9 @@ int vi_capture_setup(
+ 
+ cb_fail:
+ resp_fail:
++	/* This setup never owned the id's callbacks: a later release must not
++	 * unregister them from the stream that does, nor unpin the freed list. */
++	capture->channel_id = CAPTURE_CHANNEL_INVALID_ID;
+ submit_fail:
+ 	vfree(capture->unpins_list);
+ 	capture->unpins_list = NULL;
+-- 
+2.54.0.windows.1
+
