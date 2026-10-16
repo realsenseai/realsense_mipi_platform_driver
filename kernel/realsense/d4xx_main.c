@@ -152,7 +152,6 @@ struct ser_interface {
 
 /* GVD response payload size per product line */
 #define DS5_GVD_LEN_D4XX		276
-#define DS5_GVD_LEN_D5XX		606
 #define D585_GVD_PID_OFFSET		18
 #define D585_2C_PROTO_PID		0x0C07
 #define D585_3C_PROTO_PID		0x0C08
@@ -305,6 +304,7 @@ struct ser_interface {
 #define DS5_START_POLL_TIME	10
 #define DS5_START_MAX_TIME	2000
 #define DS5_START_MAX_COUNT	(DS5_START_MAX_TIME / DS5_START_POLL_TIME)
+#define DS5_HWMC_PFD_OPCODE	0x3b
 /*
  * RSDEV-12089: max wall-clock to wait for an HWMC command to complete. Must cover
  * a worst-case low-fps stream re-arm (ds5_mux_s_stream, bounded by
@@ -494,8 +494,10 @@ static void ds5_init_global_slots_once(void)
 		return;
 	}
 
-	for (i = 0; i < MAX_DS5_NUM; i++)
+	for (i = 0; i < MAX_DS5_NUM; i++) {
 		mutex_init(&ds5_inited[i].lock);
+		mutex_init(&ds5_inited[i].hwmc_lock);
+	}
 
 	for (i = 0; i < MAX_DSER_NUM; i++)
 		mutex_init(&dser_inited[i].lock);
@@ -616,6 +618,7 @@ static void ds5_init_global_slots_once(void)
 	mutex_lock(&ds5_slots_lock__);
 	if (!ds5_slots_inited) {
 		mutex_init(&ds5_inited[0].lock);
+		mutex_init(&ds5_inited[0].hwmc_lock);
 		ds5_slots_inited = true;
 	}
 	mutex_unlock(&ds5_slots_lock__);
@@ -680,6 +683,24 @@ static inline void msleep_range(unsigned int delay_base)
 }
 #endif
 #endif
+
+/* D58x stream transitions normally settle within a few milliseconds. Use an
+ * initial polling burst, then restore the increasing backoff. Callers retain
+ * their absolute DS5_START_MAX_TIME deadline. */
+static unsigned int ds5_stream_poll_delay(struct ds5 *state, unsigned int retry)
+{
+	/* Preserve D4xx timing and the existing backoff on slow transitions. */
+	if (ds5_is_d58x(state)) {
+		if (retry <= 2)
+			return 1;
+		if (retry <= 5)
+			return 2;
+		if (retry <= 10)
+			return DS5_START_POLL_TIME;
+	}
+
+	return retry * DS5_START_POLL_TIME;
+}
 
 static int ds5_write(struct ds5 *state, u16 reg, u16 val)
 {
@@ -2884,8 +2905,6 @@ static const struct v4l2_ctrl_type_ops d500_dpp_ctrl_type_ops = {
 #define DS5_HWMC_STATUS_OK		0
 #define DS5_HWMC_STATUS_ERR		1
 #define DS5_HWMC_STATUS_WIP		2
-#define DS5_HWMC_BUFFER_SIZE	1024
-
 enum DS5_HWMC_ERR {
 	DS5_HWMC_ERR_SUCCESS = 0,
 	DS5_HWMC_ERR_CMD     = -1,
@@ -2895,11 +2914,12 @@ enum DS5_HWMC_ERR {
 	DS5_HWMC_ERR_LAST,
 };
 
-static int ds5_hwmc_wait(struct ds5 *state)
+static int ds5_hwmc_wait(struct ds5 *state, int *fw_error)
 {
 	int ret = 0;
 	u16 status = DS5_HWMC_STATUS_WIP;
 	int errorCode;
+
 	/*
 	 * RSDEV-12089: bound the poll by wall-clock (DS5_HWMC_MAX_TIME) rather than a
 	 * fixed retry count. The old ~100 ms budget was too short on MIPI: a concurrent
@@ -2910,6 +2930,8 @@ static int ds5_hwmc_wait(struct ds5 *state)
 	 */
 	unsigned long timeout = jiffies + msecs_to_jiffies(DS5_HWMC_MAX_TIME);
 	bool first = true;
+
+	*fw_error = 0;
 	do {
 		if (!first)
 			msleep_range(1);
@@ -2925,41 +2947,52 @@ static int ds5_hwmc_wait(struct ds5 *state)
 		__func__, ret, status);
 	if (!ret) {
 		if (status == DS5_HWMC_STATUS_ERR) {
-			ds5_raw_read(state, DS5_HWMC_DATA, &errorCode, sizeof(errorCode));
-			ret = errorCode;
+			ret = ds5_raw_read(state, DS5_HWMC_DATA, &errorCode,
+					   sizeof(errorCode));
+			if (!ret) {
+				if (!errorCode)
+					return -EBADMSG;
+				*fw_error = errorCode;
+			}
 		} else if (status == DS5_HWMC_STATUS_WIP) {
 			ret = -ETIMEDOUT;
 			dev_warn(&state->client->dev,
 				"%s(): HWMC command timed out\n", __func__);
+		} else if (status != DS5_HWMC_STATUS_OK) {
+			ret = -EBADMSG;
 		}
-	} else {
-		ret = DS5_HWMC_ERR_LAST;
 	}
 	return ret;
 }
 
 static int ds5_get_hwmc(struct ds5 *state, unsigned char *data,
-		u16 cmdDataLen, u16 *dataLen)
+		u16 cmdDataLen, u16 *dataLen, bool raw_response)
 {
 	int ret = 0;
+	int fw_error;
 	u16 tmp_len = 0;
 
 	if (!data)
 		return -ENOBUFS;
 
+	if (dataLen)
+		*dataLen = 0;
 	memset(data, 0, cmdDataLen);
-	ret = ds5_hwmc_wait(state);
-	if (ret) {
+	ret = ds5_hwmc_wait(state, &fw_error);
+	if (ret)
+		return ret;
+	if (fw_error) {
 		dev_dbg(&state->client->dev,
 			"%s(): HWMC status not clear, ret: %d\n",
-			__func__, ret);
-		if (ret != DS5_HWMC_ERR_LAST) {
-			int *p = (int *)data;
-			*p = ret;
-			return 0;
-		} else {
-			return ret;
-		}
+			__func__, fw_error);
+		if (!raw_response)
+			return fw_error;
+		if (cmdDataLen < sizeof(fw_error))
+			return -ENOBUFS;
+		memcpy(data, &fw_error, sizeof(fw_error));
+		if (dataLen)
+			*dataLen = sizeof(fw_error);
+		return 0;
 	}
 
 	ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN,
@@ -2970,9 +3003,13 @@ static int ds5_get_hwmc(struct ds5 *state, unsigned char *data,
 	if (tmp_len > cmdDataLen)
 		return -ENOBUFS;
 
-	if (tmp_len == 0) {
+	/* An empty native LOG response means there are no pending logs. */
+	if (!tmp_len && !raw_response)
+		return 0;
+	if (tmp_len < sizeof(u32)) {
 		dev_err(&state->client->dev,
-			"%s(): HWMC response length is 0\n", __func__);
+			"%s(): HWMC response length %u is too short\n",
+			__func__, tmp_len);
 		return -ENODATA;
 	}
 
@@ -3001,6 +3038,112 @@ static int ds5_hwmc_send(struct ds5 *state,
 	ds5_write_with_check(state, DS5_HWMC_EXEC, 0x01); /* execute cmd */
 
 	return 0;
+}
+
+/* Caller holds hwmc_lock. Invalidate before a write: a transport failure may
+ * occur after FW has already changed flash/EEPROM or calibration metadata. */
+static void ds5_gvd_invalidate_locked(struct ds5 *state)
+{
+	state->ds5_dev->gvd_cache_valid = false;
+	state->ds5_dev->gvd_cache_len = 0;
+}
+
+/* D500 GVD contains flash/EEPROM identity and calibration version fields.
+ * Read-only discovery and ordinary streaming controls keep the cache warm. */
+static bool ds5_hwmc_changes_gvd(u32 opcode)
+{
+	switch (opcode) {
+	case 0x06: /* I2CWB8: raw I2C writes can reach EEPROM */
+	case 0x07: /* I2CWW8 */
+	case 0x08: /* I2CWD8 */
+	case 0x0a: /* FWB */
+	case 0x0b: /* FES */
+	case 0x0c: /* FEF */
+	case 0x0e: /* FPLOCK */
+	case 0x14: /* SETCAL */
+	case 0x16: /* SETINTCAL */
+	case 0x18: /* EWB */
+	case 0x1c: /* INITCAL */
+	case 0x22: /* RFBI: ISP firmware update */
+	case 0x3a: /* MMWB8 */
+	case 0x47: /* UPDATE_MM_FW */
+	case 0x50: /* MMEW */
+	case 0x51: /* CALIBRECALC */
+	case 0x54: /* SETMMEXTRNSIC */
+	case 0x56: /* OEMW */
+	case 0x61: /* CALIBRESTOREDEFAULT */
+	case 0x62: /* SETINTCALNEW */
+	case 0x63: /* SETMMEXTRNSICNEW */
+	case 0x66: /* CALIBRESTOREEPROM */
+	case 0x79: /* CALIBUPDATEISP */
+	case 0x9b: /* LOCK_EEPROM */
+		return true;
+	default:
+		return false;
+	}
+}
+
+/* DFU has no HWMC response. Use the same generation/cache transition for
+ * legacy HWMC, HWMC_RW and the DFU character-device entry point. */
+static int ds5_hwmc_send_dfu_locked(struct ds5 *state, u16 cmd_len,
+				    const struct hwm_cmd *cmd)
+{
+	ds5_gvd_invalidate_locked(state);
+	atomic_inc(ds5_get_reset_gen(state));
+	return ds5_hwmc_send(state, cmd_len, cmd);
+}
+
+static int ds5_hwmc_send_dfu(struct ds5 *state, u16 cmd_len,
+			   const struct hwm_cmd *cmd)
+{
+	int ret;
+
+	mutex_lock(&state->ds5_dev->hwmc_lock);
+	ret = ds5_hwmc_send_dfu_locked(state, cmd_len, cmd);
+	mutex_unlock(&state->ds5_dev->hwmc_lock);
+	return ret;
+}
+
+/*
+ * HKR exposes one HW-monitor engine for the whole camera, while Linux exposes
+ * it through multiple V4L2 subdevices.  Serialize the complete transaction,
+ * not only the DATA/EXEC writes: a second command issued before the first
+ * response is consumed overwrites the shared FW status/response registers.
+ */
+/* Caller holds hwmc_lock. Native controls return FW errors as errno; raw
+ * HWMC controls preserve the firmware response word for librealsense. */
+static int ds5_hwmc_xfer_locked(struct ds5 *state, u16 cmd_len,
+			      const struct hwm_cmd *cmd, unsigned char *data,
+			      u16 data_size, u16 *data_len, bool raw_response)
+{
+	int ret, fw_error;
+
+	if (cmd_len < sizeof(*cmd) || cmd_len > DS5_HWMC_BUFFER_SIZE)
+		return -EINVAL;
+	if (ds5_is_d58x(state) && ds5_hwmc_changes_gvd(cmd->opcode))
+		ds5_gvd_invalidate_locked(state);
+	ret = ds5_hwmc_send(state, cmd_len, cmd);
+	if (ret)
+		return ret;
+	if (data)
+		return ds5_get_hwmc(state, data, data_size, data_len, raw_response);
+
+	ret = ds5_hwmc_wait(state, &fw_error);
+	return ret ? ret : fw_error;
+}
+
+static int ds5_hwmc_xfer(struct ds5 *state, u16 cmd_len,
+			  const struct hwm_cmd *cmd, unsigned char *data,
+			  u16 data_size, u16 *data_len, bool raw_response)
+{
+	int ret;
+
+	mutex_lock(&state->ds5_dev->hwmc_lock);
+	ret = ds5_hwmc_xfer_locked(state, cmd_len, cmd, data, data_size,
+				  data_len, raw_response);
+	mutex_unlock(&state->ds5_dev->hwmc_lock);
+
+	return ret;
 }
 
 /* Caller must hold state->ds5_dev->lock. */
@@ -3360,11 +3503,7 @@ static int ds5_set_calibration_data(struct ds5 *state,
 {
 	int ret;
 
-	ret = ds5_hwmc_send(state, length, cmd);
-	if (ret)
-		return ret;
-
-	ret = ds5_hwmc_wait(state);
+	ret = ds5_hwmc_xfer(state, length, cmd, NULL, 0, NULL, false);
 	if (ret) {
 		dev_err(&state->client->dev,
 				"%s(): Failed to set calibration table %d, error: %d\n",
@@ -3503,7 +3642,7 @@ static int ds5_set_ser_esync_tunneling(struct ds5 *state, bool enable)
  *
  * Returns 0 on success, negative error code on failure.
  */
-static int ds5_hw_reset_with_recovery(struct ds5 *state)
+static int ds5_hw_reset_with_recovery_locked(struct ds5 *state)
 {
 	int ret;
 	int retry;
@@ -3608,7 +3747,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	if (imu_streaming)
 		ds5_write(state, DS5_START_STOP_STREAM,	DS5_STREAM_STOP | DS5_STREAM_IMU);
 
-	/* 2. Increment DS5 reset generation.
+	/* 2. Invalidate camera state (the wrapper bumped reset generation).
 	 *    After HW reset the device loses all configuration, so driver
 	 *    state must be brought in sync, like clearing streaming flags so that
 	 *    ds5_mux_s_stream() won't silently skip the next stream-start.
@@ -3623,7 +3762,6 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	 *    release-then-reallocate at stream-start time, when the FW
 	 *    has long finished its init (matching v1.0.1.33 behavior).
 	 */
-	atomic_inc(ds5_get_reset_gen(state));
 	if (!d585_proto_reset)
 		WRITE_ONCE(state->ds5_dev->cached_device_type,
 			   DS5_DEVICE_TYPE_UNKNOWN);
@@ -3837,7 +3975,28 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	return 0;
 }
 
+/* Keep cache fills and all peer HWMC commands out of the entire reset,
+ * including failure exits. Lock order is hwmc_lock, then ds5_dev->lock. */
+static int ds5_hw_reset_with_recovery(struct ds5 *state)
+{
+	struct ds5_dev *dev = state->ds5_dev;
+	int ret;
+
+	mutex_lock(&dev->hwmc_lock);
+	atomic_inc(ds5_get_reset_gen(state));
+	ds5_gvd_invalidate_locked(state);
+	ret = ds5_hw_reset_with_recovery_locked(state);
+	ds5_gvd_invalidate_locked(state);
+	mutex_unlock(&dev->hwmc_lock);
+
+	return ret;
+}
+
 static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on);
+static int ds5_gvd(struct ds5 *state, unsigned char *data, u32 buf_len,
+		   u16 *data_len, bool raw_response);
+static int ds5_gvd_locked(struct ds5 *state, unsigned char *data, u32 buf_len,
+			  u16 *data_len, bool raw_response);
 
 static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 {
@@ -4093,10 +4252,8 @@ unlock_dpp:
 			ae_roi_cmd.param2 = *((u16 *)ctrl->p_new.p_u16 + 1);
 			ae_roi_cmd.param3 = *((u16 *)ctrl->p_new.p_u16 + 2);
 			ae_roi_cmd.param4 = *((u16 *)ctrl->p_new.p_u16 + 3);
-			ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd),
-				&ae_roi_cmd);
-			if (!ret)
-				ret = ds5_hwmc_wait(state);
+			ret = ds5_hwmc_xfer(state, sizeof(struct hwm_cmd),
+				&ae_roi_cmd, NULL, 0, NULL, false);
 		}
 		break;
 	case DS5_CAMERA_CID_AE_SETPOINT_SET:
@@ -4115,10 +4272,8 @@ unlock_dpp:
 			}
 			memcpy(ae_setpoint_cmd, &set_ae_setpoint, sizeof (set_ae_setpoint));
 			memcpy(ae_setpoint_cmd->Data, (u8 *)ctrl->p_new.p_s32, 4);
-			ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd) + 4,
-					ae_setpoint_cmd);
-			if (!ret)
-				ret = ds5_hwmc_wait(state);
+			ret = ds5_hwmc_xfer(state, sizeof(struct hwm_cmd) + 4,
+					ae_setpoint_cmd, NULL, 0, NULL, false);
 			devm_kfree(&state->client->dev, ae_setpoint_cmd);
 		}
 		break;
@@ -4130,9 +4285,8 @@ unlock_dpp:
 		ae_type_cmd.param1 = ctrl->val;
 		dev_dbg(&state->client->dev, "%s(): AE_MODE set %d\n",
 			__func__, ctrl->val);
-		ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd), &ae_type_cmd);
-		if (!ret)
-			ret = ds5_hwmc_wait(state);
+		ret = ds5_hwmc_xfer(state, sizeof(struct hwm_cmd), &ae_type_cmd,
+				     NULL, 0, NULL, false);
 		}
 		break;
 	case DS5_CAMERA_CID_ERB:
@@ -4149,7 +4303,12 @@ unlock_dpp:
 
 			dev_dbg(&state->client->dev, "%s(): offset %x, size: %x\n",
 							__func__, offset, size);
-			len = sizeof(struct hwm_cmd) + size;
+			if (size > ctrl->dims[0] - 4) {
+				ret = -EINVAL;
+				break;
+			}
+			/* FW returns the opcode followed by the requested EEPROM bytes. */
+			len = sizeof(struct hwm_cmd) + size + sizeof(u32);
 			erb_cmd = devm_kzalloc(&state->client->dev,	len, GFP_KERNEL);
 			if (!erb_cmd) {
 				dev_err(&state->client->dev,
@@ -4161,9 +4320,8 @@ unlock_dpp:
 			memcpy(erb_cmd, &erb, sizeof(struct hwm_cmd));
 			erb_cmd->param1 = offset;
 			erb_cmd->param2 = size;
-			ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd), erb_cmd);
-			if (!ret)
-				ret = ds5_get_hwmc(state, erb_cmd->Data, len, &size);
+			ret = ds5_hwmc_xfer(state, sizeof(struct hwm_cmd), erb_cmd,
+					erb_cmd->Data, len - sizeof(*erb_cmd), &size, false);
 			if (ret) {
 				dev_err(&state->client->dev,
 					"%s(): ERB cmd failed, ret: %d,"
@@ -4220,9 +4378,8 @@ unlock_dpp:
 			ewb_cmd->param1 = offset; // start index
 			ewb_cmd->param2 = size; // size
 			memcpy(ewb_cmd->Data, (u8 *)ctrl->p_new.p_u8 + 4, size);
-			ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd) + size, ewb_cmd);
-			if (!ret)
-				ret = ds5_hwmc_wait(state);
+			ret = ds5_hwmc_xfer(state, sizeof(struct hwm_cmd) + size,
+					ewb_cmd, NULL, 0, NULL, false);
 			if (ret) {
 				dev_err(&state->client->dev,
 					"%s(): EWB cmd failed, ret: %d,"
@@ -4239,20 +4396,37 @@ unlock_dpp:
 		if (ctrl->p_new.p_u8) {
 			u16 size = 0;
 			struct hwm_cmd *cmd = (struct hwm_cmd *)ctrl->p_new.p_u8;
+			u32 cmd_len = (u32)cmd->header + 4;
 
 			u16 pid = READ_ONCE(state->ds5_dev->d585_product_id);
 
+			if (cmd_len < sizeof(*cmd) || cmd_len > DS5_HWMC_BUFFER_SIZE) {
+				ret = -EINVAL;
+				break;
+			}
 			if (cmd->opcode == 0x20 &&
-			    (pid == D585_2C_PROTO_PID ||
+			    (ds5_is_d58x(state) || pid == D585_2C_PROTO_PID ||
 			     pid == D585_3C_PROTO_PID)) {
 				ret = ds5_hw_reset_with_recovery(state);
 				break;
 			}
+			if (ds5_is_d58x(state) &&
+			    cmd->opcode == cmd_switch_to_dfu.opcode) {
+				ret = ds5_hwmc_send_dfu(state, cmd_len, cmd);
+				break;
+			}
 
-			size = *((u8 *)ctrl->p_new.p_u8 + 1) << 8;
-			size |= *((u8 *)ctrl->p_new.p_u8 + 0);
-			ret = ds5_hwmc_send(state, size + 4, cmd);
-			ret = ds5_get_hwmc(state, cmd->Data, ctrl->dims[0], &size);
+			if (!memcmp(cmd, &gvd, sizeof(gvd))) {
+				ret = ds5_gvd(state, cmd->Data,
+					      ctrl->dims[0] - sizeof(*cmd) - 4, &size, true);
+			} else {
+				size = *((u8 *)ctrl->p_new.p_u8 + 1) << 8;
+				size |= *((u8 *)ctrl->p_new.p_u8 + 0);
+				ret = ds5_hwmc_xfer(state, size + 4, cmd, cmd->Data,
+						     ctrl->dims[0] - sizeof(*cmd) - 4, &size, true);
+			}
+			if (ret)
+				break;
 			if (ctrl->dims[0] < DS5_HWMC_BUFFER_SIZE) {
 				ret = -ENODATA;
 				break;
@@ -4266,18 +4440,40 @@ unlock_dpp:
 	case DS5_CAMERA_CID_HWMC_RW:
 		if (ctrl->p_new.p_u8) {
 			struct hwm_cmd *cmd = (struct hwm_cmd *)ctrl->p_new.p_u8;
-			u16 size = *((u8 *)ctrl->p_new.p_u8 + 1) << 8;
-			size |= *((u8 *)ctrl->p_new.p_u8 + 0);
+			u32 cmd_len = (u32)cmd->header + 4;
 
-			/* Check if this is a HW reset command (opcode 0x20) */
-			if (cmd->opcode == 0x20) {
-				dev_info(&state->client->dev,
-					"%s(): HW reset detected via HWMC_RW, using recovery path\n",
-					__func__);
-				ret = ds5_hw_reset_with_recovery(state);
-			} else {
-				ret = ds5_hwmc_send(state, size + 4, cmd);
+			if (cmd_len < sizeof(*cmd) || cmd_len > DS5_HWMC_BUFFER_SIZE) {
+				ret = -EINVAL;
+				break;
 			}
+
+			if (cmd->opcode == 0x20) {
+				ret = ds5_hw_reset_with_recovery(state);
+				break;
+			}
+
+			mutex_lock(&state->ds5_dev->hwmc_lock);
+			state->hwmc_rw_response_valid = false;
+			state->hwmc_rw_response_len = 0;
+			if (!memcmp(cmd, &gvd, sizeof(gvd))) {
+				ret = ds5_gvd_locked(state, state->hwmc_rw_response,
+						    sizeof(state->hwmc_rw_response),
+						    &state->hwmc_rw_response_len, true);
+			} else if (cmd->opcode == cmd_switch_to_dfu.opcode) {
+				ret = ds5_hwmc_send_dfu_locked(state, cmd_len, cmd);
+			} else if (cmd->opcode == DS5_HWMC_PFD_OPCODE) {
+				/* SDK flash updates send PFD without reading a response. */
+				ret = ds5_hwmc_xfer_locked(state, cmd_len, cmd, NULL,
+							 0, NULL, false);
+			} else {
+				ret = ds5_hwmc_xfer_locked(state, cmd_len, cmd,
+						 state->hwmc_rw_response,
+						 sizeof(state->hwmc_rw_response),
+						 &state->hwmc_rw_response_len, true);
+			}
+			state->hwmc_rw_response_gen = atomic_read(ds5_get_reset_gen(state));
+			state->hwmc_rw_response_valid = !ret && state->hwmc_rw_response_len;
+			mutex_unlock(&state->ds5_dev->hwmc_lock);
 		}
 		break;
 	case DS5_CAMERA_CID_HW_RESET:
@@ -4368,7 +4564,7 @@ static int ds5_get_calibration_data(struct ds5 *state, enum table_id id,
 {
 	struct hwm_cmd *cmd;
 	int ret;
-	u16 table_length;
+	u16 table_length = 0;
 
 	cmd = devm_kzalloc(&state->client->dev,
 			sizeof(struct hwm_cmd) + length + 4, GFP_KERNEL);
@@ -4379,14 +4575,8 @@ static int ds5_get_calibration_data(struct ds5 *state, enum table_id id,
 
 	memcpy(cmd, &get_calib_data, sizeof(get_calib_data));
 	cmd->param1 = id;
-	ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd), cmd);
-	if (ret) {
-		devm_kfree(&state->client->dev, cmd);
-		return ret;
-	}
-
-	ret = ds5_hwmc_wait(state);
-
+	ret = ds5_hwmc_xfer(state, sizeof(struct hwm_cmd), cmd, cmd->Data,
+			     length + 4, &table_length, false);
 	if (ret) {
 		dev_err(&state->client->dev,
 				"%s(): Failed to get calibration table %d, error: %d\n",
@@ -4395,24 +4585,14 @@ static int ds5_get_calibration_data(struct ds5 *state, enum table_id id,
 		return ret;
 	}
 
-	// get table length from fw
-	ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN,
-			&table_length, sizeof(table_length)); /* Read response length */
-	if (ret) {
-		devm_kfree(&state->client->dev, cmd);
-		return ret;
-	}
-
-	if (table_length > length + 4) {
+	if (table_length != length + 4 ||
+	    memcmp(cmd->Data, &get_calib_data.opcode, sizeof(u32))) {
 		dev_err(&state->client->dev,
-			"%s(): calibration table %d response length %u exceeds buffer size %u\n",
+			"%s(): invalid calibration table %d response (length %u, expected %u)\n",
 			__func__, id, table_length, length + 4);
 		devm_kfree(&state->client->dev, cmd);
-		return -ENOBUFS;
+		return -EBADMSG;
 	}
-
-	// read table
-	ds5_raw_read_with_check(state, DS5_HWMC_DATA, cmd->Data, table_length); /* Read table data */
 
 	// first 4 bytes are opcode HWM, not part of calibration table
 	memcpy(table, cmd->Data + 4, length);
@@ -4420,42 +4600,77 @@ static int ds5_get_calibration_data(struct ds5 *state, enum table_id id,
 	return 0;
 }
 
-static int ds5_gvd(struct ds5 *state, unsigned char *data, u32 buf_len)
+/* Caller holds hwmc_lock. A raw FW error is a four-byte response, not GVD. */
+static int ds5_read_gvd(struct ds5 *state, unsigned char *data, u32 buf_len,
+			 u16 *data_len, bool raw_response)
 {
-	struct hwm_cmd cmd;
-	int ret;
 	u16 length = 0;
+	int ret;
 
-	memcpy(&cmd, &gvd, sizeof(gvd));
-	ret = ds5_hwmc_send(state, sizeof(cmd), &cmd);
+	ret = ds5_hwmc_xfer_locked(state, sizeof(gvd), &gvd, data, buf_len,
+				  &length, raw_response);
 	if (ret)
 		return ret;
-
-	ret = ds5_hwmc_wait(state);
-	if (ret) {
-		dev_err(&state->client->dev,
-			"%s(): Failed to read GVD, error: %d\n",
-			__func__, ret);
-		return -EIO;
+	if (memcmp(data, &gvd.opcode, sizeof(u32))) {
+		if (!raw_response || length != sizeof(u32))
+			return -EBADMSG;
+	} else if (ds5_is_d58x(state) && length != DS5_GVD_LEN_D5XX) {
+		return -EBADMSG;
 	}
-
-	ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN, &length, sizeof(length)); /* Read response length */
-	if (ret)
-		return ret;
-
-	if (!length)
-		return -ENODATA;
-
-	if (length > buf_len) {
-		dev_err(&state->client->dev,
-			"%s(): GVD response length %u exceeds buffer size %u\n",
-			__func__, length, buf_len);
-		return -ENOBUFS;
-	}
-
-	ds5_raw_read_with_check(state, DS5_HWMC_DATA, data, length); /* Read response data */
+	if (data_len)
+		*data_len = length;
 
 	return 0;
+}
+
+/* Caller holds hwmc_lock, including through reset/DFU recovery. */
+static int ds5_gvd_locked(struct ds5 *state, unsigned char *data, u32 buf_len,
+			  u16 *data_len, bool raw_response)
+{
+	struct ds5_dev *dev = state->ds5_dev;
+	u16 length = 0;
+	int ret;
+
+	if (!data)
+		return -EINVAL;
+	if (!ds5_is_d58x(state))
+		return ds5_read_gvd(state, data, buf_len, data_len, raw_response);
+	if (!dev->gvd_cache_valid) {
+		ret = ds5_read_gvd(state, dev->gvd_cache, sizeof(dev->gvd_cache),
+				   &length, raw_response);
+		if (ret)
+			return ret;
+		/* Preserve FW errors for SDK retries; never cache them. */
+		if (length == sizeof(u32)) {
+			if (buf_len < length)
+				return -ENOBUFS;
+			memcpy(data, dev->gvd_cache, length);
+			if (data_len)
+				*data_len = length;
+			return 0;
+		}
+		dev->gvd_cache_len = length;
+		dev->gvd_cache_valid = true;
+	}
+	if (dev->gvd_cache_len > buf_len)
+		return -ENOBUFS;
+	memset(data, 0, buf_len);
+	memcpy(data, dev->gvd_cache, dev->gvd_cache_len);
+	if (data_len)
+		*data_len = dev->gvd_cache_len;
+
+	return 0;
+}
+
+static int ds5_gvd(struct ds5 *state, unsigned char *data, u32 buf_len,
+		   u16 *data_len, bool raw_response)
+{
+	int ret;
+
+	mutex_lock(&state->ds5_dev->hwmc_lock);
+	ret = ds5_gvd_locked(state, data, buf_len, data_len, raw_response);
+	mutex_unlock(&state->ds5_dev->hwmc_lock);
+	return ret;
 }
 
 static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
@@ -4631,24 +4846,19 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 
 	case DS5_CAMERA_CID_LOG:
-		ret = ds5_hwmc_send(state, sizeof(log_prepare), &log_prepare);
-		if (ret)
-			return ret;
+		{
+			u16 log_size = 0;
 
-		ret = ds5_hwmc_wait(state);
-		if (ret)
-			return ret;
-
-		ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN, &data, sizeof(data)); /* Read response length */
+			ret = ds5_hwmc_xfer(state, sizeof(log_prepare), &log_prepare,
+					     ctrl->p_new.p_u8, ctrl->dims[0],
+					     &log_size, false);
+			data = log_size;
+		}
 		dev_dbg(&state->client->dev, "%s(): log size 0x%x\n", __func__, data);
 		if (ret < 0)
 			return ret;
 		if (!data)
 			return 0;
-		if (data > 1024)
-			return -ENOBUFS;
-		ret = ds5_raw_read(state, DS5_HWMC_DATA,
-				ctrl->p_new.p_u8, data);
 		break;
 	case DS5_CAMERA_DEPTH_CALIBRATION_TABLE_GET:
 		ret = ds5_get_calibration_data(state, DEPTH_CALIBRATION_ID,
@@ -4666,7 +4876,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 	case DS5_CAMERA_CID_GVD:
 		ret = ds5_gvd(state, ctrl->p_new.p_u8,
-				ctrl->elems * ctrl->elem_size);
+				ctrl->elems * ctrl->elem_size, NULL, false);
 		break;
 	case DS5_CAMERA_CID_AE_ROI_GET:
 		if (ctrl->p_new.p_u16) {
@@ -4682,12 +4892,8 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 				break;
 			}
 			memcpy(ae_roi_cmd, &get_ae_roi, sizeof(struct hwm_cmd));
-			ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd), ae_roi_cmd);
-			if (ret) {
-				devm_kfree(&state->client->dev, ae_roi_cmd);
-				return ret;
-			}
-			ret = ds5_get_hwmc(state, ae_roi_cmd->Data, len, &dataLen);
+			ret = ds5_hwmc_xfer(state, sizeof(struct hwm_cmd), ae_roi_cmd,
+						ae_roi_cmd->Data, len - sizeof(*ae_roi_cmd), &dataLen, false);
 			if (!ret && dataLen <= ctrl->dims[0])
 				memcpy(ctrl->p_new.p_u16, ae_roi_cmd->Data + 4, 8);
 			devm_kfree(&state->client->dev, ae_roi_cmd);
@@ -4707,12 +4913,8 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			break;
 		}
 		memcpy(ae_setpoint_cmd, &get_ae_setpoint, sizeof(struct hwm_cmd));
-		ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd), ae_setpoint_cmd);
-		if (ret) {
-			devm_kfree(&state->client->dev, ae_setpoint_cmd);
-			return ret;
-		}
-		ret = ds5_get_hwmc(state, ae_setpoint_cmd->Data, len, &dataLen);
+		ret = ds5_hwmc_xfer(state, sizeof(struct hwm_cmd), ae_setpoint_cmd,
+				    ae_setpoint_cmd->Data, len - sizeof(*ae_setpoint_cmd), &dataLen, false);
 		memcpy(ctrl->p_new.p_s32, ae_setpoint_cmd->Data + 4, 4);
 		dev_dbg(&state->client->dev, "%s(): len: %d, 0x%x \n",
 			__func__, dataLen, *(ctrl->p_new.p_s32));
@@ -4736,12 +4938,8 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			break;
 		}
 		memcpy(ae_type_cmd, &get_ae_type, sizeof(struct hwm_cmd));
-		ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd), ae_type_cmd);
-		if (ret) {
-			devm_kfree(&state->client->dev, ae_type_cmd);
-			return ret;
-		}
-		ret = ds5_get_hwmc(state, ae_type_cmd->Data, len, &dataLen);
+		ret = ds5_hwmc_xfer(state, sizeof(struct hwm_cmd), ae_type_cmd,
+				    ae_type_cmd->Data, len - sizeof(*ae_type_cmd), &dataLen, false);
 		if (!ret)
 			memcpy(&ae_type, ae_type_cmd->Data + 4, sizeof(ae_type));
 		*(ctrl->p_new.p_s32) = ae_type;
@@ -4753,16 +4951,33 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 	case DS5_CAMERA_CID_HWMC_RW:
 		if (ctrl->p_new.p_u8) {
 			unsigned char *data = (unsigned char *)ctrl->p_new.p_u8;
-			u16 dataLen = 0;
+			u16 dataLen;
 			u16 bufLen = ctrl->dims[0];
-			ret = ds5_get_hwmc(state, data,	bufLen, &dataLen);
+
+			mutex_lock(&state->ds5_dev->hwmc_lock);
+			dataLen = state->hwmc_rw_response_len;
+			if (!state->hwmc_rw_response_valid ||
+			    state->hwmc_rw_response_gen != atomic_read(ds5_get_reset_gen(state))) {
+				ret = -ENODATA;
+				mutex_unlock(&state->ds5_dev->hwmc_lock);
+				break;
+			}
+			if ((dataLen < 4) || (dataLen > bufLen - 4)) {
+				ret = -EBADMSG;
+				state->hwmc_rw_response_valid = false;
+				mutex_unlock(&state->ds5_dev->hwmc_lock);
+				break;
+			}
+			memset(data, 0, bufLen);
+			memcpy(data, state->hwmc_rw_response, dataLen);
 			/* This is needed for librealsense, to align there code with UVC,
-		 	 * last word is length - 4 bytes header length */
+			 * last word is length - 4 bytes header length */
 			dataLen -= 4;
 			data[bufLen - 4] = (unsigned char)(dataLen & 0x00FF);
 			data[bufLen - 3] = (unsigned char)((dataLen & 0xFF00) >> 8);
 			data[bufLen - 2] = 0;
 			data[bufLen - 1] = 0;
+			mutex_unlock(&state->ds5_dev->hwmc_lock);
 		}
 		break;
 	case DS5_CAMERA_CID_VISUAL_PRESET:
@@ -5396,6 +5611,8 @@ static void ds5_init_ds5_dev(struct ds5 *state, struct ds5_dev *ds5_dev)
 	ds5_dev->serdes_setup_complete = false;
 	ds5_dev->cached_device_type = DS5_DEVICE_TYPE_UNKNOWN;
 	ds5_dev->d585_product_id = 0;
+	ds5_dev->gvd_cache_valid = false;
+	ds5_dev->gvd_cache_len = 0;
 	ds5_dev->configured_device_mode = D500_DEVICE_MODE_3C;
 	ds5_dev->active_device_mode = D500_DEVICE_MODE_3C;
 	ds5_dev->device_mode_valid = false;
@@ -6960,7 +7177,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	u16 streaming, status;
 	int ret = 0;
 	unsigned int i = 0, ds5_config_retries = MAX_DS5_CONFIG_RETRIES;
-	unsigned long timeout, ts;
+	unsigned long timeout, ts, next_cmd_retry;
 	int restore_val = 0;
 	u16 stream_cmd;
 	u16 config_status_base, stream_status_base, stream_id, vc_id;
@@ -7035,7 +7252,8 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	/* Verify stream is in the expected state before issuing command */
 	ts = jiffies;
 	for (timeout = ts + msecs_to_jiffies(DS5_START_MAX_TIME), i = 0;
-			time_before(jiffies, timeout); i++, msleep_range(i*DS5_START_POLL_TIME))
+			time_before(jiffies, timeout);
+			i++, msleep_range(ds5_stream_poll_delay(state, i)))
 	{
 		ret = ds5_read(state, config_status_base, &status);
 		if ((ret >= 0) && (on == !(status & DS5_STATUS_STREAMING))) {
@@ -7117,8 +7335,10 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	 */
 	ts = jiffies;
 	streaming = ~expected_streaming_state; /* force initial toggle */
+	next_cmd_retry = ts;
 	for (timeout = ts + msecs_to_jiffies(DS5_START_MAX_TIME), i = 0;
-			time_before(jiffies, timeout); i++, msleep_range(i*DS5_START_POLL_TIME))
+			time_before(jiffies, timeout);
+			i++, msleep_range(ds5_stream_poll_delay(state, i)))
 	{
 		if (!ds5_config_done) {
 			ret = ds5_configure(state, &ser_pipe_armed);
@@ -7137,7 +7357,9 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 #endif
 		}
 
-		if (streaming != expected_streaming_state) {
+		if (streaming != expected_streaming_state &&
+		    time_after_eq(jiffies, next_cmd_retry)) {
+			next_cmd_retry = jiffies + msecs_to_jiffies(DS5_START_POLL_TIME);
 			ret = ds5_write(state, DS5_START_STOP_STREAM, stream_cmd);
 			if (ret < 0) {
 				dev_warn(&state->client->dev, "stream %d cmd 0x%x write failed, retry %d, %dms\n",
@@ -7745,15 +7967,18 @@ static int ds5_dfu_switch_to_dfu(struct ds5 *state)
 	int i = DS5_START_MAX_COUNT;
 	u16 status;
 
-	ret = ds5_hwmc_send(state, sizeof(cmd_switch_to_dfu),
-			    (struct hwm_cmd *)&cmd_switch_to_dfu);
+	mutex_lock(&state->ds5_dev->hwmc_lock);
+	ret = ds5_hwmc_send_dfu_locked(state, sizeof(cmd_switch_to_dfu),
+				      &cmd_switch_to_dfu);
 	if (ret)
-		return ret;
-	/*Wait for DFU fw to boot*/
+		goto unlock;
+	/* Wait for DFU FW to boot before admitting another HWMC command. */
 	do {
-		msleep_range(DS5_START_POLL_TIME*10);
+		msleep_range(DS5_START_POLL_TIME * 10);
 		ret = ds5_read(state, 0x5000, &status);
 	} while (ret && i--);
+unlock:
+	mutex_unlock(&state->ds5_dev->hwmc_lock);
 	return ret;
 };
 
@@ -8702,7 +8927,7 @@ static int ds5_probe(struct i2c_client *c
 		unsigned char *gvd_data = kzalloc(DS5_GVD_LEN_D5XX, GFP_KERNEL);
 
 		if (gvd_data) {
-			ret = ds5_gvd(state, gvd_data, DS5_GVD_LEN_D5XX);
+			ret = ds5_gvd(state, gvd_data, DS5_GVD_LEN_D5XX, NULL, false);
 			if (ret) {
 				dev_warn(&c->dev,
 					 "%s(): cannot cache D585 PID from GVD (%d)\n",

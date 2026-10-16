@@ -57,6 +57,10 @@ struct ds5_variant;
 
 #include "d4xx_desc.h"
 
+/* Shared storage bounds for the per-camera HWMC response and GVD cache. */
+#define DS5_HWMC_BUFFER_SIZE	1024
+#define DS5_GVD_LEN_D5XX		606
+
 /* FW stream ids, and the format descriptor's stream_id wire values: this is
  * how d4xx_desc.c maps a parsed table onto a node.
  */
@@ -234,6 +238,14 @@ struct ds5 {
 	bool d58x_pixel_mode;
 	u16 control_base;
 	u16 control_status_reg;
+	/* HWMC_RW is exposed as separate SET and GET ioctls. Execute the complete
+	 * FW transaction during SET and retain its response here so commands from
+	 * different subdevices cannot interleave DATA/EXEC/response phases. */
+	u8 hwmc_rw_response[DS5_HWMC_BUFFER_SIZE];
+	u16 hwmc_rw_response_len;
+	int hwmc_rw_response_gen;
+	/* Response, length and generation are guarded by hwmc_lock. */
+	bool hwmc_rw_response_valid;
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	struct gmsl_link_ctx g_ctx;
 	/* GMSL link this camera is wired to. From the serializer node's
@@ -254,6 +266,8 @@ struct ds5 {
 
 struct ds5_dev {
 	struct mutex lock;
+	/* One HW-monitor engine is shared by every subdevice of a camera. */
+	struct mutex hwmc_lock;
 
 	/*
 	* Per-camera reset generation counter.
@@ -274,6 +288,12 @@ struct ds5_dev {
 	*/
 	u16 cached_device_type;
 	u16 d585_product_id;
+	/* Share GVD across subdevices until reset/DFU or a metadata-changing
+	 * command invalidates it. Repeated discovery avoids transferring 606
+	 * bytes over the GMSL I2C tunnel. Guarded by hwmc_lock. */
+	u8 gvd_cache[DS5_GVD_LEN_D5XX];
+	u16 gvd_cache_len;
+	bool gvd_cache_valid;
 
 	/* Camera-resident format descriptor, parsed once per camera. Written
 	 * under lock before any subdev registers; the tables it points at live
