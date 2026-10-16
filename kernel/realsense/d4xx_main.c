@@ -2569,6 +2569,17 @@ enum d500_accel_sensitivity {
 #define D500_GMSL_READ_FILL_BYTE	0xff
 #define D500_OD_DISTANCE_XU_BASE	0x4598
 
+/* GMSL motion XU selector 0x1c: 0/1 = legacy (default 1), 2 = paired.
+ * GET bits0/1 report the mode; bits7/6/5 add support/pixel/active status. */
+#define D500_IMU_BATCH_XU_BASE		0x4590
+#define D500_IMU_BATCH_MASK		0x03
+#define D500_IMU_BATCH_DEFAULT		1
+#define D500_IMU_BATCH_PAIR		2
+#define D500_IMU_BATCH_RESERVED		GENMASK(4, 2)
+#define D500_IMU_BATCH_ACTIVE		BIT(5)
+#define D500_IMU_BATCH_PIXEL		BIT(6)
+#define D500_IMU_BATCH_SUPPORTED	BIT(7)
+
 /* Auto-exposure algorithm types — mirrors FW ETAeType */
 enum ds5_ae_type {
 	DS5_AE_TYPE_LEGACY = 0,
@@ -2580,6 +2591,7 @@ enum ds5_ae_type {
 #define D500_CAMERA_CID_TEMPORAL	(DS5_CAMERA_CID_BASE + 51)
 /* USB depth XU 0x10: single R/W control. */
 #define D500_CAMERA_CID_ALIGNED_DEPTH	(DS5_CAMERA_CID_BASE + 55)
+#define D500_CAMERA_CID_IMU_BATCH	(DS5_CAMERA_CID_BASE + 56)
 #define D500_MINZ_XU_BASE		0x4500
 #define D500_DECIMATION_XU_BASE		0x4540
 #define D500_TEMPORAL_XU_BASE		0x4568
@@ -3101,6 +3113,71 @@ static int d500_set_ae_policy(struct ds5 *state, u32 policy)
 				    &value, sizeof(value));
 	mutex_unlock(&state->ds5_dev->lock);
 
+	return ret;
+}
+
+static int d500_get_imu_batch(struct ds5 *state, u8 *status)
+{
+	int ret = ds5_raw_read(state, D500_IMU_BATCH_XU_BASE,
+			      status, sizeof(*status));
+
+	if (ret)
+		return ret;
+	/* Zero capability keeps bulk control reads usable with legacy firmware. */
+	if (*status == D500_GMSL_READ_FILL_BYTE ||
+	    !(*status & D500_IMU_BATCH_SUPPORTED)) {
+		*status = 0;
+		return 0;
+	}
+	if ((*status & D500_IMU_BATCH_RESERVED) ||
+	    (*status & D500_IMU_BATCH_MASK) > D500_IMU_BATCH_PAIR)
+		return -EBADMSG;
+	return 0;
+}
+
+static int d500_set_imu_batch(struct ds5 *state, u32 mode)
+{
+	u8 value = mode, status;
+	int ret;
+
+	if (mode > D500_IMU_BATCH_PAIR)
+		return -EINVAL;
+	mutex_lock(&state->ds5_dev->lock);
+	if (state->ds5_dev->imu_streaming) {
+		ret = -EBUSY;
+		goto out;
+	}
+	ret = d500_get_imu_batch(state, &status);
+	if (ret)
+		goto out;
+	if (!(status & D500_IMU_BATCH_SUPPORTED)) {
+		ret = -EOPNOTSUPP;
+		goto out;
+	}
+	if (status & D500_IMU_BATCH_ACTIVE) {
+		ret = -EBUSY;
+		goto out;
+	}
+	if (mode == D500_IMU_BATCH_PAIR && !(status & D500_IMU_BATCH_PIXEL)) {
+		ret = -EOPNOTSUPP;
+		goto out;
+	}
+	ret = ds5_raw_write(state, D500_IMU_BATCH_XU_BASE, &value, sizeof(value));
+	if (ret)
+		goto out;
+	/* FW applies SET synchronously; an ACK still requires one verified GET. */
+	ret = d500_get_imu_batch(state, &status);
+	if (ret)
+		goto out;
+	if (!(status & D500_IMU_BATCH_SUPPORTED))
+		ret = -EIO;
+	else if (status & D500_IMU_BATCH_ACTIVE)
+		ret = -EBUSY;
+	else if (((status & D500_IMU_BATCH_MASK) == D500_IMU_BATCH_PAIR) !=
+		 (mode == D500_IMU_BATCH_PAIR))
+		ret = -EIO;
+out:
+	mutex_unlock(&state->ds5_dev->lock);
 	return ret;
 }
 
@@ -4320,6 +4397,12 @@ unlock_dpp:
 			    DS5_DEVICE_TYPE_D58X)
 			ret = d500_set_ae_policy(state, ctrl->val);
 		break;
+	case D500_CAMERA_CID_IMU_BATCH:
+		if (state->is_imu &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X)
+			ret = d500_set_imu_batch(state, ctrl->val);
+		break;
 	case D500_CAMERA_CID_GYRO_SENSITIVITY:
 		if (state->is_imu &&
 		    READ_ONCE(state->ds5_dev->cached_device_type) ==
@@ -4842,6 +4925,17 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 				*ctrl->p_new.p_s32 = policy;
 		}
 		break;
+	case D500_CAMERA_CID_IMU_BATCH:
+		if (state->is_imu && ctrl->p_new.p_s32 &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X) {
+			u8 status;
+
+			ret = d500_get_imu_batch(state, &status);
+			if (!ret)
+				*ctrl->p_new.p_s32 = status;
+		}
+		break;
 	case D500_CAMERA_CID_GYRO_SENSITIVITY:
 		if (state->is_imu && ctrl->p_new.p_s32 &&
 		    READ_ONCE(state->ds5_dev->cached_device_type) ==
@@ -5270,6 +5364,18 @@ static const char * const d500_gyro_sensitivity_menu[] = {
 	[D500_GYRO_SENSITIVITY_500_DPS] = "15.3 mDeg/Sec",
 	[D500_GYRO_SENSITIVITY_250_DPS] = "7.6 mDeg/Sec",
 	[D500_GYRO_SENSITIVITY_125_DPS] = "3.8 mDeg/Sec",
+};
+
+static const struct v4l2_ctrl_config ds5_ctrl_imu_batch_d58x = {
+	.ops = &ds5_ctrl_ops,
+	.id = D500_CAMERA_CID_IMU_BATCH,
+	.name = "GMSL IMU Batch",
+	.type = V4L2_CTRL_TYPE_INTEGER,
+	.min = 0,
+	.max = 255, /* GET includes capability/state; SET accepts only 0..2. */
+	.step = 1,
+	.def = D500_IMU_BATCH_DEFAULT,
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 };
 
 static const struct v4l2_ctrl_config ds5_ctrl_gyro_sensitivity_d58x = {
@@ -6416,6 +6522,7 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 			v4l2_ctrl_new_custom(hdl,
 					     &ds5_ctrl_accel_sensitivity_d58x,
 					     sensor);
+			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_imu_batch_d58x, sensor);
 		}
 	}
 
