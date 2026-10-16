@@ -91,14 +91,14 @@ class TestCompressedZeroTail:
     @pytest.mark.parametrize("pixfmt", [ioctls.V4L2_PIX_FMT_H264,
                                         ioctls.V4L2_PIX_FMT_MJPEG],
                              ids=lambda f: ioctls.FOURCC_TO_NAME[f])
-    def test_only_zeros_after_frame(self, d58x_encoder_camera, pixfmt, pick,
+    def test_only_zeros_after_frame(self, d58x_camera, pixfmt, pick,
                                     memory):
         name = ioctls.FOURCC_TO_NAME[pixfmt]
-        sizes = _sizes(d58x_encoder_camera.rgb_path, pixfmt)
+        sizes = _sizes(d58x_camera.rgb_path, pixfmt)
         assert sizes, f"RGB device lists no {name} frame sizes"
         width, height = sizes[0] if pick == "smallest" else sizes[-1]
 
-        with V4L2Device(d58x_encoder_camera.rgb_path) as dev:
+        with V4L2Device(d58x_camera.rgb_path) as dev:
             fmt = dev.set_format(width, height, pixfmt)
             assert fmt.fmt.pix.pixelformat == pixfmt, \
                 "S_FMT changed the pixel format"
