@@ -2584,16 +2584,11 @@ enum ds5_ae_type {
 #define D500_DECIMATION_XU_BASE		0x4540
 #define D500_TEMPORAL_XU_BASE		0x4568
 #define D500_ALIGNED_DEPTH_XU_BASE	0x4599
-#define D500_DPP_XU_VERSION		1
-#define D500_DPP_XU_DECIMATION_CONTROL_ID	BIT(0)
-#define D500_DPP_XU_TEMPORAL_CONTROL_ID		BIT(1)
-#define D500_DPP_XU_MINZ_CONTROL_ID	BIT(3)
-#define D500_DPP_XU_DECIMATION_PARAM_COUNT	2
-#define D500_DPP_XU_TEMPORAL_PARAM_COUNT	4
-#define D500_DPP_XU_MINZ_PARAM_COUNT	7
-#define D500_DPP_XU_INTEGER_PARAMS	0
-/* params[1] is a floating-point alpha encoded in milli-units by the XU ABI. */
-#define D500_DPP_XU_TEMPORAL_PARAM_TYPE	BIT(1)
+/*
+ * D500 DPP controls are passed between FW and userspace as the whole
+ * struct d500_dpp_xu_control. The driver is only a pipe: it neither builds
+ * nor validates the header or the params, FW does.
+ */
 
 enum d500_minz_param_index {
 	D500_MINZ_ENABLE = 0,
@@ -2603,54 +2598,6 @@ enum d500_minz_param_index {
 	D500_MINZ_SHIFT_PIXELS,
 	D500_MINZ_THRESHOLD_MODE,
 	D500_MINZ_THRESHOLD_MM,
-};
-
-static const u32 d500_minz_min[D500_DPP_XU_MINZ_PARAM_COUNT] = {
-	0, 0, 1, 0, 0, 0, 0,
-};
-
-static const u32 d500_minz_max[D500_DPP_XU_MINZ_PARAM_COUNT] = {
-	1, 1, 2, 2, 256, 2, 65535,
-};
-
-static const u32 d500_minz_step[D500_DPP_XU_MINZ_PARAM_COUNT] = {
-	1, 1, 1, 1, 1, 1, 1,
-};
-
-static const u32 d500_minz_def[D500_DPP_XU_MINZ_PARAM_COUNT] = {
-	0, 0, 1, 0, 126, 1, 0,
-};
-
-static const u32 d500_decimation_min[D500_DPP_XU_DECIMATION_PARAM_COUNT] = {
-	0, 2,
-};
-
-static const u32 d500_decimation_max[D500_DPP_XU_DECIMATION_PARAM_COUNT] = {
-	1, 2,
-};
-
-static const u32 d500_decimation_step[D500_DPP_XU_DECIMATION_PARAM_COUNT] = {
-	1, 1,
-};
-
-static const u32 d500_decimation_def[D500_DPP_XU_DECIMATION_PARAM_COUNT] = {
-	0, 2,
-};
-
-static const u32 d500_temporal_min[D500_DPP_XU_TEMPORAL_PARAM_COUNT] = {
-	0, 0, 1, 0,
-};
-
-static const u32 d500_temporal_max[D500_DPP_XU_TEMPORAL_PARAM_COUNT] = {
-	1, 1000, 100, 8,
-};
-
-static const u32 d500_temporal_step[D500_DPP_XU_TEMPORAL_PARAM_COUNT] = {
-	1, 10, 1, 1,
-};
-
-static const u32 d500_temporal_def[D500_DPP_XU_TEMPORAL_PARAM_COUNT] = {
-	0, 400, 20, 3,
 };
 
 struct d500_dpp_xu_header {
@@ -2668,92 +2615,35 @@ struct d500_dpp_xu_control {
 
 struct d500_dpp_ctrl_desc {
 	u16 base;
-	u16 control_id;
-	u8 param_count;
-	u8 param_type;
 	bool idle_only;
-	const u32 *min;
-	const u32 *max;
-	const u32 *step;
-	const u32 *def;
 };
 
 static int d500_dpp_xu_read(struct ds5 *state,
 			    const struct d500_dpp_ctrl_desc *desc,
 			    struct d500_dpp_xu_control *control)
 {
-	int ret;
-
-	ret = ds5_raw_read(state, desc->base, control,
-			   sizeof(*control));
-	if (ret)
-		return ret;
-	if (control->header.version != D500_DPP_XU_VERSION ||
-	    le16_to_cpu(control->header.control_id) !=
-		desc->control_id ||
-	    control->param_count != desc->param_count ||
-	    control->param_type != desc->param_type)
-		return -EBADMSG;
-	return 0;
+	return ds5_raw_read(state, desc->base, control, sizeof(*control));
 }
 
 static int d500_dpp_xu_write(struct ds5 *state,
 			     const struct d500_dpp_ctrl_desc *desc,
 			     const struct d500_dpp_xu_control *control)
 {
-	return ds5_raw_write(state, desc->base, control,
-			     sizeof(*control));
+	return ds5_raw_write(state, desc->base, control, sizeof(*control));
 }
 
 static const struct d500_dpp_ctrl_desc d500_minz_desc = {
 	.base = D500_MINZ_XU_BASE,
-	.control_id = D500_DPP_XU_MINZ_CONTROL_ID,
-	.param_count = D500_DPP_XU_MINZ_PARAM_COUNT,
-	.param_type = D500_DPP_XU_INTEGER_PARAMS,
-	.min = d500_minz_min,
-	.max = d500_minz_max,
-	.step = d500_minz_step,
-	.def = d500_minz_def,
 };
 
 static const struct d500_dpp_ctrl_desc d500_decimation_desc = {
 	.base = D500_DECIMATION_XU_BASE,
-	.control_id = D500_DPP_XU_DECIMATION_CONTROL_ID,
-	.param_count = D500_DPP_XU_DECIMATION_PARAM_COUNT,
-	.param_type = D500_DPP_XU_INTEGER_PARAMS,
 	.idle_only = true,
-	.min = d500_decimation_min,
-	.max = d500_decimation_max,
-	.step = d500_decimation_step,
-	.def = d500_decimation_def,
 };
 
 static const struct d500_dpp_ctrl_desc d500_temporal_desc = {
 	.base = D500_TEMPORAL_XU_BASE,
-	.control_id = D500_DPP_XU_TEMPORAL_CONTROL_ID,
-	.param_count = D500_DPP_XU_TEMPORAL_PARAM_COUNT,
-	.param_type = D500_DPP_XU_TEMPORAL_PARAM_TYPE,
-	.min = d500_temporal_min,
-	.max = d500_temporal_max,
-	.step = d500_temporal_step,
-	.def = d500_temporal_def,
 };
-
-static bool d500_dpp_params_valid(const struct d500_dpp_ctrl_desc *desc,
-				  const u32 *params)
-{
-	u8 i;
-
-	if (!desc->min || !desc->max || !desc->step)
-		return false;
-
-	for (i = 0; i < desc->param_count; i++)
-		if (params[i] < desc->min[i] || params[i] > desc->max[i] ||
-		    !desc->step[i] ||
-		    (params[i] - desc->min[i]) % desc->step[i])
-			return false;
-	return true;
-}
 
 static const struct d500_dpp_ctrl_desc *d500_dpp_ctrl_desc(u32 ctrl_id)
 {
@@ -2768,113 +2658,6 @@ static const struct d500_dpp_ctrl_desc *d500_dpp_ctrl_desc(u32 ctrl_id)
 		return NULL;
 	}
 }
-
-/* V4L2 U32 arrays otherwise apply one scalar default/range to every slot. */
-static bool d500_dpp_ctrl_equal_elem(u32 idx, union v4l2_ctrl_ptr ptr1,
-				     union v4l2_ctrl_ptr ptr2)
-{
-	return ptr1.p_u32[idx] == ptr2.p_u32[idx];
-}
-
-static void d500_dpp_ctrl_init_elem(const struct v4l2_ctrl *ctrl, u32 idx,
-				    union v4l2_ctrl_ptr ptr)
-{
-	const struct d500_dpp_ctrl_desc *desc =
-		d500_dpp_ctrl_desc(ctrl->id);
-
-	ptr.p_u32[idx] = desc && desc->def && idx < desc->param_count ?
-		desc->def[idx] : 0;
-}
-
-static void d500_dpp_ctrl_log(const struct v4l2_ctrl *ctrl)
-{
-	pr_cont("%u", (unsigned int)*ctrl->p_cur.p_u32);
-}
-
-static int d500_dpp_ctrl_validate_elem(const struct v4l2_ctrl *ctrl, u32 idx,
-				       union v4l2_ctrl_ptr ptr)
-{
-	const struct d500_dpp_ctrl_desc *desc =
-		d500_dpp_ctrl_desc(ctrl->id);
-	u32 value;
-
-	if (!desc || !desc->min || !desc->max || !desc->step ||
-	    idx >= desc->param_count || !desc->step[idx])
-		return -EINVAL;
-
-	value = clamp(ptr.p_u32[idx], desc->min[idx], desc->max[idx]);
-	if (ctrl->id == D500_CAMERA_CID_MINZ && value != ptr.p_u32[idx])
-		return -EINVAL;
-
-	value = desc->min[idx] +
-		DIV_ROUND_CLOSEST(value - desc->min[idx], desc->step[idx]) *
-		desc->step[idx];
-	ptr.p_u32[idx] = min(value, desc->max[idx]);
-	return 0;
-}
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
-static bool d500_dpp_ctrl_equal(const struct v4l2_ctrl *ctrl,
-				union v4l2_ctrl_ptr ptr1,
-				union v4l2_ctrl_ptr ptr2)
-{
-	u32 idx;
-
-	for (idx = 0; idx < ctrl->elems; idx++)
-		if (!d500_dpp_ctrl_equal_elem(idx, ptr1, ptr2))
-			return false;
-	return true;
-}
-
-static void d500_dpp_ctrl_init(const struct v4l2_ctrl *ctrl, u32 from_idx,
-			       union v4l2_ctrl_ptr ptr)
-{
-	u32 idx;
-
-	for (idx = from_idx; idx < ctrl->elems; idx++)
-		d500_dpp_ctrl_init_elem(ctrl, idx, ptr);
-}
-
-static int d500_dpp_ctrl_validate(const struct v4l2_ctrl *ctrl,
-				  union v4l2_ctrl_ptr ptr)
-{
-	u32 idx;
-	int ret;
-
-	for (idx = 0; idx < ctrl->new_elems; idx++) {
-		ret = d500_dpp_ctrl_validate_elem(ctrl, idx, ptr);
-		if (ret)
-			return ret;
-	}
-	return 0;
-}
-#else
-static bool d500_dpp_ctrl_equal(const struct v4l2_ctrl *ctrl, u32 idx,
-				union v4l2_ctrl_ptr ptr1,
-				union v4l2_ctrl_ptr ptr2)
-{
-	return d500_dpp_ctrl_equal_elem(idx, ptr1, ptr2);
-}
-
-static void d500_dpp_ctrl_init(const struct v4l2_ctrl *ctrl, u32 idx,
-			       union v4l2_ctrl_ptr ptr)
-{
-	d500_dpp_ctrl_init_elem(ctrl, idx, ptr);
-}
-
-static int d500_dpp_ctrl_validate(const struct v4l2_ctrl *ctrl, u32 idx,
-				  union v4l2_ctrl_ptr ptr)
-{
-	return d500_dpp_ctrl_validate_elem(ctrl, idx, ptr);
-}
-#endif
-
-static const struct v4l2_ctrl_type_ops d500_dpp_ctrl_type_ops = {
-	.equal = d500_dpp_ctrl_equal,
-	.init = d500_dpp_ctrl_init,
-	.log = d500_dpp_ctrl_log,
-	.validate = d500_dpp_ctrl_validate,
-};
 
 #define DS5_HWMC_DATA			0x4900
 #define DS5_HWMC_STATUS			0x4904
@@ -3876,16 +3659,9 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 	mutex_lock(&state->lock);
 	dpp_desc = d500_dpp_ctrl_desc(ctrl->id);
 	if (dpp_desc) {
-		struct d500_dpp_xu_control control = {
-			.header.version = D500_DPP_XU_VERSION,
-			.header.control_id =
-				cpu_to_le16(dpp_desc->control_id),
-			.param_count = dpp_desc->param_count,
-			.param_type = dpp_desc->param_type,
-		};
-		const u32 *new_params = ctrl->p_new.p_u32;
+		const struct d500_dpp_xu_control *control =
+			(const struct d500_dpp_xu_control *)ctrl->p_new.p_u8;
 		bool minz_locked = false;
-		u8 i;
 
 		if (dpp_desc->idle_only && sensor && sensor->streaming) {
 			ret = -EBUSY;
@@ -3894,8 +3670,6 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 		if (ctrl->id == D500_CAMERA_CID_MINZ) {
 			struct d500_dpp_xu_control current_control;
 			bool geometry_changed;
-			u32 current_filter_type;
-			u32 current_downscale_ratio;
 
 			/*
 			 * Serialize MinZ XU I/O against sibling stream changes.
@@ -3908,30 +3682,18 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 							&current_control);
 				if (ret)
 					goto unlock_dpp;
-				current_filter_type = le32_to_cpu(
-					current_control.params[
-						D500_MINZ_FILTER_TYPE]);
-				current_downscale_ratio = le32_to_cpu(
-					current_control.params[
-						D500_MINZ_DOWNSCALE_RATIO]);
 				geometry_changed =
-					new_params[D500_MINZ_FILTER_TYPE] !=
-						current_filter_type ||
-					new_params[D500_MINZ_DOWNSCALE_RATIO] !=
-						current_downscale_ratio;
+					control->params[D500_MINZ_FILTER_TYPE] !=
+						current_control.params[D500_MINZ_FILTER_TYPE] ||
+					control->params[D500_MINZ_DOWNSCALE_RATIO] !=
+						current_control.params[D500_MINZ_DOWNSCALE_RATIO];
 				if (geometry_changed) {
 					ret = -EBUSY;
 					goto unlock_dpp;
 				}
 			}
 		}
-		if (!d500_dpp_params_valid(dpp_desc, new_params)) {
-			ret = -EINVAL;
-			goto unlock_dpp;
-		}
-		for (i = 0; i < dpp_desc->param_count; i++)
-			control.params[i] = cpu_to_le32(new_params[i]);
-		ret = d500_dpp_xu_write(state, dpp_desc, &control);
+		ret = d500_dpp_xu_write(state, dpp_desc, control);
 unlock_dpp:
 		if (minz_locked)
 			mutex_unlock(&state->ds5_dev->lock);
@@ -4495,15 +4257,8 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 
 	dpp_desc = d500_dpp_ctrl_desc(ctrl->id);
 	if (dpp_desc) {
-		struct d500_dpp_xu_control control;
-		u8 i;
-
-		ret = d500_dpp_xu_read(state, dpp_desc, &control);
-		if (ret)
-			return ret;
-		for (i = 0; i < dpp_desc->param_count; i++)
-			ctrl->p_new.p_u32[i] = le32_to_cpu(control.params[i]);
-		return 0;
+		return d500_dpp_xu_read(state, dpp_desc,
+					(struct d500_dpp_xu_control *)ctrl->p_new.p_u8);
 	}
 
 	switch (ctrl->id) {
@@ -6067,48 +5822,45 @@ enum state_sid {
 
 static const struct v4l2_ctrl_config d500_ctrl_minz = {
 	.ops = &ds5_ctrl_ops,
-	.type_ops = &d500_dpp_ctrl_type_ops,
 	.id = D500_CAMERA_CID_MINZ,
 	.name = "MinZ Configuration",
-	.type = V4L2_CTRL_TYPE_U32,
+	.type = V4L2_CTRL_TYPE_U8,
 	.min = 0,
-	.max = U32_MAX,
+	.max = U8_MAX,
 	.step = 1,
 	.def = 0,
-	.dims = { D500_DPP_XU_MINZ_PARAM_COUNT },
-	.elem_size = sizeof(u32),
+	.dims = { sizeof(struct d500_dpp_xu_control) },
+	.elem_size = sizeof(u8),
 	.flags = V4L2_CTRL_FLAG_VOLATILE |
 		 V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 };
 
 static const struct v4l2_ctrl_config d500_ctrl_decimation = {
 	.ops = &ds5_ctrl_ops,
-	.type_ops = &d500_dpp_ctrl_type_ops,
 	.id = D500_CAMERA_CID_DECIMATION,
 	.name = "D500 Decimation Configuration",
-	.type = V4L2_CTRL_TYPE_U32,
+	.type = V4L2_CTRL_TYPE_U8,
 	.min = 0,
-	.max = U32_MAX,
+	.max = U8_MAX,
 	.step = 1,
 	.def = 0,
-	.dims = { D500_DPP_XU_DECIMATION_PARAM_COUNT },
-	.elem_size = sizeof(u32),
+	.dims = { sizeof(struct d500_dpp_xu_control) },
+	.elem_size = sizeof(u8),
 	.flags = V4L2_CTRL_FLAG_VOLATILE |
 		 V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 };
 
 static const struct v4l2_ctrl_config d500_ctrl_temporal = {
 	.ops = &ds5_ctrl_ops,
-	.type_ops = &d500_dpp_ctrl_type_ops,
 	.id = D500_CAMERA_CID_TEMPORAL,
 	.name = "D500 Temporal Configuration",
-	.type = V4L2_CTRL_TYPE_U32,
+	.type = V4L2_CTRL_TYPE_U8,
 	.min = 0,
-	.max = U32_MAX,
+	.max = U8_MAX,
 	.step = 1,
 	.def = 0,
-	.dims = { D500_DPP_XU_TEMPORAL_PARAM_COUNT },
-	.elem_size = sizeof(u32),
+	.dims = { sizeof(struct d500_dpp_xu_control) },
+	.elem_size = sizeof(u8),
 	.flags = V4L2_CTRL_FLAG_VOLATILE |
 		 V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 };
