@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>D585 2C Passive Depth 驱动测试</title>
+<style>
+body{font:16px/1.7 sans-serif;max-width:1000px;margin:2em auto;padding:0 1em;color:#203040}
+pre,code{background:#f0f4f8}pre{padding:1em;white-space:pre-wrap}
+table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:.5em}
+</style>
+<h1>D585 2C Passive Depth 驱动测试</h1>
+<p>不依赖 SDK。2026-10-21 按 PR #702 对齐。离线测试提取并编译
+<code>d4xx_main.c</code> 中实际 GET/SET 与整机 idle helper，不是另写的协议模型。
+硬件 ioctl 程序只在显式指定设备路径时访问设备；make 不运行它。</p>
+<h2>冻结接口</h2>
+<p><code>D500_CAMERA_CID_PASSIVE_DEPTH = DS5_CAMERA_CID_BASE + 17 = 0x009A4011</code>。
+仅 D58x 深度节点注册，active 2C 时可见；3C 不可见。MENU 使用
+VOLATILE 和 EXECUTE_ON_WRITE，确保同值 SET 也执行忙检查。</p>
+<p>控件名为 <code>2C Passive Depth Mode</code>。</p>
+<table><tr><th>值</th><th>菜单</th></tr><tr><td>0</td><td>Disabled</td></tr>
+<tr><td>1</td><td>Alternating Passive</td></tr><tr><td>2</td><td>Full Passive</td></tr></table>
+<p>实际 FW 模式寄存器为 0x4531（1 字节），替换 PR 中明确未定的 0x453a 占位值。
+驱动不再依赖本地原有的 0x45F0 完成状态扩展，也不进行 sequence polling。</p>
+<p>整个 GET/SET 在物理设备 mutex 下进行。SET 要求 Depth/RGB/IR/IMU 全部 idle，
+包括 IMU-only。先 GET 探测：0xFF 返回 EOPNOTSUPP，其他越界值返回 EBADMSG；
+随后写模式并 GET，读回不一致返回 EIO。GET 在 idle/streaming 均可用。
+保持 PR 的值读回契约：空闲同值写被 FW 内部拒绝时，单看相同值不能证明该次事务执行；
+整机 streaming busy 由驱动前置检查保证，同值 SET 也返回 EBUSY。</p>
+<h2>离线编译与执行</h2>
+<pre>cd test/passive_depth
+set -o pipefail
+make all check 2&gt;&amp;1 | tee offline-test.log</pre>
+<p>当前 <code>test_passive_depth.py</code> 编译实际生产函数，覆盖三种模式、
+参数/2C/整机 busy、IMU-only busy、streaming GET、旧 FW 填充值、非法值、
+读回不一致和各阶段 I/O 错误；ASan/UBSan 开启。
+日志与二进制均位于本目录；make clean 删除二进制。</p>
+<h2>2026-10-21 对齐验证</h2>
+<p>日志 <code>pr702_alignment_validation_20261021.log</code>：
+生产 helper 和 24 个实际 ioctl 工具离线恢复场景通过。
+<code>test/v4l2_test</code> 同步 PR 的 CID 和 7 个硬件用例；
+本地仅 <code>--collect-only</code> 收集，未执行硬件 fixture，也不是设备测试通过。</p>
+<h2>2026-10-21 硬件验证（216，JP6.2.1 整套部署后）</h2>
+<p>216 运行本仓库构建的 d4xx <code>1.0.7.10</code>（srcversion <code>3415161FF73AA1DB7B869BE</code>），
+相机 FW <code>7.59.46787.17003</code>，2C。日志：<code>hardware_driver_tests_20261021.log</code>。</p>
+<ul>
+<li>aarch64 <code>passive_depth_ioctl --idle /dev/video-rs-depth-0</code>：<strong>PASS</strong>。</li>
+<li>PR #702 <code>pytest -k TestPassiveDepthMode</code>：<strong>7/7 PASS</strong>（1.2 s），含 streaming 时 SET EBUSY。</li>
+<li>Depth/IR/RGB/IMU 各自 streaming 时同值与异值 SET 均 <code>EBUSY</code>，模式不变；<code>--busy</code> 工具 PASS。</li>
+<li>GET 中位 0.31 ms（max 0.41），SET 中位 1.09 ms；streaming 中 3 线程并发 GET 无错误（max 1.61 ms）。</li>
+<li>3C 下控件 flags 含 DISABLED 且 GET 返回 EOPNOTSUPP；切回 2C 后恢复。</li>
+</ul>
+<p>实测注意：停流后 FW 约 100–200 ms 内仍 STOPPING，此时 SET 被 FW 拒绝（<code>rejected=-13</code>），
+协议把失败写入后的读回填 0xFF，driver 按 PR 契约返回 <code>EOPNOTSUPP</code>（或读到旧值返回 EIO）——
+该映射会把 BUSY 拒绝误报为“不支持”，建议向 PR 作者反馈。
+<code>v4l2-ctl --get-ctrl 2c_passive_depth_mode</code> 的 EINVAL 是 v4l2-ctl 把以数字开头的名字当数字 ID，
+Python G_EXT_CTRLS 正常。</p>
+<h2>历史验证记录（2026-10-20，旧实现）</h2>
+<ul>
+<li><code>make all check</code>：通过；实际 helper 和 ioctl 测试程序均使用
+gnu99、Wall/Wextra/Werror 编译，离线 helper 测试通过。日志：
+<code>offline-test.log</code>。</li>
+<li><code>test_ioctl_cleanup</code>：编译并调用实际 ioctl 工具，将 open/ioctl/close
+替换为离线后端，不访问设备。24 个场景覆盖所有初始模式、显式 emitter-off、
+自定义激光功率、快照失败时零写入、恢复失败报告、
+ETIMEDOUT/EREMOTEIO/EINTR/EIO/EOPNOTSUPP/EINVAL/EBUSY（请求实际生效或未生效）、
+同值 SET 及恢复 SET 的不确定结果后不再写入，以及 busy 同值拒绝。
+故障注入产生的 FAIL 输出属于预期断言，最终 PASS 才是测试结果。</li>
+<li>同一 helper 离线测试使用 AddressSanitizer 与 UndefinedBehaviorSanitizer：
+通过。日志：<code>sanitizer-test.log</code>。</li>
+<li>真实完整驱动编译尝试：本机 Linux 5.19 headers，包含实际
+d4xx_main.c/d4xx_desc.c；启用生产 Tegra/SerDes 宏后仍失败。
+日志：<code>kernel-build-5.19-serdes.log</code>。阻塞包括未应用
+RealSense media-bus-format 定义、GMSL YUV420 定义，以及本地旧 NVIDIA
+max9296_set_pipe 签名不匹配。不能把此尝试称为驱动构建通过。
+不启用平台宏的初次尝试日志为 <code>kernel-build-5.19.log</code>。</li>
+</ul>
+<p>kernel/kernel-jammy-src 和 kernel/kernel-noble-src 在本工作区只有包装
+Makefile 与补丁目录，不是已配置的完整内核树；sources_7.2/kernel 为空；
+现有 sources_5.0.2 未应用上述必要补丁且没有生成配置。
+未修改这些基线或安装依赖，也未进行完整 JetPack 验证。</p>
+<p>可在准备好的匹配内核树中复用实际源码编译入口（非默认测试）：</p>
+<pre>make -C /path/to/configured/kernel M="$PWD/kernel_build" \
+  NVIDIA_HEADERS=/path/to/matching/nvidia/include modules</pre>
+<p>已只读检查 deploy/verify-deploy 指南与 deploy_kernel.sh；
+正式部署需要匹配版本的整套 kernel/modules，不能单独复制 d4xx.ko
+替代完整 ABI 一致性部署。本次没有部署或设备访问。</p>
+<h2>硬件 API 测试（本次未执行）</h2>
+<p>必须先确认固件版本、active 2C 与正确深度 video 节点。
+整个设备流程需统一设备锁，固件部署、枚举、开流与清理都在同一锁内，
+不得嵌套获取锁。以下只展示独立 idle 测试：</p>
+<pre>hkr_device_lock run -- ssh -T -o StrictHostKeyChecking=yes jetson@192.168.112.216 \
+  '/path/to/deployed/passive_depth_ioctl --idle /dev/video-rs-depth-0'</pre>
+<p>上述路径需替换为 216 的实际部署路径。开发机没有 GMSL 环境，
+硬件 ioctl/采流仅在 216 执行，110 用于串口；本地只运行离线测试。</p>
+<p>idle 检查 QUERYCTRL/QUERYMENU、0/1/2 GET/SET、同值 SET、非法值。
+任何写入前先快照现有两个可读写激光控件：
+<code>0x009A4001</code>（emitter 开关）与 <code>0x009A4002</code>（manual laser power）；
+缺失、不可读写或读取失败则拒绝模式写入。清理先恢复模式，再恢复功率，
+最后恢复用户 emitter 开关，并逐项 GET 校验。单纯恢复原始模式不够，
+因为同值 SET 也会重置 emitter/alternate/strobe 派生策略。
+alternate/strobe 没有独立 V4L2 CID，由模式恢复其派生策略；
+不宣称恢复通过其他 transport/HWMC 设置的隐藏状态。</p>
+<p>模式 SET 遇到超时、I2C、EINTR、EIO 或其他不确定结果时，明确报告
+UNKNOWN、保存的原始 mode/emitter/power，禁止任何后续写入和自动恢复。
+即使一次 GET 看起来没改变，也不能证明异步请求不会稍后完成；
+必须先对固件完成状态进行外部核对，不能盲目重发恢复模式。
+idle 测试仅将框架 ERANGE 拒绝视为明确未提交；
+其他 errno 不能区分固件拒绝与完成后读状态的 I2C 错误，保守报告未知。
+busy 测试只接受预期 EBUSY 和未改变的 GET，本身永不执行恢复写入。
+SIGINT/SIGTERM 在结果确定时触发退出和恢复尝试；
+硬件断开、未知结果或外部 owner 抢占可能导致无法恢复，程序明确失败，不伪报恢复成功。</p>
+<p><code>--busy /dev/videoN</code> 用于同一持锁流程内已由测试方启动的
+Depth、IR 或 RGB 流：确认 GET 可用，同值 SET 返回 EBUSY 且模式不变。
+本工具不创建/停止任何流，不停止其他客户端。对每类流分别执行；
+IMU-only 同样应执行 busy 测试并返回 EBUSY。3C/旧固件、设备重启后的模式、
+并发共享图 owner、图像和 metadata/激光证据仍需端到端硬件验证。
+V4L2 MENU 非法范围由框架返回 ERANGE，而非固件 INVALID 的 EINVAL。</p>
+</html>

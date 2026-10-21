@@ -2499,6 +2499,8 @@ static int ds5_hw_set_exposure(struct ds5 *state, u32 base, s32 val)
 #define DS5_CAMERA_CID_EWB			(DS5_CAMERA_CID_BASE+14)
 #define DS5_CAMERA_CID_HWMC			(DS5_CAMERA_CID_BASE+15)
 #define DS5_CAMERA_CID_SYNC_MODE		(DS5_CAMERA_CID_BASE+16)
+/* D585 2C Dual RGB Passive Depth Mode: maps to USB XU selector 0x1B */
+#define D500_CAMERA_CID_PASSIVE_DEPTH		(DS5_CAMERA_CID_BASE+17)
 #define DS5_CAMERA_CID_VISUAL_PRESET		(DS5_CAMERA_CID_BASE+21)
 
 /* Sync mode public values (RSDEV-6449).  FW maps EXTERNAL → Slave or SlaveFull
@@ -2546,6 +2548,13 @@ enum d500_2c_ae_mode {
 	D500_2C_AE_POLICY_HYBRID = 3,
 };
 
+/* Mirrors FW PARAM_DUAL_RGB_PASSIVE_DEPTH; passed through unchanged. */
+enum d500_passive_depth_mode {
+	D500_PASSIVE_DEPTH_DISABLED = 0,
+	D500_PASSIVE_DEPTH_ALTERNATING = 1,
+	D500_PASSIVE_DEPTH_FULL = 2,
+};
+
 enum d500_gyro_sensitivity {
 	D500_GYRO_SENSITIVITY_2000_DPS = 0,
 	D500_GYRO_SENSITIVITY_1000_DPS,
@@ -2565,6 +2574,8 @@ enum d500_accel_sensitivity {
 #define D500_DUAL_RGB_AE_XU_BASE	0x4530
 #define D500_GYRO_SENSITIVITY_XU_BASE	0x4538
 #define D500_ACCEL_SENSITIVITY_XU_BASE	0x4539
+/* FW-assigned bridge address; replaces PR #702's 0x453a placeholder. */
+#define D500_PASSIVE_DEPTH_XU_BASE	0x4531
 /* HKR ACKs writes to registers it lacks and reads them back as this byte. */
 #define D500_GMSL_READ_FILL_BYTE	0xff
 #define D500_OD_DISTANCE_XU_BASE	0x4598
@@ -3014,6 +3025,81 @@ static int d500_get_aligned_depth(struct ds5 *state, s32 *val)
 	return ret;
 }
 
+/* Caller must hold state->ds5_dev->lock. One-byte read is safe on FW that
+ * lacks the register; such FW reads it back as 0xFF. */
+static int d500_read_passive_depth_locked(struct ds5 *state, u8 *value)
+{
+	int ret;
+
+	ret = ds5_raw_read(state, D500_PASSIVE_DEPTH_XU_BASE, value,
+			   sizeof(*value));
+	if (ret)
+		return ret;
+	if (*value == D500_GMSL_READ_FILL_BYTE)
+		return -EOPNOTSUPP;
+	if (*value > D500_PASSIVE_DEPTH_FULL)
+		return -EBADMSG;
+
+	return 0;
+}
+
+static int d500_get_passive_depth(struct ds5 *state, u32 *mode)
+{
+	u8 value;
+	int ret;
+
+	if (!mode)
+		return -EINVAL;
+
+	mutex_lock(&state->ds5_dev->lock);
+	ret = (!state->ds5_dev->device_mode_valid ||
+	       state->ds5_dev->active_device_mode != D500_DEVICE_MODE_2C) ?
+		-EOPNOTSUPP : 0;
+	if (!ret)
+		ret = d500_read_passive_depth_locked(state, &value);
+	mutex_unlock(&state->ds5_dev->lock);
+	if (ret)
+		return ret;
+
+	*mode = value;
+	return 0;
+}
+
+/* The mode changes the shared sensor rate, so FW accepts it only while Depth,
+ * IR, RGB and IMU are all stopped. */
+static int d500_set_passive_depth(struct ds5 *state, u32 mode)
+{
+	u8 value, applied;
+	int ret;
+
+	if (mode > D500_PASSIVE_DEPTH_FULL)
+		return -EINVAL;
+	value = mode;
+
+	mutex_lock(&state->ds5_dev->lock);
+	ret = (!state->ds5_dev->device_mode_valid ||
+	       state->ds5_dev->active_device_mode != D500_DEVICE_MODE_2C) ?
+		-EOPNOTSUPP : 0;
+	if (!ret && !d500_camera_is_idle_locked(state))
+		ret = -EBUSY;
+	/* HKR ACKs a write to a register it lacks; probe first so such FW is
+	 * never written to. */
+	if (!ret)
+		ret = d500_read_passive_depth_locked(state, &applied);
+	if (!ret)
+		ret = ds5_raw_write(state, D500_PASSIVE_DEPTH_XU_BASE,
+				    &value, sizeof(value));
+	/* HKR dispatches the write before serving this read, so it returns the
+	 * mode FW accepted; a mismatch is a rejected write. */
+	if (!ret)
+		ret = d500_read_passive_depth_locked(state, &applied);
+	if (!ret && applied != value)
+		ret = -EIO;
+	mutex_unlock(&state->ds5_dev->lock);
+
+	return ret;
+}
+
 static int d500_set_aligned_depth(struct ds5 *state, s32 val)
 {
 	u8 value = val ? 1 : 0;
@@ -3140,6 +3226,8 @@ static int d500_refresh_device_mode(struct ds5 *state, bool boot_mode)
 	/* 2C-only controls are hidden rather than merely deactivated, so a 3C
 	 * device does not enumerate them at all. */
 	ds5_v4l2_ctrl_set_disabled(state->ctrls.dual_rgb_ae_policy,
+				   ret || mode != D500_DEVICE_MODE_2C);
+	ds5_v4l2_ctrl_set_disabled(state->ctrls.passive_depth,
 				   ret || mode != D500_DEVICE_MODE_2C);
 
 	return ret;
@@ -4113,6 +4201,12 @@ unlock_dpp:
 			    DS5_DEVICE_TYPE_D58X)
 			ret = d500_set_aligned_depth(state, ctrl->val);
 		break;
+	case D500_CAMERA_CID_PASSIVE_DEPTH:
+		if (state->is_depth &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X)
+			ret = d500_set_passive_depth(state, ctrl->val);
+		break;
 	case D500_CAMERA_CID_OD_DISTANCE:
 		if (state->is_depth &&
 		    READ_ONCE(state->ds5_dev->cached_device_type) ==
@@ -4638,6 +4732,17 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			    DS5_DEVICE_TYPE_D58X)
 			ret = d500_get_aligned_depth(state, &ctrl->val);
 		break;
+	case D500_CAMERA_CID_PASSIVE_DEPTH:
+		if (state->is_depth && ctrl->p_new.p_s32 &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X) {
+			u32 mode;
+
+			ret = d500_get_passive_depth(state, &mode);
+			if (!ret)
+				*ctrl->p_new.p_s32 = mode;
+		}
+		break;
 	case D500_CAMERA_CID_OD_DISTANCE:
 		if (state->is_depth &&
 		    READ_ONCE(state->ds5_dev->cached_device_type) ==
@@ -5082,6 +5187,24 @@ static const struct v4l2_ctrl_config d500_ctrl_aligned_depth = {
 	.max = 1,
 	.step = 1,
 	.def = 0,
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
+static const char * const d58x_passive_depth_menu[] = {
+	[D500_PASSIVE_DEPTH_DISABLED] = "Disabled",
+	[D500_PASSIVE_DEPTH_ALTERNATING] = "Alternating Passive",
+	[D500_PASSIVE_DEPTH_FULL] = "Full Passive",
+};
+
+static const struct v4l2_ctrl_config ds5_ctrl_passive_depth_d58x = {
+	.ops = &ds5_ctrl_ops,
+	.id = D500_CAMERA_CID_PASSIVE_DEPTH,
+	.name = "2C Passive Depth Mode",
+	.type = V4L2_CTRL_TYPE_MENU,
+	.min = D500_PASSIVE_DEPTH_DISABLED,
+	.max = D500_PASSIVE_DEPTH_FULL,
+	.def = D500_PASSIVE_DEPTH_DISABLED,
+	.qmenu = d58x_passive_depth_menu,
 	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 };
 
@@ -6163,6 +6286,10 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 			ctrls->aligned_depth =
 				v4l2_ctrl_new_custom(hdl, &d500_ctrl_aligned_depth,
 						     sensor);
+			ctrls->passive_depth =
+				v4l2_ctrl_new_custom(hdl, &ds5_ctrl_passive_depth_d58x,
+						     sensor);
+			ds5_v4l2_ctrl_set_disabled(ctrls->passive_depth, true);
 			v4l2_ctrl_new_custom(hdl, &d500_ctrl_od_distance, sensor);
 		} else {
 			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_readout_shaping,

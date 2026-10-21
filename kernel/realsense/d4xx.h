@@ -131,6 +131,7 @@ struct ds5_ctrls {
 		struct v4l2_ctrl *sync_mode;
 		struct v4l2_ctrl *device_mode;
 		struct v4l2_ctrl *dual_rgb_ae_policy;
+		struct v4l2_ctrl *passive_depth;
 		struct v4l2_ctrl *minz;
 		struct v4l2_ctrl *aligned_depth;
 		/* RGB-only ISP controls. Only ae_priority needs a stored

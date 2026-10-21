@@ -817,6 +817,134 @@ class TestAlignedDepth:
 
 
 @pytest.mark.d457
+class TestPassiveDepthMode:
+    """D585 2C menu: active/alternating/full passive, USB XU 0x1B.
+    Probe FW before writes; require the whole camera idle for SET.
+    """
+
+    MIN = 0       # D500_PASSIVE_DEPTH_DISABLED
+    MID = 1       # D500_PASSIVE_DEPTH_ALTERNATING
+    MAX = 2       # D500_PASSIVE_DEPTH_FULL
+    STEP = 1
+    DEFAULT = 0
+    NAME = "2c passive depth mode"
+    FLAGS = (ioctls.V4L2_CTRL_FLAG_VOLATILE |
+             ioctls.V4L2_CTRL_FLAG_EXECUTE_ON_WRITE)
+    STREAM_SIZE = (848, 480)
+    FPS = 30
+
+    @staticmethod
+    def _require_control(dev):
+        """Return the queryctrl, or skip when the control is not enabled."""
+        try:
+            qc = dev.query_ctrl(C.D500_CAMERA_CID_PASSIVE_DEPTH)
+        except OSError:
+            pytest.skip("passive depth control not registered "
+                        "(not a D58x depth node)")
+        if qc.flags & ioctls.V4L2_CTRL_FLAG_DISABLED:
+            pytest.skip("passive depth control disabled (not in 2C mode)")
+        return qc
+
+    def _require_fw_value(self, dev):
+        """Return the current mode, or skip on FW without the register."""
+        self._require_control(dev)
+        try:
+            return self._read(dev)
+        except OSError as e:
+            if e.errno == errno.EOPNOTSUPP:
+                pytest.skip("FW does not support passive depth "
+                            "(GET returned EOPNOTSUPP)")
+            raise
+
+    def _read(self, dev):
+        return read_int_control(dev, C.D500_CAMERA_CID_PASSIVE_DEPTH)
+
+    def _write(self, dev, value):
+        write_int_control(dev, C.D500_CAMERA_CID_PASSIVE_DEPTH, value)
+
+    def test_passive_depth_enumerated(self, depth_device):
+        qc = self._require_control(depth_device)
+        ids = {c.id for c in enumerate_controls(depth_device)}
+        assert C.D500_CAMERA_CID_PASSIVE_DEPTH in ids, \
+            "passive depth not found in enumerated controls"
+        name = qc.name.decode("ascii", errors="replace").lower()
+        assert name == self.NAME, f"unexpected name: {name!r}"
+        assert qc.type == ioctls.V4L2_CTRL_TYPE_MENU, \
+            f"expected MENU ({ioctls.V4L2_CTRL_TYPE_MENU}), got {qc.type}"
+        assert (qc.minimum, qc.maximum, qc.step, qc.default_value) == \
+            (self.MIN, self.MAX, self.STEP, self.DEFAULT), \
+            f"range {qc.minimum}..{qc.maximum} step {qc.step} " \
+            f"default {qc.default_value}"
+        assert qc.flags & self.FLAGS == self.FLAGS, \
+            f"flags 0x{qc.flags:x} lack VOLATILE|EXECUTE_ON_WRITE"
+
+    def test_passive_depth_read(self, depth_device):
+        val = self._require_fw_value(depth_device)
+        assert self.MIN <= val <= self.MAX, f"passive depth out of range: {val}"
+
+    def test_passive_depth_write_legal(self, depth_device):
+        original = self._require_fw_value(depth_device)
+        try:
+            for v in (self.MIN, self.MID, self.MAX):
+                self._write(depth_device, v)
+                val = self._read(depth_device)
+                assert val == v, f"set {v}: got {val}"
+        finally:
+            self._write(depth_device, original)
+
+    def test_passive_depth_set_illegal(self, depth_device):
+        # The V4L2 core rejects out-of-range MENU writes with ERANGE rather
+        # than clamping them, so the mode must stay unchanged.
+        original = self._require_fw_value(depth_device)
+        for v in (self.MAX + 1, self.MIN - 1):
+            with pytest.raises(OSError) as exc:
+                self._write(depth_device, v)
+            got = exc.value.errno
+            assert got == errno.ERANGE, \
+                f"{v}: expected ERANGE, got {errno.errorcode.get(got, got)}"
+            val = self._read(depth_device)
+            assert val == original, \
+                f"rejected write {v} changed mode {original} -> {val}"
+
+    def test_passive_depth_default(self, depth_device):
+        original = self._require_fw_value(depth_device)
+        try:
+            self._write(depth_device, self.DEFAULT)
+            val = self._read(depth_device)
+            assert val == self.DEFAULT, f"default {self.DEFAULT}: got {val}"
+        finally:
+            self._write(depth_device, original)
+
+    def test_passive_depth_roundtrip(self, depth_device):
+        original = self._require_fw_value(depth_device)
+        try:
+            for v in (self.MAX, self.MIN, self.MID, self.MIN):
+                self._write(depth_device, v)
+                val = self._read(depth_device)
+                assert val == v, f"roundtrip {v}: got {val}"
+        finally:
+            self._write(depth_device, original)
+
+    def test_passive_depth_set_while_streaming_ebusy(self, camera):
+        """GET remains available; even a same-value SET must return EBUSY."""
+        width, height = self.STREAM_SIZE
+        with V4L2Device(camera.depth_path) as dev:
+            value = self._require_fw_value(dev)
+            TestAlignedDepth._require_mode(dev, width, height, self.FPS)
+            dev.set_format(width, height, ioctls.V4L2_PIX_FMT_Z16)
+            dev.set_parm(self.FPS)
+            with StreamContext(dev) as stream:
+                stream.capture_frames(2, timeout=5.0)
+                assert self._read(dev) == value, \
+                    "GET while streaming returned a different mode"
+                with pytest.raises(OSError) as exc:
+                    self._write(dev, value)
+            got = exc.value.errno
+            assert got == errno.EBUSY, \
+                f"expected EBUSY, got {errno.errorcode.get(got, got)}"
+
+
+@pytest.mark.d457
 @pytest.mark.d401
 class TestErrorCode:
     """Depth FW error code (librealsense XU 0x07): read-to-clear, FW-gated on D4xx."""
