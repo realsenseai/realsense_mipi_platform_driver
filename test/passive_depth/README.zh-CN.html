@@ -87,7 +87,7 @@ Makefile 与补丁目录，不是已配置的完整内核树；sources_7.2/kerne
 <p>必须先确认固件版本、active 2C 与正确深度 video 节点。
 整个设备流程需统一设备锁，固件部署、枚举、开流与清理都在同一锁内，
 不得嵌套获取锁。以下只展示独立 idle 测试：</p>
-<pre>hkr_device_lock run -- ssh -T -o StrictHostKeyChecking=yes jetson@192.168.112.216 \
+<pre>hkr_device_lock run --device gmsl-216-110 -- ssh -T -o StrictHostKeyChecking=yes jetson@192.168.112.216 \
   '/path/to/deployed/passive_depth_ioctl --idle /dev/video-rs-depth-0'</pre>
 <p>上述路径需替换为 216 的实际部署路径。开发机没有 GMSL 环境，
 硬件 ioctl/采流仅在 216 执行，110 用于串口；本地只运行离线测试。</p>
