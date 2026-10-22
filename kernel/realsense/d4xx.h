@@ -65,6 +65,17 @@ struct ds5_variant;
 #define DS5_STREAM_IMU			0x2
 #define DS5_STREAM_IR			0x4
 
+/* The driver's private control class: camera class, offset 0x4000. Needed
+ * by d4xx_desc.c to assign a published control's CID and by d4xx_main.c for
+ * its own allocations.
+ */
+#define DS5_CAMERA_CID_BASE	(V4L2_CTRL_CLASS_CAMERA | 0x4000)
+#define DS5_CAMERA_CID_HW_RESET	(DS5_CAMERA_CID_BASE + 33)	/* the one wrapped HWMC opcode */
+/* The two whose payload the driver's own arms size (ds5_desc_wrapped_opcodes). */
+#define DS5_CAMERA_CID_ERB		(DS5_CAMERA_CID_BASE + 13)
+#define DS5_CAMERA_CID_EWB		(DS5_CAMERA_CID_BASE + 14)
+#define DS5_HWMC_BUFFER_SIZE	1024	/* the mailbox's request and response buffer */
+
 enum ds5_mux_pad {
 	DS5_MUX_PAD_EXTERNAL,
 	DS5_MUX_PAD_DEPTH,
@@ -170,6 +181,12 @@ struct ds5_sensor {
 	bool streaming;
 	const struct ds5_format *formats;
 	unsigned int n_formats;
+	/* The camera's published controls for this stream, resolved by
+	 * d4xx_desc.c; NULL when the descriptor carries none and the built-in
+	 * set registers instead. Module-lifetime, like formats.
+	 */
+	const struct ds5_desc_ctrl *desc_ctrls;
+	unsigned int n_desc_ctrls;
 	int pipe_id;
 	u16 pipe_data_type1;
 	u16 pipe_data_type2;
