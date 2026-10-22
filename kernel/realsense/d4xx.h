@@ -57,6 +57,9 @@ struct ds5_variant;
 
 #include "d4xx_desc.h"
 
+/* HWMC control size; HWMC_RW reserves its final u32 for the response length. */
+#define DS5_HWMC_BUFFER_SIZE	1024
+
 /* FW stream ids, and the format descriptor's stream_id wire values: this is
  * how d4xx_desc.c maps a parsed table onto a node.
  */
@@ -181,6 +184,14 @@ struct ds5_sensor {
 	u16 cached_fps_value;
 	u16 cached_width_value;
 	u16 cached_height_value;
+	/* Each sensor has its own control handler, even within one ds5 instance.
+	 * Save its completed SET response independently for subsequent GETs.
+	 * All response fields are guarded by the camera's hwmc_lock.
+	 */
+	u8 hwmc_rw_response[DS5_HWMC_BUFFER_SIZE - sizeof(u32)];
+	u16 hwmc_rw_response_len;
+	int hwmc_rw_response_gen;
+	bool hwmc_rw_response_valid;
 };
 
 #ifdef CONFIG_TEGRA_CAMERA_PLATFORM
@@ -255,6 +266,8 @@ struct ds5 {
 
 struct ds5_dev {
 	struct mutex lock;
+	/* One HW-monitor engine is shared by every subdevice of a camera. */
+	struct mutex hwmc_lock;
 
 	/*
 	* Per-camera reset generation counter.
