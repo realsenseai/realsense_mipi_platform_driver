@@ -2580,6 +2580,137 @@ enum d500_accel_sensitivity {
 #define D500_GMSL_READ_FILL_BYTE	0xff
 #define D500_OD_DISTANCE_XU_BASE	0x4598
 
+#define D500_CONTROL_COMPLETION_BASE 0x4820
+#define D500_CONTROL_POLL_COUNT 200
+
+struct d500_control_completion {
+	u8 version;
+	u8 size;
+	u8 status;
+	u8 reserved;
+	__le16 control_id;
+	__le16 error;
+	__le32 sent;
+	__le32 completed;
+	__le32 failed;
+	__le32 rejected;
+} __packed;
+
+static int d500_read_control_completion(struct ds5 *state,
+				       struct d500_control_completion *status)
+{
+	u8 header[2];
+	int ret = ds5_raw_read(state, D500_CONTROL_COMPLETION_BASE,
+			      header, sizeof(header));
+
+	if (ret)
+		return ret;
+	if (header[0] != 1 || header[1] != sizeof(*status))
+		return -EOPNOTSUPP;
+
+	ret = ds5_raw_read(state, D500_CONTROL_COMPLETION_BASE,
+			   status, sizeof(*status));
+	if (ret)
+		return ret;
+	if (status->version != 1 || status->size != sizeof(*status))
+		return -EOPNOTSUPP;
+	if (status->status > 3 || status->reserved)
+		return -EBADMSG;
+	return 0;
+}
+
+static int d500_control_error(const struct d500_control_completion *status)
+{
+	switch ((s16)le16_to_cpu(status->error)) {
+	case -1:
+		return -EINVAL;
+	case -12:
+		return -EBUSY;
+	case -13:
+		return -ESHUTDOWN;
+	default:
+		return -EIO;
+	}
+}
+
+static int d500_set_rgb_control(struct ds5 *state, u16 offset, s32 value)
+{
+	struct d500_control_completion before, completion;
+	u16 control_id;
+	u32 expected;
+	int attempt, ret;
+
+	switch (offset) {
+	case DS5_MANUAL_EXPOSURE_LSB:
+		if (value < 1 || value > MAX_RGB_EXP)
+			return -ERANGE;
+		control_id = 0x0101;
+		break;
+	case DS5_MANUAL_GAIN:
+		control_id = 0x0102;
+		break;
+	case DS5_AUTO_EXPOSURE_MODE:
+		control_id = 0x0103;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	mutex_lock(&state->ds5_dev->lock);
+	for (attempt = 0; attempt < D500_CONTROL_POLL_COUNT; ++attempt) {
+		ret = d500_read_control_completion(state, &before);
+		if (ret)
+			goto unlock;
+		if (before.sent == before.completed && before.status != 1)
+			break;
+		usleep_range(5000, 6000);
+	}
+	if (attempt == D500_CONTROL_POLL_COUNT) {
+		ret = -EBUSY;
+		goto unlock;
+	}
+	expected = le32_to_cpu(before.sent) + 1;
+	if (offset == DS5_MANUAL_EXPOSURE_LSB)
+		ret = ds5_hw_set_exposure(state, DS5_RGB_CONTROL_BASE, value);
+	else if (offset == DS5_AUTO_EXPOSURE_MODE)
+		ret = ds5_hw_set_auto_exposure(state, DS5_RGB_CONTROL_BASE, value);
+	else
+		ret = ds5_write(state, DS5_RGB_CONTROL_BASE | offset, value);
+	if (ret)
+		goto unlock;
+
+	for (attempt = 0; attempt < D500_CONTROL_POLL_COUNT; ++attempt) {
+		ret = d500_read_control_completion(state, &completion);
+		if (ret)
+			goto unlock;
+		if (completion.rejected != before.rejected) {
+			ret = le16_to_cpu(completion.control_id) == control_id ?
+				d500_control_error(&completion) : -EAGAIN;
+			goto unlock;
+		}
+		if (completion.sent != before.sent &&
+		    le32_to_cpu(completion.sent) != expected) {
+			ret = -EAGAIN;
+			goto unlock;
+		}
+		if (le32_to_cpu(completion.completed) == expected &&
+		    le32_to_cpu(completion.sent) == expected) {
+			if (le16_to_cpu(completion.control_id) != control_id)
+				ret = -EAGAIN;
+			else if (completion.status == 2 && !completion.error)
+				ret = 0;
+			else
+				ret = d500_control_error(&completion);
+			goto unlock;
+		}
+		usleep_range(5000, 6000);
+	}
+	ret = -ETIMEDOUT;
+unlock:
+	mutex_unlock(&state->ds5_dev->lock);
+	return ret;
+}
+
 /* Auto-exposure algorithm types — mirrors FW ETAeType */
 enum ds5_ae_type {
 	DS5_AE_TYPE_LEGACY = 0,
@@ -3805,15 +3936,27 @@ unlock_dpp:
 
 	switch (ctrl->id) {
 	case V4L2_CID_ANALOGUE_GAIN:
-		ret = ds5_write(state, base | DS5_MANUAL_GAIN, ctrl->val);
+		if (state->is_rgb && READ_ONCE(state->ds5_dev->device_mode_valid) &&
+		    READ_ONCE(state->ds5_dev->active_device_mode) == D500_DEVICE_MODE_2C)
+			ret = d500_set_rgb_control(state, DS5_MANUAL_GAIN, ctrl->val);
+		else
+			ret = ds5_write(state, base | DS5_MANUAL_GAIN, ctrl->val);
 		break;
 
 	case V4L2_CID_EXPOSURE_AUTO:
-		ret = ds5_hw_set_auto_exposure(state, base, ctrl->val);
+		if (state->is_rgb && READ_ONCE(state->ds5_dev->device_mode_valid) &&
+		    READ_ONCE(state->ds5_dev->active_device_mode) == D500_DEVICE_MODE_2C)
+			ret = d500_set_rgb_control(state, DS5_AUTO_EXPOSURE_MODE, ctrl->val);
+		else
+			ret = ds5_hw_set_auto_exposure(state, base, ctrl->val);
 		break;
 
 	case V4L2_CID_EXPOSURE_ABSOLUTE:
-		ret = ds5_hw_set_exposure(state, base, ctrl->val);
+		if (state->is_rgb && READ_ONCE(state->ds5_dev->device_mode_valid) &&
+		    READ_ONCE(state->ds5_dev->active_device_mode) == D500_DEVICE_MODE_2C)
+			ret = d500_set_rgb_control(state, DS5_MANUAL_EXPOSURE_LSB, ctrl->val);
+		else
+			ret = ds5_hw_set_exposure(state, base, ctrl->val);
 		break;
 	case V4L2_CID_BRIGHTNESS:
 		if (state->is_rgb)
@@ -4381,7 +4524,9 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 	case V4L2_CID_EXPOSURE_AUTO:
 		if (state->is_imu)
 			return -EINVAL;
-		ds5_read(state, base | DS5_AUTO_EXPOSURE_MODE, &reg);
+		ret = ds5_read(state, base | DS5_AUTO_EXPOSURE_MODE, &reg);
+		if (ret)
+			return ret;
 		*ctrl->p_new.p_u16 = reg;
 		/* see ds5_hw_set_auto_exposure */
 		if (!state->is_rgb) {
@@ -4400,9 +4545,13 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		if (state->is_imu)
 			return -EINVAL;
 		/* see ds5_hw_set_exposure */
-		ds5_read(state, base | DS5_MANUAL_EXPOSURE_MSB, &reg);
+		ret = ds5_read(state, base | DS5_MANUAL_EXPOSURE_MSB, &reg);
+		if (ret)
+			return ret;
 		data = ((u32)reg << 16) & 0xffff0000;
-		ds5_read(state, base | DS5_MANUAL_EXPOSURE_LSB, &reg);
+		ret = ds5_read(state, base | DS5_MANUAL_EXPOSURE_LSB, &reg);
+		if (ret)
+			return ret;
 		data |= reg;
 		*ctrl->p_new.p_u32 = data;
 		break;

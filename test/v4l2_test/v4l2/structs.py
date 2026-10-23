@@ -181,6 +181,8 @@ class v4l2_queryctrl(ctypes.Structure):
 
 
 class v4l2_ext_control(ctypes.Structure):
+    _pack_ = 1
+
     class _u(ctypes.Union):
         _fields_ = [
             ("value", ctypes.c_int32),

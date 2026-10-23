@@ -1,5 +1,6 @@
 """V4L2 control get/set tests: laser, exposure, gain, AE ROI, calibration."""
 
+import ctypes
 import errno
 import time
 
@@ -7,6 +8,7 @@ import pytest
 
 from ..d4xx import constants as C
 from ..v4l2 import ioctls
+from ..v4l2 import structs as S
 from ..v4l2.device import V4L2Device
 from ..v4l2.stream import StreamContext
 from ..v4l2.controls import (
@@ -15,6 +17,100 @@ from ..v4l2.controls import (
     read_u8_array_control,
     enumerate_controls,
 )
+
+
+class TestGmsl2CRgbCompletion:
+    """Exercise the 2C RGB GMSL SET/completion/volatile-GET path without SDK."""
+
+    device_mode = 0x009A4024
+    gain = 0x009E0903
+    exposure = ioctls.V4L2_CID_EXPOSURE_ABSOLUTE
+    ae = ioctls.V4L2_CID_EXPOSURE_AUTO
+
+    def read(self, device, control):
+        return read_int_control(device, control)
+
+    def write(self, device, control, value):
+        if control == self.exposure:
+            ext = S.v4l2_ext_control()
+            ext.id = control
+            ext.value = value
+            controls = S.v4l2_ext_controls()
+            controls.count = 1
+            controls.controls = ctypes.pointer(ext)
+            device.ioctl(ioctls.VIDIOC_S_EXT_CTRLS, controls)
+        else:
+            write_int_control(device, control, value)
+
+    def roundtrip(self, device, control, value):
+        self.write(device, control, value)
+        actual = self.read(device, control)
+        assert actual == value, \
+            f"GMSL control {control:#x}: SET {value}, GET {actual}"
+
+    @pytest.fixture
+    def gmsl_rgb(self, rgb_device, depth_device):
+        assert ctypes.sizeof(S.v4l2_ext_control) == 20
+        assert S.v4l2_ext_control._u.offset == 12
+        assert ctypes.sizeof(S.v4l2_ext_controls) == 32
+        assert read_int_control(depth_device, self.device_mode) == 1, \
+            "These tests require a D585 2C session"
+        original = {
+            control: self.read(rgb_device, control)
+            for control in (self.ae, self.exposure, self.gain)
+        }
+        depth_ae = read_int_control(depth_device, self.ae)
+        try:
+            yield rgb_device
+        finally:
+            self.write(rgb_device, self.ae, ioctls.V4L2_EXPOSURE_MANUAL)
+            self.write(rgb_device, self.exposure, original[self.exposure])
+            self.write(rgb_device, self.gain, original[self.gain])
+            self.roundtrip(rgb_device, self.ae, original[self.ae])
+            assert read_int_control(depth_device, self.ae) == depth_ae, \
+                "RGB controls changed the Depth AE mode"
+
+    @pytest.mark.parametrize("mode", [1, 3], ids=["manual", "auto"])
+    def test_gmsl_2c_ae_modes(self, gmsl_rgb, mode):
+        self.roundtrip(gmsl_rgb, self.ae, mode)
+
+    @pytest.mark.parametrize(
+        "control,value",
+        [(exposure, 50), (exposure, 100), (exposure, 150),
+         (gain, 16), (gain, 32), (gain, 64)],
+        ids=["exp-5ms", "exp-10ms", "exp-15ms", "gain-16", "gain-32", "gain-64"],
+    )
+    def test_gmsl_2c_manual_roundtrip(self, gmsl_rgb, control, value):
+        self.roundtrip(gmsl_rgb, self.ae, ioctls.V4L2_EXPOSURE_MANUAL)
+        self.roundtrip(gmsl_rgb, control, value)
+
+    def test_gmsl_2c_repeated_writes(self, gmsl_rgb):
+        self.roundtrip(gmsl_rgb, self.ae, ioctls.V4L2_EXPOSURE_MANUAL)
+        for iteration in range(3):
+            self.roundtrip(gmsl_rgb, self.exposure, 100)
+            self.roundtrip(gmsl_rgb, self.gain, 32)
+
+    def test_gmsl_2c_streaming_controls(self, gmsl_rgb):
+        original_format = gmsl_rgb.get_format()
+        original_parm = gmsl_rgb.get_parm()
+        try:
+            actual = gmsl_rgb.set_format(640, 360, ioctls.V4L2_PIX_FMT_YUYV)
+            assert (actual.fmt.pix.width, actual.fmt.pix.height) == (640, 360)
+            gmsl_rgb.set_parm(30)
+            self.roundtrip(gmsl_rgb, self.ae, ioctls.V4L2_EXPOSURE_MANUAL)
+            with StreamContext(gmsl_rgb) as stream:
+                frames = stream.capture_frames(2)
+                for exposure, gain in [(50, 16), (100, 32), (150, 64)]:
+                    self.roundtrip(gmsl_rgb, self.exposure, exposure)
+                    self.roundtrip(gmsl_rgb, self.gain, gain)
+                    frames.extend(stream.capture_frames(2))
+                assert all(data and buf.bytesused for buf, data in frames)
+                sequences = [buf.sequence for buf, data in frames]
+                assert all(after > before for before, after in
+                           zip(sequences, sequences[1:])), sequences
+        finally:
+            gmsl_rgb.ioctl(ioctls.VIDIOC_S_FMT, original_format)
+            gmsl_rgb.ioctl(ioctls.VIDIOC_S_PARM, original_parm)
 
 
 @pytest.mark.d457

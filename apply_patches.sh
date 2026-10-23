@@ -130,6 +130,11 @@ if [[ "$ACTION" = "apply" ]]; then
         fi
     fi
 
+    if [[ "${GMSL_SKIP_PATCH_COMMIT:-0}" == "1" ]]; then
+        echo "Skipping automatic staging and commits (GMSL_SKIP_PATCH_COMMIT=1)"
+        exit 0
+    fi
+
     # Stage all modified files after patching
     git -C "${BUILD_SRCS}/$D4XX_SRC_DST" add drivers/media/i2c/d4xx_main.c \
             drivers/media/i2c/d4xx_desc.c drivers/media/i2c/d4xx.h \

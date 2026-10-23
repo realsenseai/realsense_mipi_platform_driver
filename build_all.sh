@@ -53,7 +53,7 @@ else
     export CROSS_COMPILE
 fi
 
-export LOCALVERSION=-tegra
+export LOCALVERSION="${GMSL_LOCALVERSION:--tegra}"
 export TEGRA_KERNEL_OUT="$DEVDIR/images/${JP_INPUT_VERSION}"
 
 # Clean if requested

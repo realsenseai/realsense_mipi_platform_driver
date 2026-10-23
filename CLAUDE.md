@@ -25,6 +25,12 @@ Full build flow for a given JetPack version (e.g., 6.2):
 
 Build outputs go to `images/<version>/` (e.g., `images/6.x/`).
 
+For isolated JP6 test deployment, `GMSL_LOCALVERSION` sets the same optional
+release suffix in the kernel and all modules. Keep the original module tree and
+board DTB, generate a matching initrd, and use a separate boot entry instead of
+the generic installer, which targets the running release. See `README_driver.md`.
+`GMSL_SKIP_PATCH_COMMIT=1` applies patches without automatic staging or commits.
+
 CI runs these three steps for each JetPack version (see `.github/workflows/build-jp*.yml`). CI requires `git config user.email/name` to be set before `apply_patches.sh`.
 
 ### Patch application
@@ -208,6 +214,9 @@ Each MIPI segment's lane count comes from a **different** DT property, so the ca
   `kthread_stop()`, and clear the stored pointer on creation failure and after stop.
 - In SERDES builds, hold `serdes_lock__` while scanning or assigning global topology slots (`ds5_inited[]`, `dser_inited[]`).
 - Protect per-camera mutable slot state (`ds5_primary`, `depth/rgb/ir/imu_streaming`) with `struct ds5_dev::lock`.
+- `d500_set_rgb_control()` acquires `ds5_dev->lock` itself across baseline drain,
+  writes and completion polling; callers must not already hold that lock. Its
+  completion reader probes version/size with 2 bytes before every 24-byte read.
 - Protect per-deserializer slot assignment (`dser_dev`) with `struct dser_control::lock`.
 - Any path that releases a primary camera slot must clear both camera-slot ownership and deserializer-slot ownership together; do not clear only `ds5_primary`. Use a shared helper so teardown/error paths stay symmetric. The `ds5_release_slot()` helper always acquires and releases `serdes_lock__` internally; callers must not hold the lock when calling it.
 - For sibling-health checks, snapshot pointers/flags under lock and perform I2C probing after unlocking.

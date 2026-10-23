@@ -9,6 +9,73 @@
 - Build Tools manual page [Build Manual page](./README_tools.md)
 - Driver API manual page [Driver API page](./README_driver.md)
 
+### D585 2C RGB Exposure And Gain Completion
+
+The RGB node uses one shared RGB control domain. Exposure uses 100 us ticks at
+`0x4202` (high word), then `0x4200` (low word); gain uses `0x4204`. RGB AE uses
+`0x420C`, with wire values `8` automatic and `1` manual. Retry the complete
+exposure pair after a failed split write.
+
+2C RGB exposure, gain and AE SET require completion-window version 1 at `0x4820`.
+Each snapshot starts with a safe 2-byte version/size probe. Only version `1`, size
+`24` permits the full 24-byte little-endian read. Unsupported FW returns
+`EOPNOTSUPP` before control writes; I2C errors are propagated.
+
+| Offset | Size | Field |
+| ------ | ---- | ----- |
+| 0 | 1 | Version, `1` |
+| 1 | 1 | Size, `24` |
+| 2 | 1 | State: `0` idle, `1` pending, `2` success, `3` error |
+| 3 | 1 | Reserved, zero |
+| 4 | 2 | Logical ID: exposure `0x0101`, gain `0x0102`, AE `0x0103` |
+| 6 | 2 | Signed FW error; zero on success |
+| 8 | 4 | Most recently accepted request sequence |
+| 12 | 4 | Most recently completed request sequence |
+| 16 | 4 | Failed execution count |
+| 20 | 4 | Rejected enqueue count |
+
+The helper holds the per-camera `ds5_dev->lock` across baseline drain, register
+writes and completion polling. Each wait phase is bounded to 200 snapshots with
+5-6 ms intervals. Execution errors return `EIO`, saturation `EBUSY`, shutdown
+`ESHUTDOWN`, competing requests `EAGAIN`, and completion timeout `ETIMEDOUT`.
+Timeout does not cancel a queued request. Read back accepted settings before
+retrying. Completion is not a guarantee that the next frame applied the setting;
+frame metadata remains authoritative. Legacy 3C and Depth gain SET are unchanged.
+
+Run `make -C test/host test` for the production-C sanitizer regression.
+
+On a D585 2C GMSL camera with matching completion-window firmware, close streaming
+clients and run the native V4L2 cases from the driver repository root:
+
+```bash
+python3 -m pytest -v test/v4l2_test/tests/test_controls.py::TestGmsl2CRgbCompletion
+```
+
+| Cases | GMSL control-path check |
+| ----- | ----------------------- |
+| AE manual/auto (2) | SET returns success and volatile GET reports mode 1/3 |
+| Exposure/gain (6) | Exposure 50/100/150 ticks and gain 16/32/64 round-trip |
+| Repeated writes (1) | Three identical exposure/gain writes each complete |
+| Streaming controls (1) | RGB frames continue while exposure/gain change |
+
+Each case verifies the compound-ioctl ABI and 2C mode, restores RGB settings, and
+checks that Depth AE mode did not change. The streaming case restores format and
+frame interval. Unsupported completion firmware must fail, not skip. These tests
+require no SDK. The scalar U32 exposure uses the extended-control union value,
+not a pointer payload. Tests check transport completion and readback, not AE convergence,
+image quality, or the exact frame that applied a setting. Protocol fault paths
+remain covered by the host sanitizer tests, without fault injection on shared HW.
+
+Use `GMSL_SKIP_PATCH_COMMIT=1 ./apply_patches.sh 6.2.1` to prepare extracted
+sources without the helper's automatic staging and commits.
+
+For an isolated JP6 test kernel, set `GMSL_LOCALVERSION` when running
+`build_all.sh`, for example `GMSL_LOCALVERSION=-tegra-rgb-20261023`. The default
+build naming is unchanged. Install the complete matching module tree under that
+new kernel release and use a separate boot entry, retaining the stock kernel,
+module tree, board DTB and boot configuration. The generic installer targets
+the running kernel release and must not be used for this isolated layout.
+
 #### Verify driver installation
 - Install V4L2 Utilities
 ```
