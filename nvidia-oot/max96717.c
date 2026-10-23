@@ -41,8 +41,11 @@
 #define MAX96717_2C2_ADDR 0x02C2
 #define MAX96717_2C3_ADDR 0x02C3
 
+#define MAX96717_I2C1_ADDR 0x41
 #define MAX96717_I2C4_ADDR 0x44
 #define MAX96717_I2C5_ADDR 0x45
+#define MAX96717_I2C_MST_BT_MASK 0x70
+#define MAX96717_I2C_FAST_PLUS_MST_BT 0x70
 
 /* GPIO 0 config values - Receives ID 0x17 */
 #define MAX96717_2BE_ESYNC 0x24
@@ -78,6 +81,8 @@ struct max96717 {
 	struct max96717_client_ctx g_client;
 	struct mutex lock;
 	bool pixel_mode;
+	bool i2c_fast_mode;
+	u8 i2c_saved_mst_bt;
 	/* bit[ser_vc_id] set while that pipe is streaming (set in set_pipe,
 	 * cleared in stream_stop). When it drops to 0 the MIPI RX is re-armed. */
 	u16 active_vc_mask;
@@ -98,6 +103,43 @@ static int max96717_write_reg(struct device *dev, u16 addr, u8 val)
 
 	return err;
 }
+
+/* Retain the original timing for teardown and failed-enable rollback. */
+int max96717_set_i2c_fast_mode(struct device *dev, bool enable)
+{
+	struct max96717 *priv;
+	unsigned int value;
+	int err = 0;
+
+	if (!dev)
+		return -EINVAL;
+
+	priv = dev_get_drvdata(dev);
+	if (!priv || !priv->regmap)
+		return -ENODEV;
+
+	mutex_lock(&priv->lock);
+	if (!enable && !priv->i2c_fast_mode)
+		goto out;
+
+	err = regmap_read(priv->regmap, MAX96717_I2C1_ADDR, &value);
+	if (err)
+		goto out;
+	if (enable && !priv->i2c_fast_mode) {
+		priv->i2c_saved_mst_bt = value & MAX96717_I2C_MST_BT_MASK;
+		priv->i2c_fast_mode = true;
+	}
+	value = (value & ~MAX96717_I2C_MST_BT_MASK) |
+		(enable ? MAX96717_I2C_FAST_PLUS_MST_BT :
+		 priv->i2c_saved_mst_bt);
+	err = max96717_write_reg(dev, MAX96717_I2C1_ADDR, value);
+	if (!err && !enable)
+		priv->i2c_fast_mode = false;
+out:
+	mutex_unlock(&priv->lock);
+	return err;
+}
+EXPORT_SYMBOL(max96717_set_i2c_fast_mode);
 
 int max96717_setup_control(struct device *dev)
 {

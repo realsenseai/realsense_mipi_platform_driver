@@ -192,6 +192,8 @@ struct ds5_mux_subdev {
 };
 #endif
 
+struct ds5_dfu_bus;
+
 struct ds5_dfu_dev {
 	struct cdev ds5_cdev;
 	struct class *ds5_class;
@@ -202,7 +204,7 @@ struct ds5_dfu_dev {
 	unsigned char *dfu_msg;
 	u16 msg_write_once;
 	// unsigned char init_v4l_f; // need refactoring
-	u32 bus_clk_rate;
+	struct ds5_dfu_bus *bus;
 };
 
 struct ds5 {

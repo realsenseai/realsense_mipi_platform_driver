@@ -143,6 +143,8 @@ void max96724_power_off(struct device *dev);
  * @return  0 for success, or negative error code.
  */
 int max96724_init_settings(struct device *dev);
+/* Caller selects a confirmed D585; false restores saved MST_BT. */
+int max96724_set_i2c_fast_mode(struct device *dev, u32 link, bool enable);
 
 /**
  * @brief  Enables the MAX96724 internal FSYNC generator.
