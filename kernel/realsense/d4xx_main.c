@@ -152,7 +152,6 @@ struct ser_interface {
 
 /* GVD response payload size per product line */
 #define DS5_GVD_LEN_D4XX		276
-#define DS5_GVD_LEN_D5XX		606
 #define D585_GVD_PID_OFFSET		18
 #define D585_2C_PROTO_PID		0x0C07
 #define D585_3C_PROTO_PID		0x0C08
@@ -494,8 +493,10 @@ static void ds5_init_global_slots_once(void)
 		return;
 	}
 
-	for (i = 0; i < MAX_DS5_NUM; i++)
+	for (i = 0; i < MAX_DS5_NUM; i++) {
 		mutex_init(&ds5_inited[i].lock);
+		mutex_init(&ds5_inited[i].gvd_lock);
+	}
 
 	for (i = 0; i < MAX_DSER_NUM; i++)
 		mutex_init(&dser_inited[i].lock);
@@ -616,6 +617,7 @@ static void ds5_init_global_slots_once(void)
 	mutex_lock(&ds5_slots_lock__);
 	if (!ds5_slots_inited) {
 		mutex_init(&ds5_inited[0].lock);
+		mutex_init(&ds5_inited[0].gvd_lock);
 		ds5_slots_inited = true;
 	}
 	mutex_unlock(&ds5_slots_lock__);
@@ -2696,11 +2698,92 @@ enum DS5_HWMC_ERR {
 	DS5_HWMC_ERR_LAST,
 };
 
-static int ds5_hwmc_wait(struct ds5 *state)
+/* Cache state is separate from HWMC transaction ownership. These short
+ * critical sections protect snapshots and invalidate in-flight cache fills. */
+static void ds5_gvd_invalidate_locked(struct ds5_dev *dev)
+{
+	dev->gvd_cache_valid = false;
+	dev->gvd_cache_generation++;
+}
+
+static bool ds5_hwmc_changes_gvd(u32 opcode)
+{
+	switch (opcode) {
+	case 0x06: /* I2CWB8: raw I2C writes can reach EEPROM */
+	case 0x07: /* I2CWW8 */
+	case 0x08: /* I2CWD8 */
+	case 0x0a: /* FWB */
+	case 0x0b: /* FES */
+	case 0x0c: /* FEF */
+	case 0x0e: /* FPLOCK */
+	case 0x14: /* SETCAL */
+	case 0x16: /* SETINTCAL */
+	case 0x18: /* EWB */
+	case 0x1c: /* INITCAL */
+	case 0x22: /* RFBI: ISP firmware update */
+	case 0x3a: /* MMWB8 */
+	case 0x47: /* UPDATE_MM_FW */
+	case 0x50: /* MMEW */
+	case 0x51: /* CALIBRECALC */
+	case 0x54: /* SETMMEXTRNSIC */
+	case 0x56: /* OEMW */
+	case 0x61: /* CALIBRESTOREDEFAULT */
+	case 0x62: /* SETINTCALNEW */
+	case 0x63: /* SETMMEXTRNSICNEW */
+	case 0x66: /* CALIBRESTOREEPROM */
+	case 0x79: /* CALIBUPDATEISP */
+	case 0x9b: /* LOCK_EEPROM */
+		return true;
+	default:
+		return false;
+	}
+}
+
+static void ds5_gvd_command_begin(struct ds5 *state, u32 opcode)
+{
+	struct ds5_dev *dev = state->ds5_dev;
+
+	if (!ds5_is_d58x(state))
+		return;
+	mutex_lock(&dev->gvd_lock);
+	if (ds5_hwmc_changes_gvd(opcode)) {
+		ds5_gvd_invalidate_locked(dev);
+		if (!state->gvd_write_pending ||
+		    state->gvd_write_epoch != dev->gvd_reset_epoch) {
+			state->gvd_write_pending = true;
+			state->gvd_write_epoch = dev->gvd_reset_epoch;
+			dev->gvd_writers++;
+		}
+	}
+	if (opcode == 0x20 || opcode == cmd_switch_to_dfu.opcode) {
+		ds5_gvd_invalidate_locked(dev);
+		dev->gvd_reset_epoch++;
+		dev->gvd_writers = 0;
+		dev->gvd_suspended = true;
+	}
+	mutex_unlock(&dev->gvd_lock);
+}
+
+static void ds5_gvd_command_done(struct ds5 *state)
+{
+	struct ds5_dev *dev = state->ds5_dev;
+
+	mutex_lock(&dev->gvd_lock);
+	if (state->gvd_write_pending) {
+		state->gvd_write_pending = false;
+		if (state->gvd_write_epoch == dev->gvd_reset_epoch)
+			dev->gvd_writers--;
+		ds5_gvd_invalidate_locked(dev);
+	}
+	mutex_unlock(&dev->gvd_lock);
+}
+
+static int ds5_hwmc_wait_result(struct ds5 *state, int *fw_error)
 {
 	int ret = 0;
 	u16 status = DS5_HWMC_STATUS_WIP;
 	int errorCode;
+
 	/*
 	 * RSDEV-12089: bound the poll by wall-clock (DS5_HWMC_MAX_TIME) rather than a
 	 * fixed retry count. The old ~100 ms budget was too short on MIPI: a concurrent
@@ -2711,6 +2794,8 @@ static int ds5_hwmc_wait(struct ds5 *state)
 	 */
 	unsigned long timeout = jiffies + msecs_to_jiffies(DS5_HWMC_MAX_TIME);
 	bool first = true;
+
+	*fw_error = 0;
 	do {
 		if (!first)
 			msleep_range(1);
@@ -2726,17 +2811,31 @@ static int ds5_hwmc_wait(struct ds5 *state)
 		__func__, ret, status);
 	if (!ret) {
 		if (status == DS5_HWMC_STATUS_ERR) {
-			ds5_raw_read(state, DS5_HWMC_DATA, &errorCode, sizeof(errorCode));
-			ret = errorCode;
+			ret = ds5_raw_read(state, DS5_HWMC_DATA, &errorCode,
+					   sizeof(errorCode));
+			if (!ret) {
+				if (!errorCode)
+					return -EBADMSG;
+				*fw_error = errorCode;
+			}
 		} else if (status == DS5_HWMC_STATUS_WIP) {
 			ret = -ETIMEDOUT;
 			dev_warn(&state->client->dev,
 				"%s(): HWMC command timed out\n", __func__);
+		} else if (status != DS5_HWMC_STATUS_OK) {
+			ret = -EBADMSG;
 		}
-	} else {
-		ret = DS5_HWMC_ERR_LAST;
 	}
 	return ret;
+}
+
+static int ds5_hwmc_wait(struct ds5 *state)
+{
+	int fw_error;
+	int ret = ds5_hwmc_wait_result(state, &fw_error);
+
+	ds5_gvd_command_done(state);
+	return ret ? ret : fw_error;
 }
 
 static int ds5_get_hwmc(struct ds5 *state, unsigned char *data,
@@ -2791,17 +2890,22 @@ static int ds5_hwmc_send(struct ds5 *state,
 			u16 cmdLen,
 			const struct hwm_cmd *cmd)
 {
+	int ret;
+
 	dev_dbg(&state->client->dev,
 			"%s(): HWMC header: 0x%x, magic: 0x%x, opcode: 0x%x, "
 			"cmdLen: %d, param1: %d, param2: %d, param3: %d, param4: %d\n",
 			__func__, cmd->header, cmd->magic_word, cmd->opcode,
 			cmdLen,	cmd->param1, cmd->param2, cmd->param3, cmd->param4);
 
-	ds5_raw_write_with_check(state, DS5_HWMC_DATA, cmd, cmdLen); /* Write command data */
+	ds5_gvd_command_begin(state, cmd->opcode);
+	ret = ds5_raw_write(state, DS5_HWMC_DATA, cmd, cmdLen);
+	if (!ret)
+		ret = ds5_write(state, DS5_HWMC_EXEC, 0x01);
+	if (ret)
+		ds5_gvd_command_done(state);
 
-	ds5_write_with_check(state, DS5_HWMC_EXEC, 0x01); /* execute cmd */
-
-	return 0;
+	return ret;
 }
 
 /* Caller must hold state->ds5_dev->lock. */
@@ -3383,7 +3487,7 @@ static int ds5_set_ser_esync_tunneling(struct ds5 *state, bool enable)
  *
  * Returns 0 on success, negative error code on failure.
  */
-static int ds5_hw_reset_with_recovery(struct ds5 *state)
+static int ds5_hw_reset_with_recovery_impl(struct ds5 *state)
 {
 	int ret;
 	int retry;
@@ -3717,7 +3821,33 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	return 0;
 }
 
+static int ds5_hw_reset_with_recovery(struct ds5 *state)
+{
+	struct ds5_dev *dev = state->ds5_dev;
+	int ret;
+
+	mutex_lock(&dev->gvd_lock);
+	ds5_gvd_invalidate_locked(dev);
+	dev->gvd_reset_epoch++;
+	dev->gvd_writers = 0;
+	dev->gvd_resetting++;
+	mutex_unlock(&dev->gvd_lock);
+
+	ret = ds5_hw_reset_with_recovery_impl(state);
+
+	mutex_lock(&dev->gvd_lock);
+	ds5_gvd_invalidate_locked(dev);
+	dev->gvd_resetting--;
+	dev->gvd_suspended = !!ret;
+	mutex_unlock(&dev->gvd_lock);
+	return ret;
+}
+
 static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on);
+static int ds5_gvd(struct ds5 *state, unsigned char *data, u32 buf_len,
+		   u16 *data_len, bool raw_response);
+static int ds5_gvd_save_response(struct ds5 *state);
+
 
 static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 {
@@ -4108,7 +4238,7 @@ unlock_dpp:
 			u16 pid = READ_ONCE(state->ds5_dev->d585_product_id);
 
 			if (cmd->opcode == 0x20 &&
-			    (pid == D585_2C_PROTO_PID ||
+			    (ds5_is_d58x(state) || pid == D585_2C_PROTO_PID ||
 			     pid == D585_3C_PROTO_PID)) {
 				ret = ds5_hw_reset_with_recovery(state);
 				break;
@@ -4116,8 +4246,16 @@ unlock_dpp:
 
 			size = *((u8 *)ctrl->p_new.p_u8 + 1) << 8;
 			size |= *((u8 *)ctrl->p_new.p_u8 + 0);
-			ret = ds5_hwmc_send(state, size + 4, cmd);
-			ret = ds5_get_hwmc(state, cmd->Data, ctrl->dims[0], &size);
+			if (ds5_is_d58x(state) && !memcmp(cmd, &gvd, sizeof(gvd))) {
+				ret = ds5_gvd(state, cmd->Data,
+					      ctrl->dims[0] - sizeof(*cmd) - 4, &size, true);
+			} else {
+				ret = ds5_hwmc_send(state, size + 4, cmd);
+				if (!ret)
+					ret = ds5_get_hwmc(state, cmd->Data, ctrl->dims[0], &size);
+			}
+			if (ret)
+				break;
 			if (ctrl->dims[0] < DS5_HWMC_BUFFER_SIZE) {
 				ret = -ENODATA;
 				break;
@@ -4133,6 +4271,14 @@ unlock_dpp:
 			struct hwm_cmd *cmd = (struct hwm_cmd *)ctrl->p_new.p_u8;
 			u16 size = *((u8 *)ctrl->p_new.p_u8 + 1) << 8;
 			size |= *((u8 *)ctrl->p_new.p_u8 + 0);
+
+			mutex_lock(&state->ds5_dev->gvd_lock);
+			state->gvd_rw_response_valid = false;
+			mutex_unlock(&state->ds5_dev->gvd_lock);
+			if (ds5_is_d58x(state) && !memcmp(cmd, &gvd, sizeof(gvd))) {
+				ret = ds5_gvd_save_response(state);
+				break;
+			}
 
 			/* Check if this is a HW reset command (opcode 0x20) */
 			if (cmd->opcode == 0x20) {
@@ -4291,42 +4437,154 @@ static int ds5_get_calibration_data(struct ds5 *state, enum table_id id,
 	return 0;
 }
 
-static int ds5_gvd(struct ds5 *state, unsigned char *data, u32 buf_len)
+/* Transport and firmware errors are distinct for GVD: raw controls must
+ * return the firmware word to the SDK, but that word must never be cached. */
+static int ds5_read_gvd(struct ds5 *state, unsigned char *data, u32 buf_len,
+			 u16 *data_len, bool raw_response)
 {
-	struct hwm_cmd cmd;
-	int ret;
 	u16 length = 0;
+	int ret, fw_error;
 
-	memcpy(&cmd, &gvd, sizeof(gvd));
-	ret = ds5_hwmc_send(state, sizeof(cmd), &cmd);
+	ret = ds5_hwmc_send(state, sizeof(gvd), &gvd);
 	if (ret)
 		return ret;
-
-	ret = ds5_hwmc_wait(state);
-	if (ret) {
-		dev_err(&state->client->dev,
-			"%s(): Failed to read GVD, error: %d\n",
-			__func__, ret);
-		return -EIO;
+	ret = ds5_hwmc_wait_result(state, &fw_error);
+	if (ret)
+		return ret;
+	if (fw_error) {
+		if (!raw_response)
+			return fw_error;
+		if (buf_len < sizeof(fw_error))
+			return -ENOBUFS;
+		memcpy(data, &fw_error, sizeof(fw_error));
+		*data_len = sizeof(fw_error);
+		return 0;
 	}
-
-	ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN, &length, sizeof(length)); /* Read response length */
+	ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN, &length, sizeof(length));
 	if (ret)
 		return ret;
-
-	if (!length)
+	if (length < sizeof(u32))
 		return -ENODATA;
-
-	if (length > buf_len) {
-		dev_err(&state->client->dev,
-			"%s(): GVD response length %u exceeds buffer size %u\n",
-			__func__, length, buf_len);
+	if (length > buf_len)
 		return -ENOBUFS;
-	}
-
-	ds5_raw_read_with_check(state, DS5_HWMC_DATA, data, length); /* Read response data */
-
+	ret = ds5_raw_read(state, DS5_HWMC_DATA, data, length);
+	if (ret)
+		return ret;
+	if (memcmp(data, &gvd.opcode, sizeof(u32)) ||
+	    (ds5_is_d58x(state) && length != DS5_GVD_LEN_D5XX))
+		return -EBADMSG;
+	*data_len = length;
 	return 0;
+}
+
+static int ds5_gvd(struct ds5 *state, unsigned char *data, u32 buf_len,
+		   u16 *data_len, bool raw_response)
+{
+	struct ds5_dev *dev = state->ds5_dev;
+	u8 response[DS5_GVD_LEN_D5XX];
+	u32 generation;
+	u16 length = 0;
+	int ret;
+
+	if (!data)
+		return -EINVAL;
+	if (data_len)
+		*data_len = 0;
+	if (!ds5_is_d58x(state)) {
+		ret = ds5_read_gvd(state, data, buf_len, &length, raw_response);
+		if (!ret && data_len)
+			*data_len = length;
+		return ret;
+	}
+	mutex_lock(&dev->gvd_lock);
+	if (dev->gvd_suspended || dev->gvd_resetting || dev->gvd_writers) {
+		mutex_unlock(&dev->gvd_lock);
+		return -EAGAIN;
+	}
+	if (dev->gvd_cache_valid) {
+		if (buf_len < sizeof(dev->gvd_cache)) {
+			mutex_unlock(&dev->gvd_lock);
+			return -ENOBUFS;
+		}
+		memset(data, 0, buf_len);
+		memcpy(data, dev->gvd_cache, sizeof(dev->gvd_cache));
+		if (data_len)
+			*data_len = sizeof(dev->gvd_cache);
+		mutex_unlock(&dev->gvd_lock);
+		return 0;
+	}
+	generation = dev->gvd_cache_generation;
+	mutex_unlock(&dev->gvd_lock);
+
+	ret = ds5_read_gvd(state, response, sizeof(response), &length, raw_response);
+	if (ret)
+		return ret;
+	if (length > buf_len)
+		return -ENOBUFS;
+	if (length == sizeof(response)) {
+		mutex_lock(&dev->gvd_lock);
+		if (generation == dev->gvd_cache_generation &&
+		    !dev->gvd_suspended && !dev->gvd_resetting && !dev->gvd_writers) {
+			memcpy(dev->gvd_cache, response, length);
+			dev->gvd_cache_valid = true;
+		}
+		mutex_unlock(&dev->gvd_lock);
+	}
+	memset(data, 0, buf_len);
+	memcpy(data, response, length);
+	if (data_len)
+		*data_len = length;
+	return 0;
+}
+
+static int ds5_gvd_save_response(struct ds5 *state)
+{
+	struct ds5_dev *dev = state->ds5_dev;
+	u8 response[DS5_GVD_LEN_D5XX];
+	u16 length = 0;
+	u32 epoch;
+	int ret;
+
+	mutex_lock(&dev->gvd_lock);
+	epoch = dev->gvd_reset_epoch;
+	mutex_unlock(&dev->gvd_lock);
+	ret = ds5_gvd(state, response, sizeof(response), &length, true);
+	if (ret)
+		return ret;
+	mutex_lock(&dev->gvd_lock);
+	if (epoch != dev->gvd_reset_epoch) {
+		mutex_unlock(&dev->gvd_lock);
+		return -EAGAIN;
+	}
+	memcpy(state->gvd_rw_response, response, length);
+	state->gvd_rw_response_len = length;
+	state->gvd_rw_response_epoch = epoch;
+	state->gvd_rw_response_valid = true;
+	mutex_unlock(&dev->gvd_lock);
+	return 0;
+}
+
+static int ds5_gvd_get_response(struct ds5 *state, unsigned char *data,
+			      u16 buf_len, u16 *data_len)
+{
+	struct ds5_dev *dev = state->ds5_dev;
+	int ret = -ENOENT;
+
+	mutex_lock(&dev->gvd_lock);
+	if (state->gvd_rw_response_valid) {
+		ret = -ENODATA;
+		if (state->gvd_rw_response_epoch == dev->gvd_reset_epoch) {
+			ret = -ENOBUFS;
+			if (state->gvd_rw_response_len <= buf_len) {
+				memset(data, 0, buf_len);
+				*data_len = state->gvd_rw_response_len;
+				memcpy(data, state->gvd_rw_response, *data_len);
+				ret = 0;
+			}
+		}
+	}
+	mutex_unlock(&dev->gvd_lock);
+	return ret;
 }
 
 static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
@@ -4530,7 +4788,7 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 	case DS5_CAMERA_CID_GVD:
 		ret = ds5_gvd(state, ctrl->p_new.p_u8,
-				ctrl->elems * ctrl->elem_size);
+				ctrl->elems * ctrl->elem_size, NULL, false);
 		break;
 	case DS5_CAMERA_CID_AE_ROI_GET:
 		if (ctrl->p_new.p_u16) {
@@ -4619,7 +4877,15 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			unsigned char *data = (unsigned char *)ctrl->p_new.p_u8;
 			u16 dataLen = 0;
 			u16 bufLen = ctrl->dims[0];
-			ret = ds5_get_hwmc(state, data,	bufLen, &dataLen);
+			ret = ds5_gvd_get_response(state, data, bufLen, &dataLen);
+			if (ret == -ENOENT)
+				ret = ds5_get_hwmc(state, data, bufLen, &dataLen);
+			if (ret)
+				break;
+			if (dataLen < 4 || dataLen > bufLen - 4) {
+				ret = -EBADMSG;
+				break;
+			}
 			/* This is needed for librealsense, to align there code with UVC,
 		 	 * last word is length - 4 bytes header length */
 			dataLen -= 4;
@@ -5289,6 +5555,12 @@ static void ds5_init_ds5_dev(struct ds5 *state, struct ds5_dev *ds5_dev)
 	ds5_dev->serdes_setup_complete = false;
 	ds5_dev->cached_device_type = DS5_DEVICE_TYPE_UNKNOWN;
 	ds5_dev->d585_product_id = 0;
+	ds5_dev->gvd_cache_valid = false;
+	ds5_dev->gvd_cache_generation = 0;
+	ds5_dev->gvd_reset_epoch = 0;
+	ds5_dev->gvd_writers = 0;
+	ds5_dev->gvd_resetting = 0;
+	ds5_dev->gvd_suspended = false;
 	ds5_dev->configured_device_mode = D500_DEVICE_MODE_3C;
 	ds5_dev->active_device_mode = D500_DEVICE_MODE_3C;
 	ds5_dev->device_mode_valid = false;
@@ -8596,7 +8868,7 @@ static int ds5_probe(struct i2c_client *c
 		unsigned char *gvd_data = kzalloc(DS5_GVD_LEN_D5XX, GFP_KERNEL);
 
 		if (gvd_data) {
-			ret = ds5_gvd(state, gvd_data, DS5_GVD_LEN_D5XX);
+			ret = ds5_gvd(state, gvd_data, DS5_GVD_LEN_D5XX, NULL, false);
 			if (ret) {
 				dev_warn(&c->dev,
 					 "%s(): cannot cache D585 PID from GVD (%d)\n",

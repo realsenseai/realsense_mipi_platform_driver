@@ -57,6 +57,8 @@ struct ds5_variant;
 
 #include "d4xx_desc.h"
 
+#define DS5_GVD_LEN_D5XX		606
+
 /* FW stream ids, and the format descriptor's stream_id wire values: this is
  * how d4xx_desc.c maps a parsed table onto a node.
  */
@@ -235,6 +237,14 @@ struct ds5 {
 	bool d58x_pixel_mode;
 	u16 control_base;
 	u16 control_status_reg;
+	/* Only GVD uses this saved response; other HWMC_RW commands keep the
+	 * existing split SET/GET transport. Guarded by ds5_dev->gvd_lock. */
+	u8 gvd_rw_response[DS5_GVD_LEN_D5XX];
+	u16 gvd_rw_response_len;
+	u32 gvd_rw_response_epoch;
+	bool gvd_rw_response_valid;
+	bool gvd_write_pending;
+	u32 gvd_write_epoch;
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	struct gmsl_link_ctx g_ctx;
 	/* GMSL link this camera is wired to. From the serializer node's
@@ -275,6 +285,15 @@ struct ds5_dev {
 	*/
 	u16 cached_device_type;
 	u16 d585_product_id;
+	/* Cache snapshots only: never hold gvd_lock across HWMC I/O. */
+	struct mutex gvd_lock;
+	u8 gvd_cache[DS5_GVD_LEN_D5XX];
+	u32 gvd_cache_generation;
+	u32 gvd_reset_epoch;
+	unsigned int gvd_writers;
+	unsigned int gvd_resetting;
+	bool gvd_cache_valid;
+	bool gvd_suspended;
 
 	/* Camera-resident format descriptor, parsed once per camera. Written
 	 * under lock before any subdev registers; the tables it points at live
