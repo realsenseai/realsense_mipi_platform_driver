@@ -50,6 +50,7 @@ fi
 # For JP5 we override the i2c driver and ignore the previous that was created from patches
 cp kernel/realsense/d4xx_main.c kernel/realsense/d4xx_desc.c \
     kernel/realsense/d4xx.h kernel/realsense/d4xx_desc.h \
+    kernel/realsense/d585_dfu_v2_bench.h \
     "$TARGET/${D4XX_SRC_DST}/drivers/media/i2c/"
 if [[ "$JETPACK_VERSION" == "6.x" ]]; then
     # jp6 overlay

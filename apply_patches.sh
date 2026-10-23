@@ -93,7 +93,8 @@ if [[ "$ACTION" = "apply" ]]; then
     version_lt "$JETPACK_VERSION" "5.0" || rm -f "${BUILD_SRCS}/${D4XX_SRC_DST}/drivers/media/i2c/d4xx.c"
     version_lt "$JETPACK_VERSION" "5.0" || ln -f -s "$(pwd)/kernel/realsense/d4xx_main.c" \
             "$(pwd)/kernel/realsense/d4xx_desc.c" "$(pwd)/kernel/realsense/d4xx.h" \
-            "$(pwd)/kernel/realsense/d4xx_desc.h" "${BUILD_SRCS}/${D4XX_SRC_DST}/drivers/media/i2c/"
+            "$(pwd)/kernel/realsense/d4xx_desc.h" \
+            "$(pwd)/kernel/realsense/d585_dfu_v2_bench.h" "${BUILD_SRCS}/${D4XX_SRC_DST}/drivers/media/i2c/"
     if version_lt "$JETPACK_VERSION" "6.0"; then
         # device tree
         cp "hardware/realsense/${JP5_D4XX_DTSI}" "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen/kernel-dts/common/tegra194-camera-d4xx.dtsi"
@@ -133,7 +134,7 @@ if [[ "$ACTION" = "apply" ]]; then
     # Stage all modified files after patching
     git -C "${BUILD_SRCS}/$D4XX_SRC_DST" add drivers/media/i2c/d4xx_main.c \
             drivers/media/i2c/d4xx_desc.c drivers/media/i2c/d4xx.h \
-            drivers/media/i2c/d4xx_desc.h
+            drivers/media/i2c/d4xx_desc.h drivers/media/i2c/d585_dfu_v2_bench.h
     git -C "${BUILD_SRCS}/$D4XX_SRC_DST" add -u
     [[ -d "${BUILD_SRCS}/$KERNEL_DIR" ]] && git -C "${BUILD_SRCS}/$KERNEL_DIR" add -A
     if [[ -d "${BUILD_SRCS}/hardware/nvidia/t23x/nv-public" ]]; then
