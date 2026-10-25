@@ -120,6 +120,7 @@ enums = "\n".join(
     re.search(r"enum " + name + r"\s*\{[^}]+};", SOURCE).group(0)
     for name in ("d500_device_mode", "d500_passive_depth_mode"))
 helpers = "\n".join(function(signature) for signature in (
+    "static bool d500_video_is_idle_locked(",
     "static bool d500_camera_is_idle_locked(",
     "static int d500_read_passive_depth_locked(",
     "static int d500_get_passive_depth(",
