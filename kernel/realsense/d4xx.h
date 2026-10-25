@@ -26,6 +26,8 @@
 #include <linux/atomic.h>	/* atomic_t in struct ds5_dev */
 #include <linux/cdev.h>		/* struct cdev in struct ds5_dfu_dev */
 #include <linux/mutex.h>
+#include <linux/regmap.h>	/* struct regmap_config in struct ds5 */
+#include <linux/rwsem.h>
 #include <linux/types.h>
 #include <media/media-entity.h>
 #include <media/v4l2-ctrls.h>
@@ -221,6 +223,13 @@ struct ds5 {
 	/* All below pointers are used for writing, cannot be const */
 	struct mutex lock;
 	struct regmap *regmap;
+	struct regmap_config regmap_cfg;
+	/* Replaces regmap's internal lock once ds5_regmap_lock() is installed. */
+	struct mutex regmap_mutex;
+	/* Per-link rwsems of this camera's deserializer, set once when linked;
+	 * NULL before. Index with gmsl_link. */
+	struct rw_semaphore *link_rwsems;
+	struct rw_semaphore *regmap_held_rwsem;
 	struct regulator *vcc;
 	const struct ds5_variant *variant;
 	int is_depth, is_y8, is_rgb, is_imu;
