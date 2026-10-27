@@ -288,6 +288,11 @@ struct ds5_dev {
 	*/
 	u16 cached_device_type;
 	u16 d585_product_id;
+	/* Shared by logical sensors; protected by hwmc_lock. Every reuse
+	 * is validated by FW, including after reset or calibration writes. */
+	u8 d5xx_gvd_cache[606];
+	u8 d5xx_gvd_tag[16];
+	bool d5xx_gvd_valid;
 
 	/* Camera-resident format descriptor, parsed once per camera. Written
 	 * under lock before any subdev registers; the tables it points at live

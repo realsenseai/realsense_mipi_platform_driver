@@ -153,6 +153,9 @@ struct ser_interface {
 /* GVD response payload size per product line */
 #define DS5_GVD_LEN_D4XX		276
 #define DS5_GVD_LEN_D5XX		606
+#define D5XX_GVD_TAG_SIZE		16
+#define D5XX_GVD_TAG_PROTOCOL	0x31445647U /* GVD1 */
+#define D5XX_GVD_TAG_RESPONSE_LEN	(4 + D5XX_GVD_TAG_SIZE)
 #define D585_GVD_PID_OFFSET		18
 #define D585_2C_PROTO_PID		0x0C07
 #define D585_3C_PROTO_PID		0x0C08
@@ -386,6 +389,11 @@ static const struct hwm_cmd gvd = {
 	.magic_word = 0xCDAB,
 	.opcode = 0x10,
 };
+
+/* Allows paired measurements using the same driver and firmware. */
+static bool gvd_cache = true;
+module_param(gvd_cache, bool, 0644);
+MODULE_PARM_DESC(gvd_cache, "Validate and reuse D585 GVD using firmware MD5 tags");
 
 static const struct hwm_cmd set_ae_roi = {
 	.header = 0x14,
@@ -2828,6 +2836,101 @@ static int ds5_hwmc_send(struct ds5 *state,
 	return 0;
 }
 
+static bool d5xx_cacheable_gvd(struct ds5 *state, const struct hwm_cmd *cmd)
+{
+	return READ_ONCE(gvd_cache) && ds5_is_d58x(state) &&
+	       cmd->header == gvd.header && cmd->magic_word == gvd.magic_word &&
+	       cmd->opcode == gvd.opcode && !cmd->param1 && !cmd->param2 &&
+	       !cmd->param3 && !cmd->param4;
+}
+
+/* Caller holds hwmc_lock. Every reuse is checked by FW, so existing
+ * invalidation rules stay intact. Preserve the ordinary GVD response layout
+ * and the native/raw HWMC error conventions. */
+static int d5xx_gvd_cached_locked(struct ds5 *state, u8 *data, u16 capacity,
+				  u16 *data_len, bool raw_response)
+{
+	struct ds5_dev *dev = state->ds5_dev;
+	u32 request[(sizeof(struct hwm_cmd) + D5XX_GVD_TAG_SIZE) / sizeof(u32)];
+	struct hwm_cmd *cmd = (struct hwm_cmd *)request;
+	u8 response[DS5_GVD_LEN_D5XX + D5XX_GVD_TAG_SIZE];
+	u32 opcode;
+	u16 length;
+	int ret, attempt;
+
+	if (data_len)
+		*data_len = 0;
+	if (capacity < DS5_GVD_LEN_D5XX)
+		return -ENOBUFS;
+
+	memset(data, 0, capacity);
+	memcpy(cmd, &gvd, sizeof(gvd));
+	cmd->param1 = D5XX_GVD_TAG_PROTOCOL;
+	if (dev->d5xx_gvd_valid) {
+		cmd->param2 = 1;
+		cmd->header += D5XX_GVD_TAG_SIZE;
+		memcpy(cmd->Data, dev->d5xx_gvd_tag, D5XX_GVD_TAG_SIZE);
+	}
+	for (attempt = 0; attempt < 2; attempt++) {
+		ret = ds5_hwmc_send(state, cmd->header + 4, cmd);
+		if (ret)
+			goto out;
+		ret = ds5_get_hwmc(state, response, sizeof(response), &length,
+				   true, false);
+		if (ret)
+			goto out;
+		memcpy(&opcode, response, sizeof(opcode));
+		if (!attempt && length == sizeof(opcode) &&
+		    ((s32)opcode == DS5_HWMC_ERR_CMD ||
+		     (s32)opcode == DS5_HWMC_ERR_PARAM)) {
+			/* Older HKR FW may reject the optional parameters. */
+			memcpy(cmd, &gvd, sizeof(gvd));
+			continue;
+		}
+		break;
+	}
+	ret = -EBADMSG;
+	if (length == sizeof(opcode) && (s32)opcode < 0) {
+		if (!raw_response)
+			return -EREMOTEIO;
+		memcpy(data, response, length);
+		ret = length;
+		goto out;
+	}
+	if (opcode != gvd.opcode)
+		goto out;
+	if (length == DS5_GVD_LEN_D5XX) {
+		/* Older FW can also ignore the extension; never cache untagged data. */
+		dev->d5xx_gvd_valid = false;
+		memcpy(data, response, length);
+		ret = length;
+		goto out;
+	}
+	if (length != D5XX_GVD_TAG_RESPONSE_LEN && length != sizeof(response))
+		goto out;
+	if (length == D5XX_GVD_TAG_RESPONSE_LEN) {
+		if (!dev->d5xx_gvd_valid ||
+		    memcmp(dev->d5xx_gvd_tag, response + 4, D5XX_GVD_TAG_SIZE))
+			goto out;
+	} else {
+		memcpy(dev->d5xx_gvd_cache, response, 4);
+		memcpy(dev->d5xx_gvd_cache + 4, response + D5XX_GVD_TAG_RESPONSE_LEN,
+		       DS5_GVD_LEN_D5XX - 4);
+		memcpy(dev->d5xx_gvd_tag, response + 4, D5XX_GVD_TAG_SIZE);
+		dev->d5xx_gvd_valid = true;
+	}
+	dev_dbg(&state->client->dev, "D585 GVD %s (%u wire bytes)\n",
+		length == D5XX_GVD_TAG_RESPONSE_LEN ? "tag hit" : "cache fill", length);
+	memcpy(data, dev->d5xx_gvd_cache, DS5_GVD_LEN_D5XX);
+	ret = DS5_GVD_LEN_D5XX;
+out:
+	if (ret < 0)
+		return ret;
+	if (data_len)
+		*data_len = ret;
+	return 0;
+}
+
 /* DFU has no HWMC response. Use the same generation transition for
  * legacy HWMC, HWMC_RW and the DFU character-device entry point. */
 static int ds5_hwmc_send_dfu_locked(struct ds5 *state, u16 cmd_len,
@@ -2866,6 +2969,9 @@ static int ds5_hwmc_xfer_locked(struct ds5 *state, u16 cmd_len,
 
 	if (cmd_len < sizeof(*cmd) || cmd_len > DS5_HWMC_BUFFER_SIZE)
 		return -EINVAL;
+	if (data && cmd_len == sizeof(gvd) && d5xx_cacheable_gvd(state, cmd))
+		return d5xx_gvd_cached_locked(state, data, data_size, data_len,
+					      raw_response);
 	ret = ds5_hwmc_send(state, cmd_len, cmd);
 	if (ret)
 		return ret;
@@ -5412,6 +5518,7 @@ static void ds5_init_ds5_dev(struct ds5 *state, struct ds5_dev *ds5_dev)
 	ds5_dev->serdes_setup_complete = false;
 	ds5_dev->cached_device_type = DS5_DEVICE_TYPE_UNKNOWN;
 	ds5_dev->d585_product_id = 0;
+	ds5_dev->d5xx_gvd_valid = false;
 	ds5_dev->configured_device_mode = D500_DEVICE_MODE_3C;
 	ds5_dev->active_device_mode = D500_DEVICE_MODE_3C;
 	ds5_dev->device_mode_valid = false;
