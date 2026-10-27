@@ -24,6 +24,7 @@
 #include <linux/kernel.h>
 #include <linux/media.h>
 #include <linux/module.h>
+#include <linux/compat.h>
 #include <linux/of_gpio.h>
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
@@ -494,8 +495,10 @@ static void ds5_init_global_slots_once(void)
 		return;
 	}
 
-	for (i = 0; i < MAX_DS5_NUM; i++)
+	for (i = 0; i < MAX_DS5_NUM; i++) {
 		mutex_init(&ds5_inited[i].lock);
+		mutex_init(&ds5_inited[i].v2_lock);
+	}
 
 	for (i = 0; i < MAX_DSER_NUM; i++)
 		mutex_init(&dser_inited[i].lock);
@@ -616,6 +619,7 @@ static void ds5_init_global_slots_once(void)
 	mutex_lock(&ds5_slots_lock__);
 	if (!ds5_slots_inited) {
 		mutex_init(&ds5_inited[0].lock);
+		mutex_init(&ds5_inited[0].v2_lock);
 		ds5_slots_inited = true;
 	}
 	mutex_unlock(&ds5_slots_lock__);
@@ -780,6 +784,14 @@ static int ds5_read_poll(struct ds5 *state, u16 reg, u16 *val)
 	return regmap_raw_read(state->regmap, reg, val, 2);
 }
 
+/* D585 opt-in transport hooks are defined with the DFU core below. */
+static int d585_dfu_hwmc_lock(struct ds5 *state, u32 opcode);
+static void d585_dfu_hwmc_unlock(struct ds5 *state);
+static void d585_dfu_hwmc_read_done(struct ds5 *state, u16 reg,
+                                  const void *value, size_t len, int result);
+static void d585_dfu_hwmc_complete(struct ds5 *state);
+static bool d585_dfu_selected(struct ds5 *state);
+
 int ds5_raw_read(struct ds5 *state, u16 reg, void *val, size_t val_len)
 {
 	int ret;
@@ -802,6 +814,7 @@ int ds5_raw_read(struct ds5 *state, u16 reg, void *val, size_t val_len)
 			"%s(): i2c raw read failed after %d retries, 0x%04x size(%d), err %d\n",
 			__func__, DS5_I2C_RETRY_COUNT, reg, (int)val_len, ret);
 
+	d585_dfu_hwmc_read_done(state, reg, val, val_len, ret);
 	return ret;
 }
 
@@ -2700,7 +2713,7 @@ static int ds5_hwmc_wait(struct ds5 *state)
 {
 	int ret = 0;
 	u16 status = DS5_HWMC_STATUS_WIP;
-	int errorCode;
+	int errorCode, read_error;
 	/*
 	 * RSDEV-12089: bound the poll by wall-clock (DS5_HWMC_MAX_TIME) rather than a
 	 * fixed retry count. The old ~100 ms budget was too short on MIPI: a concurrent
@@ -2726,8 +2739,11 @@ static int ds5_hwmc_wait(struct ds5 *state)
 		__func__, ret, status);
 	if (!ret) {
 		if (status == DS5_HWMC_STATUS_ERR) {
-			ds5_raw_read(state, DS5_HWMC_DATA, &errorCode, sizeof(errorCode));
-			ret = errorCode;
+			read_error = ds5_raw_read(state, DS5_HWMC_DATA, &errorCode, sizeof(errorCode));
+			if (d585_dfu_selected(state)) {
+				if (!read_error) d585_dfu_hwmc_complete(state);
+				ret = read_error ? read_error : errorCode;
+			} else ret = errorCode;
 		} else if (status == DS5_HWMC_STATUS_WIP) {
 			ret = -ETIMEDOUT;
 			dev_warn(&state->client->dev,
@@ -2736,6 +2752,12 @@ static int ds5_hwmc_wait(struct ds5 *state)
 	} else {
 		ret = DS5_HWMC_ERR_LAST;
 	}
+    if (d585_dfu_selected(state) && !ret) {
+        u16 length = 0;
+        /* The firmware consumes opcode-only SET responses at STATUS. */
+        if (!ds5_raw_read(state, DS5_HWMC_RESP_LEN, &length, sizeof(length)) && length <= 4)
+            d585_dfu_hwmc_complete(state);
+    }
 	return ret;
 }
 
@@ -2787,7 +2809,7 @@ static int ds5_get_hwmc(struct ds5 *state, unsigned char *data,
 	return ret;
 }
 
-static int ds5_hwmc_send(struct ds5 *state,
+static int ds5_hwmc_send_raw(struct ds5 *state,
 			u16 cmdLen,
 			const struct hwm_cmd *cmd)
 {
@@ -2802,6 +2824,23 @@ static int ds5_hwmc_send(struct ds5 *state,
 	ds5_write_with_check(state, DS5_HWMC_EXEC, 0x01); /* execute cmd */
 
 	return 0;
+}
+
+/* state->lock (when required by the caller) precedes v2_lock. The latter
+ * protects DATA/EXEC and the pending-response reservation, shared by every
+ * Depth/RGB/IMU role. DFU cannot start between EXEC and response consumption. */
+static int ds5_hwmc_send(struct ds5 *state, u16 length, const struct hwm_cmd *cmd)
+{
+    int gate = d585_dfu_hwmc_lock(state, cmd->opcode);
+    int ret;
+    if (gate < 0) return gate;
+    ret = ds5_hwmc_send_raw(state, length, cmd);
+    if (gate > 0) {
+        /* HWRST intentionally has no response to drain. */
+        if (cmd->opcode == 0x20) state->ds5_dev->hwmc_owner = NULL;
+        d585_dfu_hwmc_unlock(state);
+    }
+    return ret;
 }
 
 /* Caller must hold state->ds5_dev->lock. */
@@ -6848,7 +6887,7 @@ static void ds5_flush_idle_link(struct ds5 *state)
 }
 #endif
 
-static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
+static int ds5_mux_s_stream_raw(struct v4l2_subdev *sd, int on)
 {
 	struct ds5 *state = container_of(sd, struct ds5, mux.sd.subdev);
 	u16 streaming, status;
@@ -6865,6 +6904,8 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	bool reset_invalidated = false;
 	bool *streaming_flag = NULL;
 	int cur_ds5 = atomic_read(ds5_get_reset_gen(state));
+	if (on && d585_dfu_selected(state) && READ_ONCE(state->ds5_dev->v2_owner))
+		return -EBUSY;
 
 	/* Lazy invalidation after HW or deserializer reset.
 	 * Detect gen-counter bumps, clear stale streaming/config/pipe
@@ -7167,6 +7208,31 @@ restore_streaming:
 #endif
 	return ret;
 }
+/* A start in progress is a reservation, not a lock held across callbacks.
+ * Staging and stream-start cannot pass one another on sibling role nodes. */
+static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
+{
+    struct ds5 *state = container_of(sd, struct ds5, mux.sd.subdev);
+    bool guarded = on && d585_dfu_selected(state);
+    int ret;
+    if (guarded) {
+        mutex_lock(&state->ds5_dev->v2_lock);
+        if (state->ds5_dev->v2_owner) {
+            mutex_unlock(&state->ds5_dev->v2_lock);
+            return -EBUSY;
+        }
+        state->ds5_dev->dfu_stream_starting++;
+        mutex_unlock(&state->ds5_dev->v2_lock);
+    }
+    ret = ds5_mux_s_stream_raw(sd, on);
+    if (guarded) {
+        mutex_lock(&state->ds5_dev->v2_lock);
+        state->ds5_dev->dfu_stream_starting--;
+        mutex_unlock(&state->ds5_dev->v2_lock);
+    }
+    return ret;
+}
+
 
 static int ds5_mux_get_frame_desc(struct v4l2_subdev *sd,
 	unsigned int pad, struct v4l2_mbus_frame_desc *desc)
@@ -7814,6 +7880,7 @@ static int ds5_dfu_finalize_download(struct ds5 *state)
 {
 	enum dfu_fw_state manifest_state = state->dfu_dev.manifest_state;
 	int ret;
+	u64 manifest_start = ktime_get_ns();
 
 	ret = ds5_write(state, 0x4a04, 0x00); /* Download complete */
 	if (!ret)
@@ -7823,8 +7890,17 @@ static int ds5_dfu_finalize_download(struct ds5 *state)
 	if (!ret)
 		WRITE_ONCE(state->dfu_dev.manifest_complete, true);
 
+	if (state->dfu_bench_start_ns)
+		dev_notice(&state->client->dev,
+			"DFU_BENCH legacy pid=%d bytes=%llu receive_ms=%llu manifest_ms=%llu result=%d\n",
+			task_pid_nr(current), (unsigned long long)state->dfu_bench_bytes,
+			(unsigned long long)div_u64(manifest_start - state->dfu_bench_start_ns, 1000000),
+			(unsigned long long)div_u64(ktime_get_ns() - manifest_start, 1000000), ret);
 	return ret;
 }
+
+#include "d585_dfu_v2_bench.h"
+#include "d585_dfu_compat_bench.h"
 
 static ssize_t ds5_dfu_device_write(struct file *flip,
 		const char __user *buffer, size_t len, loff_t *offset)
@@ -7835,6 +7911,16 @@ static ssize_t ds5_dfu_device_write(struct file *flip,
 
 	if (mutex_lock_interruptible(&state->lock))
 		return -ERESTARTSYS;
+	if (state->dfu_compat) {
+		ssize_t written = d585_compat_write(state->dfu_compat, buffer, len);
+		mutex_unlock(&state->lock);
+		return written;
+	}
+	if (state->dfu_v2) {
+		ssize_t written = d585_v2_write(state, buffer, len);
+		mutex_unlock(&state->lock);
+		return written;
+	}
 	switch (state->dfu_dev.dfu_state_flag) {
 
 	case DS5_DFU_OPEN:
@@ -7862,6 +7948,9 @@ static ssize_t ds5_dfu_device_write(struct file *flip,
 		unsigned int dfu_full_blocks = len / DFU_BLOCK_SIZE;
 		unsigned int dfu_part_blocks = len % DFU_BLOCK_SIZE;
 
+		if (d585_v2_eligible(state) && !state->dfu_bench_start_ns)
+			state->dfu_bench_start_ns = ktime_get_ns();
+
 		while (dfu_full_blocks--) {
 			if (copy_from_user(state->dfu_dev.dfu_msg, buffer, DFU_BLOCK_SIZE)) {
 				ret = -EFAULT;
@@ -7874,6 +7963,7 @@ static ssize_t ds5_dfu_device_write(struct file *flip,
 			ret = ds5_dfu_wait_for_get_dfu_status(state, dfuDNLOAD_IDLE);
 			if (ret < 0)
 				goto dfu_write_error;
+			state->dfu_bench_bytes += DFU_BLOCK_SIZE;
 			buffer += DFU_BLOCK_SIZE;
 		}
 		if (copy_from_user(state->dfu_dev.dfu_msg, buffer, dfu_part_blocks)) {
@@ -7885,8 +7975,10 @@ static ssize_t ds5_dfu_device_write(struct file *flip,
 					state->dfu_dev.dfu_msg, dfu_part_blocks);
 			if (!ret)
 				ret = ds5_dfu_wait_for_get_dfu_status(state, dfuDNLOAD_IDLE);
-			if (!ret)
+			if (!ret) {
+				state->dfu_bench_bytes += dfu_part_blocks;
 				ret = ds5_dfu_finalize_download(state);
+			}
 			if (ret < 0)
 				goto dfu_write_error;
 		}
@@ -7922,12 +8014,21 @@ static int ds5_dfu_device_open(struct inode *inode, struct file *file)
 	struct i2c_adapter *parent = i2c_parent_is_i2c_adapter(
 			state->client->adapter);
 #endif
+	int ret;
+	if (!(file->f_mode & FMODE_WRITE) && d585_v2_eligible(state)) {
+		file->private_data = state;
+		return 0;
+	}
+	ret = d585_compat_open(state, file);
+	if (ret)
+		return ret > 0 ? 0 : ret;
 	mutex_lock(&state->lock);
 	if (state->dfu_dev.device_open_count) {
 		mutex_unlock(&state->lock);
 		return -EBUSY;
 	}
 	state->dfu_dev.device_open_count++;
+	state->dfu_bench_start_ns = state->dfu_bench_bytes = 0;
 	WRITE_ONCE(state->dfu_dev.manifest_complete, false);
 	if (state->dfu_dev.dfu_state_flag != DS5_DFU_RECOVERY)
 		state->dfu_dev.dfu_state_flag = DS5_DFU_OPEN;
@@ -7972,7 +8073,14 @@ static int ds5_dfu_device_flush(struct file *file, fl_owner_t id)
 	int ret = 0;
 
 	(void)id;
+	if (!(file->f_mode & FMODE_WRITE) && d585_v2_eligible(state)) return 0;
+	if (READ_ONCE(state->dfu_compat))
+		return d585_compat_flush(state);
 	mutex_lock(&state->lock);
+	if (state->dfu_v2) {
+		mutex_unlock(&state->lock);
+		return 0; /* V2 requires explicit FINISH. */
+	}
 	/* A partial block finalizes in write(). Use close as the end signal for an
 	 * aligned image because userspace may split it across multiple writes.
 	 */
@@ -8155,7 +8263,13 @@ static int ds5_dfu_device_release(struct inode *inode, struct file *file)
 			state->client->adapter);
 #endif
 	int ret = 0, retry = 10;
+	if (!(file->f_mode & FMODE_WRITE) && d585_v2_eligible(state)) return 0;
+	if (READ_ONCE(state->dfu_compat)) {
+		d585_compat_release(state);
+		return 0;
+	}
 	mutex_lock(&state->lock);
+	d585_v2_close(state);
 	state->dfu_dev.device_open_count--;
 	if (state->dfu_dev.dfu_state_flag != DS5_DFU_RECOVERY)
 		state->dfu_dev.dfu_state_flag = DS5_DFU_IDLE;
@@ -8202,6 +8316,10 @@ static int ds5_dfu_device_release(struct inode *inode, struct file *file)
 
 static const struct file_operations ds5_device_file_ops = {
 	.owner = THIS_MODULE,
+	.unlocked_ioctl = d585_v2_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl = compat_ptr_ioctl,
+#endif
 	.read = &ds5_dfu_device_read,
 	.write = &ds5_dfu_device_write,
 	.open = &ds5_dfu_device_open,

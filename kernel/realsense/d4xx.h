@@ -40,6 +40,8 @@ struct regulator;
 struct dser_interface;
 struct ser_interface;
 struct ds5_variant;
+struct d585_dfu_v2;
+struct d585_compat;
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 #include <media/max9295.h>
@@ -251,10 +253,23 @@ struct ds5 {
 	bool dser_primary; /* true for the first instance per deserializer (first camera of a specific dser) */
 #endif
 	struct ds5_dev *ds5_dev; /* pointer to DS5 device struct */
+	struct d585_dfu_v2 *dfu_v2;
+	struct d585_compat *dfu_compat;
+	u64 dfu_bench_start_ns, dfu_bench_bytes;
 };
 
 struct ds5_dev {
 	struct mutex lock;
+	struct mutex v2_lock;
+	struct ds5 *v2_owner;
+	u64 v2_quarantine_boot;
+	u64 v2_quarantine_session;
+	u32 v2_quarantine_total;
+	struct ds5 *hwmc_owner;
+	pid_t hwmc_tgid;
+	u16 hwmc_response_len;
+	unsigned int dfu_stream_starting;
+	u8 dfu_mode; /* 0 unknown, 1 basic, 2 V2 */
 
 	/*
 	* Per-camera reset generation counter.
