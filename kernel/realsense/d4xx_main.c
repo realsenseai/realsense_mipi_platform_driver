@@ -32,6 +32,7 @@
 #include <linux/videodev2.h>
 #include <linux/version.h>
 #include <linux/mutex.h>
+#include <linux/rwsem.h>
 #include <media/media-entity.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
@@ -43,6 +44,7 @@
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 /* Deserializer interface structure for abstraction */
 struct dser_interface {
+	int (*set_i2c_fast_mode)(struct device *dev, u32 link, bool enable);
 	/* Pipeline management. */
 	int (*get_available_pipe_id)(struct device *dev, int vc_id);
 	/* Reverse the link's VC map: Optional - NULL on
@@ -88,6 +90,7 @@ struct dser_interface {
 
 /* Serializer interface structure for abstraction */
 struct ser_interface {
+	int (*set_i2c_fast_mode)(struct device *dev, bool enable);
 	/* Pipeline management */
 	int (*set_pipe)(struct device *dev, int pipe_id, u8 data_type1, u8 data_type2, u32 vc_id);
 	/* Notify serializer a stream stopped; re-arms MIPI RX on last stop.
@@ -327,6 +330,7 @@ struct ser_interface {
 #define DFU_I2C_STANDARD_MODE		100000
 #define DFU_I2C_FAST_MODE			400000
 #define DFU_I2C_BUS_CLK_RATE		DFU_I2C_FAST_MODE
+#define D585_DFU_I2C_RATE		980000
 #endif
 #define ds5_read_with_check(state, addr, val) {\
 	if (ds5_read(state, addr, val))	\
@@ -532,6 +536,7 @@ static const struct dser_interface max9296_interface = {
 
 /* MAX96712 deserializer interface implementation */
 static const struct dser_interface max96712_interface = {
+	.set_i2c_fast_mode = max96712_set_i2c_fast_mode,
 	.get_available_pipe_id = max96712_get_available_pipe_id,
 	.get_ser_vc_id = max96712_get_ser_vc_id,
 	.get_multi_vc_pipe_id = max96712_get_multi_vc_pipe_id,
@@ -553,6 +558,7 @@ static const struct dser_interface max96712_interface = {
 };
 
 static const struct dser_interface max96724_interface = {
+	.set_i2c_fast_mode = max96724_set_i2c_fast_mode,
 	.get_available_pipe_id = max96724_get_available_pipe_id,
 	.bind_ser_to_dser_pipe = max96724_bind_ser_to_dser_pipe,
 	.set_pipe = max96724_set_pipe,
@@ -588,6 +594,7 @@ static const struct ser_interface max9295_interface = {
 
 /* MAX96717 serializer interface implementation */
 static const struct ser_interface max96717_interface = {
+	.set_i2c_fast_mode = max96717_set_i2c_fast_mode,
 	.set_pipe = max96717_set_pipe,
 	.stream_stop = max96717_stream_stop,
 	.setup_control = max96717_setup_control,
@@ -686,6 +693,362 @@ static inline void msleep_range(unsigned int delay_base)
 #endif
 #endif
 
+/*
+ * Wait for ongoing camera operations to finish before changing I2C speed.
+ *
+ * maintenance_sem protects a complete probe, control operation or stream
+ * start/stop, so the speed cannot change halfway through that operation.
+ * io_sem keeps the access check and its I2C transfer together. For example,
+ * a D400 request checked at normal speed must not run after a switch to 980 kHz.
+ *
+ * These are Linux read/write semaphores. Normal operations take shared
+ * (read) locks; speed changes take exclusive (write) locks. "Read" and
+ * "write" describe the lock, not the direction of the I2C command.
+ * Neither semaphore is held across the whole firmware download.
+ *
+ * Lock order: state->lock -> maintenance_sem -> serdes_lock__ -> io_sem.
+ * Skip locks that the current path does not use.
+ */
+static DECLARE_RWSEM(ds5_maintenance_sem);
+static DECLARE_RWSEM(ds5_io_sem);
+/* DFU state per physical I2C bus: original speed and active sessions. */
+static LIST_HEAD(ds5_dfu_buses);
+
+struct ds5_dfu_status {
+	struct list_head list;
+	struct i2c_adapter *root;
+	unsigned int users;
+	int normal_rate;
+	bool fast;
+	bool fault;
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	/* Pin the endpoints actually prepared, independent of probe/DFU state. */
+	unsigned int num_links;
+	struct {
+		struct device *ser_dev, *dser_dev;
+		const struct ser_interface *ser_ops;
+		const struct dser_interface *dser_ops;
+		u32 link;
+	} links[MAX_DS5_NUM];
+#endif
+};
+
+/* Mux branches share the physical controller clock and its DFU owner count. */
+static struct i2c_adapter *ds5_get_i2c_root_adapter(struct ds5 *state)
+{
+	struct i2c_adapter *root = state->client->adapter;
+	struct i2c_adapter *parent;
+
+	while ((parent = i2c_parent_is_i2c_adapter(root)))
+		root = parent;
+	return root;
+}
+
+/* Readers pin session state through admission and the regmap transfer.
+ * Writers drain transfers before changing timing or session ownership.
+ * I2C core serializes each bus; independent adapters may transfer in parallel.
+ */
+static struct ds5_dfu_status *ds5_find_root_dfu_status(struct ds5 *state)
+{
+	struct ds5_dfu_status *bus;
+	struct i2c_adapter *root = ds5_get_i2c_root_adapter(state);
+
+	list_for_each_entry(bus, &ds5_dfu_buses, list)
+		if (bus->root == root)
+			return bus;
+	return NULL;
+}
+
+static bool d5xx_i2c_fast_capable(struct ds5 *state);
+
+/* Caller holds ds5_io_sem for read through the subsequent regmap transfer.
+ * The legacy 400 kHz DFU rate admits both families; only 980 kHz excludes D400. An
+ * updating D585 rejects normal controls on every sensor role; peers need
+ * not join DFU.
+ * Blocking means -EBUSY, not electrical SCL stretching.
+ */
+static int ds5_check_i2c_access(struct ds5 *state, bool maintenance)
+{
+	struct ds5_dfu_status *bus = ds5_find_root_dfu_status(state);
+
+	if (bus && bus->fault)
+		return -EIO;
+	if (bus && bus->fast) {
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+		unsigned int i;
+
+		if (!maintenance && state->ds5_dev && state->ds5_dev->dfu_status)
+			return -EBUSY;
+		/* Admission follows the prepared link, not the changing DFU state. */
+		for (i = 0; i < bus->num_links; i++)
+			if (bus->links[i].ser_dev == state->ser_dev &&
+			    bus->links[i].dser_dev == state->dser_dev &&
+			    bus->links[i].link == state->gmsl_link)
+				return 0;
+#endif
+		return -EBUSY;
+	}
+	return 0;
+}
+
+#if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+/* Only qualified GPIO mux paths may run above 400 kHz. In particular do not
+ * overclock the PCA9546/PCA9548 select/deselect path on other board profiles.
+ */
+static bool d5xx_i2c_fast_capable(struct ds5 *state)
+{
+	struct i2c_adapter *adap = state->client->adapter;
+	struct i2c_adapter *parent;
+	u16 pid = state->ds5_dev ? READ_ONCE(state->ds5_dev->d585_product_id) : 0;
+	bool identity = ds5_is_d58x(state) &&
+		(pid == D585_2C_PROTO_PID || pid == D585_3C_PROTO_PID);
+
+	/* Recovery has no GVD/device-type response. Require the supported D5xx
+	 * DT plus MAX96717; never infer a legacy camera from partial enumeration.
+	 */
+	if (state->dfu_dev.dfu_state_flag == DS5_DFU_RECOVERY)
+		identity = of_device_is_compatible(state->client->dev.of_node,
+						  "realsense,d5xx");
+	if (!identity || !state->ser_ops || !state->dser_ops ||
+	    !state->ser_ops->set_i2c_fast_mode ||
+	    !state->dser_ops->set_i2c_fast_mode)
+		return false;
+	while ((parent = i2c_parent_is_i2c_adapter(adap))) {
+		struct device_node *mux = of_get_parent(adap->dev.of_node);
+		bool gpio_mux = of_device_is_compatible(mux, "i2c-mux-gpio");
+
+		/* dev.parent is the parent adapter, not the mux device. */
+		of_node_put(mux);
+		if (!gpio_mux)
+			return false;
+		adap = parent;
+	}
+	return true;
+}
+
+#else
+static bool d5xx_i2c_fast_capable(struct ds5 *state) { return false; }
+#endif
+
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+/* Prepare all eligible links before raising the root clock, including peers.
+ * serdes_lock__ protects the setup walk. Save endpoints before each attempt:
+ * rollback/final restore must not depend on mutable identity or registry slots.
+ * Endpoint helpers retain the original timing and tolerate untouched restores.
+ */
+static int d5xx_set_root_links_fast_mode(struct ds5_dfu_status *bus, bool fast)
+{
+	unsigned int i;
+	int ret = 0;
+
+	for (i = 0; i < (fast ? MAX_DS5_NUM : bus->num_links); i++) {
+		unsigned int slot = i;
+		int err, other;
+
+		if (fast) {
+			struct ds5 *peer = ds5_inited[i].ds5_primary;
+
+			if (!peer || !ds5_inited[i].serdes_setup_complete ||
+			    ds5_get_i2c_root_adapter(peer) != bus->root ||
+			    !d5xx_i2c_fast_capable(peer))
+				continue;
+			slot = bus->num_links++;
+			bus->links[slot].ser_dev = get_device(peer->ser_dev);
+			bus->links[slot].dser_dev = get_device(peer->dser_dev);
+			bus->links[slot].ser_ops = peer->ser_ops;
+			bus->links[slot].dser_ops = peer->dser_ops;
+			bus->links[slot].link = peer->gmsl_link;
+		}
+		err = bus->links[slot].ser_ops->set_i2c_fast_mode(bus->links[slot].ser_dev, fast);
+		/* Restore both endpoints even if one failed during setup/cleanup. */
+		if (!err || !fast) {
+			other = bus->links[slot].dser_ops->set_i2c_fast_mode(
+				bus->links[slot].dser_dev, bus->links[slot].link, fast);
+			if (!err)
+				err = other;
+		}
+		if (!fast) {
+			put_device(bus->links[slot].ser_dev);
+			put_device(bus->links[slot].dser_dev);
+		}
+		if (err && !ret)
+			ret = err;
+		if (err && fast)
+			break;
+	}
+	if (!fast)
+		bus->num_links = 0;
+	return ret;
+}
+
+#else
+static int d5xx_set_root_links_fast_mode(struct ds5_dfu_status *bus, bool fast) { return 0; }
+#endif
+
+static void ds5_free_dfu_status(struct ds5_dfu_status *bus)
+{
+	list_del(&bus->list);
+	put_device(&bus->root->dev);
+	kfree(bus);
+}
+
+/* Join this camera to the shared clock session. Caller holds state->lock.
+ * Preserve legacy 400 kHz entry at open; qualified
+ * D585 enters only on the first nonempty write, at 980 kHz.
+ * Drain complete normal operations and camera transfers before changing speed.
+ * Require an idle target for 980 kHz; legacy information opens keep working
+ * while streaming, as before. Leave other cameras' video paths alone.
+ * One root context owns the saved clock for concurrent same-rate participants;
+ * the first owner prepares all capable links; later owners only join the count.
+ */
+static int ds5_dfu_session_begin(struct ds5 *state)
+{
+	struct ds5_dfu_status *bus;
+	bool fast;
+	int ret = 0, restore;
+
+	down_write(&ds5_maintenance_sem);
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	mutex_lock(&serdes_lock__);
+#endif
+	down_write(&ds5_io_sem);
+	do {
+		if (state->ds5_dev->dfu_status)
+			break;
+		fast = d5xx_i2c_fast_capable(state);
+		/* The old 400 kHz path applies only behind a mux; keep direct adapters unchanged. */
+		if (!fast && !i2c_parent_is_i2c_adapter(state->client->adapter))
+			break;
+		bus = ds5_find_root_dfu_status(state);
+		if (bus && (bus->fault || bus->fast != fast)) {
+			ret = bus->fault ? -EIO : -EBUSY;
+			break;
+		}
+		if (bus && fast) {
+			ret = ds5_check_i2c_access(state, true);
+			if (ret)
+				break;
+		}
+		/* Normal stream transitions have drained; the DFU target must be idle. */
+		if (fast && state->ds5_dev &&
+		    (state->ds5_dev->depth_streaming || state->ds5_dev->rgb_streaming ||
+		     state->ds5_dev->ir_streaming || state->ds5_dev->imu_streaming)) {
+			ret = -EBUSY;
+			break;
+		}
+		if (!bus) {
+			bus = kzalloc(sizeof(*bus), GFP_KERNEL);
+			if (!bus) {
+				ret = -ENOMEM;
+				break;
+			}
+			bus->root = ds5_get_i2c_root_adapter(state);
+			get_device(&bus->root->dev);
+			bus->normal_rate = i2c_get_adapter_bus_clk_rate(bus->root);
+			if (fast && (bus->normal_rate <= 0 ||
+				     bus->normal_rate > DFU_I2C_FAST_MODE)) {
+				put_device(&bus->root->dev);
+				kfree(bus);
+				ret = -EINVAL;
+				break;
+			}
+			bus->fast = fast;
+			list_add(&bus->list, &ds5_dfu_buses);
+		}
+		if (!bus->users) {
+			/* Only 980 kHz needs matched SerDes timing; retain legacy 400 kHz DFU. */
+			if (fast) {
+				ret = i2c_set_adapter_bus_clk_rate(bus->root, bus->normal_rate);
+				if (!ret)
+					ret = d5xx_set_root_links_fast_mode(bus, true);
+				if (!ret)
+					ret = ds5_check_i2c_access(state, true);
+			}
+			if (!ret)
+				ret = i2c_set_adapter_bus_clk_rate(bus->root,
+						fast ? D585_DFU_I2C_RATE : DFU_I2C_BUS_CLK_RATE);
+			if (ret) {
+				bus->fault = !!i2c_set_adapter_bus_clk_rate(bus->root,
+									bus->normal_rate);
+				restore = fast ? d5xx_set_root_links_fast_mode(bus, false) : 0;
+				if (restore)
+					dev_warn(&state->client->dev,
+						 "DFU link timing rollback failed: %d\n", restore);
+				if (!bus->users && !bus->fault)
+					ds5_free_dfu_status(bus);
+				break;
+			}
+		}
+		bus->users++;
+		state->ds5_dev->dfu_status = bus;
+		if (fast)
+			dev_info(&state->client->dev, "DFU I2C begin: root=%d rate=%d users=%u\n",
+				 bus->root->nr, D585_DFU_I2C_RATE, bus->users);
+	} while (0);
+	up_write(&ds5_io_sem);
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	mutex_unlock(&serdes_lock__);
+#endif
+	up_write(&ds5_maintenance_sem);
+	return ret;
+}
+
+/* Caller holds state->lock. Idempotently release this camera's session after
+ * manifestation, an error, close or teardown. Keep every capable link fast
+ * while another owner remains; the last owner restores all links and the host.
+ * Only a failed host-clock restore blocks the shared bus. Link restore errors
+ * are logged separately; once the host clock is restored they do not fault peers.
+ * This releases clock ownership; it does not reset a camera or SerDes link.
+ */
+static int ds5_dfu_session_end(struct ds5 *state)
+{
+	struct ds5_dfu_status *bus;
+	int ret = 0, other;
+
+	/* Only the depth instance owns the shared camera session. */
+	if (!state->is_depth || !state->ds5_dev)
+		return 0;
+
+	down_write(&ds5_maintenance_sem);
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	mutex_lock(&serdes_lock__);
+#endif
+	down_write(&ds5_io_sem);
+	bus = state->ds5_dev->dfu_status;
+	if (bus) {
+		if (bus->users == 1) {
+			ret = i2c_set_adapter_bus_clk_rate(bus->root, bus->normal_rate);
+			other = bus->fast ? d5xx_set_root_links_fast_mode(bus, false) : 0;
+			if (other)
+				dev_warn(&state->client->dev,
+					 "DFU link timing restore failed: %d\n", other);
+		}
+		bus->fault |= !!ret;
+		bus->users--;
+		state->ds5_dev->dfu_status = NULL;
+		if (bus->fast)
+			dev_info(&state->client->dev, "DFU I2C end: root=%d users=%u restore=%d\n",
+				 bus->root->nr, bus->users, ret);
+		/* Fail closed after a host-clock restore failure. Retain only the adapter reference,
+		 * never a camera pointer; module reload/reboot recovers the faulted bus.
+		 */
+		if (!bus->users && !bus->fault)
+			ds5_free_dfu_status(bus);
+	}
+	up_write(&ds5_io_sem);
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	mutex_unlock(&serdes_lock__);
+#endif
+	up_write(&ds5_maintenance_sem);
+	return ret;
+}
+#else
+static bool d5xx_i2c_fast_capable(struct ds5 *state) { return false; }
+static int ds5_dfu_session_begin(struct ds5 *state) { return 0; }
+static int ds5_dfu_session_end(struct ds5 *state) { return 0; }
+#endif
+
 static int ds5_write(struct ds5 *state, u16 reg, u16 val)
 {
 	int ret;
@@ -700,7 +1063,14 @@ static int ds5_write(struct ds5 *state, u16 reg, u16 val)
 			__func__, reg, value[1], value[0]);
 
 	for (retry = 0; retry < DS5_I2C_RETRY_COUNT; retry++) {
+		down_read(&ds5_io_sem);
+		ret = ds5_check_i2c_access(state, true);
+		if (ret) {
+			up_read(&ds5_io_sem);
+			return ret;
+		}
 		ret = regmap_raw_write(state->regmap, reg, value, sizeof(value));
+		up_read(&ds5_io_sem);
 		if (ret == 0)
 			break;
 		if (retry < DS5_I2C_RETRY_COUNT - 1) {
@@ -729,7 +1099,14 @@ static int ds5_raw_write(struct ds5 *state, u16 reg,
 	int retry;
 
 	for (retry = 0; retry < DS5_I2C_RETRY_COUNT; retry++) {
+		down_read(&ds5_io_sem);
+		ret = ds5_check_i2c_access(state, true);
+		if (ret) {
+			up_read(&ds5_io_sem);
+			return ret;
+		}
 		ret = regmap_raw_write(state->regmap, reg, val, val_len);
+		up_read(&ds5_io_sem);
 		if (ret == 0)
 			break;
 		if (retry < DS5_I2C_RETRY_COUNT - 1) {
@@ -758,7 +1135,14 @@ static int ds5_read(struct ds5 *state, u16 reg, u16 *val)
 	int retry;
 
 	for (retry = 0; retry < DS5_I2C_RETRY_COUNT; retry++) {
+		down_read(&ds5_io_sem);
+		ret = ds5_check_i2c_access(state, true);
+		if (ret) {
+			up_read(&ds5_io_sem);
+			return ret;
+		}
 		ret = regmap_raw_read(state->regmap, reg, val, 2);
+		up_read(&ds5_io_sem);
 		if (ret == 0)
 			break;
 		if (retry < DS5_I2C_RETRY_COUNT - 1) {
@@ -782,7 +1166,14 @@ static int ds5_read(struct ds5 *state, u16 reg, u16 *val)
 
 static int ds5_read_poll(struct ds5 *state, u16 reg, u16 *val)
 {
-	return regmap_raw_read(state->regmap, reg, val, 2);
+	int ret;
+
+	down_read(&ds5_io_sem);
+	ret = ds5_check_i2c_access(state, true);
+	if (!ret)
+		ret = regmap_raw_read(state->regmap, reg, val, 2);
+	up_read(&ds5_io_sem);
+	return ret;
 }
 
 int ds5_raw_read(struct ds5 *state, u16 reg, void *val, size_t val_len)
@@ -791,7 +1182,14 @@ int ds5_raw_read(struct ds5 *state, u16 reg, void *val, size_t val_len)
 	int retry;
 
 	for (retry = 0; retry < DS5_I2C_RETRY_COUNT; retry++) {
+		down_read(&ds5_io_sem);
+		ret = ds5_check_i2c_access(state, true);
+		if (ret) {
+			up_read(&ds5_io_sem);
+			return ret;
+		}
 		ret = regmap_raw_read(state->regmap, reg, val, val_len);
+		up_read(&ds5_io_sem);
 		if (ret == 0)
 			break;
 		if (retry < DS5_I2C_RETRY_COUNT - 1) {
@@ -2397,6 +2795,42 @@ static int ds5_sensor_s_stream(struct v4l2_subdev *sd, int on)
 	return 0;
 }
 
+static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on);
+
+static int ds5_mux_s_stream_guarded(struct v4l2_subdev *sd, int on)
+{
+	struct ds5 *state = container_of(sd, struct ds5, mux.sd.subdev);
+	int ret;
+
+	down_read(&ds5_maintenance_sem);
+	down_read(&ds5_io_sem);
+	ret = ds5_check_i2c_access(state, false);
+	up_read(&ds5_io_sem);
+	if (!ret) {
+		ret = ds5_mux_s_stream(sd, on);
+	} else if (!on) {
+		struct ds5_sensor *sensor = state->mux.last_set;
+
+		/* VI tears down capture even when s_stream(0) returns an error.
+		 * Release its host pipe, but retain the camera streaming flag: the
+		 * firmware stop is still pending and the link must not be flushed.
+		 */
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+		if (sensor->pipe_id >= 0) {
+			mutex_lock(&serdes_lock__);
+			if (!state->dser_ops->release_pipe(state->dser_dev, sensor->pipe_id))
+				sensor->pipe_id = PIPE_NOT_CONFIGURED;
+			else
+				dev_warn(&state->client->dev, "release pipe failed during blocked stop\n");
+			mutex_unlock(&serdes_lock__);
+		}
+#endif
+		sensor->streaming = false;
+	}
+	up_read(&ds5_maintenance_sem);
+	return ret;
+}
+
 static const struct v4l2_subdev_video_ops ds5_sensor_video_ops = {
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)
 	.g_frame_interval	= ds5_sensor_g_frame_interval,
@@ -3868,6 +4302,15 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 		__func__, ds5_get_sensor_name(state), ctrl->name, ctrl->val);
 
 	mutex_lock(&state->lock);
+	down_read(&ds5_maintenance_sem);
+	down_read(&ds5_io_sem);
+	ret = ds5_check_i2c_access(state, false);
+	up_read(&ds5_io_sem);
+	if (ret) {
+		up_read(&ds5_maintenance_sem);
+		mutex_unlock(&state->lock);
+		return ret;
+	}
 	dpp_desc = d500_dpp_ctrl_desc(ctrl->id);
 	if (dpp_desc) {
 		const struct d500_dpp_xu_control *control =
@@ -4385,6 +4828,7 @@ unlock_dpp:
 	}
 
 unlock:
+	up_read(&ds5_maintenance_sem);
 	mutex_unlock(&state->lock);
 
 	return ret;
@@ -4450,36 +4894,15 @@ static int ds5_gvd(struct ds5 *state, unsigned char *data, u32 buf_len)
 	return 0;
 }
 
-static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
+static int ds5_g_volatile_ctrl_impl(struct ds5 *state, struct v4l2_ctrl *ctrl,
+				  struct ds5_sensor *sensor)
 {
-	struct ds5 *state = container_of(ctrl->handler, struct ds5,
-			ctrls.handler);
-
 	u32 data;
 	const struct d500_dpp_ctrl_desc *dpp_desc;
 	int ret = 0;
-	struct ds5_sensor *sensor = (struct ds5_sensor *)ctrl->priv;
 	u16 base;
 	u16 reg;
 
-	if (sensor) {
-		switch (sensor->mux_pad) {
-		case DS5_MUX_PAD_DEPTH:
-			state = container_of(ctrl->handler, struct ds5, ctrls.handler_depth);
-			break;
-		case DS5_MUX_PAD_RGB:
-			state = container_of(ctrl->handler, struct ds5, ctrls.handler_rgb);
-			break;
-		case DS5_MUX_PAD_IR:
-			state = container_of(ctrl->handler, struct ds5, ctrls.handler_y8);
-			break;
-		case DS5_MUX_PAD_IMU:
-			state = container_of(ctrl->handler, struct ds5, ctrls.handler_imu);
-			break;
-		default:
-			break;
-		}
-	}
 	base = state->control_base;
 
 	dev_dbg(&state->client->dev, "%s(): %s - ctrl: %s \n",
@@ -4889,6 +5312,42 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			ds5_read(state, base | DS5_READOUT_SHAPING, ctrl->p_new.p_u16);  /* FW may return 0xFFFF if register uninitialised; surfaced as-is to userspace */
 		break;
 	}
+	return ret;
+}
+
+static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
+{
+	struct ds5 *state = container_of(ctrl->handler, struct ds5,
+			ctrls.handler);
+
+	int ret = 0;
+	struct ds5_sensor *sensor = (struct ds5_sensor *)ctrl->priv;
+
+	if (sensor) {
+		switch (sensor->mux_pad) {
+		case DS5_MUX_PAD_DEPTH:
+			state = container_of(ctrl->handler, struct ds5, ctrls.handler_depth);
+			break;
+		case DS5_MUX_PAD_RGB:
+			state = container_of(ctrl->handler, struct ds5, ctrls.handler_rgb);
+			break;
+		case DS5_MUX_PAD_IR:
+			state = container_of(ctrl->handler, struct ds5, ctrls.handler_y8);
+			break;
+		case DS5_MUX_PAD_IMU:
+			state = container_of(ctrl->handler, struct ds5, ctrls.handler_imu);
+			break;
+		default:
+			break;
+		}
+	}
+	down_read(&ds5_maintenance_sem);
+	down_read(&ds5_io_sem);
+	ret = ds5_check_i2c_access(state, false);
+	up_read(&ds5_io_sem);
+	if (!ret)
+		ret = ds5_g_volatile_ctrl_impl(state, ctrl, sensor);
+	up_read(&ds5_maintenance_sem);
 	return ret;
 }
 
@@ -5388,7 +5847,8 @@ static int ds5_mux_open(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
 		return -EBUSY;
 	}
 
-	state->dfu_dev.device_open_count++;
+	WRITE_ONCE(state->dfu_dev.device_open_count,
+		   state->dfu_dev.device_open_count + 1);
 	mutex_unlock(&state->lock);
 
 	return 0;
@@ -5400,7 +5860,8 @@ static int ds5_mux_close(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
 
 	dev_dbg(sd->dev, "%s(): %s (%p)\n", __func__, sd->name, fh);
 	mutex_lock(&state->lock);
-	state->dfu_dev.device_open_count--;
+	WRITE_ONCE(state->dfu_dev.device_open_count,
+		   state->dfu_dev.device_open_count - 1);
 	mutex_unlock(&state->lock);
 	return 0;
 };
@@ -6991,7 +7452,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	u16 expected_streaming_state;
 	bool ds5_config_done = !on; /* for stop, skip config */
 	bool ser_pipe_armed = false;
-	bool reset_invalidated = false;
+	bool force_reconfigure = false;
 	bool *streaming_flag = NULL;
 	int cur_ds5 = atomic_read(ds5_get_reset_gen(state));
 
@@ -7003,13 +7464,10 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	if (state->reset_ref_ds5 != cur_ds5) {
 		ds5_invalidate_sensor(state, sensor);
 		sensor->streaming = false;
-		reset_invalidated = true;
+		force_reconfigure = true;
 		state->reset_ref_ds5 = cur_ds5;
 	}
 
-	// spare duplicate calls
-	if (sensor->streaming == on)
-		return 0;
 	if (state->is_depth) {
 		config_status_base = DS5_DEPTH_CONFIG_STATUS;
 		stream_status_base = DS5_DEPTH_STREAM_STATUS;
@@ -7037,6 +7495,13 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	} else {
 		return -EINVAL;
 	}
+	/* A blocked stop cleared host capture, but could not stop the camera.
+	 * Retry that stop, or force stop/reconfigure before the next start.
+	 */
+	force_reconfigure |= !sensor->streaming && *streaming_flag;
+	if (sensor->streaming == on && (on || !*streaming_flag))
+		return 0;
+
 #ifdef CONFIG_TEGRA_CAMERA_PLATFORM
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	vc_id = state->g_ctx.dst_vc;
@@ -7061,7 +7526,8 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			time_before(jiffies, timeout); i++, msleep_range(i*DS5_START_POLL_TIME))
 	{
 		ret = ds5_read(state, config_status_base, &status);
-		if ((ret >= 0) && (on == !(status & DS5_STATUS_STREAMING))) {
+		if ((ret >= 0) && ((on == !(status & DS5_STATUS_STREAMING)) ||
+					(on && force_reconfigure))) {
 			break;
 		}
 	}
@@ -7071,21 +7537,28 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			"stream %d in expected state, toggling to %d (status: 0x%04x) %dms\n",
 			stream_id, on, status, jiffies_to_msecs(jiffies - ts));
 	} else {
-		/* If state was invalidated by reset-generation bump and FW still
-		 * reports this stream as active, force a stop to guarantee next
-		 * start goes through full reconfiguration.
+		/* After reset invalidation or a blocked host stop, stop any still
+		 * active firmware stream before configuring a fresh capture.
 		 */
-		if (on && reset_invalidated && (status & DS5_STATUS_STREAMING)) {
+		if (on && force_reconfigure && (status & DS5_STATUS_STREAMING)) {
 			dev_warn(&state->client->dev,
-				"stream %d reports streaming after reset invalidation (status: 0x%04x), forcing stop and reconfigure\n",
+				"stream %d remains active (status: 0x%04x), forcing stop and reconfigure\n",
 				stream_id, status);
 
 			ret = ds5_write(state, DS5_START_STOP_STREAM,
 					DS5_STREAM_STOP | stream_id);
 			if (ret < 0)
-				dev_warn(&state->client->dev,
-					"stream %d forced stop write failed (%d), continuing with reconfigure\n",
-					stream_id, ret);
+				return ret;
+			/* Do not flush/reconfigure until the outstanding stop completes. */
+			streaming = DS5_STREAM_STREAMING;
+			for (timeout = jiffies + msecs_to_jiffies(DS5_START_MAX_TIME);
+			     time_before(jiffies, timeout); msleep_range(DS5_START_POLL_TIME)) {
+				ret = ds5_read(state, stream_status_base, &streaming);
+				if (ret < 0 || streaming == DS5_STREAM_IDLE)
+					break;
+			}
+			if (ret < 0 || streaming != DS5_STREAM_IDLE)
+				return ret < 0 ? ret : -ETIMEDOUT;
 
 			mutex_lock(&state->ds5_dev->lock);
 			*streaming_flag = false;
@@ -7265,10 +7738,12 @@ restore_streaming:
 	{
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 		mutex_lock(&serdes_lock__);
-		if (state->dser_ops->release_pipe(state->dser_dev, sensor->pipe_id) < 0)
-			dev_warn(&state->client->dev, "release pipe failed\n");
-		else
-			sensor->pipe_id = PIPE_NOT_CONFIGURED;
+		if (sensor->pipe_id >= 0) {
+			if (state->dser_ops->release_pipe(state->dser_dev, sensor->pipe_id) < 0)
+				dev_warn(&state->client->dev, "release pipe failed\n");
+			else
+				sensor->pipe_id = PIPE_NOT_CONFIGURED;
+		}
 		if (state->is_y8
 			&& (state->ir.sensor.config.format->data_type == GMSL_CSI_DT_RGB_888))
 		{
@@ -7339,7 +7814,7 @@ static const struct v4l2_subdev_video_ops ds5_mux_video_ops = {
 	.g_frame_interval	= ds5_mux_g_frame_interval,
 	.s_frame_interval	= ds5_mux_s_frame_interval,
 #endif
-	.s_stream		= ds5_mux_s_stream,
+	.s_stream		= ds5_mux_s_stream_guarded,
 };
 
 static const struct v4l2_subdev_ops ds5_mux_subdev_ops = {
@@ -7944,7 +8419,7 @@ e_dfu_read_failed:
 static int ds5_dfu_finalize_download(struct ds5 *state)
 {
 	enum dfu_fw_state manifest_state = state->dfu_dev.manifest_state;
-	int ret;
+	int ret, restore;
 
 	ret = ds5_write(state, 0x4a04, 0x00); /* Download complete */
 	if (!ret)
@@ -7954,6 +8429,12 @@ static int ds5_dfu_finalize_download(struct ds5 *state)
 	if (!ret)
 		WRITE_ONCE(state->dfu_dev.manifest_complete, true);
 
+	if (!ret) {
+		restore = ds5_dfu_session_end(state);
+		if (restore)
+			dev_warn(&state->client->dev,
+				 "DFU completed; host clock restore failed: %d\n", restore);
+	}
 	return ret;
 }
 
@@ -7966,6 +8447,19 @@ static ssize_t ds5_dfu_device_write(struct file *flip,
 
 	if (mutex_lock_interruptible(&state->lock))
 		return -ERESTARTSYS;
+	if (!len) {
+		mutex_unlock(&state->lock);
+		return 0;
+	}
+	if (state->dfu_dev.dfu_state_flag == DS5_DFU_OPEN ||
+	    state->dfu_dev.dfu_state_flag == DS5_DFU_RECOVERY) {
+		ret = ds5_dfu_session_begin(state);
+		if (ret) {
+			mutex_unlock(&state->lock);
+			return ret;
+		}
+		WRITE_ONCE(state->dfu_dev.manifest_complete, false);
+	}
 	switch (state->dfu_dev.dfu_state_flag) {
 
 	case DS5_DFU_OPEN:
@@ -8041,6 +8535,7 @@ dfu_write_error:
 	// Reset DFU device to IDLE states
 	if (!ds5_write(state, 0x5010, 0x0))
 		state->dfu_dev.dfu_state_flag = DS5_DFU_IDLE;
+	ds5_dfu_session_end(state);
 	mutex_unlock(&state->lock);
 	return ret;
 };
@@ -8049,19 +8544,20 @@ static int ds5_dfu_device_open(struct inode *inode, struct file *file)
 {
 	struct ds5 *state = container_of(inode->i_cdev, struct ds5,
 			dfu_dev.ds5_cdev);
-#if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)
-	struct i2c_adapter *parent = i2c_parent_is_i2c_adapter(
-			state->client->adapter);
-#endif
+	int ret;
+
+	/* Enumeration may probe an updating camera on its way to another one.
+	 * Do not wait behind the full-image write just to reject an exclusive
+	 * open. Recheck under the lock to serialize competing first opens.
+	 */
+	if (READ_ONCE(state->dfu_dev.device_open_count))
+		return -EBUSY;
 	mutex_lock(&state->lock);
 	if (state->dfu_dev.device_open_count) {
 		mutex_unlock(&state->lock);
 		return -EBUSY;
 	}
-	state->dfu_dev.device_open_count++;
-	WRITE_ONCE(state->dfu_dev.manifest_complete, false);
-	if (state->dfu_dev.dfu_state_flag != DS5_DFU_RECOVERY)
-		state->dfu_dev.dfu_state_flag = DS5_DFU_OPEN;
+
 	/*
 	 * Operational probe has an authoritative type; recovery defaults to the
 	 * D4xx terminal state until ds5_dfu_detach() obtains a D58x-only hint.
@@ -8074,25 +8570,23 @@ static int ds5_dfu_device_open(struct inode *inode, struct file *file)
 		mutex_unlock(&state->lock);
 		return -ENOMEM;
 	}
-	file->private_data = state;
-#if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)
-	/* get i2c controller and set dfu bus clock rate */
-	while (parent && i2c_parent_is_i2c_adapter(parent))
-		parent = i2c_parent_is_i2c_adapter(parent);
-
-	if (!parent) {
-		mutex_unlock(&state->lock);
-		return 0;
+	/* Keep the existing 400 kHz open behavior. D585 information queries
+	 * must not start a 980 kHz session; its first image write does that.
+	 */
+	if (!d5xx_i2c_fast_capable(state)) {
+		ret = ds5_dfu_session_begin(state);
+		if (ret) {
+			devm_kfree(&state->client->dev, state->dfu_dev.dfu_msg);
+			state->dfu_dev.dfu_msg = NULL;
+			mutex_unlock(&state->lock);
+			return ret;
+		}
 	}
-	dev_dbg(&state->client->dev, "%s(): i2c-%d bus_clk = %d, set %d\n",
-			__func__,
-			i2c_adapter_id(parent),
-			i2c_get_adapter_bus_clk_rate(parent),
-			DFU_I2C_BUS_CLK_RATE);
-
-	state->dfu_dev.bus_clk_rate = i2c_get_adapter_bus_clk_rate(parent);
-	i2c_set_adapter_bus_clk_rate(parent, DFU_I2C_BUS_CLK_RATE);
-#endif
+	/* A failed open has no release callback: preserve its entry state. */
+	if (state->dfu_dev.dfu_state_flag != DS5_DFU_RECOVERY)
+		state->dfu_dev.dfu_state_flag = DS5_DFU_OPEN;
+	WRITE_ONCE(state->dfu_dev.device_open_count, 1);
+	file->private_data = state;
 	mutex_unlock(&state->lock);
 	return 0;
 };
@@ -8116,6 +8610,8 @@ static int ds5_dfu_device_flush(struct file *file, fl_owner_t id)
 				state->dfu_dev.dfu_state_flag = DS5_DFU_IDLE;
 		}
 	}
+	if (ret)
+		ds5_dfu_session_end(state);
 	mutex_unlock(&state->lock);
 
 	return ret;
@@ -8281,13 +8777,10 @@ e_depth:
 static int ds5_dfu_device_release(struct inode *inode, struct file *file)
 {
 	struct ds5 *state = container_of(inode->i_cdev, struct ds5, dfu_dev.ds5_cdev);
-#if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)
-	struct i2c_adapter *parent = i2c_parent_is_i2c_adapter(
-			state->client->adapter);
-#endif
 	int ret = 0, retry = 10;
 	mutex_lock(&state->lock);
-	state->dfu_dev.device_open_count--;
+	WRITE_ONCE(state->dfu_dev.device_open_count,
+		   state->dfu_dev.device_open_count - 1);
 	if (state->dfu_dev.dfu_state_flag != DS5_DFU_RECOVERY)
 		state->dfu_dev.dfu_state_flag = DS5_DFU_IDLE;
 	/* We disable this section as it has no effect when device in operational
@@ -8299,21 +8792,11 @@ static int ds5_dfu_device_release(struct inode *inode, struct file *file)
 	if (state->dfu_dev.dfu_msg)
 		devm_kfree(&state->client->dev, state->dfu_dev.dfu_msg);
 	state->dfu_dev.dfu_msg = NULL;
-#if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)
-	/* get i2c controller and restore bus clock rate */
-	while (parent && i2c_parent_is_i2c_adapter(parent))
-		parent = i2c_parent_is_i2c_adapter(parent);
-	if (!parent) {
+	ret = ds5_dfu_session_end(state);
+	if (ret) {
 		mutex_unlock(&state->lock);
-		return 0;
+		return ret;
 	}
-	dev_dbg(&state->client->dev, "%s(): i2c-%d bus_clk %d, restore to %d\n",
-			__func__, i2c_adapter_id(parent),
-			i2c_get_adapter_bus_clk_rate(parent),
-			state->dfu_dev.bus_clk_rate);
-
-	i2c_set_adapter_bus_clk_rate(parent, state->dfu_dev.bus_clk_rate);
-#endif
 	/* Verify communication */
 	do {
 		ret = ds5_read(state, DS5_FW_VERSION, &state->fw_version);
@@ -8478,7 +8961,9 @@ static ssize_t ds5_read_reg_show(struct device *dev,
 			struct dev_ds5_reg_attribute, attr);
 	if (ds5_rw_attr->valid != 1)
 		return -EINVAL;
-	ds5_read(state, ds5_rw_attr->reg, &rbuf);
+	n = ds5_read(state, ds5_rw_attr->reg, &rbuf);
+	if (n)
+		return n;
 
 	n = snprintf(buf, PAGE_SIZE, "register:0x%4x, value:0x%02x\n",
 			ds5_rw_attr->reg, rbuf);
@@ -8531,9 +9016,9 @@ static ssize_t ds5_write_reg_store(struct device *dev,
 		return -EINVAL;
 	val = w_val & 0xffff;
 	mutex_lock(&state->lock);
-	ds5_write(state, reg, val);
+	rc = ds5_write(state, reg, val);
 	mutex_unlock(&state->lock);
-	return count;
+	return rc ? rc : count;
 }
 
 static DEVICE_ATTR_WO(ds5_write_reg);
@@ -8574,6 +9059,18 @@ static int ds5_probe(struct i2c_client *c
 
 	state->client = c;
 
+	/* Defer before SerDes setup or slot publication on a fast root. Keep
+	 * the baseline stable through probe, including identity discovery.
+	 */
+	down_read(&ds5_maintenance_sem);
+	down_read(&ds5_io_sem);
+	ret = ds5_check_i2c_access(state, true);
+	up_read(&ds5_io_sem);
+	if (ret) {
+		up_read(&ds5_maintenance_sem);
+		return ret == -EBUSY ? -EPROBE_DEFER : ret;
+	}
+
 	dev_warn(&c->dev, "Probing driver for D4xx\n");
 #ifdef CONFIG_OF
 	ret = of_property_read_u32(c->dev.of_node, "override_reg", &override_addr);
@@ -8589,6 +9086,7 @@ static int ds5_probe(struct i2c_client *c
 	if (IS_ERR(state->vcc)) {
 		ret = PTR_ERR(state->vcc);
 		dev_warn(&c->dev, "failed %d to get vcc regulator\n", ret);
+		up_read(&ds5_maintenance_sem);
 		return ret;
 	}
 
@@ -8596,6 +9094,7 @@ static int ds5_probe(struct i2c_client *c
 		ret = regulator_enable(state->vcc);
 		if (ret < 0) {
 			dev_warn(&c->dev, "failed %d to enable the vcc regulator\n", ret);
+			up_read(&ds5_maintenance_sem);
 			return ret;
 		}
 	}
@@ -8707,6 +9206,7 @@ static int ds5_probe(struct i2c_client *c
 		state->dfu_dev.dfu_state_flag = DS5_DFU_RECOVERY;
 		/* Override I2C drvdata with state for use in remove function */
 		i2c_set_clientdata(c, state);
+		up_read(&ds5_maintenance_sem);
 		return 0;
 	}
 
@@ -8744,15 +9244,18 @@ static int ds5_probe(struct i2c_client *c
 		}
 	}
 
-	ds5_read_with_check(state, DS5_FW_VERSION, &state->fw_version);
-	ds5_read_with_check(state, DS5_FW_BUILD, &state->fw_build);
+	/* Do not use the early-return macros while holding maintenance_sem. */
+	ret = ds5_read(state, DS5_FW_VERSION, &state->fw_version);
+	if (!ret)
+		ret = ds5_read(state, DS5_FW_BUILD, &state->fw_build);
+	if (!ret) {
+		dev_info(&c->dev, "D4XX Sensor: %s, firmware build: %d.%d.%d.%d\n",
+				ds5_get_sensor_name(state),
+				(state->fw_version >> 8) & 0xff, state->fw_version & 0xff,
+				(state->fw_build >> 8) & 0xff, state->fw_build & 0xff);
 
-	dev_info(&c->dev, "D4XX Sensor: %s, firmware build: %d.%d.%d.%d\n",
-			ds5_get_sensor_name(state),
-			(state->fw_version >> 8) & 0xff, state->fw_version & 0xff,
-			(state->fw_build >> 8) & 0xff, state->fw_build & 0xff);
-
-	ret = ds5_v4l_init(c, state);
+		ret = ds5_v4l_init(c, state);
+	}
 	if (ret < 0)
 		goto e_chardev;
 
@@ -8777,6 +9280,7 @@ static int ds5_probe(struct i2c_client *c
 	/* create the sysfs file group */
 	err = sysfs_create_group(&state->client->dev.kobj, &ds5_attr_group);
 #endif
+	up_read(&ds5_maintenance_sem);
 	return 0;
 
 e_chardev:
@@ -8793,6 +9297,7 @@ e_regulator:
 		i2c_unregister_device(state->dser_i2c);
 #endif
 #endif
+	up_read(&ds5_maintenance_sem);
 	return ret;
 }
 
@@ -8806,6 +9311,10 @@ static void ds5_remove(struct i2c_client *c)
 	if (state && !state->mux.sd.subdev.v4l2_dev) {
 		state = i2c_get_clientdata(c);
 	}
+
+	mutex_lock(&state->lock);
+	ds5_dfu_session_end(state);
+	mutex_unlock(&state->lock);
 
 	/* Drop this instance from the reload registry before it is freed. */
 	if (state->ds5_dev) {
@@ -8913,7 +9422,14 @@ static int __init ds5_module_init(void)
 
 static void __exit ds5_module_exit(void)
 {
+	struct ds5_dfu_status *bus, *tmp;
+
 	i2c_del_driver(&ds5_i2c_driver);
+	list_for_each_entry_safe(bus, tmp, &ds5_dfu_buses, list) {
+		list_del(&bus->list);
+		put_device(&bus->root->dev);
+		kfree(bus);
+	}
 	ds5_desc_free_all();
 }
 module_init(ds5_module_init);

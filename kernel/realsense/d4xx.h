@@ -203,6 +203,8 @@ struct ds5_mux_subdev {
 };
 #endif
 
+struct ds5_dfu_status;
+
 struct ds5_dfu_dev {
 	struct cdev ds5_cdev;
 	struct class *ds5_class;
@@ -213,7 +215,6 @@ struct ds5_dfu_dev {
 	unsigned char *dfu_msg;
 	u16 msg_write_once;
 	// unsigned char init_v4l_f; // need refactoring
-	u32 bus_clk_rate;
 };
 
 struct ds5 {
@@ -265,6 +266,8 @@ struct ds5 {
 };
 
 struct ds5_dev {
+	/* Shared by all sensor roles; protected by ds5_io_sem. */
+	struct ds5_dfu_status *dfu_status;
 	struct mutex lock;
 	/* One HW-monitor engine is shared by every subdevice of a camera. */
 	struct mutex hwmc_lock;
