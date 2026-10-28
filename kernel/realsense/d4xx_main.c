@@ -2584,6 +2584,9 @@ enum d500_accel_sensitivity {
 /* HKR ACKs writes to registers it lacks and reads them back as this byte. */
 #define D500_GMSL_READ_FILL_BYTE	0xff
 #define D500_OD_DISTANCE_XU_BASE	0x4598
+/* USB Mapping XU unit 0x18 selectors 0x05 / 0x06, Boolean GET_CUR/SET_CUR. */
+#define D500_OCCG_SEGMENTATION_XU_BASE	0x4532
+#define D500_LPCL_SEGMENTATION_XU_BASE	0x4533
 
 /* Auto-exposure algorithm types — mirrors FW ETAeType */
 enum ds5_ae_type {
@@ -2596,6 +2599,16 @@ enum ds5_ae_type {
 #define D500_CAMERA_CID_TEMPORAL	(DS5_CAMERA_CID_BASE + 51)
 /* USB depth XU 0x10: single R/W control. */
 #define D500_CAMERA_CID_ALIGNED_DEPTH	(DS5_CAMERA_CID_BASE + 55)
+/* +56/+57 are allocated to the IMU batch controls. */
+#define D500_CAMERA_CID_OCCG_SEGMENTATION (DS5_CAMERA_CID_BASE + 58)
+#define D500_CAMERA_CID_LPCL_SEGMENTATION (DS5_CAMERA_CID_BASE + 59)
+
+/*
+ * HKR public command status. The GMSL I2C target ACKs every write before it is
+ * dispatched, so a firmware refusal of a valid XU write is only visible here:
+ * HKR records the errno and the refused register and bumps the counter.
+ */
+#define D500_PUBLIC_STATUS_BASE		0x0500
 #define D500_MINZ_XU_BASE		0x4500
 #define D500_DECIMATION_XU_BASE		0x4540
 #define D500_TEMPORAL_XU_BASE		0x4568
@@ -2636,6 +2649,13 @@ struct d500_dpp_ctrl_desc {
 	u16 base;
 	bool idle_only;
 };
+
+struct d500_public_status {
+	__le16 last_error;
+	__le16 error_count;
+	__le16 last_write_register;
+	__le16 reserved;
+} __packed;
 
 static int d500_dpp_xu_read(struct ds5 *state,
 			    const struct d500_dpp_ctrl_desc *desc,
@@ -3259,6 +3279,117 @@ static int d500_read_od_distance_locked(struct ds5 *state, u8 *value)
 		return -EBADMSG;
 
 	return 0;
+}
+
+static int d500_read_mapping_segmentation_locked(struct ds5 *state, u16 reg,
+					       u8 *value)
+{
+	int ret = ds5_raw_read(state, reg, value, sizeof(*value));
+
+	if (ret)
+		return ret;
+	if (*value == D500_GMSL_READ_FILL_BYTE)
+		return -EOPNOTSUPP;
+	if (*value > 1)
+		return -EBADMSG;
+	return 0;
+}
+
+static int d500_get_mapping_segmentation(struct ds5 *state, u16 reg, s32 *val)
+{
+	u8 value;
+	int ret;
+
+	mutex_lock(&state->ds5_dev->lock);
+	ret = d500_read_mapping_segmentation_locked(state, reg, &value);
+	mutex_unlock(&state->ds5_dev->lock);
+	if (!ret)
+		*val = value;
+	return ret;
+}
+
+/* Only the Mapping XU errno contract may cross the device boundary. */
+static int d500_xu_refusal_errno(int error)
+{
+	switch (error) {
+	case -EBUSY:
+	case -EINVAL:
+	case -EOPNOTSUPP:
+	case -EIO:
+		return error;
+	default:
+		return -EREMOTEIO;
+	}
+}
+
+/*
+ * Write an XU register and attribute the firmware result through the public
+ * command status. Only for registers HKR executes synchronously inside the
+ * write dispatch (the 0x45xx D500 XU windows): queued PU registers return
+ * before execution, so the status can only show their enqueue failures.
+ * Caller holds ds5_dev->lock, so no sibling XU setter writes the same
+ * register meanwhile; HKR serves the status reads only after it has
+ * dispatched every earlier write. Returns 0 when firmware accepted the write,
+ * the firmware errno when it refused it, or -EAGAIN when unrelated failed
+ * writes landed in the same window and the result cannot be attributed.
+ */
+static int d500_sync_xu_write_checked(struct ds5 *state, u16 reg, const void *val,
+				 size_t len)
+{
+	struct d500_public_status before, after;
+	u16 delta;
+	int ret;
+
+	ret = ds5_raw_read(state, D500_PUBLIC_STATUS_BASE, &before,
+			   sizeof(before));
+	if (ret)
+		return ret;
+	ret = ds5_raw_write(state, reg, val, len);
+	if (ret)
+		return ret;
+	ret = ds5_raw_read(state, D500_PUBLIC_STATUS_BASE, &after,
+			   sizeof(after));
+	if (ret)
+		return ret;
+
+	delta = le16_to_cpu(after.error_count) - le16_to_cpu(before.error_count);
+	if (!delta)
+		return 0;
+	if (le16_to_cpu(after.last_write_register) == reg)
+		return d500_xu_refusal_errno((s16)le16_to_cpu(after.last_error));
+	return delta == 1 ? 0 : -EAGAIN;
+}
+
+static int d500_set_mapping_segmentation(struct ds5 *state, u16 reg, s32 val)
+{
+	u8 value, applied;
+	int ret, err;
+
+	if (val < 0 || val > 1)
+		return -EINVAL;
+	value = (u8)val;
+	mutex_lock(&state->ds5_dev->lock);
+	/* HKR ACKs a write to a register it lacks; probe first so such FW is
+	 * never written to. */
+	ret = d500_read_mapping_segmentation_locked(state, reg, &applied);
+	if (ret == -EBADMSG)
+		ret = 0;
+	if (ret)
+		goto unlock;
+	ret = d500_sync_xu_write_checked(state, reg, &value, sizeof(value));
+	if (ret && ret != -EAGAIN)
+		goto unlock;
+	/* Firmware reports refusals, including same-value ones, through the
+	 * status; readback settles unattributable windows and firmware that
+	 * only ACKs. A matching readback cannot clear -EAGAIN. */
+	err = d500_read_mapping_segmentation_locked(state, reg, &applied);
+	if (err)
+		ret = err;
+	else if (applied != value)
+		ret = -EIO;
+unlock:
+	mutex_unlock(&state->ds5_dev->lock);
+	return ret;
 }
 
 static int d500_get_od_distance(struct ds5 *state, s32 *val)
@@ -4371,6 +4502,16 @@ unlock_dpp:
 			    DS5_DEVICE_TYPE_D58X)
 			ret = d500_set_od_distance(state, ctrl->val);
 		break;
+	case D500_CAMERA_CID_OCCG_SEGMENTATION:
+	case D500_CAMERA_CID_LPCL_SEGMENTATION:
+		if (state->is_depth &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X)
+			ret = d500_set_mapping_segmentation(state,
+				ctrl->id == D500_CAMERA_CID_OCCG_SEGMENTATION ?
+				D500_OCCG_SEGMENTATION_XU_BASE :
+				D500_LPCL_SEGMENTATION_XU_BASE, ctrl->val);
+		break;
 	case DS5_CAMERA_CID_PWM:
 		if (state->is_depth)
 			ret = ds5_write(state, base | DS5_PWM_FREQUENCY, ctrl->val);
@@ -4880,6 +5021,16 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			    DS5_DEVICE_TYPE_D58X)
 			ret = d500_get_od_distance(state, &ctrl->val);
 		break;
+	case D500_CAMERA_CID_OCCG_SEGMENTATION:
+	case D500_CAMERA_CID_LPCL_SEGMENTATION:
+		if (state->is_depth &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X)
+			ret = d500_get_mapping_segmentation(state,
+				ctrl->id == D500_CAMERA_CID_OCCG_SEGMENTATION ?
+				D500_OCCG_SEGMENTATION_XU_BASE :
+				D500_LPCL_SEGMENTATION_XU_BASE, &ctrl->val);
+		break;
 	case DS5_CAMERA_CID_PWM:
 		if (state->is_depth)
 			ds5_read(state, base | DS5_PWM_FREQUENCY, ctrl->p_new.p_u16);
@@ -5348,6 +5499,24 @@ static const struct v4l2_ctrl_config d500_ctrl_od_distance = {
 	.max = 1,
 	.step = 1,
 	.def = 1,
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
+static const struct v4l2_ctrl_config d500_ctrl_occg_segmentation = {
+	.ops = &ds5_ctrl_ops,
+	.id = D500_CAMERA_CID_OCCG_SEGMENTATION,
+	.name = "Occupancy Grid Segmentation",
+	.type = V4L2_CTRL_TYPE_BOOLEAN,
+	.min = 0, .max = 1, .step = 1, .def = 0,
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
+static const struct v4l2_ctrl_config d500_ctrl_lpcl_segmentation = {
+	.ops = &ds5_ctrl_ops,
+	.id = D500_CAMERA_CID_LPCL_SEGMENTATION,
+	.name = "LPCL Segmentation",
+	.type = V4L2_CTRL_TYPE_BOOLEAN,
+	.min = 0, .max = 1, .step = 1, .def = 0,
 	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 };
 
@@ -6422,6 +6591,8 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 						     sensor);
 			ds5_v4l2_ctrl_set_disabled(ctrls->passive_depth, true);
 			v4l2_ctrl_new_custom(hdl, &d500_ctrl_od_distance, sensor);
+			v4l2_ctrl_new_custom(hdl, &d500_ctrl_occg_segmentation, sensor);
+			v4l2_ctrl_new_custom(hdl, &d500_ctrl_lpcl_segmentation, sensor);
 		} else {
 			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_readout_shaping,
 					     sensor);
