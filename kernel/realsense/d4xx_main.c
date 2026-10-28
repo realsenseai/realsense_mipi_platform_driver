@@ -2895,17 +2895,11 @@ static int ds5_hwmc_xfer(struct ds5 *state, u16 cmd_len,
 }
 
 /* Caller must hold state->ds5_dev->lock. */
-static bool d500_video_is_idle_locked(struct ds5 *state)
+static bool d500_camera_is_idle_locked(struct ds5 *state)
 {
 	return !state->ds5_dev->depth_streaming &&
 	       !state->ds5_dev->rgb_streaming &&
-	       !state->ds5_dev->ir_streaming;
-}
-
-/* Caller must hold state->ds5_dev->lock. */
-static bool d500_camera_is_idle_locked(struct ds5 *state)
-{
-	return d500_video_is_idle_locked(state) &&
+	       !state->ds5_dev->ir_streaming &&
 	       !state->ds5_dev->imu_streaming;
 }
 
@@ -3205,8 +3199,8 @@ static int d500_set_aligned_depth(struct ds5 *state, s32 val)
 	int ret;
 
 	mutex_lock(&state->ds5_dev->lock);
-	/* FW applies alignment while IMU streams; only video streams block it. */
-	if (!d500_video_is_idle_locked(state)) {
+	/* FW applies alignment while color/IMU stream; only depth/IR block it. */
+	if (state->ds5_dev->depth_streaming || state->ds5_dev->ir_streaming) {
 		ret = -EBUSY;
 		goto unlock;
 	}
