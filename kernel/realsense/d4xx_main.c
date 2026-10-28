@@ -2895,18 +2895,25 @@ static int ds5_hwmc_xfer(struct ds5 *state, u16 cmd_len,
 }
 
 /* Caller must hold state->ds5_dev->lock. */
-static bool d500_video_is_idle_locked(struct ds5 *state)
+static bool d500_camera_is_idle_locked(struct ds5 *state)
 {
 	return !state->ds5_dev->depth_streaming &&
 	       !state->ds5_dev->rgb_streaming &&
-	       !state->ds5_dev->ir_streaming;
+	       !state->ds5_dev->ir_streaming &&
+	       !state->ds5_dev->imu_streaming;
 }
 
-/* Caller must hold state->ds5_dev->lock. */
-static bool d500_camera_is_idle_locked(struct ds5 *state)
+/* Caller must hold state->ds5_dev->lock. FW applies alignment while IMU, or
+ * in 3C the stereo-independent Color, streams; Depth and IR always block it.
+ */
+static bool d500_aligned_depth_is_idle_locked(struct ds5 *state)
 {
-	return d500_video_is_idle_locked(state) &&
-	       !state->ds5_dev->imu_streaming;
+	struct ds5_dev *ds5_dev = state->ds5_dev;
+	bool rgb_ok = ds5_dev->device_mode_valid &&
+		      ds5_dev->active_device_mode == D500_DEVICE_MODE_3C;
+
+	return !ds5_dev->depth_streaming && !ds5_dev->ir_streaming &&
+	       (rgb_ok || !ds5_dev->rgb_streaming);
 }
 
 static int d500_get_device_mode(struct ds5 *state, u32 *mode)
@@ -3205,8 +3212,7 @@ static int d500_set_aligned_depth(struct ds5 *state, s32 val)
 	int ret;
 
 	mutex_lock(&state->ds5_dev->lock);
-	/* FW applies alignment while IMU streams; only video streams block it. */
-	if (!d500_video_is_idle_locked(state)) {
+	if (!d500_aligned_depth_is_idle_locked(state)) {
 		ret = -EBUSY;
 		goto unlock;
 	}
