@@ -32,6 +32,7 @@
 #include <linux/videodev2.h>
 #include <linux/version.h>
 #include <linux/mutex.h>
+#include <linux/rwsem.h>
 #include <media/media-entity.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
@@ -474,6 +475,82 @@ enum {
 	DS5_AWG,
 };
 
+/* Lock of the camera's own GMSL link. NULL before the camera is linked:
+ * nothing can reset its link then. Unlock with the pointer lock returned. */
+static struct rw_semaphore *ds5_link_read_lock(struct ds5 *state)
+{
+	struct rw_semaphore *rws = READ_ONCE(state->link_rwsems);
+	struct rw_semaphore *rw = rws ? &rws[state->gmsl_link] : NULL;
+
+	if (rw)
+		down_read(rw);
+	return rw;
+}
+
+static void ds5_link_read_unlock(struct rw_semaphore *rw)
+{
+	if (rw)
+		up_read(rw);
+}
+
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+/* A one-link drop disturbs only that link's tunneled I2C (RSDSO-21907), so
+ * lock just that link; a whole-deserializer drop locks all links in order. */
+static struct rw_semaphore *ds5_link_write_lock(struct ds5 *state, bool all_links)
+{
+	struct rw_semaphore *rws = READ_ONCE(state->link_rwsems);
+	int i;
+
+	if (!rws)
+		return NULL;
+	if (!all_links) {
+		down_write(&rws[state->gmsl_link]);
+		return &rws[state->gmsl_link];
+	}
+	for (i = 0; i < DS5_MAX_GMSL_LINKS; i++)
+		down_write_nested(&rws[i], i);
+	return rws;
+}
+
+static void ds5_link_write_unlock(struct rw_semaphore *rw, bool all_links)
+{
+	int i;
+
+	if (!rw)
+		return;
+	for (i = all_links ? DS5_MAX_GMSL_LINKS - 1 : 0; i >= 0; i--)
+		up_write(&rw[i]);
+}
+#endif
+
+/* regmap lock callbacks: every camera register access crosses the GMSL link. */
+static void ds5_regmap_lock(void *arg)
+{
+	struct ds5 *state = arg;
+	struct rw_semaphore *rw = ds5_link_read_lock(state);
+
+	mutex_lock(&state->regmap_mutex);
+	state->regmap_held_rwsem = rw;
+}
+
+static void ds5_regmap_unlock(void *arg)
+{
+	struct ds5 *state = arg;
+	struct rw_semaphore *rw = state->regmap_held_rwsem;
+
+	mutex_unlock(&state->regmap_mutex);
+	ds5_link_read_unlock(rw);
+}
+
+/* Tunneled serializer op outside a link-down region; returns the op's result. */
+#define ds5_ser_call(state, op, ...) ({				\
+	struct rw_semaphore *__rw = ds5_link_read_lock(state);		\
+	int __ret = (state)->ser_ops->op(__VA_ARGS__);			\
+									\
+	ds5_link_read_unlock(__rw);					\
+	__ret;								\
+})
+
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 static DEFINE_MUTEX(serdes_lock__);
 static bool ds5_slots_inited;
@@ -482,6 +559,9 @@ static bool ds5_slots_inited;
 struct dser_control {
 	struct mutex lock;
 	struct device *dser_dev;
+	/* Per link: held for write while that link is down (one-shot, link setup,
+	 * SerDes recovery); tunneled I2C over the link holds it for read. */
+	struct rw_semaphore link_rwsem[DS5_MAX_GMSL_LINKS];
 };
 static struct dser_control dser_inited[MAX_DSER_NUM];
 
@@ -501,10 +581,28 @@ static void ds5_init_global_slots_once(void)
 		mutex_init(&ds5_inited[i].hwmc_lock);
 	}
 
-	for (i = 0; i < MAX_DSER_NUM; i++)
+	for (i = 0; i < MAX_DSER_NUM; i++) {
+		int j;
+
 		mutex_init(&dser_inited[i].lock);
+		for (j = 0; j < DS5_MAX_GMSL_LINKS; j++)
+			init_rwsem(&dser_inited[i].link_rwsem[j]);
+	}
 
 	ds5_slots_inited = true;
+}
+
+/* One-shot drops the reset link(s) for ~35-45 ms (measured, RSDSO-21907); the
+ * op's own msleep(100) runs under the write lock so tunneled I2C waits it out. */
+static void ds5_link_reset_oneshot(struct ds5 *state, bool all_links)
+{
+	struct rw_semaphore *rw = ds5_link_write_lock(state, all_links);
+
+	if (all_links)
+		state->dser_ops->reset_oneshot(state->dser_dev);
+	else
+		state->dser_ops->reset_oneshot_link(state->dser_dev, state->gmsl_link);
+	ds5_link_write_unlock(rw, all_links);
 }
 
 static inline atomic_t *ds5_get_reset_gen(struct ds5 *state)
@@ -2091,7 +2189,7 @@ static int ds5_setup_pipeline(struct ds5 *state, u8 data_type1, u8 data_type2,
 	/* A failed set_pipe may still arm the VC. Keep this attempt across
 	 * retries so a later allocation error cannot skip its cleanup. */
 	*ser_pipe_armed = true;
-	ret |= state->ser_ops->set_pipe(state->ser_dev, ser_pipe_id,
+	ret |= ds5_ser_call(state, set_pipe, state->ser_dev, ser_pipe_id,
 				data_type1, data_type2, ser_vc_id);
 	ret |= state->dser_ops->set_pipe(state->dser_dev, pipe_id,
 				data_type1, data_type2, state->gmsl_link, ser_vc_id);
@@ -2257,7 +2355,7 @@ static int ds5_configure(struct ds5 *state, bool *ser_pipe_armed)
 					 ser_pipe_armed);
 		// reset data path when switching to Y12I
 		if (is_calib)
-			state->dser_ops->reset_oneshot(state->dser_dev);
+			ds5_link_reset_oneshot(state, true);
 		mutex_unlock(&serdes_lock__);
 		if (ret < 0)
 			return ret;
@@ -3424,6 +3522,31 @@ static void ds5_reset_streaming_flags(struct ds5_dev *ds5_dev)
 	mutex_unlock(&ds5_dev->lock);
 }
 
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+/* The control tunnel is down until init_settings() completes: the whole
+ * sequence is a link-down region, so sibling I2C waits instead of failing. */
+static int ds5_d585_serdes_recover(struct ds5 *primary)
+{
+	struct rw_semaphore *rw;
+	int ret;
+
+	mutex_lock(&serdes_lock__);
+	rw = ds5_link_write_lock(primary, false);
+	ret = primary->ser_ops->reset_control(primary->ser_dev);
+	if (!ret)
+		ret = primary->dser_ops->recover_link(primary->dser_dev,
+						      primary->ser_dev,
+						      primary->gmsl_link);
+	if (!ret)
+		ret = primary->ser_ops->setup_control(primary->ser_dev);
+	if (!ret)
+		ret = primary->ser_ops->init_settings(primary->ser_dev);
+	ds5_link_write_unlock(rw, false);
+	mutex_unlock(&serdes_lock__);
+	return ret;
+}
+#endif
+
 static int ds5_set_ser_esync_tunneling(struct ds5 *state, bool enable)
 {
 #ifdef CONFIG_VIDEO_D4XX_SERDES
@@ -3442,9 +3565,9 @@ static int ds5_set_ser_esync_tunneling(struct ds5 *state, bool enable)
 		__func__, enable ? "enable" : "disable");
 
 	if (enable)
-		ret = state->ser_ops->enable_gpio_tunneling(state->ser_dev);
+		ret = ds5_ser_call(state, enable_gpio_tunneling, state->ser_dev);
 	else
-		ret = state->ser_ops->disable_gpio_tunneling(state->ser_dev);
+		ret = ds5_ser_call(state, disable_gpio_tunneling, state->ser_dev);
 
 	if (!ret && state->dser_ops->setup_fsync) {
 		if (state->mux.last_set)
@@ -3538,17 +3661,7 @@ static int ds5_hw_reset_with_recovery_locked(struct ds5 *state)
 		if (!primary || !primary->dser_ops->recover_link)
 			return -ENODEV;
 
-		mutex_lock(&serdes_lock__);
-		ret = primary->ser_ops->reset_control(primary->ser_dev);
-		if (!ret)
-			ret = primary->dser_ops->recover_link(primary->dser_dev,
-						      primary->ser_dev,
-						      primary->gmsl_link);
-		if (!ret)
-			ret = primary->ser_ops->setup_control(primary->ser_dev);
-		if (!ret)
-			ret = primary->ser_ops->init_settings(primary->ser_dev);
-		mutex_unlock(&serdes_lock__);
+		ret = ds5_d585_serdes_recover(primary);
 		if (ret) {
 			dev_err(&state->client->dev,
 				"%s(): pre-HW-reset D585 SerDes recovery failed (%d)\n",
@@ -3659,17 +3772,7 @@ static int ds5_hw_reset_with_recovery_locked(struct ds5 *state)
 			msleep(DS5_D585_DFU_SERDES_SETTLE_MS);
 		}
 
-		mutex_lock(&serdes_lock__);
-		ret = primary->ser_ops->reset_control(primary->ser_dev);
-		if (!ret)
-			ret = primary->dser_ops->recover_link(primary->dser_dev,
-						      primary->ser_dev,
-						      primary->gmsl_link);
-		if (!ret)
-			ret = primary->ser_ops->setup_control(primary->ser_dev);
-		if (!ret)
-			ret = primary->ser_ops->init_settings(primary->ser_dev);
-		mutex_unlock(&serdes_lock__);
+		ret = ds5_d585_serdes_recover(primary);
 		if (ret) {
 			dev_err(&state->client->dev,
 				"%s(): D585 prototype SerDes recovery failed (%d)\n",
@@ -3784,7 +3887,7 @@ static int ds5_hw_reset_with_recovery_locked(struct ds5 *state)
 	/* RSDEV-12608: drop the stale partial frame a mid-stream camera reset leaves
 	 * in this link's line buffer (NULL-safe; max9296 leaves none). */
 	if (state->dser_ops->reset_oneshot_link)
-		state->dser_ops->reset_oneshot_link(state->dser_dev, state->gmsl_link);
+		ds5_link_reset_oneshot(state, false);
 
 	/* Re-apply ESYNC tunneling to match cached sync_mode control */
 	if (state->ctrls.sync_mode) {
@@ -5563,6 +5666,11 @@ static int ds5_setup_and_link(struct ds5 *state)
 	if (NULL == state->ds5_dev) {
 		err = -ENOSPC;
 		dev_err(dev, "cannot handle more than %d DS5 cameras\n", MAX_DS5_NUM);
+	} else if (state->ds5_dev->dser_control &&
+		   state->gmsl_link < DS5_MAX_GMSL_LINKS) {
+		/* dser_inited[] is static: the pointer outlives slot release. */
+		WRITE_ONCE(state->link_rwsems,
+			   state->ds5_dev->dser_control->link_rwsem);
 	}
 
 out_unlock:
@@ -5946,6 +6054,9 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 	mutex_lock(&serdes_lock__);
 
 	if (state->dser_primary) {
+		/* Power cycle + link setup drops every link behind this deserializer. */
+		struct rw_semaphore *rw = ds5_link_write_lock(state, true);
+
 		state->dser_ops->power_off(state->dser_dev);
 		/* For now no separate power on required for serializer device */
 		state->dser_ops->power_on(state->dser_dev);
@@ -5962,18 +6073,20 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 		dev_dbg(dev, "Setup SERDES addressing and control pipeline\n");
 		/* setup serdes addressing and control pipeline */
 		err = state->dser_ops->setup_link(state->dser_dev, &state->client->dev);
+		if (!err)
+			msleep(100);
+		ds5_link_write_unlock(rw, true);
 		if (err) {
 			dev_err(dev, "gmsl deserializer link config failed\n");
 			goto error;
 		}
-		msleep(100);
 	}
 
 	attempts = (DS5_SERDES_STARTUP_TIMEOUT_MS +
 		DS5_SERDES_STARTUP_RETRY_DELAY_MS - 1) /
 		DS5_SERDES_STARTUP_RETRY_DELAY_MS;
 	for (retry = 0; retry < attempts; retry++) {
-		err = state->ser_ops->setup_control(state->ser_dev);
+		err = ds5_ser_call(state, setup_control, state->ser_dev);
 		if (!err)
 			break;
 		if (retry < attempts - 1)
@@ -5988,8 +6101,11 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 	}
 
 	if (state->dser_primary) {
+		struct rw_semaphore *rw = ds5_link_write_lock(state, true);
+
 		/* proceed even if ser setup failed, to setup deser correctly */
 		des_err = state->dser_ops->setup_control(state->dser_dev, &state->client->dev);
+		ds5_link_write_unlock(rw, true);
 		if (des_err) {
 			dev_err(dev, "gmsl deserializer setup failed\n");
 			/* overwrite err only if deser setup also failed */
@@ -6043,7 +6159,7 @@ static int ds5_serdes_setup(struct ds5 *state)
 		goto serdes_setup_end;
 	}
 
-	ret = state->ser_ops->init_settings(state->ser_dev);
+	ret = ds5_ser_call(state, init_settings, state->ser_dev);
 	if (ret) {
 		dev_warn(&c->dev, "%s, failed to init %s settings\n",
 			__func__, state->ser_ops->name);
@@ -6957,9 +7073,9 @@ static int ds5_mux_s_frame_interval(struct v4l2_subdev *sd,
 }
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
-/* RSDSO-21786: fire the link flush at most once per cold bring-up. The flag is
- * consumed under ds5_dev->lock, but the op itself (CTRL1 write plus a 100 ms
- * settle) must run unlocked so it cannot stall a sibling's start. */
+/* RSDSO-21786: fire the link flush at most once per cold bring-up. The op (CTRL1
+ * write plus a 100 ms settle) runs outside ds5_dev->lock, but under the link
+ * rwsem so tunneled I2C waits it out instead of failing. */
 static void ds5_flush_idle_link(struct ds5 *state)
 {
 	bool flush;
@@ -6973,7 +7089,7 @@ static void ds5_flush_idle_link(struct ds5 *state)
 	mutex_unlock(&state->ds5_dev->lock);
 
 	if (flush)
-		state->dser_ops->reset_oneshot_link(state->dser_dev, state->gmsl_link);
+		ds5_link_reset_oneshot(state, false);
 }
 #endif
 
@@ -7253,7 +7369,7 @@ restore_streaming:
 				(int)vc_id;
 
 			if (ser_vc_id >= 0)
-				state->ser_ops->stream_stop(state->ser_dev, ser_vc_id);
+				(void)ds5_ser_call(state, stream_stop, state->ser_dev, ser_vc_id);
 		}
 #endif
 		mutex_lock(&state->ds5_dev->lock);
@@ -7272,7 +7388,7 @@ restore_streaming:
 		if (state->is_y8
 			&& (state->ir.sensor.config.format->data_type == GMSL_CSI_DT_RGB_888))
 		{
-			state->dser_ops->reset_oneshot(state->dser_dev);
+			ds5_link_reset_oneshot(state, true);
 		}
 		mutex_unlock(&serdes_lock__);
 		/* Tell the serializer this stream stopped. On the last stream it
@@ -7285,7 +7401,7 @@ restore_streaming:
 				(int)vc_id;
 
 			if (ser_vc_id >= 0)
-				state->ser_ops->stream_stop(state->ser_dev, ser_vc_id);
+				(void)ds5_ser_call(state, stream_stop, state->ser_dev, ser_vc_id);
 		}
 		msleep_range(100);
 #endif
@@ -8600,7 +8716,13 @@ static int ds5_probe(struct i2c_client *c
 		}
 	}
 #endif
-	state->regmap = devm_regmap_init_i2c(c, &ds5_regmap_config);
+	/* Every camera register access takes the GMSL link lock for read. */
+	mutex_init(&state->regmap_mutex);
+	state->regmap_cfg = ds5_regmap_config;
+	state->regmap_cfg.lock = ds5_regmap_lock;
+	state->regmap_cfg.unlock = ds5_regmap_unlock;
+	state->regmap_cfg.lock_arg = state;
+	state->regmap = devm_regmap_init_i2c(c, &state->regmap_cfg);
 	if (IS_ERR(state->regmap)) {
 		ret = PTR_ERR(state->regmap);
 		dev_err(&c->dev, "regmap init failed: %d\n", ret);
@@ -8827,6 +8949,9 @@ static void ds5_remove(struct i2c_client *c)
 		do_cleanup = ds5_release_slot(state);
 
 		if (do_cleanup) {
+			/* Teardown drops this camera's link and powers the deser off. */
+			struct rw_semaphore *rw = ds5_link_write_lock(state, true);
+
 			ret = state->ser_ops->reset_control(state->ser_dev);
 			if (ret)
 				dev_warn(&c->dev,
@@ -8846,6 +8971,7 @@ static void ds5_remove(struct i2c_client *c)
 				dev_warn(&c->dev,
 					"failed to %s unregister sdev\n", state->dser_ops->name);
 			state->dser_ops->power_off(state->dser_dev);
+			ds5_link_write_unlock(rw, true);
 		}
 	}
 #ifndef CONFIG_OF
