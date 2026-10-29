@@ -3,8 +3,10 @@
 The host selects the health width by setting the IMU node to 256 x 1, a size only
 the camera's format descriptor offers; the FW sizes its IMU-VC packets from that
 width. Health reports and IMU records share the node and differ by their first byte.
+Each channel is switched on, paced and (logs) filtered by V4L2 controls on the IMU node.
 """
 
+import errno
 import re
 import struct
 import time
@@ -45,6 +47,24 @@ KEEPALIVE_EDGE_PERIODS = 2
 DEQUEUE_TIMEOUT_S = 2.0
 # IMU rate at 256 B must stay within this fraction of the 38 B rate.
 IMU_RATE_TOLERANCE = 0.1
+
+# Health controls: channel n (errors, logs, sensors, metrics) sends report id 4 + n.
+HEALTH_CHANNELS = range(len(C.DS5_CAMERA_CID_HEALTH_ENABLE))
+HEALTH_LOGS = 1
+HEALTH_METRICS = 3
+PERIOD_MIN_MS = 100
+PERIOD_MAX_MS = 3_600_000
+PERIOD_DEF_MS = 1000
+SEVERITY_WARNING = 2
+SEVERITY_DISABLE = 5
+MS_PER_S = 1000
+CHANNEL_PERIOD_MS = 300
+CHANNEL_SECONDS = 4
+OFF_SECONDS = 2
+# lines already queued in VI when a channel goes off still dequeue after it
+OFF_HOST_SLACK_S = 0.5
+RESET_TIMEOUT_S = 30
+RESET_POLL_S = 0.5
 
 _IMU_RES_RE = re.compile(
     r"static const struct ds5_resolution (\w*imu\w*)\[\] = \{(.*?)\n\};", re.S)
@@ -171,10 +191,77 @@ def imu_wide(imu_device, request):
     return imu_device
 
 
+def _health_ctrl_ids():
+    return (*C.DS5_CAMERA_CID_HEALTH_ENABLE, *C.DS5_CAMERA_CID_HEALTH_PERIOD,
+            C.DS5_CAMERA_CID_HEALTH_LOG_MIN_SEVERITY)
+
+
+def _report_id(channel):
+    return HEALTH_REPORT_IDS[channel]
+
+
+def _health_supported(dev):
+    """The camera answers health controls; EOPNOTSUPP = it can't send health."""
+    try:
+        dev.get_ctrl(C.DS5_CAMERA_CID_HEALTH_ENABLE[0])
+    except OSError as e:
+        if e.errno == errno.EOPNOTSUPP:
+            return False
+        raise
+    return True
+
+
+def _health_reset(dev):
+    """Every channel off at the default period; logs filter at its default."""
+    for ch in HEALTH_CHANNELS:
+        dev.set_ctrl(C.DS5_CAMERA_CID_HEALTH_ENABLE[ch], 0)
+        dev.set_ctrl(C.DS5_CAMERA_CID_HEALTH_PERIOD[ch], PERIOD_DEF_MS)
+    dev.set_ctrl(C.DS5_CAMERA_CID_HEALTH_LOG_MIN_SEVERITY, SEVERITY_WARNING)
+
+
+def _health_enable(dev, channels, period_ms=PERIOD_DEF_MS):
+    for ch in channels:
+        dev.set_ctrl(C.DS5_CAMERA_CID_HEALTH_PERIOD[ch], period_ms)
+        dev.set_ctrl(C.DS5_CAMERA_CID_HEALTH_ENABLE[ch], 1)
+
+
+def _report_times(health):
+    """{report id: [FW report time in s]} in arrival order."""
+    times = defaultdict(list)
+    for _, d in health:
+        times[d[0]].append(HEALTH_HEADER.unpack_from(d)[-1] / US_PER_S)
+    return times
+
+
+def _gaps(t):
+    return [(b - a) % (HEALTH_TIME_WRAP / US_PER_S) for a, b in zip(t, t[1:])]
+
+
 @pytest.fixture
-def health_on(request):
-    if not request.config.getoption("--imu-health"):
-        pytest.skip("needs a health-on FW image: pass --imu-health")
+def health_ctrl(imu_device, request):
+    """The IMU node of a camera that sends health, every channel off before and after.
+    --imu-health makes a camera without health a failure instead of a skip."""
+    if not _health_supported(imu_device):
+        msg = "health controls return EOPNOTSUPP"
+        if request.config.getoption("--imu-health"):
+            pytest.fail(f"{msg}, but --imu-health expects a camera that sends health")
+        pytest.skip(f"{msg}: this camera can't send health")
+    _health_reset(imu_device)
+    yield imu_device
+    _health_reset(imu_device)
+
+
+@pytest.fixture
+def health_wide(health_ctrl, imu_wide):
+    """health_ctrl, for tests that stream health at the 256 B width."""
+    return health_ctrl
+
+
+@pytest.fixture
+def health_on(health_wide):
+    """Every channel on at the default period."""
+    _health_enable(health_wide, HEALTH_CHANNELS)
+    return health_wide
 
 
 @pytest.mark.d457
@@ -243,24 +330,25 @@ class TestImuHealthStream:
         assert not other, f"unknown first bytes {sorted(set(other))}"
         _check_imu(imu, pitch)
 
-    def test_health_report_format(self, imu_wide, health_on):
-        """T-3: every report follows the header and payload layout."""
-        pixfmt, _ = _imu_sizes(imu_wide)
-        _set_imu_width(imu_wide, pixfmt, HEALTH_REPORT_BYTES)
-        _, health, _ = _split(_capture_lines(imu_wide, CAPTURE_SECONDS))
-        assert health, "health-on image sent no health reports"
+    def test_health_report_format(self, health_on):
+        """T-3: every report follows the header and payload layout; IMU lines stay clean."""
+        pixfmt, _ = _imu_sizes(health_on)
+        pitch = _set_imu_width(health_on, pixfmt, HEALTH_REPORT_BYTES)
+        imu, health, _ = _split(_capture_lines(health_on, CAPTURE_SECONDS))
+        assert health, "no health reports with every channel on"
+        _check_imu(imu, pitch)
         seqs, state = {}, {}
         for _, d in health:
             _check_report(d, seqs, state)
         assert set(seqs) == set(HEALTH_REPORT_IDS), \
             f"channels seen {sorted(seqs)}"
 
-    def test_health_keepalive(self, imu_wide, health_on):
+    def test_health_keepalive(self, health_on):
         """T-4: every channel reports at its rate, never silent past a period plus 3 ticks.
         Timed on the reports' own FW time, so host dequeue bursts do not count."""
-        pixfmt, _ = _imu_sizes(imu_wide)
-        _set_imu_width(imu_wide, pixfmt, HEALTH_REPORT_BYTES)
-        _, health, _ = _split(_capture_lines(imu_wide, KEEPALIVE_SECONDS))
+        pixfmt, _ = _imu_sizes(health_on)
+        _set_imu_width(health_on, pixfmt, HEALTH_REPORT_BYTES)
+        _, health, _ = _split(_capture_lines(health_on, KEEPALIVE_SECONDS))
         times = defaultdict(list)
         for _, d in health:
             times[d[0]].append(HEALTH_HEADER.unpack_from(d)[-1])
@@ -275,3 +363,138 @@ class TestImuHealthStream:
             mean = sum(gaps) / len(gaps)
             assert abs(mean - KEEPALIVE_PERIOD_S) <= KEEPALIVE_MEAN_SLIP_TICKS * SENDER_TICK_S, \
                 f"channel {ch} mean interval {mean:.2f} s"
+
+
+@pytest.mark.d457
+class TestImuHealthControl:
+    """Per-channel enable, period and log filter through V4L2 controls on the IMU node."""
+
+    def test_controls_listed(self, imu_device):
+        """All nine controls are registered with the USB report's ranges."""
+        for cid in C.DS5_CAMERA_CID_HEALTH_ENABLE:
+            qc = imu_device.query_ctrl(cid)
+            assert (qc.minimum, qc.maximum, qc.default_value) == (0, 1, 0), \
+                f"enable 0x{cid:x} range {qc.minimum}..{qc.maximum} def {qc.default_value}"
+        for cid in C.DS5_CAMERA_CID_HEALTH_PERIOD:
+            qc = imu_device.query_ctrl(cid)
+            got = (qc.minimum, qc.maximum, qc.step, qc.default_value)
+            assert got == (PERIOD_MIN_MS, PERIOD_MAX_MS, PERIOD_MIN_MS, PERIOD_DEF_MS), \
+                f"period 0x{cid:x} min/max/step/def {got}"
+        qc = imu_device.query_ctrl(C.DS5_CAMERA_CID_HEALTH_LOG_MIN_SEVERITY)
+        assert (qc.minimum, qc.maximum, qc.default_value) == \
+            (0, SEVERITY_DISABLE, SEVERITY_WARNING), "log severity range"
+
+    def test_unsupported_refused(self, imu_device):
+        """A camera that can't send health refuses every health get and set."""
+        if _health_supported(imu_device):
+            pytest.skip("this camera sends health")
+        for cid in _health_ctrl_ids():
+            with pytest.raises(OSError) as e:
+                imu_device.get_ctrl(cid)
+            assert e.value.errno == errno.EOPNOTSUPP, f"get 0x{cid:x}: {e.value}"
+        for cid in C.DS5_CAMERA_CID_HEALTH_ENABLE:
+            with pytest.raises(OSError) as e:
+                imu_device.set_ctrl(cid, 0)
+            assert e.value.errno == errno.EOPNOTSUPP, f"set 0x{cid:x}: {e.value}"
+
+    def test_set_get(self, health_ctrl):
+        """Every value set reads back from the camera."""
+        for ch in HEALTH_CHANNELS:
+            for value in (1, 0):
+                health_ctrl.set_ctrl(C.DS5_CAMERA_CID_HEALTH_ENABLE[ch], value)
+                got = health_ctrl.get_ctrl(C.DS5_CAMERA_CID_HEALTH_ENABLE[ch]).value
+                assert got == value, f"channel {ch} enable {got}, set {value}"
+            for value in (PERIOD_MIN_MS, CHANNEL_PERIOD_MS, PERIOD_MAX_MS):
+                health_ctrl.set_ctrl(C.DS5_CAMERA_CID_HEALTH_PERIOD[ch], value)
+                got = health_ctrl.get_ctrl(C.DS5_CAMERA_CID_HEALTH_PERIOD[ch]).value
+                assert got == value, f"channel {ch} period {got}, set {value}"
+        for value in range(SEVERITY_DISABLE + 1):
+            health_ctrl.set_ctrl(C.DS5_CAMERA_CID_HEALTH_LOG_MIN_SEVERITY, value)
+            got = health_ctrl.get_ctrl(C.DS5_CAMERA_CID_HEALTH_LOG_MIN_SEVERITY).value
+            assert got == value, f"log severity {got}, set {value}"
+
+    def test_bad_severity_refused(self, health_ctrl):
+        cid = C.DS5_CAMERA_CID_HEALTH_LOG_MIN_SEVERITY
+        with pytest.raises(OSError) as e:
+            health_ctrl.set_ctrl(cid, SEVERITY_DISABLE + 1)
+        assert e.value.errno in (errno.EINVAL, errno.ERANGE), str(e.value)
+        assert health_ctrl.get_ctrl(cid).value == SEVERITY_WARNING
+
+    def test_all_off_no_health(self, health_wide):
+        """256 B with every channel off: IMU only."""
+        pixfmt, _ = _imu_sizes(health_wide)
+        _set_imu_width(health_wide, pixfmt, HEALTH_REPORT_BYTES)
+        imu, health, _ = _split(_capture_lines(health_wide, CAPTURE_SECONDS))
+        assert imu, "no IMU records"
+        assert not health, f"{len(health)} health reports with every channel off"
+
+    @pytest.mark.parametrize("channel", HEALTH_CHANNELS)
+    def test_single_channel(self, health_wide, channel):
+        """One channel on: only its reports arrive, never silent past its period plus 3 ticks."""
+        _health_enable(health_wide, [channel], CHANNEL_PERIOD_MS)
+        pixfmt, _ = _imu_sizes(health_wide)
+        _set_imu_width(health_wide, pixfmt, HEALTH_REPORT_BYTES)
+        _, health, _ = _split(_capture_lines(health_wide, CHANNEL_SECONDS))
+        times = _report_times(health)
+        assert set(times) == {_report_id(channel)}, f"report ids {sorted(times)}"
+        period = CHANNEL_PERIOD_MS / MS_PER_S
+        t = times[_report_id(channel)]
+        want = int(CHANNEL_SECONDS / period) - KEEPALIVE_EDGE_PERIODS
+        assert len(t) >= want, f"{len(t)} reports in {CHANNEL_SECONDS} s, want {want}"
+        worst = max(_gaps(t))
+        assert worst <= period + KEEPALIVE_GAP_SLIP_TICKS * SENDER_TICK_S, \
+            f"silent {worst:.2f} s at a {period} s period"
+
+    def test_off_stops_channel(self, health_wide):
+        """Switching a channel off mid-stream stops its reports within one period."""
+        _health_enable(health_wide, [HEALTH_METRICS], CHANNEL_PERIOD_MS)
+        pixfmt, _ = _imu_sizes(health_wide)
+        _set_imu_width(health_wide, pixfmt, HEALTH_REPORT_BYTES)
+        cid = C.DS5_CAMERA_CID_HEALTH_ENABLE[HEALTH_METRICS]
+        off_at = None
+        last = None
+        with StreamContext(health_wide) as stream:
+            start = time.monotonic()
+            while time.monotonic() < start + 2 * OFF_SECONDS:
+                buf, data = stream.dequeue(timeout=DEQUEUE_TIMEOUT_S)
+                now = time.monotonic()
+                if data[0] == _report_id(HEALTH_METRICS):
+                    last = now
+                stream.requeue(buf)
+                if off_at is None and now >= start + OFF_SECONDS:
+                    health_wide.set_ctrl(cid, 0)
+                    off_at = time.monotonic()
+        assert last is not None, "no metrics reports before switching off"
+        limit = off_at + CHANNEL_PERIOD_MS / MS_PER_S + OFF_HOST_SLACK_S
+        assert last <= limit, f"metrics report {last - off_at:.2f} s after off"
+
+    def test_log_filter_disable(self, health_wide):
+        """Logs at minimum severity Disable: keep-alives only after the first report,
+        which may still flush logs queued before the filter changed."""
+        health_wide.set_ctrl(C.DS5_CAMERA_CID_HEALTH_LOG_MIN_SEVERITY, SEVERITY_DISABLE)
+        _health_enable(health_wide, [HEALTH_LOGS], CHANNEL_PERIOD_MS)
+        pixfmt, _ = _imu_sizes(health_wide)
+        _set_imu_width(health_wide, pixfmt, HEALTH_REPORT_BYTES)
+        _, health, _ = _split(_capture_lines(health_wide, CHANNEL_SECONDS))
+        logs = [d for _, d in health if d[0] == _report_id(HEALTH_LOGS)]
+        assert len(logs) > 1, f"{len(logs)} log reports"
+        sizes = [HEALTH_HEADER.unpack_from(d)[3] for d in logs[1:]]
+        assert not any(sizes), f"log payload sizes {sizes} with the filter at Disable"
+
+    def test_hw_reset_turns_off(self, health_ctrl, camera):
+        """A camera HW reset returns every channel to off."""
+        _health_enable(health_ctrl, HEALTH_CHANNELS)
+        with V4L2Device(camera.depth_path) as dev:
+            dev.set_ctrl(C.DS5_CAMERA_CID_HW_RESET, 1)
+        end = time.monotonic() + RESET_TIMEOUT_S
+        while True:
+            try:
+                got = [health_ctrl.get_ctrl(cid).value
+                       for cid in C.DS5_CAMERA_CID_HEALTH_ENABLE]
+                break
+            except OSError as e:
+                # EBUSY while the camera model is unknown, I2C errors while it reboots
+                if time.monotonic() > end:
+                    pytest.fail(f"health controls still fail {RESET_TIMEOUT_S} s after reset: {e}")
+                time.sleep(RESET_POLL_S)
+        assert got == [0] * len(got), f"enables after reset {got}"
