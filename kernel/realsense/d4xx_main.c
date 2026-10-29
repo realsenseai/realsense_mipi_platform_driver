@@ -2600,6 +2600,51 @@ enum ds5_ae_type {
 #define D500_DECIMATION_XU_BASE		0x4540
 #define D500_TEMPORAL_XU_BASE		0x4568
 #define D500_ALIGNED_DEPTH_XU_BASE	0x4599
+
+/* D4xx health stream control (IMU node); FW keeps one copy shared with USB. */
+enum ds5_health_channel {
+	DS5_HEALTH_ERRORS,
+	DS5_HEALTH_LOGS,
+	DS5_HEALTH_SENSORS,
+	DS5_HEALTH_METRICS,
+};
+
+#define DS5_CAMERA_CID_HEALTH_ERRORS_ENABLE	(DS5_CAMERA_CID_BASE + 56)
+#define DS5_CAMERA_CID_HEALTH_LOGS_ENABLE	(DS5_CAMERA_CID_BASE + 57)
+#define DS5_CAMERA_CID_HEALTH_SENSORS_ENABLE	(DS5_CAMERA_CID_BASE + 58)
+#define DS5_CAMERA_CID_HEALTH_METRICS_ENABLE	(DS5_CAMERA_CID_BASE + 59)
+#define DS5_CAMERA_CID_HEALTH_ERRORS_PERIOD	(DS5_CAMERA_CID_BASE + 60)
+#define DS5_CAMERA_CID_HEALTH_LOGS_PERIOD	(DS5_CAMERA_CID_BASE + 61)
+#define DS5_CAMERA_CID_HEALTH_SENSORS_PERIOD	(DS5_CAMERA_CID_BASE + 62)
+#define DS5_CAMERA_CID_HEALTH_METRICS_PERIOD	(DS5_CAMERA_CID_BASE + 63)
+#define DS5_CAMERA_CID_HEALTH_LOG_MIN_SEVERITY	(DS5_CAMERA_CID_BASE + 64)
+#define DS5_CAMERA_CID_HEALTH_FIRST	DS5_CAMERA_CID_HEALTH_ERRORS_ENABLE
+
+/* 16-bit FW registers; the layout below is VERSION_1's (old FW reads 0xcafe). */
+#define DS5_HEALTH_VERSION		0x4400
+#define DS5_HEALTH_VERSION_1		1
+#define DS5_HEALTH_CHANNEL_BASE		0x4410
+#define DS5_HEALTH_CHANNEL_STRIDE	0x08
+#define DS5_HEALTH_ENABLE		0x00
+#define DS5_HEALTH_PERIOD		0x02
+#define DS5_HEALTH_MIN_SEVERITY		0x04
+#define DS5_HEALTH_REG(_ch, _field) \
+	(DS5_HEALTH_CHANNEL_BASE + (_ch) * DS5_HEALTH_CHANNEL_STRIDE + (_field))
+
+/* The period register counts 100 ms units, so 60 min fits 16 bits. */
+#define DS5_HEALTH_PERIOD_UNIT_MS	100
+#define DS5_HEALTH_PERIOD_MAX_MS	3600000
+#define DS5_HEALTH_PERIOD_DEF_MS	1000
+
+/* FW TLogLevelSeverity */
+enum ds5_health_severity {
+	DS5_HEALTH_SEVERITY_INFORMATION,
+	DS5_HEALTH_SEVERITY_SYS_EVENTS,
+	DS5_HEALTH_SEVERITY_WARNING,
+	DS5_HEALTH_SEVERITY_NON_CRITICAL_ERROR,
+	DS5_HEALTH_SEVERITY_CRITICAL_ERROR,
+	DS5_HEALTH_SEVERITY_DISABLE,
+};
 /*
  * D500 DPP controls are passed between FW and userspace as the whole
  * struct d500_dpp_xu_control. The driver is only a pipe: it neither builds
@@ -3054,6 +3099,109 @@ static int d500_set_imu_xu_byte(struct ds5 *state, u16 reg, u8 value)
 	else if (readback != value)
 		ret = -EIO;
 out:
+	mutex_unlock(&state->ds5_dev->lock);
+
+	return ret;
+}
+
+struct ds5_health_field {
+	u16 reg;
+	u16 unit;	/* control value per register count */
+};
+
+#define DS5_HEALTH_FIELD(_cid, _ch, _field, _unit) \
+	[(_cid) - DS5_CAMERA_CID_HEALTH_FIRST] = { \
+		.reg = DS5_HEALTH_REG(_ch, _field), .unit = (_unit) }
+
+static const struct ds5_health_field ds5_health_fields[] = {
+	DS5_HEALTH_FIELD(DS5_CAMERA_CID_HEALTH_ERRORS_ENABLE,
+			 DS5_HEALTH_ERRORS, DS5_HEALTH_ENABLE, 1),
+	DS5_HEALTH_FIELD(DS5_CAMERA_CID_HEALTH_LOGS_ENABLE,
+			 DS5_HEALTH_LOGS, DS5_HEALTH_ENABLE, 1),
+	DS5_HEALTH_FIELD(DS5_CAMERA_CID_HEALTH_SENSORS_ENABLE,
+			 DS5_HEALTH_SENSORS, DS5_HEALTH_ENABLE, 1),
+	DS5_HEALTH_FIELD(DS5_CAMERA_CID_HEALTH_METRICS_ENABLE,
+			 DS5_HEALTH_METRICS, DS5_HEALTH_ENABLE, 1),
+	DS5_HEALTH_FIELD(DS5_CAMERA_CID_HEALTH_ERRORS_PERIOD,
+			 DS5_HEALTH_ERRORS, DS5_HEALTH_PERIOD,
+			 DS5_HEALTH_PERIOD_UNIT_MS),
+	DS5_HEALTH_FIELD(DS5_CAMERA_CID_HEALTH_LOGS_PERIOD,
+			 DS5_HEALTH_LOGS, DS5_HEALTH_PERIOD,
+			 DS5_HEALTH_PERIOD_UNIT_MS),
+	DS5_HEALTH_FIELD(DS5_CAMERA_CID_HEALTH_SENSORS_PERIOD,
+			 DS5_HEALTH_SENSORS, DS5_HEALTH_PERIOD,
+			 DS5_HEALTH_PERIOD_UNIT_MS),
+	DS5_HEALTH_FIELD(DS5_CAMERA_CID_HEALTH_METRICS_PERIOD,
+			 DS5_HEALTH_METRICS, DS5_HEALTH_PERIOD,
+			 DS5_HEALTH_PERIOD_UNIT_MS),
+	DS5_HEALTH_FIELD(DS5_CAMERA_CID_HEALTH_LOG_MIN_SEVERITY,
+			 DS5_HEALTH_LOGS, DS5_HEALTH_MIN_SEVERITY, 1),
+};
+
+static const struct ds5_health_field *ds5_health_field(u32 id)
+{
+	return &ds5_health_fields[id - DS5_CAMERA_CID_HEALTH_FIRST];
+}
+
+/* Decided per call: a DFU can change FW, and a reset leaves the model unknown. */
+static int ds5_health_supported(struct ds5 *state)
+{
+	u16 dev_type = READ_ONCE(state->ds5_dev->cached_device_type);
+	u16 version;
+	int ret;
+
+	if (!state->is_imu)
+		return -EINVAL;
+	if (dev_type == DS5_DEVICE_TYPE_UNKNOWN)
+		return -EBUSY;
+	if (dev_type == DS5_DEVICE_TYPE_D58X)
+		return -EOPNOTSUPP;
+
+	ret = ds5_read(state, DS5_HEALTH_VERSION, &version);
+	if (ret)
+		return ret;
+	/* 0: this camera can't send health; another version: unknown layout */
+	if (version != DS5_HEALTH_VERSION_1)
+		return -EOPNOTSUPP;
+
+	return 0;
+}
+
+static int ds5_health_get(struct ds5 *state, u32 id, s32 *val)
+{
+	const struct ds5_health_field *field = ds5_health_field(id);
+	u16 value;
+	int ret;
+
+	ret = ds5_health_supported(state);
+	if (ret)
+		return ret;
+
+	ret = ds5_read(state, field->reg, &value);
+	if (!ret)
+		*val = value * field->unit;
+
+	return ret;
+}
+
+/* FW keeps its previous value on a refused write, so the read-back catches it. */
+static int ds5_health_set(struct ds5 *state, u32 id, s32 val)
+{
+	const struct ds5_health_field *field = ds5_health_field(id);
+	u16 value = val / field->unit;
+	u16 readback;
+	int ret;
+
+	ret = ds5_health_supported(state);
+	if (ret)
+		return ret;
+
+	mutex_lock(&state->ds5_dev->lock);
+	ret = ds5_write(state, field->reg, value);
+	if (!ret)
+		ret = ds5_read(state, field->reg, &readback);
+	if (!ret && readback != value)
+		ret = -EIO;
 	mutex_unlock(&state->ds5_dev->lock);
 
 	return ret;
@@ -4347,6 +4495,10 @@ unlock_dpp:
 			    DS5_DEVICE_TYPE_D58X)
 			ret = d500_set_gyro_sensitivity(state, ctrl->val);
 		break;
+	case DS5_CAMERA_CID_HEALTH_ERRORS_ENABLE ...
+	     DS5_CAMERA_CID_HEALTH_LOG_MIN_SEVERITY:
+		ret = ds5_health_set(state, ctrl->id, ctrl->val);
+		break;
 	case D500_CAMERA_CID_ACCEL_SENSITIVITY:
 		if (state->is_imu &&
 		    READ_ONCE(state->ds5_dev->cached_device_type) ==
@@ -4835,6 +4987,10 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 				*ctrl->p_new.p_s32 = policy;
 		}
 		break;
+	case DS5_CAMERA_CID_HEALTH_ERRORS_ENABLE ...
+	     DS5_CAMERA_CID_HEALTH_LOG_MIN_SEVERITY:
+		ret = ds5_health_get(state, ctrl->id, &ctrl->val);
+		break;
 	case D500_CAMERA_CID_GYRO_SENSITIVITY:
 		if (state->is_imu && ctrl->p_new.p_s32 &&
 		    READ_ONCE(state->ds5_dev->cached_device_type) ==
@@ -5305,6 +5461,59 @@ static const struct v4l2_ctrl_config ds5_ctrl_accel_sensitivity_d58x = {
 	.def = D500_ACCEL_SENSITIVITY_3_G,
 	.qmenu = d500_accel_sensitivity_menu,
 	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
+#define DS5_HEALTH_CTRL_FLAGS \
+	(V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE)
+
+#define DS5_HEALTH_ENABLE_CTRL(_id, _name) { \
+	.ops = &ds5_ctrl_ops, .id = (_id), .name = (_name), \
+	.type = V4L2_CTRL_TYPE_BOOLEAN, .min = 0, .max = 1, .step = 1, \
+	.def = 0, .flags = DS5_HEALTH_CTRL_FLAGS }
+
+#define DS5_HEALTH_PERIOD_CTRL(_id, _name) { \
+	.ops = &ds5_ctrl_ops, .id = (_id), .name = (_name), \
+	.type = V4L2_CTRL_TYPE_INTEGER, .min = DS5_HEALTH_PERIOD_UNIT_MS, \
+	.max = DS5_HEALTH_PERIOD_MAX_MS, .step = DS5_HEALTH_PERIOD_UNIT_MS, \
+	.def = DS5_HEALTH_PERIOD_DEF_MS, .flags = DS5_HEALTH_CTRL_FLAGS }
+
+static const char * const ds5_health_severity_menu[] = {
+	[DS5_HEALTH_SEVERITY_INFORMATION] = "Information",
+	[DS5_HEALTH_SEVERITY_SYS_EVENTS] = "System Events",
+	[DS5_HEALTH_SEVERITY_WARNING] = "Warning",
+	[DS5_HEALTH_SEVERITY_NON_CRITICAL_ERROR] = "Non-Critical Error",
+	[DS5_HEALTH_SEVERITY_CRITICAL_ERROR] = "Critical Error",
+	[DS5_HEALTH_SEVERITY_DISABLE] = "Disable",
+};
+
+static const struct v4l2_ctrl_config ds5_ctrl_health[] = {
+	DS5_HEALTH_ENABLE_CTRL(DS5_CAMERA_CID_HEALTH_ERRORS_ENABLE,
+			       "Health Errors Enable"),
+	DS5_HEALTH_ENABLE_CTRL(DS5_CAMERA_CID_HEALTH_LOGS_ENABLE,
+			       "Health Logs Enable"),
+	DS5_HEALTH_ENABLE_CTRL(DS5_CAMERA_CID_HEALTH_SENSORS_ENABLE,
+			       "Health Sensors Enable"),
+	DS5_HEALTH_ENABLE_CTRL(DS5_CAMERA_CID_HEALTH_METRICS_ENABLE,
+			       "Health Metrics Enable"),
+	DS5_HEALTH_PERIOD_CTRL(DS5_CAMERA_CID_HEALTH_ERRORS_PERIOD,
+			       "Health Errors Period"),
+	DS5_HEALTH_PERIOD_CTRL(DS5_CAMERA_CID_HEALTH_LOGS_PERIOD,
+			       "Health Logs Period"),
+	DS5_HEALTH_PERIOD_CTRL(DS5_CAMERA_CID_HEALTH_SENSORS_PERIOD,
+			       "Health Sensors Period"),
+	DS5_HEALTH_PERIOD_CTRL(DS5_CAMERA_CID_HEALTH_METRICS_PERIOD,
+			       "Health Metrics Period"),
+	{
+		.ops = &ds5_ctrl_ops,
+		.id = DS5_CAMERA_CID_HEALTH_LOG_MIN_SEVERITY,
+		.name = "Health Log Min Severity",
+		.type = V4L2_CTRL_TYPE_MENU,
+		.min = DS5_HEALTH_SEVERITY_INFORMATION,
+		.max = DS5_HEALTH_SEVERITY_DISABLE,
+		.def = DS5_HEALTH_SEVERITY_WARNING,
+		.qmenu = ds5_health_severity_menu,
+		.flags = DS5_HEALTH_CTRL_FLAGS,
+	},
 };
 
 /* FW emits aligned depth at the configured depth WxH and Z16 on the same VC,
@@ -6439,6 +6648,12 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 			v4l2_ctrl_new_custom(hdl,
 					     &ds5_ctrl_accel_sensitivity_d58x,
 					     sensor);
+		} else {
+			unsigned int i;
+
+			for (i = 0; i < ARRAY_SIZE(ds5_ctrl_health); i++)
+				v4l2_ctrl_new_custom(hdl, &ds5_ctrl_health[i],
+						     sensor);
 		}
 	}
 
