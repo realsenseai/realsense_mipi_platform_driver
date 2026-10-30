@@ -41,6 +41,14 @@
 #include "d4xx.h"
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
+/* Opt-in recovery of an already powered camera; do not enable at boot.
+ * Link/control setup and teardown still run; serializer state is not retained.
+ */
+static bool preserve_serdes_power;
+module_param(preserve_serdes_power, bool, 0444);
+MODULE_PARM_DESC(preserve_serdes_power,
+	"Skip SerDes power cycling for live recovery of an already powered camera");
+
 /* Deserializer interface structure for abstraction */
 struct dser_interface {
 	/* Pipeline management. */
@@ -5946,17 +5954,21 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 	mutex_lock(&serdes_lock__);
 
 	if (state->dser_primary) {
-		state->dser_ops->power_off(state->dser_dev);
-		/* For now no separate power on required for serializer device */
-		state->dser_ops->power_on(state->dser_dev);
-		/* Allow deserializer to stabilize after power cycle before I2C access.
-		 * With REGCACHE_NONE the first register write goes straight to I2C;
-		 * if the chip is still booting after XCLR deassert the write fails.
-		 */
-		msleep(600);
-		if (state->ser_ops == &max96717_interface) {
-			/* Longer boot time for max96717 based products */
+		if (!preserve_serdes_power) {
+			state->dser_ops->power_off(state->dser_dev);
+			/* For now no separate power on required for serializer device */
+			state->dser_ops->power_on(state->dser_dev);
+			/* Allow deserializer to stabilize after power cycle before I2C access.
+			 * With REGCACHE_NONE the first register write goes straight to I2C;
+			 * if the chip is still booting after XCLR deassert the write fails.
+			 */
 			msleep(600);
+			if (state->ser_ops == &max96717_interface) {
+				/* Longer boot time for max96717 based products */
+				msleep(600);
+			}
+		} else {
+			dev_info(dev, "Live recovery: preserving SerDes/PoC power\n");
 		}
 
 		dev_dbg(dev, "Setup SERDES addressing and control pipeline\n");
@@ -8845,7 +8857,8 @@ static void ds5_remove(struct i2c_client *c)
 			if (ret)
 				dev_warn(&c->dev,
 					"failed to %s unregister sdev\n", state->dser_ops->name);
-			state->dser_ops->power_off(state->dser_dev);
+			if (!preserve_serdes_power)
+				state->dser_ops->power_off(state->dser_dev);
 		}
 	}
 #ifndef CONFIG_OF
