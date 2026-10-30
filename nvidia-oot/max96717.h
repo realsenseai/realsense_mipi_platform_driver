@@ -87,6 +87,8 @@ int max96717_sdev_pair(struct device *dev, struct gmsl_link_ctx *g_ctx);
 int max96717_sdev_unpair(struct device *dev, struct device *s_dev);
 
 int max96717_init_settings(struct device *dev);
+/* Caller selects a confirmed D585; false restores saved MST_BT. */
+int max96717_set_i2c_fast_mode(struct device *dev, bool enable);
 
 int max96717_enable_gpio_tunneling(struct device *dev);
 int max96717_disable_gpio_tunneling(struct device *dev);

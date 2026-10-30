@@ -66,6 +66,8 @@ int max96712_sdev_unregister(struct device *dev, struct device *s_dev);
 int max96712_power_on(struct device *dev);
 void max96712_power_off(struct device *dev);
 int max96712_init_settings(struct device *dev);
+/* Caller selects a confirmed D585; false restores saved MST_BT. */
+int max96712_set_i2c_fast_mode(struct device *dev, u32 link, bool enable);
 /**
  * @brief  Maps dserializer to serializer pipe id
  *
