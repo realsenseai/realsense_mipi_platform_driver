@@ -82,9 +82,14 @@ diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/pl
  			}
  			if (!chan->bypass && !chan->pg_mode &&
  					chan->deskew_ctx->deskew_lanes) {
-@@ -973,4 +1007,20 @@ int tegra_channel_set_stream(struct tegra_channel *chan, bool on)
- 	if (ret == 0)
+@@ -973,4 +1007,24 @@ int tegra_channel_set_stream(struct tegra_channel *chan, bool on)
+-	if (ret == 0)
++	/* Stop has torn down CSI and clocks even if the sensor was unreachable.
++	 * Do not let a stale streaming flag suppress the next real start. */
++	if (!on || ret == 0)
  		atomic_set(&chan->is_streaming, on);
++	if (!on && ret)
++		dev_warn(chan->vi->dev, "stream stop completed with subdevice error: %d\n", ret);
  	return ret;
 +
 +rollback_start:
@@ -103,7 +108,7 @@ diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/pl
 +	tegra_camera_update_clknbw(chan, false);
 +	return ret;
  }
-@@ -1089,6 +1139,8 @@
+@@ -1089,6 +1143,8 @@
  	struct v4l2_subdev_state cfg = {.pads = &pad_cfg};
  	int ret = 0;
  
@@ -112,7 +117,7 @@ diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/pl
  	/* Convert v4l2 pixel format (fourcc) into media bus format code */
  	fse.code = tegra_core_get_code_by_fourcc(chan, sizes->pixel_format, 0);
  	if (fse.code < 0)
-@@ -1118,6 +1170,8 @@
+@@ -1118,6 +1174,8 @@
  	struct v4l2_subdev_pad_config pad_cfg;
  	struct v4l2_subdev_state cfg = {.pads = &pad_cfg};
  	int ret = 0;
@@ -121,7 +126,7 @@ diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/pl
  
  	/* Convert v4l2 pixel format (fourcc) into media bus format code */
  	fie.code = tegra_core_get_code_by_fourcc(
-@@ -1147,6 +1201,8 @@
+@@ -1147,6 +1205,8 @@
  	struct tegra_channel *chan = video_drvdata(file);
  	unsigned int index = 0, i;
  	unsigned long *fmts_bitmap = chan->fmts_bitmap;
@@ -130,7 +135,7 @@ diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/pl
  
  	if (f->index >= bitmap_weight(fmts_bitmap, MAX_FORMAT_NUM))
  		return -EINVAL;
-@@ -2094,6 +2150,8 @@
+@@ -2094,6 +2154,8 @@
  	struct tegra_channel *chan = video_drvdata(file);
  	struct v4l2_pix_format *pix = &format->fmt.pix;
  
@@ -139,7 +144,7 @@ diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/pl
  	*pix = chan->format;
  
  	return 0;
-@@ -2149,6 +2207,8 @@
+@@ -2149,6 +2211,8 @@
  {
  	struct tegra_channel *chan = video_drvdata(file);
  
@@ -148,7 +153,7 @@ diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/pl
  	return  __tegra_channel_try_format(chan, &format->fmt.pix);
  }
  
-@@ -2202,6 +2262,8 @@
+@@ -2202,6 +2266,8 @@
  {
  	struct tegra_channel *chan = video_drvdata(file);
  	int ret = 0;
