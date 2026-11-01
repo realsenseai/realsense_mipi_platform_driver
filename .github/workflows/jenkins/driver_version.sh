@@ -12,7 +12,7 @@ fi
 BRANCH="$1"
 REPO_URL="https://github.com/realsenseai/realsense_mipi_platform_driver.git"
 CLONE_DIR="realsense_mipi_platform_driver_temp"
-VERSION_FILE="kernel/realsense/d4xx.c"
+VERSION_FILE="kernel/realsense/d4xx_main.c"
 
 echo "=== Driver Version Tagger ==="
 echo "Branch: $BRANCH"

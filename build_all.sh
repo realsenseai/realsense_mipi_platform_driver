@@ -81,7 +81,7 @@ if version_lt "$JETPACK_VERSION" "6.0"; then
     fi
     make O=$TEGRA_KERNEL_OUT -j${NPROC}
     make O=$TEGRA_KERNEL_OUT modules_install INSTALL_MOD_PATH=$KERNEL_MODULES_OUT
-    D4XX_CMD_FILE="$(find "$TEGRA_KERNEL_OUT" -name '.d4xx.o.cmd' 2>/dev/null | head -1)"
+    D4XX_CMD_FILE="$(find "$TEGRA_KERNEL_OUT" -name '.d4xx_main.o.cmd' 2>/dev/null | head -1)"
 else
     cd $BUILD_SRCS
     export KERNEL_HEADERS=${BUILD_SRCS}/${KERNEL_DIR}
@@ -119,7 +119,7 @@ else
     NVVSE_SKIP=""
     version_lt "$JETPACK_VERSION" "7.0" || { DISPLAY_SKIP="SKIP_NVIDIA_DISPLAY=1"; NVVSE_SKIP="NV_OOT_NVVSE_SKIP_BUILD=y"; }
     make modules $DISPLAY_SKIP $NVVSE_SKIP
-    D4XX_CMD_FILE="$BUILD_SRCS/nvidia-oot/drivers/media/i2c/.d4xx.o.cmd"
+    D4XX_CMD_FILE="$BUILD_SRCS/nvidia-oot/drivers/media/i2c/.d4xx_main.o.cmd"
     mkdir -p $TEGRA_KERNEL_OUT/rootfs/boot/dtb
     if version_lt "$JETPACK_VERSION" "7.0"; then
         make dtbs
@@ -154,5 +154,5 @@ if [ -n "${D4XX_CMD_FILE:-}" ] && [ -f "$D4XX_CMD_FILE" ]; then
     "$DEVDIR/scripts/generate_compile_commands.sh" "$D4XX_CMD_FILE" || \
         echo "Warning: compile_commands.json generation failed (non-fatal)"
 else
-    echo "Warning: .d4xx.o.cmd not found; skipping compile_commands.json generation"
+    echo "Warning: .d4xx_main.o.cmd not found; skipping compile_commands.json generation"
 fi

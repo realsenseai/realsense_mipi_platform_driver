@@ -9,7 +9,7 @@ overwrite each other's metadata.
 
 Signed-off-by: Dmitry Perchanov <dmitry.perchanov@intel.com>
 ---
- drivers/media/i2c/Makefile                    |   5 +
+ drivers/media/i2c/Makefile                    |   6 +
  drivers/media/i2c/max9295.c                   | 139 ++++++
  drivers/media/i2c/max9296.c                   | 193 +++++++++
  .../platform/tegra/camera/sensor_common.c     |   4 +
@@ -23,19 +23,20 @@ Signed-off-by: Dmitry Perchanov <dmitry.perchanov@intel.com>
  include/media/max9296.h                       |   8 +
  include/media/mc_common.h                     |  23 +
  include/media/tegra_camera_core.h             |  12 +-
- 14 files changed, 1031 insertions(+), 53 deletions(-)
+ 14 files changed, 1032 insertions(+), 53 deletions(-)
 
 diff --git a/drivers/media/i2c/Makefile b/drivers/media/i2c/Makefile
 index fdf09df..0e40687 100644
 --- a/drivers/media/i2c/Makefile
 +++ b/drivers/media/i2c/Makefile
-@@ -17,6 +17,11 @@ subdir-ccflags-y += -Werror
+@@ -17,6 +17,12 @@ subdir-ccflags-y += -Werror
  ifneq ($(NV_BUILD_SYSTEM_TYPE),embedded-linux)
  obj-m += max9295.o
  obj-m += max9296.o
 +subdir-ccflags-y += -DCONFIG_VIDEO_D4XX_SERDES
 +subdir-ccflags-y += -DCONFIG_TEGRA_CAMERA_PLATFORM
 +obj-m += d4xx.o
++d4xx-y := d4xx_main.o d4xx_desc.o
 +obj-m += max96717.o
 +obj-m += max96724.o
  ifndef CONFIG_TEGRA_SYSTEM_TYPE_ACK
