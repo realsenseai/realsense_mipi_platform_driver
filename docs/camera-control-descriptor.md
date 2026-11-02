@@ -265,26 +265,30 @@ flowchart LR
   R["<b>Refused</b><br/>code = the reason<br/>status = ERROR or BUSY<br/>seq = n + 1"]
   D["<b>Done</b><br/>code = 0, or the reason it failed<br/>status = OK or ERROR<br/>seq = n + 1"]
   A["<b>Accepted</b><br/>code = 0<br/>status = OK<br/>seq = n + 1"]
+  X["<b>Superseded</b><br/>nothing written"]
   I -->|"the host writes the control"| E
   E -->|"the handler refuses it:<br/>wrong state, out of range,<br/>no such control"| R
   E -->|"the handler accepts a<br/>synchronous control"| W
   E -->|"the handler accepts an<br/>asynchronous control"| A
   W -->|"the handler finishes"| D
+  W -->|"the handler finishes, but a<br/>newer write followed"| X
   R --> I
   D --> I
   A --> I
+  X --> I
 ```
 
 **Figure 3.** What the three words of one stream record hold at each stage of one write,
-as the camera moves it along. The handler is the camera's own control handler, the one that
-serves the same control over USB, so the reasons it refuses are USB's reasons. Three
-properties hold the protocol together:
+as the camera moves it along. DS5 and HKR implement this one state machine. The handler is
+the camera's own control handler, the one that serves the same control over USB, so the
+reasons it refuses are USB's reasons. Four properties hold the protocol together:
 
 - **The sequence is the commit point.** Firmware stores the code, then the status, then bumps
   the sequence, so a reader that saw the sequence move sees a complete result. The entry
   `ERROR` and the `WIP` in between never advance it, which is why they can never be mistaken
   for a result.
-- **Every write to a control slot's low word ends in exactly one result**, whether firmware
+- **Every write to a control slot's low word ends in exactly one result** unless
+  superseded (below), whether firmware
   refused it in the pre-check, accepted an asynchronous control, failed it on execution,
   served it synchronously, or has no handler for the slot. A high-word write (the first half of an `F_LSW_LATCH` scalar, §5)
   reports nothing by itself.
@@ -292,6 +296,11 @@ properties hold the protocol together:
   never shows a value the camera rejected. DS5 reports a refusal as `ERROR` with its code;
   HKR reports a stream-state refusal as `BUSY` with code 2 (*wrong state*) and everything
   else as `ERROR` (§8.1).
+- **A superseded completion publishes nothing.** A synchronous write still executing when a
+  newer write to the same record arrives is one the host already gave up on (`-ETIMEDOUT`,
+  since the driver holds its lock until a result or the bound); publishing it would
+  pre-empt or overwrite the newer write's result. So `WIP` is never published with a
+  sequence advance.
 
 **When the result is final follows USB.** A control whose UVC GET_INFO says asynchronous
 (bit 4 — on DS5 the depth exposure, gain, AE, laser and preset controls; none on HKR) gets
@@ -307,11 +316,10 @@ at 30 fps delayed the next synchronous write by 1.25–1.38 s. A queue whose exe
 longer than the bound — more writes, or a low frame rate where each waits for its frame —
 returns `-ETIMEDOUT` for a write firmware still applies (§15.2).
 
-On HKR a control-block write is queued to a worker and its result lands when the worker
-completes it; an XU write or a refusal before the queue reports on the I2C thread, so the
-driver's first poll already sees the sequence move. If a later write for the same camera is
-still queued when one completes, firmware reports that completion as `WIP` with the sequence
-advanced, and the driver re-arms (§3.3) until the queue drains.
+On HKR a control-block write is queued to a worker (`WIP` on dispatch) and its result lands
+when the worker completes it; an XU write or a refusal before the queue reports on the I2C
+thread, so the driver's first poll already sees the sequence move. DS5 tracks the superseded
+case with a per-block write count, HKR with a token carried by each queued write.
 
 ### 3.3 Driver: snapshot, write, wait for the sequence
 
@@ -322,7 +330,7 @@ flowchart LR
   P -->|"not yet, within the bound"| P
   P -->|"not within the bound"| T["return ETIMEDOUT"]
   P -->|"yes: read status"| Q{"status"}
-  Q -->|"WIP: another write<br/>finished ahead of ours"| A["re-arm: seq0 = seq"] --> P
+  Q -->|"WIP: not a result"| A["re-arm: seq0 = seq"] --> P
   Q -->|"OK"| OK["return 0"]
   Q -->|"ERROR or BUSY: read code"| ER["return the code's errno<br/>(EIO or EBUSY for code 0)"]
 ```
@@ -1044,7 +1052,9 @@ s_pStreamConfiguration[camIndex].control_status =
 That is stock firmware. RSDEV-15376 keeps the two counters for synchronous writes only (B1c,
 B1d): an accepted asynchronous write stores its result at once and is never counted as sent,
 and its completion touches neither counter nor the result words — a failed one only restores
-the register — so a later synchronous completion cannot see a phantom pending write.
+the register — so a later synchronous completion cannot see a phantom pending write. Where
+stock firmware stores `WIP` above, RSDEV-15376 publishes nothing (a superseded completion,
+§3.2).
 
 Two consequences shape §12.3:
 
@@ -1536,7 +1546,7 @@ a sibling's write between ours and our read would hand us its result.
 The result is exact. `ds5_ctrl_seq_status()` polls with `ds5_read_poll()`, bounded like
 the HWMC wait, until the sequence differs from the snapshot (`!=` on the `u16`, so a wrap is
 an advance too) — an advance that still reads
-`WIP` is another write completing first, so it re-arms — and maps status and code per
+`WIP` is not a result, so it re-arms — and maps status and code per
 §3.3 and §8.1; a sequence that never moves is `-ETIMEDOUT`.
 
 **The HWMC executor** (`ds5_ctrl_hwmc_xfer()`) builds the `hwm_cmd` from the opcode pair,
@@ -1756,6 +1766,7 @@ as on USB, and A8 refuses a non-2C camera with `ERROR` and code 6, *invalid cont
 | B1b | **Report the absolute XU windows too**, at `status_addr` or a register of their own. A1–A8 all live at `0x45xx`, outside `[ctrl_base, ctrl_base + 0x100)` | **HKR: present** — every `0x45xx` write reports in the depth record (§3). DS5 publishes no XU window |
 | B1c | **Keep the sent and completed counters in step.** A rejected async write posted a completion with no send behind it, leaving the word `WIP` from boot on — seen on two D457s, stock FW included | **fixed in RSDEV-15376** |
 | B1d | **Time the result as USB does** (§3.2): a UVC-asynchronous control (GET_INFO bit 4) reports on acceptance, its execution reports nothing; a synchronous one reports after execution. The sent/completed counters (B1c) count synchronous writes only, so an asynchronous completion can neither advance the sequence nor leave a synchronous result at `WIP` | **DS5: present** (RSDEV-15376). **HKR: nothing to do** — its USB controls are all synchronous |
+| B1e | **One state machine on both firmwares** (§3.2, Figure 3): `ERROR` on entry, `WIP` on dispatch of a synchronous write, then code, status and sequence; a completion behind a newer write publishes nothing, so `WIP` never comes with a sequence advance | **DS5: present** (RSDEV-15376, per-block write count). **HKR: present** (RSDEV-15377, result token per queued write) |
 | B2 | Publish the UVC request error code instead of discarding it (§8.2), so a refused control returns the errno USB returns (§8.1) | **present on both.** DS5 (RSDEV-15376): `control_error` at `status_addr - 4`. HKR (RSDEV-15377): the same word of its stream records |
 | B3 | Report a result for the `vfID_UnitExtFunc` path, so a successful AE-ROI write stops reporting `ERROR` (§8.4) | **DS5: present** with B1a — every low-word write ends in one result, the unused slots included |
 | B4 | Give the host's reset-readiness probe a register of its own (§8.3) | **not needed** — the probe scratches `0x400E`, a reserved word of the depth record that every firmware zeroes at boot and none writes, so no result can clear the sentinel; a new register would not exist on old firmware |
@@ -1847,6 +1858,7 @@ control tables has shipped.
 | **Passive depth on a 2C D585.** The rig's D585 boots 3C, where the control is registered and hidden; its writes, refusals and readback in 2C were not exercised | a 2C-only regression | switch the D585 to 2C, then set each mode idle and mid-stream |
 | **An asynchronous burst ahead of a synchronous write (B1d).** Measured only at 30 fps: 20 queued `manual_laser_power` executions delayed the next synchronous write 1.25–1.38 s, inside the 2 s bound; no preset apply (exposure, gain, AE, laser, preset back to back) was timed at a low frame rate | a synchronous write returns `-ETIMEDOUT` although firmware applies it | time a preset apply followed by a synchronous write at the lowest frame rate each D4xx SKU offers, against the 2 s bound |
 | **DS5 result sequence under concurrency (B1a).** Validated one write at a time; two nodes writing the same control block at once, and a write following a timed-out one, were reviewed but not exercised | a result attributed to the wrong write | concurrent writers from the depth, IR and IMU nodes with a refusal mix |
+| **A timed-out write completing inside the next write's snapshot window.** Both firmwares drop a completion once a newer write arrived (§3.2), but one finishing after the next write's snapshot and before that write reaches the camera is published, and the host reads it as the newer write's | after a 2 s timeout only: the next write gets the late write's result | the host tags each write and firmware echoes the tag with the result: a wire change on all three sides |
 | **D585 in 2C mode.** All D585 runs were 3C | the `2c_ae_policy` hook and the 2C-only gates are untested | the same probes on a 2C camera |
 | **Concurrency under load.** The re-sync, sibling control calls, HW resets and streaming were reviewed but not stress-tested together | a race the reviews missed | a soak: control calls from all nodes while resets and DFUs run |
 | **Malformed blobs.** The parser rules were exercised with valid blobs only | a rule that rejects too little or too much | inject malformed blobs (out-of-range offsets, bad types, oversized extents) through a test firmware or a host harness of `d4xx_desc.c` |
