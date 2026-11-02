@@ -55,6 +55,10 @@ DS5_CAMERA_CID_AE_MODE = DS5_CAMERA_CID_BASE + 35
 # D58x depth "Enable Aligned Depth" (USB depth XU 0x10), d4xx_main.c
 # D500_CAMERA_CID_ALIGNED_DEPTH. Registered on the D58x depth node only.
 D500_CAMERA_CID_ALIGNED_DEPTH = DS5_CAMERA_CID_BASE + 55
+# D4xx health stream control on the IMU node, per channel errors/logs/sensors/metrics.
+DS5_CAMERA_CID_HEALTH_ENABLE = tuple(DS5_CAMERA_CID_BASE + n for n in range(56, 60))
+DS5_CAMERA_CID_HEALTH_PERIOD = tuple(DS5_CAMERA_CID_BASE + n for n in range(60, 64))
+DS5_CAMERA_CID_HEALTH_LOG_MIN_SEVERITY = DS5_CAMERA_CID_BASE + 64
 
 # D58x FW reports major 7 or 8 (d4xx_main.c DS5_D58X_FW_MAJOR_MIN/MAX); D4xx reports 5.
 D58X_FW_MAJORS = {7, 8}

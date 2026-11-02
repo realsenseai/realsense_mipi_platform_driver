@@ -34,6 +34,16 @@ def pytest_addoption(parser):
         default=0,
         help="Index of the D4XX camera to test (default: 0, the first found)",
     )
+    parser.addoption(
+        "--imu-health",
+        action="store_true",
+        help="The camera runs a health-on FW image: check GMSL health reports",
+    )
+    parser.addoption(
+        "--imu-node",
+        default=None,
+        help="IMU video node of the camera under test (default: from discovery)",
+    )
 
 
 # ---- Session-scoped fixtures ----
