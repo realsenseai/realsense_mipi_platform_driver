@@ -11,7 +11,18 @@ from ..v4l2 import ioctls
 from ..v4l2.device import V4L2Device
 from ..v4l2.stream import StreamContext
 
-REFUSAL_FPS = 30
+# 2C advertises 25 fps colour at these sizes; 3C has no 25 fps video profile.
+TWO_C_25FPS_SIZES = ((1280, 720), (1280, 960))
+TWO_C_EXTRA_FPS = 25
+# 2C colour shares the stereo sensors: above this rate it needs them to itself.
+TWO_C_SHARED_MAX_FPS = 30
+TWO_C_FAST_FPS = 60
+LIMIT_CHECK_FRAMES = 5
+FRAME_TIMEOUT_S = 5.0
+RAW_COLOUR_FORMATS = (ioctls.V4L2_PIX_FMT_UYVY, ioctls.V4L2_PIX_FMT_YUYV)
+# None picks the first raw format the colour node lists.
+COLOUR_FORMATS = (ioctls.V4L2_PIX_FMT_H264, ioctls.V4L2_PIX_FMT_MJPEG, None)
+COLOUR_IDS = ("H264", "MJPG", "raw")
 
 
 @pytest.mark.d457
@@ -108,28 +119,6 @@ class TestFormatEnumeration:
         assert pixfmts & ir_fmts, f"IR device missing GREY/Y8I/Y12I: {pixfmts}"
 
 
-def _stream_refused(path, pixfmt, width, height):
-    """True if STREAMON fails with EAGAIN, d4xx's code for a camera refusal.
-    Host-side steps and any other STREAMON error raise."""
-    with V4L2Device(path) as dev:
-        dev.set_format(width, height, pixfmt)
-        dev.set_parm(REFUSAL_FPS)
-        stream = StreamContext(dev)
-        try:
-            stream._reqbufs()
-            stream._mmap_buffers()
-            stream._queue_all()
-            try:
-                stream._streamon()
-            except OSError as err:
-                if err.errno != errno.EAGAIN:
-                    raise
-                return True
-            return False
-        finally:
-            stream.__exit__(None, None, None)
-
-
 def _discrete_fps(intervals):
     """Frame rates of the discrete intervals, in fps."""
     return [fi.discrete.denominator / fi.discrete.numerator for fi in intervals
@@ -142,10 +131,47 @@ def _macroblocks(pixels):
     return -(-pixels // C.H264_MACROBLOCK_EDGE_PX)
 
 
+def _size_with_fps(dev, pixfmt, fps):
+    """First discrete size that lists `fps` for `pixfmt`, or None."""
+    for fs in dev.enum_framesizes(pixfmt):
+        if fs.type != ioctls.V4L2_FRMSIZE_TYPE_DISCRETE:
+            continue
+        wh = (fs.discrete.width, fs.discrete.height)
+        if fps in _discrete_fps(dev.enum_frameintervals(pixfmt, *wh)):
+            return wh
+    return None
+
+
+def _stream_refused(path, pixfmt, width, height, fps):
+    """True if STREAMON fails with EAGAIN, d4xx's code for a camera refusal.
+    Host-side steps and any other STREAMON error raise."""
+    with V4L2Device(path) as dev:
+        dev.set_format(width, height, pixfmt)
+        dev.set_parm(fps)
+        stream = StreamContext(dev)
+        try:
+            stream._reqbufs()
+            stream._mmap_buffers()
+            stream._queue_all()
+            return _streamon_refused(stream)
+        finally:
+            stream.__exit__(None, None, None)
+
+
+def _streamon_refused(stream):
+    """STREAMON on prepared buffers: True on EAGAIN, any other error raises."""
+    try:
+        stream._streamon()
+    except OSError as err:
+        if err.errno != errno.EAGAIN:
+            raise
+        return True
+    return False
+
+
 @pytest.mark.d585
 class TestCompressedColourFormats:
-    """3C lists H.264/MJPEG with frame sizes; on 2C (no colour encoder) a listed
-    format must be refused at STREAMON with EAGAIN, and any other result fails."""
+    """3C and 2C list H.264/MJPEG with frame sizes; 2C adds its 25 fps rate."""
 
     @pytest.mark.parametrize("pixfmt", [ioctls.V4L2_PIX_FMT_H264,
                                         ioctls.V4L2_PIX_FMT_MJPEG])
@@ -153,25 +179,23 @@ class TestCompressedColourFormats:
         with V4L2Device(d58x_camera.rgb_path) as dev:
             pixfmts = {f.pixelformat for f in dev.enum_formats()}
             sizes = dev.enum_framesizes(pixfmt) if pixfmt in pixfmts else []
+            dims = {(fs.discrete.width, fs.discrete.height) for fs in sizes
+                    if fs.type == ioctls.V4L2_FRMSIZE_TYPE_DISCRETE}
+            rates = {wh: _discrete_fps(dev.enum_frameintervals(pixfmt, *wh))
+                     for wh in dims & set(TWO_C_25FPS_SIZES)}
         name = ioctls.FOURCC_TO_NAME[pixfmt]
-        dims = sorted(((fs.discrete.width, fs.discrete.height) for fs in sizes
-                       if fs.type == ioctls.V4L2_FRMSIZE_TYPE_DISCRETE),
-                      key=lambda wh: wh[0] * wh[1])
-        if not d58x_is_2c:
-            assert pixfmt in pixfmts, f"RGB device missing {name}: {pixfmts}"
-            assert len(sizes) > 0, f"No frame sizes for {name}"
-            return
-        if pixfmt not in pixfmts:
-            return
-        assert dims, f"2C D585 lists {name} with no frame sizes"
-        width, height = dims[0]
-        assert _stream_refused(d58x_camera.rgb_path, pixfmt, width, height), \
-            f"2C D585 accepted a {name} {width}x{height} stream"
+        assert pixfmt in pixfmts, f"RGB device missing {name}: {pixfmts}"
+        assert len(sizes) > 0, f"No frame sizes for {name}"
+        for (width, height) in TWO_C_25FPS_SIZES:
+            listed = TWO_C_EXTRA_FPS in rates.get((width, height), [])
+            assert listed == d58x_is_2c, (
+                f"{name} {width}x{height} {TWO_C_EXTRA_FPS} fps listed={listed} "
+                f"on {'2C' if d58x_is_2c else '3C'}")
 
-    def test_h264_rates_within_level40(self, d58x_encoder_camera):
+    def test_h264_rates_within_level40(self, d58x_camera):
         """Every offered H.264 size and rate fits level 4.0's MB rate."""
         pixfmt = ioctls.V4L2_PIX_FMT_H264
-        with V4L2Device(d58x_encoder_camera.rgb_path) as dev:
+        with V4L2Device(d58x_camera.rgb_path) as dev:
             listed = [f.pixelformat for f in dev.enum_formats()]
             sizes = [(fs.discrete.width, fs.discrete.height)
                      for fs in dev.enum_framesizes(pixfmt)
@@ -188,6 +212,94 @@ class TestCompressedColourFormats:
                      if mbs * fps > C.H264_LEVEL40_MAX_MBPS]
         assert not over, (f"H.264 profiles over level 4.0 "
                           f"({C.H264_LEVEL40_MAX_MBPS} MB/s): {over}")
+
+
+@pytest.mark.d585
+class TestTwoCColourFpsLimit:
+    """On 2C, colour beside depth is refused above 30 fps, for every format.
+
+    Both cases start depth and colour back to back at the same rate, inside the
+    camera's build window, so only the rate differs between refused and accepted."""
+
+    @staticmethod
+    def _colour_size(camera, pixfmt, fps):
+        with V4L2Device(camera.rgb_path) as dev:
+            listed = {f.pixelformat for f in dev.enum_formats()}
+            if pixfmt is None:
+                pixfmt = next((f for f in RAW_COLOUR_FORMATS if f in listed), None)
+            assert pixfmt in listed, f"colour node lists no {pixfmt}: {listed}"
+            size = _size_with_fps(dev, pixfmt, fps)
+        name = ioctls.FOURCC_TO_NAME[pixfmt]
+        assert size, f"2C lists no {name} size at {fps} fps"
+        return pixfmt, name, size
+
+    @staticmethod
+    def _depth_device(camera, fps):
+        dev = V4L2Device(camera.depth_path)
+        dev.open()
+        size = _size_with_fps(dev, ioctls.V4L2_PIX_FMT_Z16, fps)
+        if not size:
+            dev.close()
+            pytest.fail(f"depth lists no Z16 size at {fps} fps")
+        dev.set_format(*size, ioctls.V4L2_PIX_FMT_Z16)
+        dev.set_parm(fps)
+        return dev
+
+    @pytest.mark.parametrize("pixfmt", COLOUR_FORMATS, ids=COLOUR_IDS)
+    def test_fast_colour_refused_beside_depth(self, d58x_camera, d58x_is_2c,
+                                              pixfmt):
+        if not d58x_is_2c:
+            pytest.skip("3C colour has its own sensor: no shared-sensor limit")
+        pixfmt, name, size = self._colour_size(d58x_camera, pixfmt,
+                                               TWO_C_FAST_FPS)
+        # Precondition: the rate itself is accepted while colour runs alone.
+        assert not _stream_refused(d58x_camera.rgb_path, pixfmt, *size,
+                                   TWO_C_FAST_FPS), (
+            f"2C refused {name} {size[0]}x{size[1]} at {TWO_C_FAST_FPS} fps alone")
+        depth = self._depth_device(d58x_camera, TWO_C_FAST_FPS)
+        colour = V4L2Device(d58x_camera.rgb_path)
+        colour.open()
+        stream = StreamContext(colour)
+        try:
+            colour.set_format(*size, pixfmt)
+            colour.set_parm(TWO_C_FAST_FPS)
+            stream._reqbufs()
+            stream._mmap_buffers()
+            stream._queue_all()
+            # Colour starts right after depth, inside the build window, as the
+            # accepted case does: only the rate can refuse it.
+            with StreamContext(depth):
+                assert _streamon_refused(stream), (
+                    f"2C accepted {name} {size[0]}x{size[1]} at "
+                    f"{TWO_C_FAST_FPS} fps beside depth at the same rate")
+        finally:
+            stream.__exit__(None, None, None)
+            colour.close()
+            depth.close()
+
+    @pytest.mark.parametrize("pixfmt", COLOUR_FORMATS, ids=COLOUR_IDS)
+    def test_colour_at_limit_streams_beside_depth(self, d58x_camera,
+                                                  d58x_is_2c, pixfmt):
+        if not d58x_is_2c:
+            pytest.skip("3C colour has its own sensor: no shared-sensor limit")
+        pixfmt, name, size = self._colour_size(d58x_camera, pixfmt,
+                                               TWO_C_SHARED_MAX_FPS)
+        depth = self._depth_device(d58x_camera, TWO_C_SHARED_MAX_FPS)
+        colour = V4L2Device(d58x_camera.rgb_path)
+        colour.open()
+        try:
+            colour.set_format(*size, pixfmt)
+            colour.set_parm(TWO_C_SHARED_MAX_FPS)
+            # Back to back: a colour start after the depth graph is built is refused.
+            with StreamContext(depth), StreamContext(colour) as stream:
+                frames = stream.capture_frames(LIMIT_CHECK_FRAMES,
+                                               timeout=FRAME_TIMEOUT_S)
+            assert len(frames) == LIMIT_CHECK_FRAMES, (
+                f"{name} {size[0]}x{size[1]} at {TWO_C_SHARED_MAX_FPS} fps "
+                "beside depth delivered too few frames")
+        finally:
+            colour.close()
+            depth.close()
 
 
 @pytest.mark.d457

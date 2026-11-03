@@ -112,18 +112,9 @@ def _d58x_usb_pid(camera):
 
 @pytest.fixture(scope="session")
 def d58x_is_2c(d58x_camera):
-    """True on a 2C D585 (GVD PID), which has no colour encoder. An
-    unreadable GVD counts as 3C, so a format loss is never hidden."""
+    """True on a 2C D585 (GVD PID). An unreadable GVD counts as 3C, so a
+    missing 2C rate is never hidden."""
     return _d58x_usb_pid(d58x_camera) == C.D585_2C_PROTO_PID
-
-
-@pytest.fixture(scope="session")
-def d58x_encoder_camera(d58x_camera, d58x_is_2c):
-    """A D58x with a colour encoder; a 2C D585 skips."""
-    if d58x_is_2c:
-        pytest.skip(f"D585 2C (GVD PID 0x{C.D585_2C_PROTO_PID:04X}): "
-                    "no colour encoder")
-    return d58x_camera
 
 
 # ---- Function-scoped device fixtures ----
