@@ -1591,22 +1591,25 @@ and the set of controls itself.
 The reload cannot fix that in place. It runs from `hw_reset`'s `s_ctrl`, under the reset
 node's handler lock and `ds5_dev->lock`, and a sibling node's `s_ctrl` takes *its* handler
 lock before `ds5_dev->lock` — so re-ranging a sibling's controls from the reload is an ABBA
-deadlock. The formats had the same problem with the VI's format bitmap, and the same answer
-applies: **mark, and let the next ioctl do the work outside every lock.**
+deadlock. **Mark during reload; refresh on the next control ioctl under `video_lock`,
+before taking handler locks.** This serializes refresh with unregister. Release `video_lock`
+before `video_ioctl2()` acquires it again.
 
 ```
 hw_reset s_ctrl ──► ds5_desc_reload_after_reset()
                       swap records ──► tegra_channel_mark_ctrls_dirty(chan)   (lock-free)
 
 next control ioctl on that node
-  tegra_channel_ioctl()                      VI, before video_ioctl2: no lock held
-    ├─ subdev core.command(TEGRA_CHANNEL_CMD_REFRESH_CTRLS)
-    │    └─ ds5_ctrl_refresh()               d4xx, under the role handler's lock
-    │         target = the records, or the built-in set if the camera publishes none
-    │         control, same storage in target ──► re-range, re-label, re-flag
-    │         control, not in target ───────────► FLAG_DISABLED
-    │         target entry, no control ─────────► register it
-    └─ v4l2_ctrl_add_handler(chan, subdev)   re-merge; adds only what is new
+  tegra_channel_ioctl()                      VI
+    ├─ tegra_channel_refresh_ctrls()         under video_lock
+    │    ├─ subdev core.command(TEGRA_CHANNEL_CMD_REFRESH_CTRLS)
+    │    │    └─ ds5_ctrl_refresh()          d4xx: refresh mutex, then handler locks
+    │    │         target = the records, or the built-in set if the camera publishes none
+    │    │         control, same storage in target ──► re-range, re-label, re-flag
+    │    │         control, not in target ───────────► FLAG_DISABLED
+    │    │         target entry, no control ─────────► register it
+    │    └─ v4l2_ctrl_add_handler(chan, subdev)   re-merge; adds only what is new
+    └─ video_ioctl2()                       after refresh releases video_lock
 ```
 
 The VI side is one patch, `0016-Tegra_channel_runtime_control_changes`, twin of the format

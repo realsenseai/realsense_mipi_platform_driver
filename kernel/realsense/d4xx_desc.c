@@ -1422,8 +1422,8 @@ static void ds5_mark_channel_fmts_dirty(struct ds5 *inst)
 			 __func__, sd->name);
 }
 
-/* Same mark for the control set: the VI re-syncs each subdev's handler on
- * the next control ioctl, outside video_lock and every handler lock.
+/* Marking stays lock-free during reset. The next control ioctl refreshes
+ * subdev handlers under video_lock, before taking control handler locks.
  */
 static void ds5_mark_channel_ctrls_dirty(struct ds5 *inst)
 {

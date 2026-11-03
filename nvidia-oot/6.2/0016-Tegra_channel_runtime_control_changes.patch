@@ -13,7 +13,7 @@ from that handler.
 Export tegra_channel_mark_ctrls_dirty() for the sensor to flag the
 change - a lock-free write, safe from a control handler that already
 holds its node's locks. The re-sync runs on the ioctl thread, ahead of
-video_ioctl2 and so outside video_lock and every handler lock: each
+video_ioctl2 under video_lock, outside every handler lock: each
 subdev refreshes its own handler through v4l2_subdev_core_ops.command
 (TEGRA_CHANNEL_CMD_REFRESH_CTRLS), then the channel re-merges it, which
 adds only what is new. The first post-reset control query sees the
@@ -24,7 +24,7 @@ Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
 --- a/drivers/media/platform/tegra/camera/vi/channel.c
 +++ b/drivers/media/platform/tegra/camera/vi/channel.c
-@@ -425,6 +425,61 @@
+@@ -425,6 +425,63 @@
  }
  EXPORT_SYMBOL(tegra_channel_mark_fmts_dirty);
  
@@ -38,19 +38,19 @@ diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/pl
 +}
 +EXPORT_SYMBOL(tegra_channel_mark_ctrls_dirty);
 +
-+/* Re-sync the subdevs' controls on the ioctl thread, ahead of video_ioctl2
-+ * and so outside video_lock and every handler lock: each subdev refreshes
-+ * its own handler through the core command op, then the channel re-merges
-+ * it, which adds only what is new (v4l2_ctrl_add_handler skips duplicates).
-+ * Cleared before the refresh so a mark that races it is not lost.
++/* Serialize sensor callbacks with unregister, before taking handler locks.
++ * Clear the dirty mark before refresh so a concurrent mark is retained.
 + */
 +static void tegra_channel_refresh_ctrls(struct tegra_channel *chan)
 +{
 +	int num_sd = 0;
 +	struct v4l2_subdev *sd;
 +
-+	if (!chan || !READ_ONCE(chan->ctrls_dirty))
++	if (!chan)
 +		return;
++	mutex_lock(&chan->video_lock);
++	if (!chan->video || !READ_ONCE(chan->ctrls_dirty))
++		goto unlock;
 +	WRITE_ONCE(chan->ctrls_dirty, false);
 +	while ((sd = chan->subdev[num_sd++]) && num_sd <= chan->num_subdevs) {
 +		if (v4l2_subdev_call(sd, core, command,
@@ -61,6 +61,8 @@ diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/pl
 +			dev_warn(chan->vi->dev, "%s: re-merging %s controls failed\n",
 +				 __func__, sd->name);
 +	}
++unlock:
++	mutex_unlock(&chan->video_lock);
 +}
 +
 +static long tegra_channel_ioctl(struct file *filp, unsigned int cmd,
@@ -86,7 +88,7 @@ diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/pl
  /*
   * -----------------------------------------------------------------------------
   * Tegra channel frame setup and capture operations
-@@ -2622,9 +2677,9 @@
+@@ -2622,9 +2679,9 @@
   */
  static const struct v4l2_file_operations tegra_channel_fops = {
  	.owner		= THIS_MODULE,
