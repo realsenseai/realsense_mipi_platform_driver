@@ -534,6 +534,7 @@ static const struct dser_interface max9296_interface = {
 	.name = "max9296",
 };
 
+#ifdef D4XX_HAVE_MAX96712
 /* MAX96712 deserializer interface implementation */
 static const struct dser_interface max96712_interface = {
 	.set_i2c_fast_plus_mode = max96712_set_i2c_fast_plus_mode,
@@ -556,7 +557,9 @@ static const struct dser_interface max96712_interface = {
 	.init_settings = max96712_init_settings,
 	.name = "max96712",
 };
+#endif /* D4XX_HAVE_MAX96712 */
 
+#ifdef D4XX_HAVE_MAX96724
 static const struct dser_interface max96724_interface = {
 	.set_i2c_fast_plus_mode = max96724_set_i2c_fast_plus_mode,
 	.get_available_pipe_id = max96724_get_available_pipe_id,
@@ -578,6 +581,7 @@ static const struct dser_interface max96724_interface = {
 	.init_settings = max96724_init_settings,
 	.name = "max96724",
 };
+#endif /* D4XX_HAVE_MAX96724 */
 
 /* MAX9295 serializer interface implementation */
 static const struct ser_interface max9295_interface = {
@@ -592,6 +596,7 @@ static const struct ser_interface max9295_interface = {
 	.name = "max9295",
 };
 
+#ifdef D4XX_HAVE_MAX96717
 /* MAX96717 serializer interface implementation */
 static const struct ser_interface max96717_interface = {
 	.set_i2c_fast_plus_mode = max96717_set_i2c_fast_plus_mode,
@@ -606,8 +611,40 @@ static const struct ser_interface max96717_interface = {
 	.disable_gpio_tunneling = max96717_disable_gpio_tunneling,
 	.name = "max96717",
 };
+#endif /* D4XX_HAVE_MAX96717 */
 /* Max96717 only has one pipe, and its ID is 2 */
 #define MAX96717_PIPE_ID 2
+
+/* Which SerDes a camera sits behind. Predicates rather than open-coded ops
+ * comparisons, so a build that leaves a driver out needs no #ifdef at the
+ * dozen call sites - an absent part simply never matches.
+ */
+static inline bool ds5_dser_is_max96712(const struct ds5 *state)
+{
+#ifdef D4XX_HAVE_MAX96712
+	return state->dser_ops == &max96712_interface;
+#else
+	return false;
+#endif
+}
+
+static inline bool ds5_dser_is_max96724(const struct ds5 *state)
+{
+#ifdef D4XX_HAVE_MAX96724
+	return state->dser_ops == &max96724_interface;
+#else
+	return false;
+#endif
+}
+
+static inline bool ds5_ser_is_max96717(const struct ds5 *state)
+{
+#ifdef D4XX_HAVE_MAX96717
+	return state->ser_ops == &max96717_interface;
+#else
+	return false;
+#endif
+}
 
 #else /* !CONFIG_VIDEO_D4XX_SERDES */
 
@@ -684,13 +721,15 @@ static bool ds5_is_valid_device_type(u16 dev_type)
 #define ds5_from_depth_sd(sd) container_of(sd, struct ds5, depth.sd)
 #define ds5_from_ir_sd(sd) container_of(sd, struct ds5, ir.sd)
 #define ds5_from_rgb_sd(sd) container_of(sd, struct ds5, rgb.sd)
-#if LINUX_VERSION_CODE > KERNEL_VERSION(5, 15, 136)
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 148)
+/* msleep_range() is NVIDIA's, from camera_common.h: define it wherever that
+ * header is absent (every non-Tegra platform) or did not carry it. */
+#if !defined(CONFIG_TEGRA_CAMERA_PLATFORM) || \
+	(LINUX_VERSION_CODE > KERNEL_VERSION(5, 15, 136) && \
+	 LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 148))
 static inline void msleep_range(unsigned int delay_base)
 {
 	usleep_range(delay_base * 1000, delay_base * 1000 + 500);
 }
-#endif
 #endif
 
 #if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)
@@ -2492,11 +2531,11 @@ static int ds5_sensor_set_fmt(struct v4l2_subdev *sd,
 static int serdes_get_ser_pipe_id(struct ds5 *state, int dser_pipe_id,
 				  int ser_vc_id)
 {
-	if (state->ser_ops == &max96717_interface)
+	if (ds5_ser_is_max96717(state))
 		return MAX96717_PIPE_ID;
 
 	/* MAX9295 serializer: mapping depends on the deserializer */
-	if (state->dser_ops == &max96712_interface)
+	if (ds5_dser_is_max96712(state))
 		return ser_vc_id;
 
 	/* MAX9295 + MAX9296 deserializer */
@@ -2664,7 +2703,7 @@ static int ds5_configure(struct ds5 *state, bool *ser_pipe_armed)
 		 * and reuse it for every stream. All other serializers (MAX9295)
 		 * keep allocating a fresh deserializer pipe per stream.
 		 */
-		if (state->ser_ops == &max96717_interface &&
+		if (ds5_ser_is_max96717(state) &&
 		    state->dser_ops->get_multi_vc_pipe_id)
 			pipe_id =
 				state->dser_ops->get_multi_vc_pipe_id(state->dser_dev,
@@ -3897,9 +3936,7 @@ static int ds5_set_ser_esync_tunneling(struct ds5 *state, bool enable)
 
 	if (!state || !state->ser_dev)
 		return -EINVAL;
-	if (state->dser_ops != &max96712_interface
-	    && state->dser_ops != &max96724_interface
-	   )
+	if (!ds5_dser_is_max96712(state) && !ds5_dser_is_max96724(state))
 		return 0;
 
 	dev_dbg(&state->client->dev,
@@ -6643,8 +6680,10 @@ static int ds5_board_setup(struct ds5 *state)
 	 * nodes with link suffixes (e.g. max9295_a, max9295_b) are recognized. */
 	if (!strncmp(ser_node->name, "max9295", strlen("max9295"))) {
 		state->ser_ops = &max9295_interface;
+#ifdef D4XX_HAVE_MAX96717
 	} else if (!strncmp(ser_node->name, "max96717", strlen("max96717"))) {
 		state->ser_ops = &max96717_interface;
+#endif
 	} else {
 		dev_err(dev, "%s: Unsupported serializer = %s\n", __func__, ser_node->name);
 		err = -ENODEV;
@@ -6679,11 +6718,15 @@ static int ds5_board_setup(struct ds5 *state)
 	 * nodes with suffixes (e.g. max96712_a) are recognized. */
 	if (!strncmp(dser_node->name, "max9296", strlen("max9296"))) {
 		state->dser_ops = &max9296_interface;
+#ifdef D4XX_HAVE_MAX96712
 	} else if (!strncmp(dser_node->name, "max96712", strlen("max96712"))) {
 		state->dser_ops = &max96712_interface;
+#endif
+#ifdef D4XX_HAVE_MAX96724
 	} else if (!strncmp(dser_node->name, "max96724",
 			    strlen("max96724"))) {
 		state->dser_ops = &max96724_interface;
+#endif
 	} else {
 		dev_err(dev, "%s: Unsupported deserializer = %s\n", __func__, dser_node->name);
 		/* Should not be used, this is just to make sure we don't have NULL pointers */
@@ -6954,7 +6997,7 @@ static int ds5_gmsl_serdes_setup(struct ds5 *state)
 		 * if the chip is still booting after XCLR deassert the write fails.
 		 */
 		msleep(600);
-		if (state->ser_ops == &max96717_interface) {
+		if (ds5_ser_is_max96717(state)) {
 			/* Longer boot time for max96717 based products */
 			msleep(600);
 		}
@@ -9216,7 +9259,7 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	/* D58x on a MAX96712 deserializer runs the serdes link in PIXEL mode. */
 	state->d58x_pixel_mode = (dev_type == DS5_DEVICE_TYPE_D58X) &&
-				 (state->dser_ops == &max96712_interface);
+				 ds5_dser_is_max96712(state);
 	/* The FW serves only the formats valid for the serdes link mode, which
 	 * the host alone knows: tell it before asking for the descriptor.
 	 * Non-fatal, as in ds5_hw_init(): FW without this register rejects the

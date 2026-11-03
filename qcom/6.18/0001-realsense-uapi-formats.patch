@@ -1,0 +1,43 @@
+diff --git a/include/uapi/linux/media-bus-format.h b/include/uapi/linux/media-bus-format.h
+index ff62056fe..e3603b436 100644
+--- a/include/uapi/linux/media-bus-format.h
++++ b/include/uapi/linux/media-bus-format.h
+@@ -160,11 +160,24 @@
+ /* JPEG compressed formats - next is	0x4002 */
+ #define MEDIA_BUS_FMT_JPEG_1X8			0x4001
+ 
+-/* Vendor specific formats - next is	0x5002 */
++/* Vendor specific formats - next is	0x500d */
+ 
+ /* S5C73M3 sensor specific interleaved UYVY and JPEG */
+ #define MEDIA_BUS_FMT_S5C_UYVY_JPEG_1X8		0x5001
+ 
++/*
++ * Intel RealSense D4xx/D5xx carriers over MIPI CSI-2. Each names a transport
++ * whose wire data type does not describe the payload, so the capture driver
++ * must pick geometry and surface handling from the code, not from the DT.
++ * Values are shared with the NVIDIA Jetson builds of this driver - keep them
++ * identical across platforms.
++ */
++#define MEDIA_BUS_FMT_RS_NV12_FLAT_1X8		0x5008
++#define MEDIA_BUS_FMT_RS_SBGGR10P_1X8		0x5009
++#define MEDIA_BUS_FMT_RS_VARLEN_1X8		0x500a
++#define MEDIA_BUS_FMT_RS_H264_1X8		0x500b
++#define MEDIA_BUS_FMT_RS_JPEG_1X8		0x500c
++
+ /* HSV - next is	0x6002 */
+ #define MEDIA_BUS_FMT_AHSV8888_1X32		0x6001
+ 
+diff --git a/include/uapi/linux/videodev2.h b/include/uapi/linux/videodev2.h
+index 27db18776..fde0178c1 100644
+--- a/include/uapi/linux/videodev2.h
++++ b/include/uapi/linux/videodev2.h
+@@ -811,6 +811,8 @@ struct v4l2_pix_format {
+ #define V4L2_PIX_FMT_Y12I     v4l2_fourcc('Y', '1', '2', 'I') /* Greyscale 12-bit L/R interleaved */
+ #define V4L2_PIX_FMT_Y16I     v4l2_fourcc('Y', '1', '6', 'I') /* Greyscale 16-bit L/R interleaved */
+ #define V4L2_PIX_FMT_Z16      v4l2_fourcc('Z', '1', '6', ' ') /* Depth data 16-bit */
++#define V4L2_PIX_FMT_RW16     v4l2_fourcc('R', 'W', '1', '6') /* Raw data 16-bit */
++#define V4L2_PIX_FMT_RS_VARLEN v4l2_fourcc('R', 'S', 'V', 'L') /* RealSense variable-length data */
+ #define V4L2_PIX_FMT_MT21C    v4l2_fourcc('M', 'T', '2', '1') /* Mediatek compressed block mode  */
+ #define V4L2_PIX_FMT_MM21     v4l2_fourcc('M', 'M', '2', '1') /* Mediatek 8-bit block mode, two non-contiguous planes */
+ #define V4L2_PIX_FMT_MT2110T  v4l2_fourcc('M', 'T', '2', 'T') /* Mediatek 10-bit block tile mode */

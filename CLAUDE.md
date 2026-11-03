@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Linux kernel driver and userspace utilities for Intel RealSense D4XX series 3D depth cameras operating over GMSL (Gigabit Multimedia Serial Link) MIPI CSI-2 interface on NVIDIA Jetson platforms. Licensed under GPL-2.0.
 
-**Supported platforms:** Jetson AGX Xavier (JetPack 5.0.2, 5.1.2) and AGX Orin (JetPack 6.0, 6.1, 6.2, 6.2.1) and AGX Thor (JetPack 7.0, 7.1)
+**Supported platforms:** Jetson AGX Xavier (JetPack 5.0.2, 5.1.2) and AGX Orin (JetPack 6.0, 6.1, 6.2, 6.2.1) and AGX Thor (JetPack 7.0, 7.1). Qualcomm QCS6490 / RB3 Gen 2 is **build-only** so far (RSDEV-15171) — it compiles and links, it does not stream.
 **Supported cameras:** D457 (primary), D401, D40x, D41x, D43x, D45x series
 
 ## Build Commands
@@ -36,6 +36,18 @@ CI runs these three steps for each JetPack version (see `.github/workflows/build
 ```
 `reset` must come **before** the version — the arg loop `break`s on the first non-flag token, so `apply_patches.sh <version> reset` silently runs an *apply* instead (and then fails every hunk against an already-patched tree).
 The `--one-cam`/`--dual-cam` options only apply to JetPack 5.0.2. The target version is the trailing argv if given, otherwise the `jetpack_version` file (written by `setup_workspace.sh`) — so a one-off `./apply_patches.sh reset 5.1.2` does not disturb the active version. **Non-interactive:** `apply_patches.sh` prompts via `read` when a sub-repo has local changes and, under `set -e`, aborts (rc=1) on EOF — pipe confirmations with `yes '' | ./apply_patches.sh [reset]` when running headless.
+
+### Qualcomm (QCS6490 / RB3 Gen 2) build
+
+A parallel flow — `setup_workspace_qcom.sh` / `apply_patches_qcom.sh` / `build_all_qcom.sh` + `scripts/setup-common-qcom`, patches and shims under `qcom/`, details in `README_QCOM.md`. It is deliberately **separate** from the Jetson scripts, not a mode of them, so a JetPack change cannot regress it (and vice versa). `reset` comes before the version here too, but unlike `apply_patches.sh` the apply path resets first and is non-interactive, so re-running it is idempotent.
+
+Three rules this flow rests on:
+
+- **No second copy of the SerDes sources.** `max9295.c`/`max9296.c` exist in this repo only as `nvidia-oot/6.0/0002`; `apply_patches_qcom.sh` replays that same carrier onto a pinned `linux-nv-oot` donor and symlinks the result. Never materialise a `qcom/` copy — it would reintroduce exactly the per-generation drift the max96712 carriers already fight.
+- **A board that can only ever have one SerDes pair may gate the rest out.** d4xx names all five drivers in its `dser_interface`/`ser_interface` tables, so `d4xx.ko` normally needs all five modules. `CONFIG_VIDEO_D4XX_SERDES_MAX9296_ONLY` (set only by `qcom/modules/Kbuild`) drops the MAX96712/96717/96724 tables and their DT branches; the `D4XX_HAVE_MAX9671x` guards in `d4xx.h` default all of them **on**, so every other platform is untouched. Comparison sites go through `ds5_{dser,ser}_is_max96712/96724/96717()`, which compile to `false` for an absent part — add new ones there rather than open-coding an `ops ==` test, or a gated build stops compiling. Drop the macro once no platform needs it: a guard nothing defines is dead code.
+- **Upstream kernels ship their own Maxim GMSL drivers under our names.** `drivers/staging/media/max96712` (an unrelated Renesas V4L2 subdev driver, no API in common with ours) builds as `max96712.ko` *and* claims `maxim,max96712` + `maxim,max96724`; `drivers/media/i2c/max96717.c` builds as `max96717.ko`. Nothing collides on QCOM today only because the gating above means we build neither — enabling the full set there also requires disabling `CONFIG_VIDEO_MAX96712`/`CONFIG_VIDEO_MAX96717` in `qcom/<ver>/realsense.config`, or `depmod` binds the name to the in-tree module and silently strands d4xx's `max96712_*` symbols. There are no in-tree max9295/max9296. The NVIDIA trees have none of this, so the hazard is new with any upstream-based platform.
+
+Off-Tegra porting shims live in `qcom/compat-include/` (`nvidia/conftest.h`, `media/camera_common.h`). The SerDes sources reference no symbol *declared* by `camera_common.h` — what they use is its transitive includes — so that shim is just that include subset; widen it only for a symbol genuinely declared there. `msleep_range()` is also a `camera_common.h` helper, and `d4xx_main.c` now defines it whenever that header is absent (any non-Tegra platform), not only in the 5.15.136–147 window.
 
 ### Deploy to Jetson
 

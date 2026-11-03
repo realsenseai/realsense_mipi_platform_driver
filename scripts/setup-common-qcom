@@ -1,0 +1,96 @@
+#!/bin/bash
+# Shared settings for the Qualcomm build flow (RSDEV-15171).
+#
+# Mirrors scripts/setup-common, which serves the NVIDIA Jetson flow. The two are
+# kept separate on purpose: the Jetson flow syncs a dozen NVIDIA repos keyed by
+# L4T revision, while the Qualcomm flow needs one upstream-style kernel plus a
+# SerDes source donor. Folding both into one file would make every JetPack
+# change a Qualcomm regression risk.
+
+SUPPORTED_QCOM="6.18"
+
+QCOM_INPUT_VERSION="$1"
+if [[ -z "${QCOM_INPUT_VERSION}" || "$1" == "-h" ]]; then
+    QCOM_INPUT_VERSION="${SUPPORTED_QCOM%%,*}"
+    if [[ -f "qcom_version" ]]; then
+        QCOM_INPUT_VERSION="$(cat qcom_version)"
+    fi
+fi
+
+if [[ $1 == "-h" ]]; then
+    echo "supported Qualcomm kernel versions: ${SUPPORTED_QCOM}"
+    echo "pre-selected/active: ${QCOM_INPUT_VERSION:-none}"
+    exit 0
+fi
+
+export ARCH=arm64
+export QCOM_INPUT_VERSION
+export QCOM_VERSION="${QCOM_INPUT_VERSION}"
+
+# Qualcomm Linux kernel. QCOM_KERNEL_PIN is what `reset` returns to, so the tree
+# is reproducible even though the branch moves daily.
+QCOM_KERNEL_REPO="https://github.com/qualcomm-linux/kernel.git"
+# SerDes donor: max9295/max9296/max96712 have no standalone copy in this repo,
+# they are NVIDIA sources plus nvidia-oot/6.0/000{2,3}. Deriving them here from
+# the same patch carriers keeps one source of truth across all platforms.
+NVOOT_REPO="https://gitlab.com/nvidia/nv-tegra/linux-nv-oot.git"
+
+case "${QCOM_INPUT_VERSION}" in
+    6.18)
+        QCOM_KERNEL_BRANCH="qcom-6.18.y"
+        QCOM_KERNEL_PIN="94124ba1e75d5856e99ec30cb6bf779ea0717b20"
+        NVOOT_TAG="jetson_36.4.3"
+        NVOOT_PATCH_DIR="nvidia-oot/6.0"
+        ;;
+    *)
+        echo "Unsupported Qualcomm kernel version ${QCOM_INPUT_VERSION}! Supported: ${SUPPORTED_QCOM}"
+        exit 1
+        ;;
+esac
+
+export QCOM_KERNEL_REPO QCOM_KERNEL_BRANCH QCOM_KERNEL_PIN
+export NVOOT_REPO NVOOT_TAG NVOOT_PATCH_DIR
+
+export BUILD_SRCS="sources_qcom_${QCOM_INPUT_VERSION}"
+export QCOM_KERNEL_SRC="${BUILD_SRCS}/kernel"
+export QCOM_NVOOT_SRC="${BUILD_SRCS}/nv-oot"
+export QCOM_MODULES_SRC="${BUILD_SRCS}/modules"
+
+# QCS6490 is served by the generic arm64 defconfig; camss, CCI and the GMSL
+# helpers are modules there.
+export QCOM_DEFCONFIG="defconfig"
+export QCOM_DTB="qcom/qcs6490-rb3gen2.dtb"
+
+function version_lt {
+    IFS='.' read -r -a v1 <<< "$1"
+    IFS='.' read -r -a v2 <<< "$2"
+    for i in 0 1 2; do
+        [[ ${v1[i]:-0} -lt ${v2[i]:-0} ]] && return 0
+        [[ ${v1[i]:-0} -gt ${v2[i]:-0} ]] && return 1
+    done
+    return 1
+}
+
+# Cross toolchain. Prefer one already in the tree or on PATH; only download as a
+# last resort. QCOM_TOOLCHAIN_URL is consumed by setup_workspace_qcom.sh.
+export QCOM_GCC_DIR="qcom-gcc"
+export QCOM_TOOLCHAIN_VER="13.3.rel1"
+export QCOM_TOOLCHAIN_URL="https://developer.arm.com/-/media/Files/downloads/gnu/${QCOM_TOOLCHAIN_VER}/binrel/arm-gnu-toolchain-${QCOM_TOOLCHAIN_VER}-x86_64-aarch64-none-linux-gnu.tar.xz"
+
+# Echo the cross-compile prefix to use, or nothing for a native aarch64 build.
+function qcom_cross_compile {
+    [[ $(uname -m) == aarch64 ]] && return 0
+    local devdir="${1:-$PWD}"
+    if [[ -x "${devdir}/${QCOM_GCC_DIR}/bin/aarch64-none-linux-gnu-gcc" ]]; then
+        echo "${devdir}/${QCOM_GCC_DIR}/bin/aarch64-none-linux-gnu-"
+    elif [[ -x "${devdir}/l4t-gcc/7.x/bin/aarch64-none-linux-gnu-gcc" ]]; then
+        # The JetPack 7.x toolchain is the same ARM GNU aarch64-none-linux-gnu
+        # build; reuse it rather than downloading a second copy.
+        echo "${devdir}/l4t-gcc/7.x/bin/aarch64-none-linux-gnu-"
+    elif command -v aarch64-linux-gnu-gcc > /dev/null; then
+        echo "aarch64-linux-gnu-"
+    fi
+}
+
+echo "Qualcomm kernel version ${QCOM_INPUT_VERSION} (${QCOM_KERNEL_BRANCH})"
+echo "${QCOM_INPUT_VERSION}" > qcom_version
