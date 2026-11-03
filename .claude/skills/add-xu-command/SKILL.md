@@ -5,15 +5,14 @@ description: Add a new XU command/control for the D4XX driver in this repository
 
 # Add XU Command Skill
 
-Add a new XU-style control in the D4XX stack with consistent driver wiring, test updates, and command-line validation.
+Add a new XU-style control in the D4XX stack with consistent driver wiring and command-line validation. Automated tests for the control go in `perc_hw_fw-rs400`'s `fw_tests`, not this repo (step 5).
 
 ## Scope
 
 Use this skill when implementing a new XU/extended control path that maps to D4XX firmware command/register behavior and is exposed as a V4L2 control.
 
 - Primary implementation file: `kernel/realsense/d4xx_main.c`
-- Test constants mirror: `test/v4l2_test/d4xx/constants.py`
-- Control tests: `test/v4l2_test/tests/test_controls.py`
+- Control tests: the `fw_tests` suite in the `perc_hw_fw-rs400` repo (`DS5_B0_DEV/fw_tests/`), run on every driver PR by Jenkins `test_driver`
 - Optional app-side selector mapping: `utilities/streamApp/camera_sub_system/include/CSSTypes.h`
 
 ## Inputs To Collect First
@@ -85,36 +84,25 @@ In `ds5_ctrl_init()`:
 2. Store the returned pointer in `ctrls->*` only if a write path needs to access it later.
 3. Preserve existing control registration order/style.
 
-### 5. Mirror test constants
+### 5. Write tests (mandatory, in `perc_hw_fw-rs400`)
 
-Update `test/v4l2_test/d4xx/constants.py`:
+Tests are **always required** for every new XU control, but they are **not added to this repo**. Write them in the `fw_tests` suite of `perc_hw_fw-rs400` (`DS5_B0_DEV/fw_tests/`), following that repo's `add-fw-test` skill and conventions, and open them as a companion PR there. `test/standalone_tests/` here holds manual tools only and no CI runs it.
 
-1. Add `DS5_CAMERA_CID_* = DS5_CAMERA_CID_BASE + <offset>` with the same offset as `d4xx_main.c`.
-2. Keep numbering synchronized with the driver file to avoid test drift.
+`add-fw-test` governs **how** the tests are written (file layout, naming, helpers, markers). This step only fixes **what** they must cover, by the operations the control supports:
 
-### 6. Write tests (mandatory)
-
-Tests are **always required** for every new XU control. Add a new `class Test<ControlName>` in `test/v4l2_test/tests/test_controls.py`, decorated with `@pytest.mark.d457`.
-
-Write **every applicable test** from the list below based on which operations the control supports:
-
-| Test | When to write |
+| Behaviour to cover | When |
 |------|--------------|
-| `test_<name>_enumerated` | Always — verify control appears in `enumerate_controls()` |
-| `test_<name>_read` | When GET is supported — verify value is readable and within `[min, max]` |
-| `test_<name>_write_legal` | When SET is supported — verify legal values (min, mid, max) are accepted |
-| `test_<name>_write_rejected` | When GET-only — verify write raises `OSError` |
-| `test_<name>_set_illegal` | When SET is supported — verify out-of-range values are clamped to `[min, max]` |
-| `test_<name>_default` | When GET + SET — verify writing default and reading back returns default |
-| `test_<name>_roundtrip` | When GET + SET — verify set/get roundtrip for min, mid, max; restore original in `finally` |
+| Control is enumerated on the expected node(s) | Always |
+| Read returns a value within `[min, max]` | GET supported |
+| Legal values (min, mid, max) are accepted | SET supported |
+| A write is rejected | GET-only |
+| Out-of-range writes are clamped or rejected | SET supported |
+| Writing the default reads back the default | GET + SET |
+| Set/get round-trip for min, mid, max, restoring the original value | GET + SET |
 
-**Clamping note:** `VIDIOC_S_CTRL` silently clamps out-of-range writes to `[min, max]`. Verify clamped value with a subsequent read. If hard rejection is required, use `VIDIOC_S_EXT_CTRLS` (returns `ERANGE`) and assert with `pytest.raises(OSError)`.
+V4L2 semantics to assert against: `VIDIOC_S_CTRL` silently clamps out-of-range writes to `[min, max]`, while `VIDIOC_S_EXT_CTRLS` rejects them with `ERANGE`.
 
-Always restore the original value in a `finally` block when a test changes a persistent control value.
-
-**No magic numbers:** Declare `MIN`, `MAX`, `MID`, and `DEFAULT` as class-level constants at the top of the test class. Use these names everywhere in the test methods — including boundary arithmetic (`self.MAX + 1`, `self.MIN - 1`) and assertion messages. Never write raw numeric literals in test logic.
-
-### 7. Optional selector/app mapping
+### 6. Optional selector/app mapping
 
 If userspace selector mapping is required, update:
 
@@ -133,8 +121,7 @@ Run these checks after coding:
    - `v4l2-ctl -d /dev/video0 --get-ctrl=<control_name>`
 4. Verify control write (when SET is supported):
    - `v4l2-ctl -d /dev/video0 --set-ctrl=<control_name>=<value>`
-5. Run the new test class:
-   - `cd test && python3 run_ci.py -r test_<name>`
+5. Run the new `fw_tests` tests from `perc_hw_fw-rs400` against the rig running the new driver.
 
 ## Code Style and Safety Rules
 

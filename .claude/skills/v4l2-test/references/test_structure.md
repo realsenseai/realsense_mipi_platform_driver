@@ -5,7 +5,7 @@ Overview of the v4l2_test directory organization and test categories.
 ## Directory Structure
 
 ```
-test/v4l2_test/
+test/standalone_tests/v4l2_test/
 ├── conftest.py              # Pytest fixtures (camera discovery, device fixtures)
 ├── pytest.ini               # Pytest configuration
 ├── report.py                # Custom test report plugin

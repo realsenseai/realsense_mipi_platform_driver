@@ -5,7 +5,7 @@ from pathlib import Path
 
 from ..v4l2.ioctls import V4L2_CTRL_CLASS_CAMERA
 
-_D4XX_C = Path(__file__).resolve().parents[3] / "kernel" / "realsense" / "d4xx_main.c"
+_D4XX_C = Path(__file__).resolve().parents[4] / "kernel" / "realsense" / "d4xx_main.c"
 
 
 def _fw_error_code_min(src=_D4XX_C):

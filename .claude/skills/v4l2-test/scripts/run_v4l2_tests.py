@@ -61,10 +61,10 @@ class V4L2TestRunner:
 
         # Common paths to check
         paths_to_check = [
-            "~/realsense_mipi_platform_driver/tests/v4l2_test",
-            "~/realsense_tests/test/v4l2_test",
+            "~/realsense_mipi_platform_driver/test/standalone_tests/v4l2_test",
+            "~/realsense_tests/test/standalone_tests/v4l2_test",
             "~/tests/v4l2_test",
-            "/home/*/realsense_mipi_platform_driver/tests/v4l2_test",
+            "/home/*/realsense_mipi_platform_driver/test/standalone_tests/v4l2_test",
         ]
 
         for path in paths_to_check:

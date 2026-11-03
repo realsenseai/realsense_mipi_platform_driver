@@ -312,7 +312,7 @@ ssh -o ControlPath="/tmp/debug-ssh-${USERNAME}-${TARGET}" -O exit ${USERNAME}@${
 [Suggest specific test commands the user should run to verify the bug is fixed, e.g.:]
 - `v4l2-ctl -d /dev/video0 --stream-mmap --stream-count=100` (for streaming bugs)
 - `v4l2-ctl -d /dev/video0 -C fw_version` (for firmware bugs)
-- `cd test && python3 run_ci.py -r test_name` (for specific test failures)
+- `cd test/standalone_tests && pytest -vs -m d457 -k test_name v4l2_test/` (for specific test failures)
 ```
 
 ---

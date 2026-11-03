@@ -53,7 +53,7 @@ The `reset_issue_dmesg.txt` log shows 35 consecutive userspace-triggered HW rese
 - **Cooldown**: Send two HW resets <5s apart. Verify the second one returns `-EAGAIN` with a throttle warning.
 - **Probe bypass**: Verify `modprobe d4xx` still performs initial HW reset successfully without tripping the circuit-breaker.
 - **Phase 1 safety**: On a dual-camera Orin setup, HW-reset camera A while camera B is streaming. Check dmesg for "may have disrupted sibling" warning. Confirm camera B's stream is unaffected.
-- **Regression**: Run `python3 run_ci.py` from `test/` on a D457 to verify no existing tests break.
+- **Regression**: Run `pytest -vs -m d457 v4l2_test/` from `test/standalone_tests/` on a D457 to verify no existing tests break.
 
 ## Design Decisions
 
