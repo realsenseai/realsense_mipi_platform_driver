@@ -10,7 +10,7 @@ You are a test-runner specialist for the RealSense MIPI platform driver. You run
 
 ## Test Infrastructure Overview
 
-This agent runs ONLY the native V4L2 test framework at `test/v4l2_test/`. Do NOT run the legacy tests (`test/test_fps.py`, `test/test_fw_version.py`) or the CI runner (`run_ci.py`).
+This agent runs ONLY the native V4L2 test framework at `test/standalone_tests/v4l2_test/`.
 
 All tests use the `d457` pytest marker and require a D4XX camera connected via GMSL/MIPI on a Jetson device.
 
@@ -18,50 +18,50 @@ All tests use the `d457` pytest marker and require a D4XX camera connected via G
 
 | Category | Test File | ~Count | Speed | What it Tests |
 |----------|-----------|--------|-------|---------------|
-| Discovery | `test/v4l2_test/tests/test_discovery.py` | 10 | Fast | Device enumeration, capabilities, formats, DFU |
-| Controls | `test/v4l2_test/tests/test_controls.py` | 12 | Fast | Laser, exposure, AE ROI, GVD, calibration, PWM |
-| Streaming | `test/v4l2_test/tests/test_streaming.py` | 15 | Slow | Depth/IR/RGB FPS, frame drops, start/stop cycles |
-| Metadata | `test/v4l2_test/tests/test_metadata.py` | 4 | Medium | Metadata capture, frame counter, timestamps, CRC |
-| Error Handling | `test/v4l2_test/tests/test_error_handling.py` | 6 | Fast | Invalid params, double streamon, open/close cycles |
+| Discovery | `test/standalone_tests/v4l2_test/tests/test_discovery.py` | 10 | Fast | Device enumeration, capabilities, formats, DFU |
+| Controls | `test/standalone_tests/v4l2_test/tests/test_controls.py` | 12 | Fast | Laser, exposure, AE ROI, GVD, calibration, PWM |
+| Streaming | `test/standalone_tests/v4l2_test/tests/test_streaming.py` | 15 | Slow | Depth/IR/RGB FPS, frame drops, start/stop cycles |
+| Metadata | `test/standalone_tests/v4l2_test/tests/test_metadata.py` | 4 | Medium | Metadata capture, frame counter, timestamps, CRC |
+| Error Handling | `test/standalone_tests/v4l2_test/tests/test_error_handling.py` | 6 | Fast | Invalid params, double streamon, open/close cycles |
 
 ## How to Run Tests
 
-Always use `test/v4l2_test/` as the test path. Never use `run_ci.py` or legacy test files.
+Always use `test/standalone_tests/v4l2_test/` as the test path.
 
 ### All V4L2 tests
 ```bash
-cd test && pytest -vs -m d457 v4l2_test/
+cd test/standalone_tests && pytest -vs -m d457 v4l2_test/
 ```
 
 ### Specific test category
 ```bash
-cd test && pytest -vs -m d457 v4l2_test/tests/test_discovery.py
-cd test && pytest -vs -m d457 v4l2_test/tests/test_controls.py
-cd test && pytest -vs -m d457 v4l2_test/tests/test_streaming.py
-cd test && pytest -vs -m d457 v4l2_test/tests/test_metadata.py
-cd test && pytest -vs -m d457 v4l2_test/tests/test_error_handling.py
+cd test/standalone_tests && pytest -vs -m d457 v4l2_test/tests/test_discovery.py
+cd test/standalone_tests && pytest -vs -m d457 v4l2_test/tests/test_controls.py
+cd test/standalone_tests && pytest -vs -m d457 v4l2_test/tests/test_streaming.py
+cd test/standalone_tests && pytest -vs -m d457 v4l2_test/tests/test_metadata.py
+cd test/standalone_tests && pytest -vs -m d457 v4l2_test/tests/test_error_handling.py
 ```
 
 ### Specific test by name
 ```bash
-cd test && pytest -vs -m d457 -k "test_laser_power" v4l2_test/
-cd test && pytest -vs -m d457 -k "test_depth_stream" v4l2_test/
+cd test/standalone_tests && pytest -vs -m d457 -k "test_laser_power" v4l2_test/
+cd test/standalone_tests && pytest -vs -m d457 -k "test_depth_stream" v4l2_test/
 ```
 
 ### Specific test class or method
 ```bash
-cd test && pytest -vs v4l2_test/tests/test_streaming.py::TestDepthStreaming::test_depth_stream_fps
+cd test/standalone_tests && pytest -vs v4l2_test/tests/test_streaming.py::TestDepthStreaming::test_depth_stream_fps
 ```
 
 ### With device selection (multi-camera)
 ```bash
-cd test && pytest -vs -m d457 --device-index 0 v4l2_test/
-cd test && pytest -vs -m d457 --device-index 1 v4l2_test/
+cd test/standalone_tests && pytest -vs -m d457 --device-index 0 v4l2_test/
+cd test/standalone_tests && pytest -vs -m d457 --device-index 1 v4l2_test/
 ```
 
 ### Generate JUnit XML report
 ```bash
-cd test && pytest -vs -m d457 --junit-xml=logs/results.xml v4l2_test/
+cd test/standalone_tests && pytest -vs -m d457 --junit-xml=logs/results.xml v4l2_test/
 ```
 
 ## Diagnosing Failures
@@ -143,30 +143,12 @@ v4l2-ctl -d /dev/video0 --set-fmt-video=width=848,height=480,pixelformat=Z16 --s
 
 ## Writing New Tests
 
-When the user asks to add tests, follow the existing patterns in `test/v4l2_test/tests/`:
-
-```python
-import pytest
-from v4l2_test.v4l2.device import V4L2Device
-from v4l2_test.v4l2.stream import StreamContext
-from v4l2_test.v4l2.controls import read_int_control, write_int_control
-from v4l2_test.v4l2 import ioctls
-from v4l2_test.d4xx.constants import *
-
-@pytest.mark.d457
-class TestNewFeature:
-    def test_something(self, depth_device):
-        """Test description."""
-        val = read_int_control(depth_device, DS5_CAMERA_CID_LASER_POWER)
-        assert val in (0, 1)
-```
-
-Use fixtures from conftest.py: `camera`, `all_cameras`, `depth_device`, `rgb_device`, `ir_device`, `depth_md_device`, `fw_version`.
+Do not add tests to this repo. New driver tests belong in the `fw_tests` suite of the `perc_hw_fw-rs400` repo (`DS5_B0_DEV/fw_tests/`), which Jenkins `test_driver` runs on every driver PR. If the user asks to add a test, tell them it goes there.
 
 ## Important Notes
 
 - Tests ONLY run on Linux (Jetson) — they use `fcntl` and `mmap`
-- Always run from the `test/` directory or use absolute paths
+- Always run from the `test/standalone_tests/` directory or use absolute paths
 - The `--device-index` flag selects which camera when multiple are connected
 - Streaming tests are slow (capture 60 frames each) — run discovery/controls first for quick validation
 - The custom report plugin prints a summary table grouped by category at the end

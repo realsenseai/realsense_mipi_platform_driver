@@ -81,7 +81,7 @@ def _fourcc(s: str) -> int:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ctypes structs (matching kernel ABI; adapted from test/v4l2_test/v4l2/structs.py)
+# ctypes structs (matching kernel ABI; adapted from test/standalone_tests/v4l2_test/v4l2/structs.py)
 # ─────────────────────────────────────────────────────────────────────────────
 class v4l2_capability(ctypes.Structure):
     _fields_ = [
