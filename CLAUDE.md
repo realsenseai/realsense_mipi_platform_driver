@@ -213,6 +213,8 @@ Each MIPI segment's lane count comes from a **different** DT property, so the ca
 - A stored kthread pointer whose worker may return before teardown must own an
   extra task reference. Acquire it before waking the new task, release it after
   `kthread_stop()`, and clear the stored pointer on creation failure and after stop.
+- On Tegra kernels below 6.8, DFU lock order: `state->lock` (when held) → `ds5_maintenance_sem` → `serdes_lock__` (when held) → `ds5_io_sem` → chip-private SerDes locks. Never acquire maintenance under `serdes_lock__`, or camera/topology locks under `ds5_io_sem`. Neither semaphore spans the download; only the depth instance owns the shared clock session. `ds5_dfu_read_lock`/`ds5_dfu_read_unlock` map to the Linux read locks there; JP7/non-Tegra compile them out together with the admission state and root lookup.
+- `ds5_read`/`ds5_write`/`ds5_raw_read`/`ds5_raw_write`/`ds5_read_poll` can return `-EBUSY` (admission) or `-EIO` (latched host-clock fault) without a transfer. Keep the access check and transfer under the same I/O read lock; existing transport retry behaviour is unchanged.
 - In SERDES builds, hold `serdes_lock__` while scanning or assigning global topology slots (`ds5_inited[]`, `dser_inited[]`).
 - Protect per-camera mutable slot state (`ds5_primary`, `depth/rgb/ir/imu_streaming`) with `struct ds5_dev::lock`.
 - Protect per-deserializer slot assignment (`dser_dev`) with `struct dser_control::lock`.
