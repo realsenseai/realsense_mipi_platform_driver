@@ -1,0 +1,26 @@
+# Out-of-tree D4XX + GMSL SerDes modules for Qualcomm platforms (RSDEV-15171).
+#
+# apply_patches_qcom.sh populates the build directory with symlinks to the
+# driver sources, then build_all_qcom.sh runs kbuild here with M=.
+#
+# The RB3 Gen 2 vision mezzanine carries a MAX9296A deserializer and MAX9295
+# serializers, and nothing else can be fitted to it, so this build gates the
+# MAX96712/MAX96717/MAX96724 wiring out of d4xx and ships two SerDes modules.
+# That also sidesteps the in-tree drivers of those names - see README_QCOM.md.
+
+obj-m += d4xx.o
+d4xx-y := d4xx_main.o d4xx_desc.o
+
+obj-m += max9295.o
+obj-m += max9296.o
+
+ccflags-y += -DCONFIG_VIDEO_D4XX_SERDES
+ccflags-y += -DCONFIG_VIDEO_D4XX_SERDES_MAX9296_ONLY
+ccflags-y += -I$(src)/include
+# Compat shims for nvidia/conftest.h and media/camera_common.h. Last on the
+# include path so a real kernel header always wins.
+ccflags-y += -I$(src)/compat-include
+# The RealSense private media-bus codes. Force-included rather than patched
+# into the kernel's UAPI: every consumer here is out-of-tree, so the board
+# keeps its stock Ubuntu kernel.
+ccflags-y += -include $(src)/compat-include/media/rs-formats.h

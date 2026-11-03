@@ -41,12 +41,30 @@ struct dser_interface;
 struct ser_interface;
 struct ds5_variant;
 
+/* Which SerDes parts this build carries. A board that can only ever have the
+ * MAX9295/MAX9296 pair (the RB3 Gen 2 vision mezzanine) sets
+ * CONFIG_VIDEO_D4XX_SERDES_MAX9296_ONLY and ships two modules instead of five;
+ * every other build carries all of them. Drop the opt-out once no supported
+ * platform needs it - a guard nothing defines is dead code.
+ */
+#ifndef CONFIG_VIDEO_D4XX_SERDES_MAX9296_ONLY
+#define D4XX_HAVE_MAX96712
+#define D4XX_HAVE_MAX96717
+#define D4XX_HAVE_MAX96724
+#endif
+
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 #include <media/max9295.h>
 #include <media/max9296.h>
+#ifdef D4XX_HAVE_MAX96712
 #include <media/max96712.h>
+#endif
+#ifdef D4XX_HAVE_MAX96717
 #include <media/max96717.h>
+#endif
+#ifdef D4XX_HAVE_MAX96724
 #include <media/max96724.h>
+#endif
 #else
 #include <media/gmsl-link.h>
 #define GMSL_CSI_DT_YUV422_8 0x1E

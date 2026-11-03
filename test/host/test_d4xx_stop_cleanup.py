@@ -38,8 +38,12 @@ wire_start = s.index("static u8 ds5_wire_data_type(")
 wire_end = s.index("\n}", wire_start) + 2
 role_start = s.index("static inline enum ds5_mux_pad ds5_role(")
 role_end = s.index("\n}", role_start) + 2
+ser_start = s.index("static inline bool ds5_ser_is_max96717(")
+ser_end = s.index("\n}", ser_start) + 2
 f = (
     s[role_start:role_end]
+    + "\n"
+    + s[ser_start:ser_end]
     + "\n"
     + s[wire_start:wire_end]
     + "\n"
@@ -77,6 +81,7 @@ typedef uint16_t u16;
 typedef uint32_t u32;
 #define CONFIG_VIDEO_D4XX_SERDES
 #define CONFIG_TEGRA_CAMERA_PLATFORM
+#define D4XX_HAVE_MAX96717
 #define PIPE_NOT_CONFIGURED -1
 #define DS5_MAX_STREAMS 4
 #define GMSL_CSI_DT_RGB_888 0x24

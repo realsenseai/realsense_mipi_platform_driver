@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Linux kernel driver and userspace utilities for Intel RealSense D4XX series 3D depth cameras operating over GMSL (Gigabit Multimedia Serial Link) MIPI CSI-2 interface on NVIDIA Jetson platforms. Licensed under GPL-2.0.
 
-**Supported platforms:** Jetson AGX Xavier (JetPack 5.0.2, 5.1.2) and AGX Orin (JetPack 6.0, 6.1, 6.2, 6.2.1) and AGX Thor (JetPack 7.0, 7.1)
+**Supported platforms:** Jetson AGX Xavier (JetPack 5.0.2, 5.1.2) and AGX Orin (JetPack 6.0, 6.1, 6.2, 6.2.1) and AGX Thor (JetPack 7.0, 7.1). Qualcomm QCS6490 / RB3 Gen 2 on **Ubuntu 24.04** is **build-only** so far (RSDEV-15171) — it compiles, links and packages as DKMS, it does not stream.
 **Supported cameras:** D457 (primary), D401, D40x, D41x, D43x, D45x series
 
 ## Build Commands
@@ -36,6 +36,20 @@ CI runs these three steps for each JetPack version (see `.github/workflows/build
 ```
 `reset` must come **before** the version — the arg loop `break`s on the first non-flag token, so `apply_patches.sh <version> reset` silently runs an *apply* instead (and then fails every hunk against an already-patched tree).
 The `--one-cam`/`--dual-cam` options only apply to JetPack 5.0.2. The target version is the trailing argv if given, otherwise the `jetpack_version` file (written by `setup_workspace.sh`) — so a one-off `./apply_patches.sh reset 5.1.2` does not disturb the active version. **Non-interactive:** `apply_patches.sh` prompts via `read` when a sub-repo has local changes and, under `set -e`, aborts (rc=1) on EOF — pipe confirmations with `yes '' | ./apply_patches.sh [reset]` when running headless.
+
+### Qualcomm (QCS6490 / RB3 Gen 2) build
+
+Targets **Ubuntu 24.04 LTS** (`linux-qcom` 6.8) — the newest Ubuntu Canonical publishes for this board; the 25.10/26.04 Qualcomm images are IQ-X only. A parallel flow: `setup_workspace_qcom.sh` / `apply_patches_qcom.sh` / `build_all_qcom.sh` + `scripts/setup-common-qcom`, shims and patches under `qcom/`, details in `README_QCOM.md`. Deliberately **separate** from the Jetson scripts, not a mode of them, so a JetPack change cannot regress it (and vice versa). `reset` comes before the series here too, but unlike `apply_patches.sh` the apply path resets first and is non-interactive, so re-running it is idempotent.
+
+Five rules this flow rests on:
+
+- **Nothing is patched into the kernel.** Every consumer is out-of-tree, so the board keeps Canonical's signed, updated kernel. The RealSense private media-bus codes live in `qcom/compat-include/media/rs-formats.h`, force-included into both module trees — **not** a UAPI patch, because Z16/Y8I/Y12I/Y16I/GREY/SGRBG16 are already upstream from 6.8 and librealsense takes its fourccs from its own headers. Do not reintroduce a kernel patch here.
+- **CAMSS is forked out-of-tree, not patched in.** `CONFIG_VIDEO_QCOM_CAMSS` is `tristate`, every object is local to its directory and it includes only public kernel headers, so the fork builds OOT. DKMS installs to `updates/dkms/`, which `depmod` prefers over `kernel/`, so it replaces the stock `qcom-camss.ko` with no blacklist and no kernel-package change. `qcom/modules/camss.Kbuild` hardcodes the object list and `apply_patches_qcom.sh` warns when the kernel's Makefile drifts from it (6.8 and 6.18 already differ).
+- **Metadata needs no kernel change here, unlike Jetson.** Tegra's VI has one channel per stream, so metadata meant teaching the VI *core* to make an extra one. CAMSS registers a `camss_video` per `vfe_line`, so **every RDI is already its own `/dev/videoN`**; metadata is just another `(VC, DT)` → RDI route. That is why the whole port stays out-of-tree.
+- **Stay on 6.8 for the VC mapping.** Ubuntu's 6.8 CAMSS passes the loop index as the virtual channel (`__csid_configure_rdi_stream(csid, enable, i)`), giving pad N → RDI N → VC N with pad N's format supplying the data type — exactly what our four streams need. Mainline later decoupled port index from VC and passes a hardcoded `0`; `qcom-6.18.y` and `qcom-7.3` still do. Moving to a newer kernel **re-introduces** VC work.
+- **No second copy of the SerDes sources.** `max9295.c`/`max9296.c` exist in this repo only as `nvidia-oot/6.0/0002`; `apply_patches_qcom.sh` replays that carrier onto a pinned `linux-nv-oot` donor and symlinks the result. Never materialise a `qcom/` copy. `CONFIG_VIDEO_D4XX_SERDES_MAX9296_ONLY` (set only by `qcom/modules/Kbuild`) drops the MAX96712/96717/96724 tables and their DT branches; the `D4XX_HAVE_MAX9671x` guards in `d4xx.h` default all of them **on**, so every other platform is untouched. Comparison sites go through `ds5_{dser,ser}_is_max96712/96724/96717()`, which compile to `false` for an absent part — add new ones there rather than open-coding an `ops ==` test. That gating also means we build no `max96712.ko`/`max96717.ko`, so the in-tree drivers of those names cannot collide; enabling the full set would require disabling `CONFIG_VIDEO_MAX96712`/`CONFIG_VIDEO_MAX96717`.
+
+The host cross-build is a **compile gate only** (arm64 `defconfig` + `modules_prepare`); the `.deb`s carry source and the board rebuilds through DKMS against its own `linux-headers-qcom`, which is what guarantees the ABI match. Off-Tegra shims live in `qcom/compat-include/`: the SerDes sources reference no symbol *declared* by NVIDIA's `camera_common.h` — what they use is its transitive includes — so that shim is just that include subset. `msleep_range()` is also a `camera_common.h` helper, and `d4xx_main.c` defines it whenever that header is absent, not only in the 5.15.136–147 window.
 
 ### Deploy to Jetson
 
