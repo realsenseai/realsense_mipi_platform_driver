@@ -63,7 +63,7 @@
 
 	i2c@3180000 {
 		status = "ok";
-		clock-frequency = <100000>;
+		clock-frequency = <200000>;
 		tca9548@72 {
 			status = "ok";
 			reg = <0x72>;

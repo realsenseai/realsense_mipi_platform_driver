@@ -192,7 +192,7 @@
 				};
 
 				i2c@31e0000 {
-					clock-frequency = <100000>;
+					clock-frequency = <200000>;
 
 					dser: max96712@29 {
 						status = "okay";
