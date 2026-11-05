@@ -1587,7 +1587,7 @@
 
 				/* ---- First deserializer: cameras 0-3 on i2c9 ---- */
 				i2c@810c6a0000 {
-					clock-frequency = <100000>;
+					clock-frequency = <400000>;
 
 					dser_a: max96712@29 {
 						status = "okay";
@@ -2413,7 +2413,7 @@
 
 				/* ---- Second deserializer: cameras 4-7 on i2c12 ---- */
 				i2c@810c6d0000 {
-					clock-frequency = <100000>;
+					clock-frequency = <400000>;
 
 					dser_b: max96712@29 {
 						status = "okay";

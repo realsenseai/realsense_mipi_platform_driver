@@ -1065,9 +1065,68 @@ static int ds5_dfu_session_end(struct ds5 *state)
 	up_write(&ds5_maintenance_sem);
 	return ret;
 }
+/* RSDSO-21053: firmware older than the RSDSO-21558 series answers a transient on
+ * the host i2c by disabling its own slave for good, and 400 kHz provokes one. The
+ * DT starts the shared bus fast; the first camera that cannot take it drops the
+ * bus for everyone, and only a reload picks the rate up again. */
+#define DS5_FAST_I2C_FW_MIN	DS5_FW_VER(5, 17, 6)
+#define DS5_SLOW_I2C_RATE	100000
+
+static DEFINE_MUTEX(ds5_fast_i2c_lock);
+static int ds5_fast_i2c_dt_rate;
+static bool ds5_fast_i2c_slowed;
+
+/* D58x runs the HKR stack, which never carried the defect, so its DS5 version is
+ * not comparable; a camera in the bootloader reports none and votes against. */
+static bool ds5_fast_i2c_ok(struct ds5 *state)
+{
+	if (state->dfu_dev.dfu_state_flag == DS5_DFU_RECOVERY)
+		return false;
+	return ds5_is_d58x(state) || ds5_fw_at_least(state, DS5_FAST_I2C_FW_MIN);
+}
+
+/* Called when this camera's firmware version becomes known: at the end of probe,
+ * and again after a HW reset, which a DFU may have moved below the floor. */
+static void ds5_fast_i2c_check(struct ds5 *state)
+{
+	struct i2c_adapter *root;
+
+	if (!state->is_depth)
+		return;
+	mutex_lock(&ds5_fast_i2c_lock);
+	root = ds5_get_i2c_root_adapter(state);
+	if (!ds5_fast_i2c_dt_rate)
+		ds5_fast_i2c_dt_rate = i2c_get_adapter_bus_clk_rate(root);
+	if (!ds5_fast_i2c_slowed && !ds5_fast_i2c_ok(state)) {
+		if (i2c_set_adapter_bus_clk_rate(root, DS5_SLOW_I2C_RATE)) {
+			dev_warn(&state->client->dev, "camera i2c slowdown failed\n");
+		} else {
+			ds5_fast_i2c_slowed = true;
+			dev_info(&state->client->dev,
+				 "camera i2c dropped to %d Hz: fw %u.%u.%u is below the floor\n",
+				 DS5_SLOW_I2C_RATE, state->fw_version >> 8,
+				 state->fw_version & 0xff, state->fw_build >> 8);
+		}
+	}
+	mutex_unlock(&ds5_fast_i2c_lock);
+}
+
+/* Hand the bus back at the DT rate, so a reload re-evaluates it after a camera
+ * has been given firmware that can take it. */
+static void ds5_fast_i2c_teardown(struct ds5 *state)
+{
+	mutex_lock(&ds5_fast_i2c_lock);
+	if (ds5_fast_i2c_slowed && ds5_fast_i2c_dt_rate > 0 &&
+	    !i2c_set_adapter_bus_clk_rate(ds5_get_i2c_root_adapter(state),
+					  ds5_fast_i2c_dt_rate))
+		ds5_fast_i2c_slowed = false;
+	mutex_unlock(&ds5_fast_i2c_lock);
+}
 #else
 static int ds5_dfu_session_begin(struct ds5 *state) { return 0; }
 static int ds5_dfu_session_end(struct ds5 *state) { return 0; }
+static void ds5_fast_i2c_check(struct ds5 *state) { }
+static void ds5_fast_i2c_teardown(struct ds5 *state) { }
 #endif
 
 static int ds5_write(struct ds5 *state, u16 reg, u16 val)
@@ -2565,6 +2624,19 @@ static u8 ds5_wire_data_type(const struct ds5_format *format)
 		format->data_type;
 }
 
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+/* A calibration-format transition concerns only this camera's datapath, so reset
+ * just its link: the all-links one-shot drops every camera's link on the
+ * deserializer (HW-measured, RSDSO-21053) and NACKs a sibling's in-flight i2c. */
+static void ds5_reset_calib_datapath(struct ds5 *state)
+{
+	if (state->dser_ops->reset_oneshot_link)
+		state->dser_ops->reset_oneshot_link(state->dser_dev, state->gmsl_link);
+	else if (state->dser_ops->reset_oneshot)
+		state->dser_ops->reset_oneshot(state->dser_dev);
+}
+#endif
+
 static int ds5_configure(struct ds5 *state, bool *ser_pipe_armed)
 {
 	struct ds5_sensor *sensor;
@@ -2688,7 +2760,7 @@ static int ds5_configure(struct ds5 *state, bool *ser_pipe_armed)
 					 ser_pipe_armed);
 		// reset data path when switching to Y12I
 		if (is_calib)
-			state->dser_ops->reset_oneshot(state->dser_dev);
+			ds5_reset_calib_datapath(state);
 		mutex_unlock(&serdes_lock__);
 		if (ret < 0)
 			return ret;
@@ -4260,6 +4332,8 @@ static int ds5_hw_reset_with_recovery_locked(struct ds5 *state)
 		dev_type,
 		(state->fw_version >> 8) & 0xff, state->fw_version & 0xff,
 		(state->fw_build >> 8) & 0xff, state->fw_build & 0xff);
+
+	ds5_fast_i2c_check(state);
 
 	/* RSDEV-12608: drop the stale partial frame a mid-stream camera reset leaves
 	 * in this link's line buffer (NULL-safe; max9296 leaves none). */
@@ -8518,7 +8592,7 @@ restore_streaming:
 		if (state->is_y8
 			&& (state->ir.sensor.config.format->data_type == GMSL_CSI_DT_RGB_888))
 		{
-			state->dser_ops->reset_oneshot(state->dser_dev);
+			ds5_reset_calib_datapath(state);
 		}
 		mutex_unlock(&serdes_lock__);
 		/* Tell the serializer this stream stopped. On the last stream it
@@ -10345,6 +10419,7 @@ static int ds5_probe(struct i2c_client *c
 		}
 #endif
 		ds5_dfu_read_unlock(&ds5_maintenance_sem);
+		ds5_fast_i2c_check(state);
 		return 0;
 	}
 
@@ -10423,6 +10498,7 @@ static int ds5_probe(struct i2c_client *c
 	err = sysfs_create_group(&state->client->dev.kobj, &ds5_attr_group);
 #endif
 	ds5_dfu_read_unlock(&ds5_maintenance_sem);
+	ds5_fast_i2c_check(state);
 	return 0;
 
 e_chardev:
@@ -10461,6 +10537,8 @@ static void ds5_remove(struct i2c_client *c)
 	mutex_lock(&state->lock);
 	ds5_dfu_session_end(state);
 	mutex_unlock(&state->lock);
+
+	ds5_fast_i2c_teardown(state);
 
 	/* Drop this instance from the reload registry before it is freed. */
 	if (state->ds5_dev) {
