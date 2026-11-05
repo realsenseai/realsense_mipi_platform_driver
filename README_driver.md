@@ -280,9 +280,12 @@ v4l2-ctl -d0 --stream-mmap
 Firmware without control descriptors uses the built-in MinZ `U8[38]` control
 at `0x4500`. The eight-field ICR layout places `HighResMode` at parameter index 2,
 where the legacy seven-field layout placed `DownscaleRatio`. The fallback
-therefore delegates eight-field parameter and live-topology validation to
-firmware while retaining the camera lock; it keeps the legacy streaming checks
-for other payload counts. Descriptor-backed controls are unchanged.
+uses the eight-field layout only: seven-field SET payloads are rejected with
+`EINVAL`. While Depth or IR is streaming, it retains the camera lock and checks
+`DownscaleRatio` at index 1, but allows `HighResMode` changes at index 2.
+Firmware validates parameter values and changes against the built ICR mode.
+Descriptor-backed controls are unchanged. Userspace must use the eight-field ICR
+interface; renaming legacy seven-field fields is not sufficient.
 
 Run the host regression without a camera:
 ```

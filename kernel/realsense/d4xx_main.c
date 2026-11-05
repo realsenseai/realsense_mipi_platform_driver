@@ -3064,21 +3064,21 @@ enum ds5_ae_type {
 #define D500_ALIGNED_DEPTH_XU_BASE	0x4599
 /*
  * D500 DPP controls are passed between FW and userspace as the whole
- * struct d500_dpp_xu_control. The driver is only a pipe: it neither builds
- * nor validates the params, FW does. The only checks are structural: the
- * header version on read (a FW without the window answers 0xFF) and
- * param_count within the struct on write.
+ * struct d500_dpp_xu_control. FW validates parameter values and the built
+ * MinZ mode. The driver checks the ABI, serializes MinZ I/O and rejects
+ * live DownscaleRatio changes. MinZ requires the eight-field ICR layout.
  */
 #define D500_DPP_XU_VERSION		1
 
 enum d500_minz_param_index {
-	D500_MINZ_ENABLE = 0,
-	D500_MINZ_FILTER_TYPE,
+	D500_MINZ_MODE = 0,
 	D500_MINZ_DOWNSCALE_RATIO,
-	D500_MINZ_SHIFT_MODE,
-	D500_MINZ_SHIFT_PIXELS,
-	D500_MINZ_THRESHOLD_MODE,
-	D500_MINZ_THRESHOLD_MM,
+	D500_MINZ_HIGH_RES_MODE,
+	D500_MINZ_MANUAL_SHIFT,
+	D500_MINZ_SMOOTHING_OFFSET,
+	D500_MINZ_COMPLETION_OFFSET,
+	D500_MINZ_NOMINAL_DEPTH,
+	D500_MINZ_IMPROVED_DEPTH,
 };
 
 struct d500_dpp_xu_header {
@@ -4836,6 +4836,11 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			ret = -EINVAL;
 			goto unlock;
 		}
+		if (ctrl->id == D500_CAMERA_CID_MINZ &&
+		    control->param_count != ARRAY_SIZE(control->params)) {
+			ret = -EINVAL;
+			goto unlock;
+		}
 		if (dpp_desc->idle_only && sensor && sensor->streaming) {
 			ret = -EBUSY;
 			goto unlock;
@@ -4849,10 +4854,8 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			 */
 			mutex_lock(&state->ds5_dev->lock);
 			minz_locked = true;
-			/* Eight-field ICR geometry is validated by firmware. */
-			if (control->param_count != ARRAY_SIZE(control->params) &&
-			    (state->ds5_dev->depth_streaming ||
-			     state->ds5_dev->ir_streaming)) {
+			if (state->ds5_dev->depth_streaming ||
+			    state->ds5_dev->ir_streaming) {
 				ret = d500_dpp_xu_read(state, dpp_desc,
 							&current_control);
 				if (ret)
@@ -4860,8 +4863,6 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 				geometry_changed =
 					memcmp(control, &current_control,
 					       offsetof(struct d500_dpp_xu_control, params)) ||
-					control->params[D500_MINZ_FILTER_TYPE] !=
-						current_control.params[D500_MINZ_FILTER_TYPE] ||
 					control->params[D500_MINZ_DOWNSCALE_RATIO] !=
 						current_control.params[D500_MINZ_DOWNSCALE_RATIO];
 				if (geometry_changed) {

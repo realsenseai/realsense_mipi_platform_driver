@@ -71,7 +71,7 @@ int main(void) {
  memcpy(current, &payload, 38);
  payload.params[2] = 1;
  assert(write_control(&state, &control, &sensor) == 0);
- assert(writes == 1 && reads == 0 && !held && !camera.lock);
+ assert(writes == 1 && reads == 1 && !held && !camera.lock);
  for (int stream = 0; stream < 3; ++stream) {
   camera.depth_streaming = stream == 1;
   camera.ir_streaming = stream == 2;
@@ -79,9 +79,9 @@ int main(void) {
    for (unsigned i = 0; i < 38; ++i) ((u8 *)&payload)[i] = trial + i;
    payload.header.version = 1; payload.param_count = 8;
    reads = writes = 0;
-   memset(current, 0, sizeof(current));
+   memcpy(current, &payload, sizeof(current));
    assert(write_control(&state, &control, &sensor) == 0);
-   assert(writes == 1 && reads == 0 && !held && !camera.lock);
+   assert(writes == 1 && reads == (stream != 0) && !held && !camera.lock);
    assert(memcmp(written, &payload, 38) == 0);
   }
  }
@@ -89,26 +89,43 @@ int main(void) {
  for (int error = -1; error >= -121; --error) {
   write_error = error; reads = writes = 0;
   assert(write_control(&state, &control, &sensor) == error);
-  assert(writes == 1 && reads == 0 && !held && !camera.lock);
+  assert(writes == 1 && reads == 1 && !held && !camera.lock);
  }
- write_error = 0; payload.param_count = 9; reads = writes = 0;
- assert(write_control(&state, &control, &sensor) == -EINVAL);
- assert(!reads && !writes && !held);
+ write_error = 0;
+ for (int stream = 0; stream < 3; ++stream) {
+  camera.depth_streaming = stream == 1;
+  camera.ir_streaming = stream == 2;
+  for (int count = 0; count <= 9; ++count) {
+   if (count == 8) continue;
+   payload.param_count = count; reads = writes = 0;
+   assert(write_control(&state, &control, &sensor) == -EINVAL);
+   assert(!reads && !writes && !held && !camera.lock);
+  }
+ }
  memset(&payload, 0, sizeof(payload));
- payload.header.version = 1; payload.header.control_id = 8; payload.param_count = 7;
- payload.params[1] = 1; payload.params[2] = 1;
+ payload.header.version = 1; payload.header.control_id = 8; payload.param_count = 8;
+ payload.params[0] = 2; payload.params[1] = 1;
  for (int stream = 1; stream < 3; ++stream) {
   camera.depth_streaming = stream == 1;
   camera.ir_streaming = stream == 2;
   memcpy(current, &payload, 38); reads = writes = 0;
   assert(write_control(&state, &control, &sensor) == 0);
   assert(reads == 1 && writes == 1 && !held);
-  for (int slot = 1; slot <= 2; ++slot) {
-   payload.params[slot] = 2; reads = writes = 0;
+  for (int ratio = 2; ratio <= 4; ratio *= 2) {
+   payload.params[1] = ratio; reads = writes = 0;
    assert(write_control(&state, &control, &sensor) == -EBUSY);
    assert(reads == 1 && writes == 0 && !held && !camera.lock);
-   payload.params[slot] = 1;
   }
+  payload.params[1] = 1;
+  for (int mode = 0; mode <= 2; ++mode) {
+   payload.params[2] = mode; reads = writes = 0;
+   assert(write_control(&state, &control, &sensor) == 0);
+   assert(reads == 1 && writes == 1 && !held && !camera.lock);
+  }
+  payload.params[0] = 0; writes = 0;
+  assert(write_control(&state, &control, &sensor) == 0 && writes == 1 && !held);
+  payload.params[0] = 2; writes = 0;
+  assert(write_control(&state, &control, &sensor) == 0 && writes == 1 && !held);
   payload.header.flags = 1; writes = 0;
   assert(write_control(&state, &control, &sensor) == -EBUSY && !writes && !held);
   payload.header.flags = 0;
@@ -123,18 +140,20 @@ int main(void) {
   assert(write_control(&state, &control, &sensor) == -EOPNOTSUPP && !writes && !held);
  }
  camera.depth_streaming = camera.ir_streaming = 0;
- payload.params[2] = 2; reads = writes = 0;
+ payload.params[1] = 4; reads = writes = 0;
  assert(write_control(&state, &control, &sensor) == 0);
  assert(reads == 0 && writes == 1 && !held);
  control.id = D500_CAMERA_CID_DECIMATION; expected_base = 0x4540;
+ payload.param_count = 2;
  sensor.streaming = 1; writes = 0;
  assert(write_control(&state, &control, &sensor) == -EBUSY && !writes);
  sensor.streaming = 0;
  assert(write_control(&state, &control, &sensor) == 0 && writes == 1);
  control.id = D500_CAMERA_CID_TEMPORAL; expected_base = 0x4568;
+ payload.param_count = 4;
  sensor.streaming = 1; writes = 0;
  assert(write_control(&state, &control, &sensor) == 0 && writes == 1);
- puts("PASS: eight-field exact writes, seven-field live guards, transport errors, locks and DPP regression");
+ puts("PASS: eight-field exact writes, live ratio guards, HighResMode changes, seven-field rejection, errors, locks and DPP regression");
 }
 """
 
