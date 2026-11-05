@@ -275,6 +275,20 @@ v4l2-ctl -d0 --stream-mmap
 <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< 60.19 fps
 ```
 
+#### MinZ / ICR fallback
+
+Firmware without control descriptors uses the built-in MinZ `U8[38]` control
+at `0x4500`. The eight-field ICR layout places `HighResMode` at parameter index 2,
+where the legacy seven-field layout placed `DownscaleRatio`. The fallback
+therefore delegates eight-field parameter and live-topology validation to
+firmware while retaining the camera lock; it keeps the legacy streaming checks
+for other payload counts. Descriptor-backed controls are unchanged.
+
+Run the host regression without a camera:
+```
+python3 test/standalone_tests/test_minz_fallback.py
+```
+
 #### Verify Firmware Version
 ```
 cat /dev/d4xx-dfu-30-0010

@@ -4849,8 +4849,10 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			 */
 			mutex_lock(&state->ds5_dev->lock);
 			minz_locked = true;
-			if (state->ds5_dev->depth_streaming ||
-			    state->ds5_dev->ir_streaming) {
+			/* Eight-field ICR geometry is validated by firmware. */
+			if (control->param_count != ARRAY_SIZE(control->params) &&
+			    (state->ds5_dev->depth_streaming ||
+			     state->ds5_dev->ir_streaming)) {
 				ret = d500_dpp_xu_read(state, dpp_desc,
 							&current_control);
 				if (ret)
