@@ -698,7 +698,7 @@ index 8e237eef049896820fa58cacbac1cfe7c26fbf43..6ef202e31de20724e774a8c08e75cc82
  	if (err)
  		return err;
  
-@@ -274,15 +691,868 @@
+@@ -274,15 +691,870 @@
  static void max96712_remove(struct i2c_client *client)
  #endif
  {
@@ -928,8 +928,6 @@ index 8e237eef049896820fa58cacbac1cfe7c26fbf43..6ef202e31de20724e774a8c08e75cc82
 +		return 0;
 +	}
 +
-+	priv->video_pipe_alloc[pipe_id] = false;
-+
 +	err = max96712_read_reg(priv, MAX96712_VIDEO_PIPE_EN_ADDR, &pipe_en_val);
 +	if (err == 0) {
 +		pipe_en_val &= ~(1 << pipe_id);
@@ -939,6 +937,10 @@ index 8e237eef049896820fa58cacbac1cfe7c26fbf43..6ef202e31de20724e774a8c08e75cc82
 +	if (err == 0) {
 +		err = __max96712_bind_ser_to_dser_pipe(dev, pipe_id, 0, 0);
 +	}
++
++	/* Keep the pipe allocated until its hardware release succeeds. */
++	if (err == 0)
++		priv->video_pipe_alloc[pipe_id] = false;
 +
 +	mutex_unlock(&priv->lock);
 +
@@ -1570,7 +1572,7 @@ index 8e237eef049896820fa58cacbac1cfe7c26fbf43..6ef202e31de20724e774a8c08e75cc82
  
  static const struct i2c_device_id max96712_id[] = {
  	{ "max96712", 0 },
-@@ -290,7 +1560,7 @@
+@@ -290,7 +1562,7 @@
  };
  
  static const struct of_device_id max96712_of_match[] = {
@@ -1579,7 +1581,7 @@ index 8e237eef049896820fa58cacbac1cfe7c26fbf43..6ef202e31de20724e774a8c08e75cc82
  	{ },
  };
  
-@@ -300,6 +1570,7 @@
+@@ -300,6 +1572,7 @@
  	.driver = {
  		.name = "max96712",
  		.owner = THIS_MODULE,

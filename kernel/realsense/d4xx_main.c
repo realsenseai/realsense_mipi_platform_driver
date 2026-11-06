@@ -2506,7 +2506,7 @@ static int serdes_get_ser_pipe_id(struct ds5 *state, int dser_pipe_id,
 
 static int ds5_setup_pipeline(struct ds5 *state, u8 data_type1, u8 data_type2,
 			      int pipe_id, u32 vc_id, int ser_vc_id,
-			      bool *ser_pipe_armed)
+			      bool *ser_pipe_setup_attempted)
 {
 	int ret = 0;
 	/* ser_pipe_id depends on both the serializer and the deserializer
@@ -2521,7 +2521,7 @@ static int ds5_setup_pipeline(struct ds5 *state, u8 data_type1, u8 data_type2,
 			ser_vc_id, vc_id);
 	/* A failed set_pipe may still arm the VC. Keep this attempt across
 	 * retries so a later allocation error cannot skip its cleanup. */
-	*ser_pipe_armed = true;
+	*ser_pipe_setup_attempted = true;
 	ret |= state->ser_ops->set_pipe(state->ser_dev, ser_pipe_id,
 				data_type1, data_type2, ser_vc_id);
 	ret |= state->dser_ops->set_pipe(state->dser_dev, pipe_id,
@@ -2565,7 +2565,25 @@ static u8 ds5_wire_data_type(const struct ds5_format *format)
 		format->data_type;
 }
 
-static int ds5_configure(struct ds5 *state, bool *ser_pipe_armed)
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+static int ds5_release_pipe_for_reconfigure(struct ds5 *state,
+					    struct ds5_sensor *sensor)
+{
+	int ret;
+
+	if (sensor->pipe_id < 0)
+		return 0;
+	mutex_lock(&serdes_lock__);
+	ret = state->dser_ops->release_pipe(state->dser_dev, sensor->pipe_id);
+	mutex_unlock(&serdes_lock__);
+	if (ret < 0)
+		dev_warn(&state->client->dev, "release pipe %d before reconfigure failed: %d\n",
+			 sensor->pipe_id, ret);
+	return ret;
+}
+#endif
+
+static int ds5_configure(struct ds5 *state, bool *ser_pipe_setup_attempted)
 {
 	struct ds5_sensor *sensor;
 	u16 md_fmt, vc_id;
@@ -2645,10 +2663,9 @@ static int ds5_configure(struct ds5 *state, bool *ser_pipe_armed)
 			sensor->pipe_vc_id != vc_id) {
 		/* Release old pipe only if it changed and was valid */
 		if (sensor->pipe_id >= 0) {
-			mutex_lock(&serdes_lock__);
-			ret = state->dser_ops->release_pipe(state->dser_dev, sensor->pipe_id);
-			mutex_unlock(&serdes_lock__);
-			dev_warn(&state->client->dev, "release pipe %d (%d)\n", sensor->pipe_id, ret);
+			ret = ds5_release_pipe_for_reconfigure(state, sensor);
+			if (ret < 0)
+				return ret;
 		}
 		/*
 		* Serialize SERDES pipe allocation and configuration
@@ -2685,7 +2702,7 @@ static int ds5_configure(struct ds5 *state, bool *ser_pipe_armed)
 		mutex_lock(&serdes_lock__);
 		ret = ds5_setup_pipeline(state, data_type1, data_type2,
 					 sensor->pipe_id, vc_id, ser_vc_id,
-					 ser_pipe_armed);
+					 ser_pipe_setup_attempted);
 		// reset data path when switching to Y12I
 		if (is_calib)
 			state->dser_ops->reset_oneshot(state->dser_dev);
@@ -2829,6 +2846,8 @@ static int ds5_sensor_s_stream(struct v4l2_subdev *sd, int on)
 }
 
 static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on);
+static int ds5_release_dser_pipe(struct ds5 *state, struct ds5_sensor *sensor,
+				 bool reset_oneshot);
 
 static int ds5_mux_s_stream_guarded(struct v4l2_subdev *sd, int on)
 {
@@ -2846,17 +2865,12 @@ static int ds5_mux_s_stream_guarded(struct v4l2_subdev *sd, int on)
 
 		/* mux_init/SerDes setup initialize sensor and ops before registration. */
 		/* VI tears down capture even when s_stream(0) returns an error.
-		 * Release its host pipe, but retain the camera streaming flag: the
-		 * firmware stop is still pending and the link must not be flushed.
+		 * Release its host pipe and defer serializer stop until FW is idle.
+		 * Retain the camera streaming flag so the link is not flushed.
 		 */
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 		if (sensor->pipe_id >= 0) {
-			mutex_lock(&serdes_lock__);
-			if (!state->dser_ops->release_pipe(state->dser_dev, sensor->pipe_id))
-				sensor->pipe_id = PIPE_NOT_CONFIGURED;
-			else
-				dev_warn(&state->client->dev, "release pipe failed during blocked stop\n");
-			mutex_unlock(&serdes_lock__);
+			(void)ds5_release_dser_pipe(state, sensor, false);
 		}
 #endif
 		sensor->streaming = false;
@@ -8179,6 +8193,76 @@ static void ds5_flush_idle_link(struct ds5 *state)
 }
 #endif
 
+/*
+ * A pipe release marks serializer stream-stop pending when supported, even if
+ * the release fails. The optional Y8/RGB888 one-shot reset affects all
+ * MAX96712 links and must not be requested when FW may still be active.
+ */
+static int ds5_release_dser_pipe(struct ds5 *state, struct ds5_sensor *sensor,
+				 bool reset_oneshot)
+{
+	int ret = 0;
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	mutex_lock(&serdes_lock__);
+	if (sensor->pipe_id >= 0) {
+		sensor->ser_stop_pending = state->ser_ops->stream_stop != NULL;
+		ret = state->dser_ops->release_pipe(state->dser_dev, sensor->pipe_id);
+		if (ret < 0) {
+			/* A partial release can disable the pipe; rebuild it on retry. */
+			sensor->pipe_data_type1 = 0;
+			sensor->pipe_data_type2 = 0;
+			sensor->pipe_vc_id = 0xFFFF;
+			dev_warn(&state->client->dev, "release pipe %d failed: %d\n",
+				 sensor->pipe_id, ret);
+		} else {
+			sensor->pipe_id = PIPE_NOT_CONFIGURED;
+		}
+	}
+	if (reset_oneshot && state->is_y8 &&
+	    state->ir.sensor.config.format->data_type == GMSL_CSI_DT_RGB_888)
+		state->dser_ops->reset_oneshot(state->dser_dev);
+	mutex_unlock(&serdes_lock__);
+#else
+	(void)state;
+	(void)sensor;
+	(void)reset_oneshot;
+#endif
+	return ret;
+}
+
+/* Release host SerDes resources and retry any pending serializer stop. */
+static int ds5_stop_serdes(struct ds5 *state, struct ds5_sensor *sensor, u16 vc_id,
+			   bool reset_oneshot)
+{
+	int ret = 0;
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	int err;
+
+	if (sensor->pipe_id < 0 && !sensor->ser_stop_pending && !reset_oneshot)
+		return 0;
+	ret = ds5_release_dser_pipe(state, sensor, reset_oneshot);
+
+	if (sensor->ser_stop_pending) {
+		int ser_vc_id = state->dser_ops->get_ser_vc_id ?
+			state->dser_ops->get_ser_vc_id(state->dser_dev,
+						    state->gmsl_link, vc_id) :
+			(int)vc_id;
+
+		err = ser_vc_id < 0 ? ser_vc_id :
+			state->ser_ops->stream_stop(state->ser_dev, ser_vc_id);
+		if (err < 0)
+			dev_warn(&state->client->dev, "serializer stream %u stop failed: %d\n",
+				 vc_id, err);
+		else
+			sensor->ser_stop_pending = false;
+		if (!ret)
+			ret = err;
+	}
+	msleep_range(100);
+#endif
+	return ret;
+}
+
 static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 {
 	struct ds5 *state = container_of(sd, struct ds5, mux.sd.subdev);
@@ -8192,9 +8276,9 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	struct ds5_sensor *sensor = state->mux.last_set;
 	u16 expected_streaming_state;
 	bool ds5_config_done = !on; /* for stop, skip config */
-	bool ser_pipe_armed = false;
+	bool ser_pipe_setup_attempted = false;
 	bool reset_invalidated = false;
-	bool dfu_stop_pending;
+	bool fw_stop_pending;
 	bool *streaming_flag = NULL;
 	int cur_ds5 = atomic_read(ds5_get_reset_gen(state));
 
@@ -8210,9 +8294,6 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		state->reset_ref_ds5 = cur_ds5;
 	}
 
-	// spare duplicate calls
-	if (sensor->streaming == on && (on || reset_invalidated))
-		return 0;
 	if (state->is_depth) {
 		config_status_base = DS5_DEPTH_CONFIG_STATUS;
 		stream_status_base = DS5_DEPTH_STREAM_STATUS;
@@ -8240,19 +8321,22 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	} else {
 		return -EINVAL;
 	}
-	/* Only a DFU-blocked stop leaves host capture off but firmware active.
-	 * Reset invalidation keeps its original recovery behaviour below.
+	/* Only a DFU-blocked or timed-out stop leaves host capture off but
+	 * firmware active. Reset invalidation keeps its original recovery
+	 * behaviour below.
 	 */
-	dfu_stop_pending = !reset_invalidated && !sensor->streaming && *streaming_flag;
-	if (sensor->streaming == on && !dfu_stop_pending)
-		return 0;
+	fw_stop_pending = !reset_invalidated && !sensor->streaming && *streaming_flag;
 
 #ifdef CONFIG_TEGRA_CAMERA_PLATFORM
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	vc_id = state->g_ctx.dst_vc;
 #endif
 #endif
-	if (on && dfu_stop_pending) {
+	/* A duplicate stop does not confirm FW idle; do not reset all links. */
+	if (sensor->streaming == on && !fw_stop_pending)
+		return on ? 0 : ds5_stop_serdes(state, sensor, vc_id, false);
+
+	if (on && fw_stop_pending) {
 		/* Finish the blocked stop before configuring or flushing the link. */
 		ret = ds5_write(state, DS5_START_STOP_STREAM, DS5_STREAM_STOP | stream_id);
 		if (ret < 0)
@@ -8266,23 +8350,19 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 		}
 		if (ret < 0 || streaming != DS5_STREAM_IDLE)
 			return ret < 0 ? ret : -ETIMEDOUT;
-#ifdef CONFIG_VIDEO_D4XX_SERDES
-		/* The camera is idle now; defer serializer re-arm until this point. */
-		if (state->ser_ops->stream_stop) {
-			int ser_vc_id = state->dser_ops->get_ser_vc_id ?
-				state->dser_ops->get_ser_vc_id(state->dser_dev, state->gmsl_link, vc_id) :
-				(int)vc_id;
-
-			if (ser_vc_id >= 0) {
-				ret = state->ser_ops->stream_stop(state->ser_dev, ser_vc_id);
-				if (ret < 0)
-					return ret;
-			}
-		}
-#endif
+		/* The camera is idle now; complete the deferred SerDes cleanup. */
+		ret = ds5_stop_serdes(state, sensor, vc_id, true);
+		if (ret < 0)
+			return ret;
 		mutex_lock(&state->ds5_dev->lock);
 		*streaming_flag = false;
 		mutex_unlock(&state->ds5_dev->lock);
+	}
+
+	if (on && sensor->ser_stop_pending) {
+		ret = ds5_stop_serdes(state, sensor, vc_id, false);
+		if (ret < 0)
+			return ret;
 	}
 
 	dev_dbg(&state->client->dev, "s_stream for stream %s, vc:%d, SENSOR=%s on = %d\n",
@@ -8358,7 +8438,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			if (on && state->dser_ops->retrigger_datapath)
 				state->dser_ops->retrigger_datapath(state->dser_dev);
 #endif
-			return 0;
+			return on ? 0 : ds5_stop_serdes(state, sensor, vc_id, true);
 		}
 	}
 
@@ -8387,7 +8467,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			time_before(jiffies, timeout); i++, msleep_range(i*DS5_START_POLL_TIME))
 	{
 		if (!ds5_config_done) {
-			ret = ds5_configure(state, &ser_pipe_armed);
+			ret = ds5_configure(state, &ser_pipe_setup_attempted);
 			if (ret < 0) {
 				if (ret == -ENOSR) {
 					/* No recovery can help if no resources are available */
@@ -8467,75 +8547,41 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			"stream %d toggle to %d timeout in %dms, retries %d\n",
 			stream_id, on, jiffies_to_msecs(jiffies - ts), i);
 
-		if (streaming == expected_streaming_state) { /* try to toggle stream back on timeout  */
-			ds5_write(state, DS5_START_STOP_STREAM,
-				(on ? DS5_STREAM_STOP : DS5_STREAM_START) | stream_id);
-		}
+		/* A timed-out STREAMOFF is left pending and finished before restart;
+		 * only a timed-out STREAMON is toggled back.
+		 */
+		if (on && streaming == expected_streaming_state)
+			ds5_write(state, DS5_START_STOP_STREAM, DS5_STREAM_STOP | stream_id);
 		ret = -EAGAIN;
 restore_streaming:
 #ifdef CONFIG_VIDEO_D4XX_SERDES
-		/* Also reached after allocation failure on a later retry. The
-		 * serializer attempt is independent of the current pipe ID. */
-		if (on && sensor->pipe_id >= 0) {
-			int cleanup_ret;
-
-			mutex_lock(&serdes_lock__);
-			cleanup_ret = state->dser_ops->release_pipe(state->dser_dev,
-								 sensor->pipe_id);
-			mutex_unlock(&serdes_lock__);
-			if (cleanup_ret < 0) {
-				dev_warn(&state->client->dev, "release pipe failed\n");
-			} else {
-				sensor->pipe_id = PIPE_NOT_CONFIGURED;
-			}
-		}
-		if (on && ser_pipe_armed && state->ser_ops->stream_stop) {
-			int ser_vc_id = state->dser_ops->get_ser_vc_id ?
-				state->dser_ops->get_ser_vc_id(state->dser_dev,
-							state->gmsl_link, vc_id) :
-				(int)vc_id;
-
-			if (ser_vc_id >= 0)
-				state->ser_ops->stream_stop(state->ser_dev, ser_vc_id);
+		if (on) {
+			/*
+			 * ds5_stop_serdes() handles a retained pipe. A previous setup
+			 * attempt still needs cleanup if allocation lost the pipe ID.
+			 */
+			if (ser_pipe_setup_attempted && sensor->pipe_id < 0 &&
+			    state->ser_ops->stream_stop)
+				sensor->ser_stop_pending = true;
+			ds5_stop_serdes(state, sensor, vc_id, false);
 		}
 #endif
+		/* STREAMOFF ends host capture; the FW flag records the pending stop. */
 		mutex_lock(&state->ds5_dev->lock);
-		*streaming_flag = restore_val;
+		*streaming_flag = on ? restore_val : true;
 		mutex_unlock(&state->ds5_dev->lock);
-		sensor->streaming = restore_val;
+		sensor->streaming = on ? restore_val : false;
 	}
-	else if (!on)
-	{
-#ifdef CONFIG_VIDEO_D4XX_SERDES
-		mutex_lock(&serdes_lock__);
-		/* A DFU-blocked stop may already have released the host pipe. */
-		if (sensor->pipe_id >= 0) {
-			if (state->dser_ops->release_pipe(state->dser_dev, sensor->pipe_id) < 0)
-				dev_warn(&state->client->dev, "release pipe failed\n");
-			else
-				sensor->pipe_id = PIPE_NOT_CONFIGURED;
-		}
-		if (state->is_y8
-			&& (state->ir.sensor.config.format->data_type == GMSL_CSI_DT_RGB_888))
-		{
-			state->dser_ops->reset_oneshot(state->dser_dev);
-		}
-		mutex_unlock(&serdes_lock__);
-		/* Tell the serializer this stream stopped. On the last stream it
-		 * re-arms the MIPI RX PHY (idle) so the next stream re-locks
-		 * cleanly instead of wedging the shared pipe. */
-		if (state->ser_ops->stream_stop) {
-			int ser_vc_id = state->dser_ops->get_ser_vc_id ?
-				state->dser_ops->get_ser_vc_id(state->dser_dev,
-							       state->gmsl_link, vc_id) :
-				(int)vc_id;
+	if (!on) {
+		/* Serializer re-arm waits while the FW stop is still pending. */
+		int cleanup_ret = *streaming_flag ?
+				  ds5_release_dser_pipe(state, sensor, false) :
+				  ds5_stop_serdes(state, sensor, vc_id, true);
 
-			if (ser_vc_id >= 0)
-				state->ser_ops->stream_stop(state->ser_dev, ser_vc_id);
-		}
-		msleep_range(100);
-#endif
+		if (!ret)
+			ret = cleanup_ret;
 	}
+
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	if (on && ret >= 0 && state->dser_ops->retrigger_datapath)
 		state->dser_ops->retrigger_datapath(state->dser_dev);
