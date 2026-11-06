@@ -194,6 +194,8 @@ struct ds5_sensor {
 	const struct ds5_desc_ctrl *desc_ctrls;
 	unsigned int n_desc_ctrls;
 	int pipe_id;
+	/* Serializer re-arm can remain pending after the DES pipe is released. */
+	bool ser_stop_pending;
 	u16 pipe_data_type1;
 	u16 pipe_data_type2;
 	u32 pipe_vc_id;
