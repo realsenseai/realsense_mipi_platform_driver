@@ -86,6 +86,8 @@ struct max96717 {
 	/* bit[ser_vc_id] set while that pipe is streaming (set in set_pipe,
 	 * cleared in stream_stop). When it drops to 0 the MIPI RX is re-armed. */
 	u16 active_vc_mask;
+	/* Last-stream MIPI RX re-arm failed; complete it before arming any VC. */
+	bool rx_rearm_pending;
 };
 
 static int max96717_write_reg(struct device *dev, u16 addr, u8 val)
@@ -439,6 +441,7 @@ int max96717_init_settings(struct device *dev)
 	 * ensures a deserializer/link reset can't strand a stale bit and
 	 * permanently suppress the last-stream MIPI RX re-arm. */
 	priv->active_vc_mask = 0;
+	priv->rx_rearm_pending = false;
 
 	err |= max96717_set_registers(dev, gpio_release,
 				     ARRAY_SIZE(gpio_release));
@@ -476,6 +479,14 @@ int max96717_set_pipe(struct device *dev, int pipe_id,
 
 	mutex_lock(&priv->lock);
 
+	if (priv->rx_rearm_pending) {
+		err = max96717_mipi_rx_reset_pulse(dev);
+		if (err) {
+			mutex_unlock(&priv->lock);
+			return err;
+		}
+		priv->rx_rearm_pending = false;
+	}
 	priv->active_vc_mask |= (u16)BIT(vc_id);
 	mutex_unlock(&priv->lock);
 
@@ -501,6 +512,7 @@ int max96717_stream_stop(struct device *dev, u32 vc_id)
 		 * idle, so the next stream re-locks cleanly instead of wedging.
 		 */
 		err = max96717_mipi_rx_reset_pulse(dev);
+		priv->rx_rearm_pending = !!err;
 		dev_dbg(dev, "%s: last stream stopped, MIPI RX re-armed (err %d)\n",
 			__func__, err);
 	}
