@@ -697,6 +697,8 @@ static inline void msleep_range(unsigned int delay_base)
 #if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)
 #define ds5_dfu_read_lock(sem) down_read(sem)
 #define ds5_dfu_read_unlock(sem) up_read(sem)
+#define ds5_dfu_write_lock(sem) down_write(sem)
+#define ds5_dfu_write_unlock(sem) up_write(sem)
 
 /*
  * Wait for ongoing camera operations to finish before changing I2C speed.
@@ -800,6 +802,8 @@ static int ds5_check_i2c_access(struct ds5 *state, bool internal)
 /* Builds without runtime clock switching keep the original access path. */
 #define ds5_dfu_read_lock(sem) do { } while (0)
 #define ds5_dfu_read_unlock(sem) do { } while (0)
+#define ds5_dfu_write_lock(sem) do { } while (0)
+#define ds5_dfu_write_unlock(sem) do { } while (0)
 static int ds5_check_i2c_access(struct ds5 *state, bool internal) { return 0; }
 #endif
 
@@ -1065,9 +1069,81 @@ static int ds5_dfu_session_end(struct ds5 *state)
 	up_write(&ds5_maintenance_sem);
 	return ret;
 }
+/* RSDSO-21053: DS5 FW before the RSDSO-21558 i2c-slave irq drain (5.17.5.4) wedges at
+ * 400 kHz, so the first such camera drops the shared bus to 100 kHz until a reload.
+ * The check cannot see the build field, hence 5.17.6. */
+#define DS5_FAST_I2C_FW_MIN	DS5_FW_VER(5, 17, 6)
+#define DS5_SLOW_I2C_RATE	100000
+
+static DEFINE_MUTEX(ds5_fast_i2c_lock);
+/* One camera i2c root is assumed: every overlay puts all cameras behind one controller. */
+static int ds5_fast_i2c_dt_rate;
+/* The root adapter, held once the slowdown is set: live, or at an open DFU session's
+ * close. Module exit restores the DT rate. */
+static struct i2c_adapter *ds5_fast_i2c_root;
+
+/* D58x runs the HKR stack, which never carried the defect, so its DS5 version is
+ * not comparable; a camera in the bootloader reports none and votes against. */
+static bool ds5_fast_i2c_ok(struct ds5 *state)
+{
+	if (state->dfu_dev.dfu_state_flag == DS5_DFU_RECOVERY)
+		return false;
+	return ds5_is_d58x(state) || ds5_fw_at_least(state, DS5_FAST_I2C_FW_MIN);
+}
+
+/* Called when this camera's firmware version becomes known: at the end of probe,
+ * and again after a HW reset, which a DFU may have moved below the floor. */
+static void ds5_fast_i2c_check(struct ds5 *state)
+{
+	struct ds5_dfu_status *bus;
+	struct i2c_adapter *root;
+	int ret = 0;
+
+	if (!state->is_depth)
+		return;
+	mutex_lock(&ds5_fast_i2c_lock);
+	root = ds5_get_i2c_root_adapter(state);
+	if (!ds5_fast_i2c_dt_rate)
+		ds5_fast_i2c_dt_rate = i2c_get_adapter_bus_clk_rate(root);
+	if (!ds5_fast_i2c_root && !ds5_fast_i2c_ok(state)) {
+		/* An open DFU session restores its saved rate on close: lower that one. */
+		ds5_dfu_write_lock(&ds5_io_sem);
+		bus = ds5_find_root_dfu_status(state);
+		if (bus)
+			bus->normal_rate = DS5_SLOW_I2C_RATE;
+		else
+			ret = i2c_set_adapter_bus_clk_rate(root, DS5_SLOW_I2C_RATE);
+		ds5_dfu_write_unlock(&ds5_io_sem);
+		if (ret) {
+			dev_warn(&state->client->dev, "camera i2c slowdown failed\n");
+		} else {
+			get_device(&root->dev);
+			ds5_fast_i2c_root = root;
+			dev_info(&state->client->dev,
+				 "camera i2c %s %d Hz: fw %u.%u.%u is below the floor\n",
+				 bus ? "drops at the DFU session's close to" : "dropped to",
+				 DS5_SLOW_I2C_RATE, state->fw_version >> 8,
+				 state->fw_version & 0xff, state->fw_build >> 8);
+		}
+	}
+	mutex_unlock(&ds5_fast_i2c_lock);
+}
+
+/* Called from module exit, once every instance is gone, so a reload re-evaluates
+ * the bus after a camera has been given firmware that can take it. */
+static void ds5_fast_i2c_teardown(void)
+{
+	if (!ds5_fast_i2c_root)
+		return;
+	if (ds5_fast_i2c_dt_rate > 0)
+		i2c_set_adapter_bus_clk_rate(ds5_fast_i2c_root, ds5_fast_i2c_dt_rate);
+	put_device(&ds5_fast_i2c_root->dev);
+	ds5_fast_i2c_root = NULL;
+}
 #else
 static int ds5_dfu_session_begin(struct ds5 *state) { return 0; }
 static int ds5_dfu_session_end(struct ds5 *state) { return 0; }
+static void ds5_fast_i2c_check(struct ds5 *state) { }
 #endif
 
 static int ds5_write(struct ds5 *state, u16 reg, u16 val)
@@ -2504,6 +2580,8 @@ static int serdes_get_ser_pipe_id(struct ds5 *state, int dser_pipe_id,
 	return dser_pipe_id;
 }
 
+/* Takes serdes_lock__ itself: the serializer write may wait out a sibling's link
+ * one-shot, and must not hold back the siblings' deserializer setup meanwhile. */
 static int ds5_setup_pipeline(struct ds5 *state, u8 data_type1, u8 data_type2,
 			      int pipe_id, u32 vc_id, int ser_vc_id,
 			      bool *ser_pipe_setup_attempted)
@@ -2513,6 +2591,7 @@ static int ds5_setup_pipeline(struct ds5 *state, u8 data_type1, u8 data_type2,
 	 * (see serdes_get_ser_pipe_id()). */
 	int ser_pipe_id = serdes_get_ser_pipe_id(state, pipe_id, ser_vc_id);
 
+	mutex_lock(&serdes_lock__);
 	ret |= state->dser_ops->bind_ser_to_dser_pipe(state->dser_dev, pipe_id, ser_pipe_id,
 				state->gmsl_link);
 	dev_dbg(&state->client->dev,
@@ -2522,10 +2601,14 @@ static int ds5_setup_pipeline(struct ds5 *state, u8 data_type1, u8 data_type2,
 	/* A failed set_pipe may still arm the VC. Keep this attempt across
 	 * retries so a later allocation error cannot skip its cleanup. */
 	*ser_pipe_setup_attempted = true;
-	ret |= state->ser_ops->set_pipe(state->ser_dev, ser_pipe_id,
-				data_type1, data_type2, ser_vc_id);
 	ret |= state->dser_ops->set_pipe(state->dser_dev, pipe_id,
 				data_type1, data_type2, state->gmsl_link, ser_vc_id);
+	mutex_unlock(&serdes_lock__);
+	/* The serializer is reached over the link, which a one-shot drops (RSDSO-21053). */
+	ds5_dfu_read_lock(&ds5_io_sem);
+	ret |= state->ser_ops->set_pipe(state->ser_dev, ser_pipe_id,
+				data_type1, data_type2, ser_vc_id);
+	ds5_dfu_read_unlock(&ds5_io_sem);
 	if (ret)
 		dev_warn(&state->client->dev,
 			 "failed to set pipe %d, data_type1: 0x%x, data_type2: 0x%x, vc_id: %u\n",
@@ -2580,6 +2663,18 @@ static int ds5_release_pipe_for_reconfigure(struct ds5 *state,
 		dev_warn(&state->client->dev, "release pipe %d before reconfigure failed: %d\n",
 			 sensor->pipe_id, ret);
 	return ret;
+}
+
+/* One-shot reset of this camera's GMSL link; false if the deserializer has none.
+ * It drops the link (~43 ms), so camera transfers wait it out (RSDSO-21053). */
+static bool ds5_reset_oneshot_link(struct ds5 *state)
+{
+	if (!state->dser_ops->reset_oneshot_link)
+		return false;
+	ds5_dfu_write_lock(&ds5_io_sem);
+	state->dser_ops->reset_oneshot_link(state->dser_dev, state->gmsl_link);
+	ds5_dfu_write_unlock(&ds5_io_sem);
+	return true;
 }
 #endif
 
@@ -2667,13 +2762,8 @@ static int ds5_configure(struct ds5 *state, bool *ser_pipe_setup_attempted)
 			if (ret < 0)
 				return ret;
 		}
-		/*
-		* Serialize SERDES pipe allocation and configuration
-		* across all d4xx instances sharing the same GMSL link.
-		* Without this, concurrent pipe setups race on the shared
-		* Serializer/Deserializer hardware, causing I2C NACKs (-121) that
-		* take down the entire bus.
-		*/
+		/* Serialize pipe allocation across the d4xx instances sharing the
+		 * deserializer; ds5_setup_pipeline() serializes the configuration. */
 		mutex_lock(&serdes_lock__);
 		/*
 		 * A MAX96717 serializer funnels all of a camera's streams through
@@ -2699,14 +2789,16 @@ static int ds5_configure(struct ds5 *state, bool *ser_pipe_setup_attempted)
 			return -ENOSR;
 		}
 		sensor->pipe_id = pipe_id;
-		mutex_lock(&serdes_lock__);
 		ret = ds5_setup_pipeline(state, data_type1, data_type2,
 					 sensor->pipe_id, vc_id, ser_vc_id,
 					 ser_pipe_setup_attempted);
 		// reset data path when switching to Y12I
-		if (is_calib)
-			state->dser_ops->reset_oneshot(state->dser_dev);
-		mutex_unlock(&serdes_lock__);
+		if (is_calib) {
+			mutex_lock(&serdes_lock__);
+			if (!ds5_reset_oneshot_link(state))
+				state->dser_ops->reset_oneshot(state->dser_dev);
+			mutex_unlock(&serdes_lock__);
+		}
 		if (ret < 0)
 			return ret;
 		dev_dbg(&state->client->dev,
@@ -4275,10 +4367,11 @@ static int ds5_hw_reset_with_recovery_locked(struct ds5 *state)
 		(state->fw_version >> 8) & 0xff, state->fw_version & 0xff,
 		(state->fw_build >> 8) & 0xff, state->fw_build & 0xff);
 
+	ds5_fast_i2c_check(state);
+
 	/* RSDEV-12608: drop the stale partial frame a mid-stream camera reset leaves
 	 * in this link's line buffer (NULL-safe; max9296 leaves none). */
-	if (state->dser_ops->reset_oneshot_link)
-		state->dser_ops->reset_oneshot_link(state->dser_dev, state->gmsl_link);
+	ds5_reset_oneshot_link(state);
 
 	/* Re-apply ESYNC tunneling to match cached sync_mode control; a
 	 * re-sync on a sibling node may swap the pointer meanwhile.
@@ -8174,8 +8267,7 @@ static int ds5_mux_s_frame_interval(struct v4l2_subdev *sd,
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 /* RSDSO-21786: fire the link flush at most once per cold bring-up. The flag is
- * consumed under ds5_dev->lock, but the op itself (CTRL1 write plus a 100 ms
- * settle) must run unlocked so it cannot stall a sibling's start. */
+ * consumed under ds5_dev->lock; the flush itself runs outside it. */
 static void ds5_flush_idle_link(struct ds5 *state)
 {
 	bool flush;
@@ -8189,14 +8281,15 @@ static void ds5_flush_idle_link(struct ds5 *state)
 	mutex_unlock(&state->ds5_dev->lock);
 
 	if (flush)
-		state->dser_ops->reset_oneshot_link(state->dser_dev, state->gmsl_link);
+		ds5_reset_oneshot_link(state);
 }
 #endif
 
 /*
  * A pipe release marks serializer stream-stop pending when supported, even if
- * the release fails. The optional Y8/RGB888 one-shot reset affects all
- * MAX96712 links and must not be requested when FW may still be active.
+ * the release fails. The optional Y8/RGB888 one-shot reset drops the camera's
+ * link (every link without a per-link reset), so it must not be requested
+ * when FW may still be active.
  */
 static int ds5_release_dser_pipe(struct ds5 *state, struct ds5_sensor *sensor,
 				 bool reset_oneshot)
@@ -8219,7 +8312,8 @@ static int ds5_release_dser_pipe(struct ds5 *state, struct ds5_sensor *sensor,
 		}
 	}
 	if (reset_oneshot && state->is_y8 &&
-	    state->ir.sensor.config.format->data_type == GMSL_CSI_DT_RGB_888)
+	    state->ir.sensor.config.format->data_type == GMSL_CSI_DT_RGB_888 &&
+	    !ds5_reset_oneshot_link(state))
 		state->dser_ops->reset_oneshot(state->dser_dev);
 	mutex_unlock(&serdes_lock__);
 #else
@@ -8248,8 +8342,14 @@ static int ds5_stop_serdes(struct ds5 *state, struct ds5_sensor *sensor, u16 vc_
 						    state->gmsl_link, vc_id) :
 			(int)vc_id;
 
-		err = ser_vc_id < 0 ? ser_vc_id :
-			state->ser_ops->stream_stop(state->ser_dev, ser_vc_id);
+		if (ser_vc_id < 0) {
+			err = ser_vc_id;
+		} else {
+			/* The serializer is reached over the link (RSDSO-21053). */
+			ds5_dfu_read_lock(&ds5_io_sem);
+			err = state->ser_ops->stream_stop(state->ser_dev, ser_vc_id);
+			ds5_dfu_read_unlock(&ds5_io_sem);
+		}
 		if (err < 0)
 			dev_warn(&state->client->dev, "serializer stream %u stop failed: %d\n",
 				 vc_id, err);
@@ -8332,7 +8432,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	vc_id = state->g_ctx.dst_vc;
 #endif
 #endif
-	/* A duplicate stop does not confirm FW idle; do not reset all links. */
+	/* A duplicate stop does not confirm FW idle; do not reset the link. */
 	if (sensor->streaming == on && !fw_stop_pending)
 		return on ? 0 : ds5_stop_serdes(state, sensor, vc_id, false);
 
@@ -10391,6 +10491,7 @@ static int ds5_probe(struct i2c_client *c
 		}
 #endif
 		ds5_dfu_read_unlock(&ds5_maintenance_sem);
+		ds5_fast_i2c_check(state);
 		return 0;
 	}
 
@@ -10469,6 +10570,7 @@ static int ds5_probe(struct i2c_client *c
 	err = sysfs_create_group(&state->client->dev.kobj, &ds5_attr_group);
 #endif
 	ds5_dfu_read_unlock(&ds5_maintenance_sem);
+	ds5_fast_i2c_check(state);
 	return 0;
 
 e_chardev:
@@ -10593,6 +10695,7 @@ static void __exit ds5_module_exit(void)
 
 	i2c_del_driver(&ds5_i2c_driver);
 #if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)
+	ds5_fast_i2c_teardown();
 	list_for_each_entry_safe(bus, tmp, &ds5_dfu_buses, list) {
 		list_del(&bus->list);
 		put_device(&bus->root->dev);
