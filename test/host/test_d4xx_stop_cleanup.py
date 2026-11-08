@@ -158,6 +158,7 @@ struct dser_ops {
     int (*get_ser_vc_id)(struct device *, unsigned, unsigned);
     int (*release_pipe)(struct device *, int);
     void (*reset_oneshot)(struct device *);
+    void (*reset_oneshot_link)(struct device *, unsigned);
     void (*retrigger_datapath)(struct device *);
     int (*get_available_pipe_id)(struct device *, int);
     int (*get_multi_vc_pipe_id)(struct device *, unsigned);
@@ -186,9 +187,12 @@ enum configure_mode {
 static enum configure_mode configure_mode;
 static int ds5_release_pipe_for_reconfigure(struct ds5 *, struct ds5_sensor *);
 static int ds5_configure_production(struct ds5 *, bool *);
+static bool ds5_reset_oneshot_link(struct ds5 *);
 static int ds5_maintenance_sem, ds5_io_sem;
 static void ds5_dfu_read_lock(int *s) { (void)s; }
 static void ds5_dfu_read_unlock(int *s) { (void)s; }
+static void ds5_dfu_write_lock(int *s) { (void)s; }
+static void ds5_dfu_write_unlock(int *s) { (void)s; }
 static int ds5_check_i2c_access(struct ds5 *s, bool poll) {
     (void)s; (void)poll; return access_ret;
 }
