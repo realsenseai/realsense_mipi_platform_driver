@@ -1,0 +1,37 @@
+name: Teams PR thread
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, reopened, closed]
+
+permissions: {}
+
+jobs:
+  notify:
+    # Drafts stay out of Teams: the thread starts when the PR is ready for review.
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post PR event to the Teams flow
+        continue-on-error: true
+        env:
+          HOOK: ${{ secrets.TEAMS_CI_FLOW_URL }}
+          PR: ${{ github.event.pull_request.number }}
+          TITLE: ${{ github.event.pull_request.title }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          URL: ${{ github.event.pull_request.html_url }}
+          ACTION: ${{ github.event.action }}
+          MERGED: ${{ github.event.pull_request.merged }}
+        run: |
+          [ -n "$HOOK" ] || { echo "TEAMS_CI_FLOW_URL not set"; exit 0; }
+          case "$ACTION" in
+            closed) [ "$MERGED" = "true" ] && STATUS=merged || STATUS=closed ;;
+            *)      STATUS="ready for review" ;;
+          esac
+          JIRA=$(echo "$BRANCH" | grep -oE 'RS(DSO|DEV)-[0-9]+' || true)
+          jq -n --arg key "PR-$PR" --arg status "$STATUS" --arg title "$TITLE" \
+                --arg author "$AUTHOR" --arg jira "$JIRA" --arg url "$URL" \
+                --arg source github \
+                '{key:$key,status:$status,title:$title,author:$author,jira:$jira,url:$url,source:$source}' \
+          | curl -sf -X POST "$HOOK" -H 'Content-Type: application/json' -d @-
