@@ -4496,6 +4496,8 @@ static int ds5_ctrl_seq_status(struct ds5 *state, u16 status_addr, u16 seq0)
 		return -ETIMEDOUT;
 	if (status == RS_CTRL_STATUS_OK)
 		return 0;
+	if (status == RS_CTRL_STATUS_ACCESS_DENIED)
+		return -EACCES;
 	ret = ds5_read(state, status_addr - RS_CTRL_CODE_BELOW, &code);
 	if (ret)
 		return ret;
@@ -4537,6 +4539,47 @@ static int ds5_ctrl_wire_to_menu(const struct ds5_desc_ctrl *c, u16 wire,
 	return -EBADMSG;
 }
 
+/* regmap may split a raw transfer to accommodate I2C adapter quirks. A
+ * descriptor REG window is atomic; refuse rather than publish a prefix.
+ */
+static int ds5_ctrl_reg_size(struct ds5 *state, const struct ds5_desc_ctrl *c,
+			     const struct v4l2_ctrl *ctrl, bool set)
+{
+	const struct i2c_adapter *adapter = state->client->adapter;
+	const struct i2c_adapter_quirks *q = adapter->quirks;
+	u32 extent = c->reg.extent;
+
+	if (!extent || extent > RS_CTRL_MAX_EXTENT)
+		return -EINVAL;
+	if (ctrl->is_ptr) {
+		if (!ctrl->p_new.p_u8 || ctrl->elems != c->elems ||
+		    ctrl->elem_size != c->elem_size ||
+		    extent != ctrl->elems * ctrl->elem_size)
+			return -EINVAL;
+	} else if (extent > sizeof(u32)) {
+		return -EINVAL;
+	}
+	if (c->flags & (RS_CTRL_F_LSW_LATCH | RS_CTRL_F_MSW_FIRST))
+		extent = sizeof(u16);
+	if (extent > I2C_SMBUS_BLOCK_MAX &&
+	    !i2c_check_functionality(adapter, I2C_FUNC_I2C))
+		return -EOPNOTSUPP;
+	if (!q)
+		return 0;
+	if (set) {
+		if (q->max_write_len && extent + sizeof(u16) > q->max_write_len)
+			return -EMSGSIZE;
+	} else if ((q->max_read_len && extent > q->max_read_len) ||
+		   (q->max_write_len && sizeof(u16) > q->max_write_len) ||
+		   (q->max_num_msgs && q->max_num_msgs < 2) ||
+		   (q->max_comb_1st_msg_len &&
+		    sizeof(u16) > q->max_comb_1st_msg_len) ||
+		   (q->max_comb_2nd_msg_len && extent > q->max_comb_2nd_msg_len)) {
+		return -EMSGSIZE;
+	}
+	return 0;
+}
+
 /* REG transport (§5): extent bytes at the resolved address. A scalar is
  * little-endian in a 1/2/4-byte register, an array is the payload verbatim.
  * F_LSW_LATCH is two 16-bit writes, high half first, because firmware acts
@@ -4546,14 +4589,19 @@ static int ds5_ctrl_wire_to_menu(const struct ds5_desc_ctrl *c, u16 wire,
 static int ds5_ctrl_reg_set(struct ds5 *state, const struct ds5_desc_ctrl *c,
 			    struct v4l2_ctrl *ctrl)
 {
-	u8 buf[RS_CTRL_MAX_EXTENT] = { 0 };
+	u8 scalar[sizeof(u32)] = { 0 };
+	u8 *buf = scalar;
 	u16 seq0 = 0;
 	int ret;
 
+	ret = ds5_ctrl_reg_size(state, c, ctrl, true);
+	if (ret)
+		return ret;
 	/* A U8/U16/U32 control keeps even a single value behind p_new */
 	if (ctrl->is_ptr) {
-		memcpy(buf, ctrl->p_new.p_u8, min_t(u32, c->reg.extent,
-						    ctrl->elems * ctrl->elem_size));
+		buf = kmemdup(ctrl->p_new.p_u8, c->reg.extent, GFP_KERNEL);
+		if (!buf)
+			return -ENOMEM;
 	} else {
 		u32 val = c->type == V4L2_CTRL_TYPE_MENU ?
 			  ds5_ctrl_menu_to_wire(c, ctrl->val) : (u32)ctrl->val;
@@ -4581,16 +4629,27 @@ static int ds5_ctrl_reg_set(struct ds5 *state, const struct ds5_desc_ctrl *c,
 		ret = ds5_ctrl_seq_status(state, c->status_addr, seq0);
 unlock:
 	mutex_unlock(&state->ds5_dev->lock);
+	if (buf != scalar)
+		kfree(buf);
 	return ret;
 }
 
 static int ds5_ctrl_reg_get(struct ds5 *state, const struct ds5_desc_ctrl *c,
 			    struct v4l2_ctrl *ctrl)
 {
-	u8 buf[RS_CTRL_MAX_EXTENT] = { 0 };
+	u8 scalar[sizeof(u32)] = { 0 };
+	u8 *buf = scalar;
 	u32 val;
 	int ret;
 
+	ret = ds5_ctrl_reg_size(state, c, ctrl, false);
+	if (ret)
+		return ret;
+	if (ctrl->is_ptr) {
+		buf = kzalloc(c->reg.extent, GFP_KERNEL);
+		if (!buf)
+			return -ENOMEM;
+	}
 	/* The register file loads one 16-bit word per read; clocking past it
 	 * returns that word again and risks wedging the I2C slave.
 	 */
@@ -4607,21 +4666,25 @@ static int ds5_ctrl_reg_get(struct ds5 *state, const struct ds5_desc_ctrl *c,
 		ret = ds5_raw_read(state, c->reg.addr, buf, c->reg.extent);
 	}
 	if (ret)
-		return ret;
+		goto out;
 	if (ctrl->is_ptr) {
-		memcpy(ctrl->p_new.p_u8, buf, min_t(u32, c->reg.extent,
-						    ctrl->elems * ctrl->elem_size));
-		return 0;
+		memcpy(ctrl->p_new.p_u8, buf, c->reg.extent);
+		goto out;
 	}
 	val = buf[0] | buf[1] << 8 | buf[2] << 16 | buf[3] << 24;
-	if (c->type == V4L2_CTRL_TYPE_MENU)
-		return val > U16_MAX ? -EBADMSG :
+	if (c->type == V4L2_CTRL_TYPE_MENU) {
+		ret = val > U16_MAX ? -EBADMSG :
 		       ds5_ctrl_wire_to_menu(c, val, &ctrl->val);
+		goto out;
+	}
 	/* a negative range means a narrow register holds a signed value */
 	if (c->min < 0 && c->reg.extent < 4)
 		val = sign_extend32(val, c->reg.extent * 8 - 1);
 	ctrl->val = val;
-	return 0;
+out:
+	if (buf != scalar)
+		kfree(buf);
+	return ret;
 }
 
 /* HWMC transport (§5): a hwm_cmd built from the record. The value rides in

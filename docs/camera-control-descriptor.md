@@ -248,6 +248,7 @@ writable REG record uses it (§8.4).
 | `RS_CTRL_STATUS_ERROR` (1) | firmware rejected or failed it — or, before the sequence moves, *not dispatched yet* | the code's errno (§8.1), `-EIO` for code 0 |
 | `RS_CTRL_STATUS_WIP` (2) | still in flight | keep polling; `-ETIMEDOUT` past the bound |
 | `RS_CTRL_STATUS_BUSY` (3) | refused in the current state; the register is unchanged | the code's errno, `-EBUSY` for code 0 |
+| `RS_CTRL_STATUS_ACCESS_DENIED` (4) | permission refusal; code is 0 | `-EACCES` |
 
 Depth, IR and IMU write the cam0 control block and share the depth record's words; RGB
 writes the cam1 block and has its own. On the D585 every `0x45xx` XU window reports in the
@@ -1365,7 +1366,7 @@ arbitrary `mech.reg.addr`/`extent`, and the first `VIDIOC_S_CTRL` clocks that on
    arm is checked on its own fields — a rule written against `extent` alone leaves the HWMC
    arm unbounded.
 
-   **REG:** `extent` is 0, exceeds `RS_CTRL_MAX_EXTENT` (256), or disagrees with the
+   **REG:** `extent` is 0, exceeds `RS_CTRL_MAX_EXTENT` (1024), or disagrees with the
    payload — a scalar (`elems == 1`) must be 1, 2 or 4 bytes, and an array must have
    `extent == elems × elem_size`, `elem_size` being 1 for `RS_CTRL_T_U8_ARRAY`, 2 for
    `RS_CTRL_T_U16_ARRAY` and 4 for `RS_CTRL_T_U32_ARRAY`, so a 7-slot `u32` window is 28
@@ -1519,6 +1520,13 @@ was told at registration, not the one firmware holds now. A record that does not
 `extent` bytes. An `F_LSW_LATCH` scalar is two 2-byte transfers in both directions, **high
 half-word first**, because firmware acts on the write to the low one and its register file
 serves one word per read (§5); `F_MSW_FIRST` reads the same way.
+
+Array transfers use a heap buffer, not a 1 KiB kernel-stack buffer. Before any
+I/O, the executor checks the registered payload size and the I2C adapter's raw
+and combined-message limits. A REG window must fit one transaction: an adapter
+that would require fragmentation returns `-EMSGSIZE` (or `-EOPNOTSUPP` without
+raw I2C support), rather than applying a prefix. A failed GET leaves the control
+buffer untouched. Existing latched scalars retain their two-word transfers.
 
 The write and its result read share one lock:
 

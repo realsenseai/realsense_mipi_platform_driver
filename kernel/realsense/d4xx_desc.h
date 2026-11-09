@@ -63,11 +63,12 @@ enum rs_ctrl_transport {
 #define RS_CTRL_STATUS_ERROR	1
 #define RS_CTRL_STATUS_WIP	2
 #define RS_CTRL_STATUS_BUSY	3	/* refused in the current state */
+#define RS_CTRL_STATUS_ACCESS_DENIED 4	/* permission refusal, code is 0 */
 
-/* Largest REG window: one regmap transfer, as the descriptor fetch chunk
- * proves good. The parser refuses more; the executors size their buffer by it.
+/* Largest REG window: one atomic register transfer, not descriptor-fetch
+ * chunks. Executors check the adapter's limits before issuing any I/O.
  */
-#define RS_CTRL_MAX_EXTENT	256
+#define RS_CTRL_MAX_EXTENT	1024
 #define RS_CTRL_HWMC_PARAMS	4	/* param1..param4 of struct hwm_cmd */
 
 /* One control as the driver operates it, resolved for the stream that
