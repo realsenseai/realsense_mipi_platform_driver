@@ -1,0 +1,54 @@
+name: Teams PR thread
+
+# Keep the PR's Teams card in step with its state, base, agent-review labels and head commit.
+on:
+  pull_request:
+    types: [opened, ready_for_review, reopened, closed, synchronize, labeled, unlabeled,
+            enqueued, dequeued]
+
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: read
+  checks: read
+  actions: read
+
+jobs:
+  notify:
+    # Drafts stay out of Teams: the card appears when the PR is ready for review.
+    if: >-
+      github.event.pull_request.draft == false &&
+      (!contains(fromJSON('["labeled","unlabeled"]'), github.event.action) ||
+       endsWith(github.event.label.name, '-AGENT-APPROVE'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #v3
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+      - name: Update the PR's Teams card
+        continue-on-error: true
+        env:
+          HOOK: ${{ secrets.TEAMS_CI_FLOW_URL }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          JENKINS_RE: ^D4xx_Kernel_Module
+          JENKINS_JOB: D4xx_Kernel_Module_Jetson_JP6
+          BUILDS: Build JP 5.0.2,Build JP 5.1.2,Build JP 5.1.6,Build JP 6.0,Build JP 6.1,Build JP 6.2,Build JP 6.2.2,Build JP 7.0,Build JP 7.1,Build JP 7.2
+          MERGED: ${{ github.event.pull_request.merged }}
+          BASE: ${{ github.event.pull_request.base.ref }}
+          ACTION: ${{ github.event.action }}
+          REASON: ${{ github.event.reason }}
+        run: |
+          [ -n "$HOOK" ] || { echo "TEAMS_CI_FLOW_URL not set"; exit 0; }
+          if [ "$ACTION" = closed ] && [ "$MERGED" = true ]; then
+            export NOTIFY_TEXT="<b>Merged into $BASE ✔</b>"
+          elif [ "$ACTION" = dequeued ] && [ "$REASON" != MANUAL ]; then
+            # A merge also dequeues; give GitHub time to mark the PR merged before calling it a rejection.
+            sleep 20
+            if [ "$(gh api "repos/$REPO/pulls/$PR" --jq .merged)" != true ]; then
+              export NOTIFY_TEXT="<b>Rejected by merge queue ❌</b> · $(echo "$REASON" | tr 'A-Z_' 'a-z ')"
+            fi
+          fi
+          bash .github/scripts/teams-card.sh
