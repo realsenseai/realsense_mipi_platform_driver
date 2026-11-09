@@ -13,11 +13,17 @@ fetch() {
     echo "PR $PR is a draft"; exit 0
   fi
   sha=$(jq -r '.head.sha' <<<"$prj")
-  queued=$(gh api graphql -F n="$PR" -f o="${REPO%/*}" -f r="${REPO#*/}" -f query='query($o: String!, $r: String!, $n: Int!) {
-      repository(owner: $o, name: $r) { pullRequest(number: $n) { mergeQueueEntry { state } } } }' \
-    --jq '.data.repository.pullRequest.mergeQueueEntry != null' || echo false)
-  jq --argjson queued "$queued" '{number, title, html_url, draft, state, merged, queued: $queued,
-      labels: [.labels[].name], user: {login: .user.login}, head: {ref: .head.ref}, base: {ref: .base.ref}}' \
+  gh api graphql -F n="$PR" -f o="${REPO%/*}" -f r="${REPO#*/}" -F query=@"$DIR/teams-card.graphql" \
+    --jq '.data.repository.pullRequest' > "$T/gql" || echo '{}' > "$T/gql"
+  # Human review leaves out bots and the author (agent reviewers post as the author).
+  jq --slurpfile g "$T/gql" '.user.login as $a | $g[0] as $q | ($q.latestOpinionatedReviews.nodes // []
+      | map(select(.author.__typename == "User" and .author.login != $a))) as $rv
+    | {number, title, html_url, draft, state, merged, queued: ($q.mergeQueueEntry != null),
+       review: {decision: $q.reviewDecision,
+                approvers: [$rv[] | select(.state == "APPROVED") | .author.login],
+                blockers: [$rv[] | select(.state == "CHANGES_REQUESTED") | .author.login],
+                requested: [$q.reviewRequests.nodes[]?.requestedReviewer | (.login // .name) | values]},
+       labels: [.labels[].name], user: {login: .user.login}, head: {ref: .head.ref}, base: {ref: .base.ref}}' \
     <<<"$prj" > "$T/pr"
   # A merge-queue run tests its own commit, so its Jenkins row comes from that commit.
   gh api "repos/$REPO/commits/${QUEUE_SHA:-$sha}/status" \
