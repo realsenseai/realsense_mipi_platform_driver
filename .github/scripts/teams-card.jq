@@ -14,7 +14,7 @@ def lbl($l): if any($pr.labels[]; . == $l) then "✅" else "—" end;
 
 ($pr.head.ref | [match("RS(DSO|DEV)-[0-9]+").string] | first) as $jira
 | (if $pr.merged then "Merged ✔" elif $pr.state == "closed" then "Closed"
-   elif $pr.draft then "Draft" else "Ready for review" end) as $state
+   elif $pr.draft then "Draft" elif $pr.queued then "In Merge Queue" else "Ready for review" end) as $state
 | [ $st[] | select(.context | test($jre)) ] as $jobs
 | [ $cr[] | select(.name | startswith("Aikido")) ] as $aik
 | (if ($aik | length) == 0 then null

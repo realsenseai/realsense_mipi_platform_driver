@@ -3,7 +3,8 @@ name: Teams PR thread
 # Keep the PR's Teams card in step with its state, base, agent-review labels and head commit.
 on:
   pull_request:
-    types: [opened, ready_for_review, reopened, closed, synchronize, labeled, unlabeled]
+    types: [opened, ready_for_review, reopened, closed, synchronize, labeled, unlabeled,
+            enqueued, dequeued]
 
 permissions:
   contents: read
@@ -38,9 +39,16 @@ jobs:
           MERGED: ${{ github.event.pull_request.merged }}
           BASE: ${{ github.event.pull_request.base.ref }}
           ACTION: ${{ github.event.action }}
+          REASON: ${{ github.event.reason }}
         run: |
           [ -n "$HOOK" ] || { echo "TEAMS_CI_FLOW_URL not set"; exit 0; }
           if [ "$ACTION" = closed ] && [ "$MERGED" = true ]; then
             export NOTIFY_TEXT="<b>Merged into $BASE ✔</b>"
+          elif [ "$ACTION" = dequeued ] && [ "$REASON" != MANUAL ]; then
+            # A merge also dequeues; give GitHub time to mark the PR merged before calling it a rejection.
+            sleep 20
+            if [ "$(gh api "repos/$REPO/pulls/$PR" --jq .merged)" != true ]; then
+              export NOTIFY_TEXT="<b>Rejected by merge queue ❌</b> · $(echo "$REASON" | tr 'A-Z_' 'a-z ')"
+            fi
           fi
           bash .github/scripts/teams-card.sh

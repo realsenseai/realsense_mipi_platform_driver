@@ -13,8 +13,12 @@ fetch() {
     echo "PR $PR is a draft"; exit 0
   fi
   sha=$(jq -r '.head.sha' <<<"$prj")
-  jq '{number, title, html_url, draft, state, merged, labels: [.labels[].name],
-      user: {login: .user.login}, head: {ref: .head.ref}, base: {ref: .base.ref}}' <<<"$prj" > "$T/pr"
+  queued=$(gh api graphql -F n="$PR" -f o="${REPO%/*}" -f r="${REPO#*/}" -f query='query($o: String!, $r: String!, $n: Int!) {
+      repository(owner: $o, name: $r) { pullRequest(number: $n) { mergeQueueEntry { state } } } }' \
+    --jq '.data.repository.pullRequest.mergeQueueEntry != null' || echo false)
+  jq --argjson queued "$queued" '{number, title, html_url, draft, state, merged, queued: $queued,
+      labels: [.labels[].name], user: {login: .user.login}, head: {ref: .head.ref}, base: {ref: .base.ref}}' \
+    <<<"$prj" > "$T/pr"
   # A merge-queue run tests its own commit, so its Jenkins row comes from that commit.
   gh api "repos/$REPO/commits/${QUEUE_SHA:-$sha}/status" \
     --jq '[.statuses[] | {context, state, description, target_url}]' > "$T/st" || echo '[]' > "$T/st"
