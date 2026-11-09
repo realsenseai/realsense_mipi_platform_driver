@@ -11,6 +11,14 @@ def run_icon($r):
   elif $r.conclusion == "failure" then "❌"
   elif $r.conclusion == "skipped" then "⏭" else "⚠️" end;
 def lbl($l): if any($pr.labels[]; . == $l) then "✅" else "—" end;
+# GitHub's own verdict (what branch protection checks); derived from the reviews when no rule sets one.
+def human($v):
+  ($v.decision // (if ($v.blockers | length) > 0 then "CHANGES_REQUESTED"
+                   elif ($v.approvers | length) > 0 then "APPROVED" else "REVIEW_REQUIRED" end)) as $d
+  | if $d == "APPROVED" then "✅ Approved" + ($v.approvers | if length > 0 then " · " + join(", ") else "" end)
+    elif $d == "CHANGES_REQUESTED" then "❌ Changes requested · " + ($v.blockers | join(", "))
+    else "⏳ Review required · " + ($v.requested
+           | if length > 0 then "requested: " + join(", ") else "no reviewer requested" end) end;
 
 ($pr.head.ref | [match("RS(DSO|DEV)-[0-9]+").string] | first) as $jira
 | (if $pr.merged then "Merged ✔" elif $pr.state == "closed" then "Closed"
@@ -49,6 +57,8 @@ def lbl($l): if any($pr.labels[]; . == $l) then "✅" else "—" end;
       {title: "State", value: $state}]},
     {type: "TextBlock", wrap: true, spacing: "Medium",
      text: "**Agent review:**  CR \(lbl("CR-AGENT-APPROVE"))   CQ \(lbl("CQ-AGENT-APPROVE"))   VC \(lbl("VC-AGENT-APPROVE"))"},
+    {type: "TextBlock", wrap: true, spacing: "None",
+     text: "**Human review:**  \(human($pr.review))"},
     {type: "FactSet", spacing: "Medium", facts: (
       (if ($jobs | length) == 0 then [{title: $jname, value: "—"}] else [] end)
       + [ $jobs[] | {title: "\(.context)\($queue)",
