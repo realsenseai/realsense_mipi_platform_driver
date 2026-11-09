@@ -1,6 +1,7 @@
 name: Teams CI status
 
-# Relay the D4xx Jenkins status, failed JetPack builds and failed Aikido checks into the PR's Teams thread.
+# Refresh the PR's Teams card on the D4xx Jenkins status, JetPack builds and Aikido results;
+# a red result also posts a reply so people get pinged.
 on:
   status:
   check_run:
@@ -8,66 +9,53 @@ on:
   workflow_run:
     workflows: [Build JP 5.0.2, Build JP 5.1.2, Build JP 5.1.6, Build JP 6.0, Build JP 6.1,
                 Build JP 6.2, Build JP 6.2.2, Build JP 7.0, Build JP 7.1, Build JP 7.2]
-    types: [completed]
+    types: [requested, completed]
   workflow_dispatch:
     inputs:
       pr:
         description: PR number
         required: true
-      kind:
-        description: jenkins, build or aikido
-        required: true
-        default: jenkins
-      state:
-        description: pending, success, failure or error
-        required: true
-        default: success
-      url:
-        description: Build or scan URL
-        required: false
-        default: ''
-      name:
-        description: Workflow name (kind=build)
-        required: false
-        default: Build JP 6.2
 
 permissions:
   contents: read
   pull-requests: read
+  statuses: read
+  checks: read
+  actions: read
 
 jobs:
   notify:
-    # Builds and Aikido run on every push, so only a red result is worth a post.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'status' && startsWith(github.event.context, 'D4xx_Kernel_Module')) ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request' &&
-       github.event.workflow_run.conclusion == 'failure') ||
-      (github.event_name == 'check_run' && startsWith(github.event.check_run.name, 'Aikido') &&
-       !contains(fromJSON('["success","neutral","skipped"]'), github.event.check_run.conclusion))
+      (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request') ||
+      (github.event_name == 'check_run' && startsWith(github.event.check_run.name, 'Aikido'))
     runs-on: ubuntu-latest
     steps:
-      - name: Post CI status to the Teams flow
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #v3
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+      - name: Update the PR's Teams card
         continue-on-error: true
         env:
           HOOK: ${{ secrets.TEAMS_CI_FLOW_URL }}
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          JENKINS_RE: ^D4xx_Kernel_Module
+          JENKINS_JOB: D4xx_Kernel_Module_Jetson_JP6
+          SETTLE: 30
+          BUILDS: Build JP 5.0.2,Build JP 5.1.2,Build JP 5.1.6,Build JP 6.0,Build JP 6.1,Build JP 6.2,Build JP 6.2.2,Build JP 7.0,Build JP 7.1,Build JP 7.2
           EVENT: ${{ github.event_name }}
           INPUT_PR: ${{ inputs.pr }}
-          INPUT_KIND: ${{ inputs.kind }}
-          INPUT_STATE: ${{ inputs.state }}
-          INPUT_URL: ${{ inputs.url }}
-          INPUT_NAME: ${{ inputs.name }}
           SHA: ${{ github.event.sha }}
           STATE: ${{ github.event.state }}
           URL: ${{ github.event.target_url }}
-          DESC: ${{ github.event.description }}
+          CONTEXT: ${{ github.event.context }}
           BRANCHES_JSON: ${{ toJSON(github.event.branches) }}
           CR_SHA: ${{ github.event.check_run.head_sha }}
           CR_CONCLUSION: ${{ github.event.check_run.conclusion }}
           CR_URL: ${{ github.event.check_run.details_url }}
-          CR_TITLE: ${{ github.event.check_run.output.title }}
           CR_PRS: ${{ toJSON(github.event.check_run.pull_requests) }}
           WR_NAME: ${{ github.event.workflow_run.name }}
           WR_SHA: ${{ github.event.workflow_run.head_sha }}
@@ -76,66 +64,33 @@ jobs:
           WR_PRS: ${{ toJSON(github.event.workflow_run.pull_requests) }}
         run: |
           [ -n "$HOOK" ] || { echo "TEAMS_CI_FLOW_URL not set"; exit 0; }
-          PR="$INPUT_PR"; QUEUE=""
-          if [ "$EVENT" = check_run ] || [ "$INPUT_KIND" = aikido ]; then
-            KIND=aikido; SHA="$CR_SHA"; STATE="${CR_CONCLUSION:-$INPUT_STATE}"; URL="${CR_URL:-$INPUT_URL}"
-            [ -n "$PR" ] || PR=$(echo "$CR_PRS" | jq -r '.[0].number // empty' 2>/dev/null || true)
-          elif [ "$EVENT" = workflow_run ] || [ "$INPUT_KIND" = build ]; then
-            KIND=build; SHA="$WR_SHA"; STATE="${WR_CONCLUSION:-$INPUT_STATE}"; URL="${WR_URL:-$INPUT_URL}"
-            [ -n "$PR" ] || PR=$(echo "$WR_PRS" | jq -r '.[0].number // empty' 2>/dev/null || true)
-          else
-            KIND=jenkins; STATE="${STATE:-$INPUT_STATE}"; URL="${URL:-$INPUT_URL}"
-          fi
+          PR="$INPUT_PR"
+          case "$EVENT" in
+            check_run)    SHA="$CR_SHA"; PR=$(echo "$CR_PRS" | jq -r '.[0].number // empty' 2>/dev/null || true) ;;
+            workflow_run) SHA="$WR_SHA"; PR=$(echo "$WR_PRS" | jq -r '.[0].number // empty' 2>/dev/null || true) ;;
+          esac
           if [ -z "$PR" ] && [ -n "$SHA" ]; then
             PR=$(gh api "repos/$REPO/commits/$SHA/pulls" --jq '.[0].number // empty' 2>/dev/null || true)
           fi
           # Merge-queue commits belong to no PR; take it from the queue branch whose head (per the
           # event payload, as a failed entry's branch is deleted at once) is this SHA.
-          if [ -z "$PR" ] && [ "$KIND" = jenkins ]; then
+          if [ -z "$PR" ] && [ "$EVENT" = status ]; then
             b=$(echo "$BRANCHES_JSON" | jq -r --arg s "$SHA" '.[]? | select(.commit.sha == $s) | .name' \
                 | grep -E '^gh-readonly-queue/.*/pr-[0-9]+-' | head -1 || true)
             PR=$(echo "$b" | sed -nE 's#.*/pr-([0-9]+)-.*#\1#p')
-            [ -n "$PR" ] && QUEUE="merge queue"
+            [ -n "$PR" ] && export QUEUE_SHA="$SHA"
           fi
           [ -n "$PR" ] || { echo "No PR for $SHA"; exit 0; }
-          # A draft has no thread yet; posting would open one with an empty card.
-          PRJ=$(gh api "repos/$REPO/pulls/$PR" 2>/dev/null || echo '{}')
-          if [ -z "$QUEUE" ] && [ "$(echo "$PRJ" | jq -r '.draft')" = true ]; then
-            echo "PR $PR is a draft"; exit 0
-          fi
-          # Sent with every post so a thread first opened by a CI event (a PR marked ready before
-          # these workflows existed) gets a full card.
-          TITLE=$(echo "$PRJ" | jq -r '.title // ""')
-          AUTHOR=$(echo "$PRJ" | jq -r '.user.login // ""')
-          PRURL=$(echo "$PRJ" | jq -r '.html_url // ""')
-          JIRA=$(echo "$PRJ" | jq -r '.head.ref // ""' | grep -oE 'RS(DSO|DEV)-[0-9]+' || true)
-          BUILD=""; JOB=""
-          if [ "$KIND" = aikido ]; then
-            case "$STATE" in
-              failure)         STATUS="Aikido failed ❌" ;;
-              action_required) STATUS="Aikido needs action ⚠️" ;;
-              *)               STATUS="Aikido $STATE ⚠️" ;;
-            esac
-            JOB="Security check"; SUMMARY="$CR_TITLE"
-          elif [ "$KIND" = build ]; then
-            STATUS="${WR_NAME:-$INPUT_NAME} failed ❌"; SUMMARY=""
-          else
-            # Jenkins sets pending twice; the first ("Triggered", queued) has no build link yet.
-            [ "$STATE" = pending ] && [ -z "$URL" ] && { echo "Queued, no build yet"; exit 0; }
-            NAME=$(echo "$URL" | sed -nE 's#.*/job/([^/]+)/([0-9]+).*#\1#p')
-            NAME="${NAME:-D4xx_Kernel_Module_Jetson_JP6}"
-            case "$STATE" in
-              pending) STATUS="$NAME started ⏳" ;;
-              success) case "$DESC" in Skipped*) STATUS="$NAME skipped ⏭" ;; *) STATUS="$NAME passed ✅" ;; esac ;;
-              failure) STATUS="$NAME failed ❌" ;;
-              *)       STATUS="$NAME error ⚠️" ;;
-            esac
-            BUILD=$(echo "$URL" | sed -nE 's#.*/job/([^/]+)/([0-9]+).*#\#\2#p')
-            SUMMARY=$(printf '%s %s' "$QUEUE" "$DESC" | sed 's/^ *//; s/ *$//')
-          fi
-          jq -n --arg key "PR-$PR" --arg status "$STATUS" --arg source "$KIND" \
-                --arg job "$JOB" --arg build "$BUILD" --arg url "$URL" --arg summary "$SUMMARY" \
-                --arg title "$TITLE" --arg author "$AUTHOR" --arg jira "$JIRA" --arg prurl "$PRURL" \
-                '{key:$key,status:$status,source:$source,job:$job,build:$build,url:$url,summary:$summary,
-                  title:$title,author:$author,jira:$jira,prurl:$prurl}' \
-          | curl -sf -X POST "$HOOK" -H 'Content-Type: application/json' -d @-
+          # Jenkins sets pending twice; the first ("Triggered", queued) has no build link yet.
+          [ "$EVENT" = status ] && [ "$STATE" = pending ] && [ -z "$URL" ] && { echo "Queued"; exit 0; }
+          WHERE="${QUEUE_SHA:+ in the merge queue}"
+          case "$EVENT:$STATE$CR_CONCLUSION$WR_CONCLUSION" in
+            status:failure|status:error)
+              export NOTIFY_TEXT="<b>$CONTEXT $STATE$WHERE ❌</b> · <a href=\"$URL\">Open build</a>" ;;
+            check_run:failure|check_run:action_required)
+              export NOTIFY_TEXT="<b>Aikido $CR_CONCLUSION ❌</b> · <a href=\"$CR_URL\">Open scan</a>" ;;
+            workflow_run:failure)
+              export NOTIFY_TEXT="<b>$WR_NAME failed ❌</b> · <a href=\"$WR_URL\">Open run</a>" ;;
+          esac
+          export PR
+          bash .github/scripts/teams-card.sh
