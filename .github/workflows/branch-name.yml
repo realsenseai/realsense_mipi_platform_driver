@@ -1,0 +1,33 @@
+name: Branch name
+
+# PR-side twin of the branch-naming ruleset (26350292), which only gates branch
+# creation in this repo: forks and pre-ruleset branches reach PRs unchecked.
+
+on:
+  pull_request:
+    branches: [dev, master]
+    types: [opened, reopened, synchronize]
+  merge_group:
+
+permissions: {}
+
+jobs:
+  branch-name:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR head branch name
+        if: github.event_name == 'pull_request'
+        env:
+          HEAD: ${{ github.head_ref }}
+        run: |
+          # Keep in lockstep with the branch-naming ruleset exclude list (case-sensitive).
+          case "$HEAD" in
+            fix/RSDSO-*|fix/RSDEV-*|feature/*|docs/*|r/*|master|dev|update-module-version)
+              echo "OK: '$HEAD'" ;;
+            *)
+              echo "::error::Branch '$HEAD' does not match the naming rule. Allowed: fix/RSDEV-*, fix/RSDSO-*, feature/**, docs/**, r/**. Rename the branch and push again."
+              exit 1 ;;
+          esac
+      - name: Merge queue entry already checked as a PR
+        if: github.event_name == 'merge_group'
+        run: echo "OK"
