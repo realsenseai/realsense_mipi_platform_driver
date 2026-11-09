@@ -1,0 +1,12 @@
+query($o: String!, $r: String!, $n: Int!) {
+  repository(owner: $o, name: $r) {
+    pullRequest(number: $n) {
+      mergeQueueEntry { state }
+      reviewDecision
+      latestOpinionatedReviews(first: 20) { nodes { state author { login __typename } } }
+      reviewRequests(first: 20) {
+        nodes { requestedReviewer { ... on User { login } ... on Team { name } ... on Bot { login } } }
+      }
+    }
+  }
+}
