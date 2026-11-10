@@ -10328,6 +10328,7 @@ static int ds5_probe(struct i2c_client *c
 #endif
 	u16 rec_state;
 	int ret, err = 0;
+	int retry;
 #ifdef CONFIG_OF
 	const char *str;
 	uint32_t override_addr = 0;
@@ -10404,8 +10405,16 @@ static int ds5_probe(struct i2c_client *c
 #endif
 	state->reset_ref_ds5 = atomic_read(ds5_get_reset_gen(state));
 
-	// Verify communication
-	ret = ds5_read(state, DS5_FW_VERSION, &state->fw_version);
+	/* Each role waits for camera startup after SerDes bring-up so the
+	 * primary can finish probing before sibling roles bind.
+	 */
+	for (retry = 0; retry < DS5_HW_RESET_MAX_RETRIES; retry++) {
+		ret = ds5_read_poll(state, DS5_FW_VERSION, &state->fw_version);
+		if (!ret)
+			break;
+		if (retry < DS5_HW_RESET_MAX_RETRIES - 1)
+			msleep(DS5_HW_RESET_POLL_INTERVAL_MS);
+	}
 	if (ret < 0) {
 		dev_err(&c->dev,
 			"%s(): cannot communicate with D4XX: %d on addr: 0x%x\n",
