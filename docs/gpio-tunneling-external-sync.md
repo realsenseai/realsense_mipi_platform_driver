@@ -94,7 +94,7 @@ Each serializer–deserializer pair was configured independently at probe. Same 
 1. **HW reset left camera and serializer out of sync** — HW reset returned the D4XX FW to default sync mode, but the serializer tunneling registers remained programmed. Recovery did not drive the serializer back to default.
 2. **No runtime enable/disable** — tunneling was always on, no V4L2 control to toggle it.
 3. **Redundant deserializer writes** — `max96712_setup_control()` wrote ESYNC registers on every call, including once per camera in multi-camera setups.
-4. **Tunneling active even when not needed** — cameras using internal sync (modes 0/1/4/5) still had ESYNC registers configured.
+4. **Tunneling active even when not needed** — cameras using internal sync (modes 0/1) still had ESYNC registers configured.
 
 ---
 
@@ -106,7 +106,7 @@ Each serializer–deserializer pair was configured independently at probe. Same 
 |--------|-----------|------------|
 | Deserializer ESYNC | Always at probe | At probe, fixed — no runtime changes |
 | Serializer tunneling | Always at probe | On demand, only for the camera changing sync mode |
-| Default state | Tunneling ON (both) | Deserializer ON at probe; serializer OFF until mode 2/3 |
+| Default state | Tunneling ON (both) | Deserializer ON at probe; serializer OFF until mode 2 |
 | Runtime control | None | Per-camera `DS5_CAMERA_CID_SYNC_MODE` controls its serializer |
 | After HW reset | Camera/serializer could diverge | Recovering camera serializer is reset to default to match reset camera FW |
 | Scope | All MAX96712 setups | MAX96712 only; serializer side per-camera |
@@ -115,18 +115,19 @@ Each serializer–deserializer pair was configured independently at probe. Same 
 
 - The deserializer ESYNC configuration is set once at probe and never modified at runtime. It is a shared, permanent configuration for the deserializer.
 - Each camera's serializer ESYNC is independent. Enabling ESYNC on camera A does not affect camera B's serializer.
-- Mixed sync modes on the same deserializer are supported: camera A can be in mode 2 (slave) while camera B is in mode 0 (default). Each camera controls only its own serializer.
+- Mixed sync modes on the same deserializer are supported: camera A can be in mode 2 (External Sync) while camera B is in mode 0 (Default). Each camera controls only its own serializer.
 
 ## Trigger
+
+The `camera_sync_mode` menu has exactly three entries — the index is the meaning,
+shared across all models, D4xx and D5xx alike (D5xx skip-masks Master;
+it does not renumber the menu):
 
 | Sync Mode | Name | Serializer Action (this camera only) |
 |-----------|------|--------------------------------------|
 | 0 | Default | Disable (if currently on) |
 | 1 | Master | Disable (if currently on) |
-| 2 | Slave | **Enable** (if currently off) |
-| 3 | Full Slave | **Enable** (if currently off) |
-| 4 | Sub Pre-Master | Disable (if currently on) |
-| 5 | Full Master | Disable (if currently on) |
+| 2 | External Sync | **Enable** (if currently off) |
 
 Deserializer ESYNC is **not toggled** at runtime.
 
@@ -134,7 +135,7 @@ Deserializer ESYNC is **not toggled** at runtime.
 
 **R1 — Deserializer ESYNC at probe.** Keep ESYNC register writes in `max96712_setup_control()`. The deserializer is configured once at probe and never changed afterward.
 
-**R2 — Serializer update policy.** On mode 2/3, program this camera's serializer to ESYNC-enabled. On mode 0/1/4/5, program this camera's serializer to default (ESYNC-disabled).
+**R2 — Serializer update policy.** On mode 2 (External Sync), program this camera's serializer to ESYNC-enabled. On mode 0/1, program this camera's serializer to default (ESYNC-disabled).
 
 **R3 — HW reset returns serializer to default.** HW reset restores the camera FW to default sync mode, but does not reset serializer registers. Recovery must therefore disable tunneling on the recovered camera's serializer. Deserializer is not re-configured.
 
@@ -157,8 +158,8 @@ Deserializer ESYNC is **not toggled** at runtime.
 | Path | Serializer tunneling | Deserializer ESYNC |
 |------|---------------------|--------------------|
 | **Probe** | None | At probe via `max96712_setup_control()` — permanent |
-| **`s_ctrl` SYNC_MODE → mode 2/3** | Enable **this camera's** serializer | No change |
-| **`s_ctrl` SYNC_MODE → mode 0/1/4/5** | Disable **this camera's** serializer | No change |
+| **`s_ctrl` SYNC_MODE → mode 2** | Enable **this camera's** serializer | No change |
+| **`s_ctrl` SYNC_MODE → mode 0/1** | Disable **this camera's** serializer | No change |
 | **HW reset recovery** | Disable **this camera's** serializer | No change |
 | **Stream-start recovery** | No serializer change; previous HW reset already forced default state | No change |
 
@@ -179,7 +180,7 @@ Deserializer ESYNC is **not toggled** at runtime.
 
 1. Probe: deserializer ESYNC configured. Both serializers OFF.
 2. Camera A sets mode 2 → Only Camera A's serializer configured. Camera B's serializer unchanged.
-3. Camera B sets mode 3 → Only Camera B's serializer configured.
+3. Camera B sets mode 2 → Only Camera B's serializer configured.
 4. Camera B sets mode 0 → Only Camera B's serializer restored. Camera A unaffected.
 5. After HW reset of Camera A: recovery disables only Camera A's serializer. Camera B unchanged. **Independent per-camera recovery.**
 
@@ -227,7 +228,7 @@ In `ds5_s_ctrl`, case `DS5_CAMERA_CID_SYNC_MODE`, after the FW write:
 
 ```c
 if (state->is_depth && state->dser_ops == &max96712_interface) {
-    bool need_esync = (ctrl->val == 2 || ctrl->val == 3);
+    bool need_esync = (ctrl->val == DS5_SYNC_MODE_EXTERNAL);
     ds5_set_ser_esync_tunneling(state, need_esync);
 }
 ```

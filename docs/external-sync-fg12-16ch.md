@@ -116,10 +116,16 @@ When `--fps` or `--duty` is provided with `--enable`, the script first sends a `
    ```bash
    python3 ext_sync_gen.py --enable --fps 30
    ```
-3. Set cameras to inter cam sync mode (mode 3 for D457 cameras and mode 2 for D401) camera streaming .
+3. Set each camera to `camera_sync_mode` = 2 (External Sync) — the same value on every model, D4xx and D5xx alike:
+   ```bash
+   v4l2-ctl -d /dev/video-rs-depth-0 --set-ctrl=camera_sync_mode=2
+   ```
+   The menu is 0 = Default, 1 = Master, 2 = External Sync. D5xx skip-masks Master,
+   so it queries as 0 and 2 — the index keeps its meaning, the menu is never renumbered.
+   There is no mode 3 on either.
 4. Start streaming
 5. Cameras are now frame-synced to the external signal.
-6. To stop external sync and revert to internal timing return cameras to inter cam sync mode 0
+6. To stop external sync and revert to internal timing, set `camera_sync_mode` = 0 (Default) on every camera.
 7. Stop TSC generator using:
    ```bash
    python3 ext_sync_gen.py --disable
