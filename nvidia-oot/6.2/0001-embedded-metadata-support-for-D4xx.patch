@@ -14,7 +14,7 @@ vb2; real S_FMT/TRY_FMT; proper init error ladder) and review follow-ups:
  - one page-aligned DMA slot per capture descriptor so in-flight frames do not
    overwrite each other's embedded metadata
 ---
- drivers/media/i2c/Makefile                    |   5 +
+ drivers/media/i2c/Makefile                    |   6 +
  .../platform/tegra/camera/sensor_common.c     |   4 +
  .../media/platform/tegra/camera/vi/channel.c  | 440 +++++++++++++++++-
  .../media/platform/tegra/camera/vi/graph.c    |  46 +-
@@ -23,19 +23,20 @@ vb2; real S_FMT/TRY_FMT; proper init error ladder) and review follow-ups:
  .../platform/tegra/camera/vi/vi5_formats.h    |  30 +-
  include/media/mc_common.h                     |  31 ++
  include/media/tegra_camera_core.h             |  12 +-
- 9 files changed, 723 insertions(+), 60 deletions(-)
+ 9 files changed, 724 insertions(+), 60 deletions(-)
 
 diff --git a/drivers/media/i2c/Makefile b/drivers/media/i2c/Makefile
 index a85d6e8..947e6e9 100644
 --- a/drivers/media/i2c/Makefile
 +++ b/drivers/media/i2c/Makefile
-@@ -5,6 +5,11 @@ subdir-ccflags-y += -Werror
+@@ -5,6 +5,12 @@ subdir-ccflags-y += -Werror
  
  obj-m += max9295.o
  obj-m += max9296.o
 +subdir-ccflags-y += -DCONFIG_VIDEO_D4XX_SERDES
 +subdir-ccflags-y += -DCONFIG_TEGRA_CAMERA_PLATFORM
 +obj-m += d4xx.o
++d4xx-y := d4xx_main.o d4xx_desc.o
 +obj-m += max96717.o
 +obj-m += max96724.o
  ifeq ($(findstring ack_src,$(NV_BUILD_KERNEL_OPTIONS)),)

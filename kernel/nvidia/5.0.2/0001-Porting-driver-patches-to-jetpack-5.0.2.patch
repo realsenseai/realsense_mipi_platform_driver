@@ -6,7 +6,7 @@ Subject: [PATCH] Porting driver patches to jetpack 5.0.2
 Signed-off-by: Junze Wu <junze.wu@intel.com>
 ---
  drivers/media/i2c/Kconfig                     |  18 +
- drivers/media/i2c/Makefile                    |   3 +
+ drivers/media/i2c/Makefile                    |   4 +
  drivers/media/i2c/max9295.c                   | 389 ++++++++++++++++
  drivers/media/i2c/max9296.c                   | 399 ++++++++++++++++
  .../platform/tegra/camera/sensor_common.c     |   4 +
@@ -22,7 +22,7 @@ Signed-off-by: Junze Wu <junze.wu@intel.com>
  include/media/max9296.h                       |   3 +
  include/media/mc_common.h                     |  26 ++
  include/media/tegra_camera_core.h             |  12 +-
- 17 files changed, 1643 insertions(+), 70 deletions(-)
+ 17 files changed, 1644 insertions(+), 70 deletions(-)
 
 diff --git a/drivers/media/i2c/Kconfig b/drivers/media/i2c/Kconfig
 index 8362bc8..873b62e 100644
@@ -57,12 +57,13 @@ diff --git a/drivers/media/i2c/Makefile b/drivers/media/i2c/Makefile
 index af6122b..7be6d7e 100644
 --- a/drivers/media/i2c/Makefile
 +++ b/drivers/media/i2c/Makefile
-@@ -23,3 +23,6 @@ obj-$(CONFIG_I2C_IOEXPANDER_DESER_MAX9296) += max9296.o
+@@ -23,3 +23,7 @@ obj-$(CONFIG_I2C_IOEXPANDER_DESER_MAX9296) += max9296.o
  obj-$(CONFIG_NV_VIDEO_IMX390) += nv_imx390.o
  obj-$(CONFIG_NV_VIDEO_AR0234) += nv_ar0234.o
  obj-$(CONFIG_NV_DESER_MAX96712) += max96712.o
 +obj-$(CONFIG_VIDEO_D4XX) += max96717.o
 +obj-$(CONFIG_VIDEO_D4XX) += d4xx.o
++d4xx-y := d4xx_main.o d4xx_desc.o
 +obj-$(CONFIG_VIDEO_D4XX) += max96724.o
 diff --git a/drivers/media/i2c/max9295.c b/drivers/media/i2c/max9295.c
 index 110f861..03040cc 100644

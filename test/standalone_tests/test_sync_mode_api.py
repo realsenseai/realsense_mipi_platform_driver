@@ -2,10 +2,16 @@
 """
 Test RSDEV-6449: Simplified 3-value sync mode public API.
 
+D58x has no master role, so the driver skip-masks the Master entry on those
+SKUs (RSDEV-14614).  The expected menu and the set of acceptable values are
+therefore chosen per SKU; everything else is identical.
+
 Verifies the behavioral contract introduced by the simplification:
-  1. Menu has exactly 3 entries: Default / Master / External Sync
-  2. Control max is 2 (previously 5)
-  3. Values 0, 1, 2 accepted; value 3 (old Full Slave) rejected
+  1. Menu is Default / Master / External Sync on D4xx, Default / External
+     Sync on D58x
+  2. Control max is 2 (previously 5) on both — External keeps wire value 2
+  3. Valid values accepted; value 3 (old Full Slave) rejected, and on D58x
+     value 1 (Master) rejected too
   4. Set/readback consistent for every valid value
   5. HW reset re-applies External Sync state — mode 2 reads back after reset
   6. Streaming delivers >=90% of requested frames in every sync mode
@@ -23,7 +29,8 @@ import subprocess
 import sys
 import time
 
-EXPECTED_MENU = {0: "Default", 1: "Master", 2: "External Sync"}
+MENU_D4XX = {0: "Default", 1: "Master", 2: "External Sync"}
+MENU_D58X = {0: "Default", 2: "External Sync"}   # Master skip-masked (RSDEV-14614)
 EXPECTED_MAX = 2
 STREAM_FRAMES = 30
 STREAM_MIN_OK = 27        # 90 % of STREAM_FRAMES
@@ -56,6 +63,20 @@ def discover_cameras():
     return cameras
 
 
+def is_d58x(dev):
+    """D58x registers "Device Mode" on the depth node; D4xx never does."""
+    r = sh(f"v4l2-ctl -d {dev} --list-ctrls 2>/dev/null")
+    return "device_mode" in r.stdout
+
+
+def expected_menu(d58x):
+    return MENU_D58X if d58x else MENU_D4XX
+
+
+def valid_modes(d58x):
+    return [0, 2] if d58x else [0, 1, 2]
+
+
 def parse_sync_ctrl(dev):
     """Return (menu_dict, ctrl_max) from v4l2-ctl --list-ctrls-menus output."""
     r = sh(f"v4l2-ctl -d {dev} --list-ctrls-menus 2>/dev/null")
@@ -72,6 +93,10 @@ def parse_sync_ctrl(dev):
             m = re.match(r'\s+(\d+):\s+(.+)', line)
             if m:
                 menu[int(m.group(1))] = m.group(2).strip()
+            elif re.search(r'0x[0-9a-fA-F]{8}\s*\(', line):
+                # Next control header. v4l2-ctl indents these, so the
+                # column-0 check below never catches them.
+                break
             elif line.strip() and not line[0].isspace():
                 break
     return menu, ctrl_max
@@ -133,14 +158,15 @@ class T:
         return not self._fail
 
 
-def test_menu(dev):
+def test_menu(dev, d58x):
     t = T("menu_and_range")
     menu, ctrl_max = parse_sync_ctrl(dev)
+    want = expected_menu(d58x)
 
-    if menu == EXPECTED_MENU:
+    if menu == want:
         t.ok(f"menu entries correct: {list(menu.values())}")
     else:
-        t.fail(f"menu wrong — expected {EXPECTED_MENU}, got {menu}")
+        t.fail(f"menu wrong — expected {want}, got {menu}")
 
     if ctrl_max == EXPECTED_MAX:
         t.ok(f"control max={ctrl_max}")
@@ -150,13 +176,19 @@ def test_menu(dev):
     return t
 
 
-def test_acceptance(dev):
+def test_acceptance(dev, d58x):
     t = T("value_acceptance")
-    for val in [0, 1, 2]:
+    for val in valid_modes(d58x):
         if set_sync_mode(dev, val):
             t.ok(f"set {val} accepted")
         else:
             t.fail(f"set {val} rejected (expected accept)")
+
+    if d58x:
+        if not set_sync_mode(dev, 1):
+            t.ok("set 1 rejected (expected — D58x has no Master)")
+        else:
+            t.fail("set 1 accepted (expected reject — D58x has no Master)")
 
     if not set_sync_mode(dev, 3):
         t.ok("set 3 rejected (expected — old Full Slave removed)")
@@ -167,9 +199,9 @@ def test_acceptance(dev):
     return t
 
 
-def test_readback(dev):
+def test_readback(dev, d58x):
     t = T("set_readback")
-    for val in [0, 1, 2]:
+    for val in valid_modes(d58x):
         set_sync_mode(dev, val)
         time.sleep(0.1)
         got = get_sync_mode(dev)
@@ -212,9 +244,9 @@ def test_hw_reset_persistence(dev):
     return t
 
 
-def test_streaming(depth_dev, rgb_dev):
+def test_streaming(depth_dev, rgb_dev, d58x):
     t = T("streaming_per_mode")
-    for mode in [0, 1, 2]:
+    for mode in valid_modes(d58x):
         set_sync_mode(depth_dev, mode)
         time.sleep(0.2)
 
@@ -240,26 +272,30 @@ def test_streaming(depth_dev, rgb_dev):
 # ---------------------------------------------------------------------------
 
 def run_camera(depth_dev, rgb_dev, no_stream):
+    d58x = is_d58x(depth_dev)
+    sku = "D58x" if d58x else "D4xx"
     print(f"\n{'─'*60}")
-    print(f"Camera: {depth_dev}  rgb: {rgb_dev or '(none)'}")
+    print(f"Camera: {depth_dev}  rgb: {rgb_dev or '(none)'}  sku: {sku}")
     print(f"{'─'*60}")
 
     tests = []
     print("\n[1] Menu and range")
-    tests.append(test_menu(depth_dev))
+    tests.append(test_menu(depth_dev, d58x))
 
-    print("\n[2] Value acceptance (0/1/2 ok, 3 rejected)")
-    tests.append(test_acceptance(depth_dev))
+    accept = "/".join(str(v) for v in valid_modes(d58x))
+    reject = "1/3" if d58x else "3"
+    print(f"\n[2] Value acceptance ({accept} ok, {reject} rejected)")
+    tests.append(test_acceptance(depth_dev, d58x))
 
     print("\n[3] Set/readback consistency")
-    tests.append(test_readback(depth_dev))
+    tests.append(test_readback(depth_dev, d58x))
 
     print("\n[4] HW reset preserves External Sync mode")
     tests.append(test_hw_reset_persistence(depth_dev))
 
     if not no_stream:
         print("\n[5] Streaming in each sync mode")
-        tests.append(test_streaming(depth_dev, rgb_dev))
+        tests.append(test_streaming(depth_dev, rgb_dev, d58x))
 
     return tests
 

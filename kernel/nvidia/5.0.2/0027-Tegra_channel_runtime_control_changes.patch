@@ -1,0 +1,126 @@
+From 2222222222222222222222222222222222222222 Mon Sep 17 00:00:00 2001
+From: ejgoldik <ehud.joseph.goldik@realsenseai.com>
+Date: Thu, 22 Oct 2026 12:00:00 +0300
+Subject: [PATCH] VI runtime control refresh
+
+A sensor whose control set changes after probe (D58x control
+descriptor reload after a HW reset: ranges, menu masks, labels,
+defaults, controls added or withdrawn by the new firmware) keeps the
+stale set on the video node, because the channel merged the subdev's
+handler once at bind and the V4L2 core serves control ioctls straight
+from that handler.
+
+Export tegra_channel_mark_ctrls_dirty() for the sensor to flag the
+change - a lock-free write, safe from a control handler that already
+holds its node's locks. The re-sync runs on the ioctl thread, ahead of
+video_ioctl2 and so outside video_lock and every handler lock: each
+subdev refreshes its own handler through v4l2_subdev_core_ops.command
+(TEGRA_CHANNEL_CMD_REFRESH_CTRLS), then the channel re-merges it, which
+adds only what is new. The first post-reset control query sees the
+fresh set. Companion of the format refresh in the previous patch.
+
+Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
+---
+diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
+--- a/drivers/media/platform/tegra/camera/vi/channel.c
++++ b/drivers/media/platform/tegra/camera/vi/channel.c
+@@ -412,6 +412,61 @@
+ }
+ EXPORT_SYMBOL(tegra_channel_mark_fmts_dirty);
+ 
++/* Lock-free stale mark for a sensor whose control set changes at runtime
++ * (D58x descriptor reload); the next control ioctl re-syncs it.
++ */
++void tegra_channel_mark_ctrls_dirty(struct tegra_channel *chan)
++{
++	if (chan)
++		WRITE_ONCE(chan->ctrls_dirty, true);
++}
++EXPORT_SYMBOL(tegra_channel_mark_ctrls_dirty);
++
++/* Re-sync the subdevs' controls on the ioctl thread, ahead of video_ioctl2
++ * and so outside video_lock and every handler lock: each subdev refreshes
++ * its own handler through the core command op, then the channel re-merges
++ * it, which adds only what is new (v4l2_ctrl_add_handler skips duplicates).
++ * Cleared before the refresh so a mark that races it is not lost.
++ */
++static void tegra_channel_refresh_ctrls(struct tegra_channel *chan)
++{
++	int num_sd = 0;
++	struct v4l2_subdev *sd;
++
++	if (!chan || !READ_ONCE(chan->ctrls_dirty))
++		return;
++	WRITE_ONCE(chan->ctrls_dirty, false);
++	while ((sd = chan->subdev[num_sd++]) && num_sd <= chan->num_subdevs) {
++		if (v4l2_subdev_call(sd, core, command,
++				     TEGRA_CHANNEL_CMD_REFRESH_CTRLS, NULL))
++			continue;
++		if (v4l2_ctrl_add_handler(&chan->ctrl_handler, sd->ctrl_handler,
++					  NULL, false))
++			dev_warn(chan->vi->dev, "%s: re-merging %s controls failed\n",
++				 __func__, sd->name);
++	}
++}
++
++static long tegra_channel_ioctl(struct file *filp, unsigned int cmd,
++				unsigned long arg)
++{
++	switch (cmd) {
++	case VIDIOC_QUERYCTRL:
++	case VIDIOC_QUERY_EXT_CTRL:
++	case VIDIOC_QUERYMENU:
++	case VIDIOC_G_CTRL:
++	case VIDIOC_S_CTRL:
++	case VIDIOC_G_EXT_CTRLS:
++	case VIDIOC_S_EXT_CTRLS:
++	case VIDIOC_TRY_EXT_CTRLS:
++		tegra_channel_refresh_ctrls(video_drvdata(filp));
++		break;
++	default:
++		break;
++	}
++	return video_ioctl2(filp, cmd, arg);
++}
++
+ /*
+  * -----------------------------------------------------------------------------
+  * Tegra channel frame setup and capture operations
+@@ -2477,12 +2532,12 @@
+  */
+ static const struct v4l2_file_operations tegra_channel_fops = {
+ 	.owner		= THIS_MODULE,
+-	.unlocked_ioctl	= video_ioctl2,
++	.unlocked_ioctl	= tegra_channel_ioctl,
+ #ifdef CONFIG_COMPAT
+ #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 4, 0)
+ 	.compat_ioctl32 = tegra_channel_compat_ioctl,
+ #else
+-	.compat_ioctl32 = video_ioctl2,
++	.compat_ioctl32 = tegra_channel_ioctl,
+ #endif
+ #endif
+ 	.open		= tegra_channel_open,
+diff --git a/include/media/mc_common.h b/include/media/mc_common.h
+--- a/include/media/mc_common.h
++++ b/include/media/mc_common.h
+@@ -251,6 +251,7 @@
+ 
+ 	DECLARE_BITMAP(fmts_bitmap, MAX_FORMAT_NUM);
+ 	bool fmts_dirty;		/* fmts_bitmap needs a runtime rebuild */
++	bool ctrls_dirty;		/* re-sync subdev controls at the next ioctl */
+ 	atomic_t power_on_refcnt;
+ 	struct v4l2_fh *fh;
+ 	bool bypass;
+@@ -368,6 +369,11 @@
+ int tegra_vi_channels_cleanup(struct tegra_mc_vi *vi);
+ int tegra_channel_init_subdevices(struct tegra_channel *chan);
+ void tegra_channel_mark_fmts_dirty(struct tegra_channel *chan);
++void tegra_channel_mark_ctrls_dirty(struct tegra_channel *chan);
++/* v4l2_subdev_core_ops.command: re-sync the subdev's control handler with
++ * its current control set (a sensor whose published controls changed).
++ */
++#define TEGRA_CHANNEL_CMD_REFRESH_CTRLS	_IO('T', 0xC0)
+ void tegra_channel_remove_subdevices(struct tegra_channel *chan);
+ struct v4l2_subdev *tegra_channel_find_linked_csi_subdev(
+ 	struct tegra_channel *chan);
