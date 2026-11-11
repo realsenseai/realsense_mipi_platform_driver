@@ -190,6 +190,22 @@ int main(void) {
     c.status_addr=0; ctrl.is_ptr=false; ctrl.val=0x12345678; q.max_write_len=4;
     assert(ds5_ctrl_reg_set(&state,&c,&ctrl)==0 && io_count==2 && last_len==2);
     assert(!allocated && !dev.lock);
+    c.flags=0; c.type=V4L2_CTRL_TYPE_MENU; c.max=3;
+    memset(wire,0,sizeof(wire)); wire[0]=2;
+    assert(ds5_ctrl_reg_get(&state,&c,&ctrl)==0 && ctrl.val==2);
+    wire[0]=4; ctrl.val=123;
+    assert(ds5_ctrl_reg_get(&state,&c,&ctrl)==-EBADMSG && ctrl.val==123);
+    memset(wire,0xff,4);
+    assert(ds5_ctrl_reg_get(&state,&c,&ctrl)==-EBADMSG && ctrl.val==123);
+    const u16 menu[] = {5,9};
+    c.wire_map=menu; c.max=1; memset(wire,0,4); wire[0]=9;
+    assert(ds5_ctrl_reg_get(&state,&c,&ctrl)==0 && ctrl.val==1);
+    c.wire_map=NULL; c.type=V4L2_CTRL_TYPE_INTEGER;
+    c.min=-128; c.reg.extent=1; wire[0]=0xfe;
+    assert(ds5_ctrl_reg_get(&state,&c,&ctrl)==0 && ctrl.val==-2);
+    ctrl.val=123; fail_io=1;
+    assert(ds5_ctrl_reg_get(&state,&c,&ctrl)==-EREMOTEIO && ctrl.val==123);
+    assert(!allocated && !dev.lock);
     puts("PASS: descriptor bounds, atomic 1024-byte REG sizing, cleanup and completion errno");
 }
 '''
@@ -199,7 +215,8 @@ cfile, exe = out / "extent.c", out / "extent"
 cfile.write_text(prefix + header + "\n" + executors + parser_support + reg_arm +
                  "\n*out=c; return 0;\n}\n" + checks)
 subprocess.run(["cc", "-std=gnu11", "-Wall", "-Wextra", "-Werror",
-                "-fsanitize=address,undefined", "-g", str(cfile), "-o", str(exe)], check=True)
+                "-fsanitize=address,undefined", "-fno-sanitize-recover=all",
+                "-g", str(cfile), "-o", str(exe)], check=True)
 subprocess.run([str(exe)], check=True)
 cfile.unlink()
 exe.unlink()

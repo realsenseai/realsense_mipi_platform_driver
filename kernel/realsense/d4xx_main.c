@@ -4613,21 +4613,19 @@ static int ds5_ctrl_reg_set(struct ds5 *state, const struct ds5_desc_ctrl *c,
 	}
 
 	mutex_lock(&state->ds5_dev->lock);
-	if (c->status_addr) {
+	if (c->status_addr)
 		ret = ds5_read(state, c->status_addr - RS_CTRL_SEQ_BELOW, &seq0);
-		if (ret)
-			goto unlock;
-	}
-	if (c->flags & RS_CTRL_F_LSW_LATCH) {
-		ret = ds5_raw_write(state, c->reg.addr + 2, buf + 2, 2);
-		if (!ret)
-			ret = ds5_raw_write(state, c->reg.addr, buf, 2);
-	} else {
-		ret = ds5_raw_write(state, c->reg.addr, buf, c->reg.extent);
+	if (!ret) {
+		if (c->flags & RS_CTRL_F_LSW_LATCH) {
+			ret = ds5_raw_write(state, c->reg.addr + 2, buf + 2, 2);
+			if (!ret)
+				ret = ds5_raw_write(state, c->reg.addr, buf, 2);
+		} else {
+			ret = ds5_raw_write(state, c->reg.addr, buf, c->reg.extent);
+		}
 	}
 	if (!ret && c->status_addr)
 		ret = ds5_ctrl_seq_status(state, c->status_addr, seq0);
-unlock:
 	mutex_unlock(&state->ds5_dev->lock);
 	if (buf != scalar)
 		kfree(buf);
@@ -4665,23 +4663,21 @@ static int ds5_ctrl_reg_get(struct ds5 *state, const struct ds5_desc_ctrl *c,
 	} else {
 		ret = ds5_raw_read(state, c->reg.addr, buf, c->reg.extent);
 	}
-	if (ret)
-		goto out;
-	if (ctrl->is_ptr) {
+	if (!ret && ctrl->is_ptr) {
 		memcpy(ctrl->p_new.p_u8, buf, c->reg.extent);
-		goto out;
+	} else if (!ret) {
+		val = (u32)buf[0] | (u32)buf[1] << 8 |
+		      (u32)buf[2] << 16 | (u32)buf[3] << 24;
+		if (c->type == V4L2_CTRL_TYPE_MENU) {
+			ret = val > U16_MAX ? -EBADMSG :
+			       ds5_ctrl_wire_to_menu(c, val, &ctrl->val);
+		} else {
+			/* a negative range means a narrow register holds a signed value */
+			if (c->min < 0 && c->reg.extent < 4)
+				val = sign_extend32(val, c->reg.extent * 8 - 1);
+			ctrl->val = val;
+		}
 	}
-	val = buf[0] | buf[1] << 8 | buf[2] << 16 | buf[3] << 24;
-	if (c->type == V4L2_CTRL_TYPE_MENU) {
-		ret = val > U16_MAX ? -EBADMSG :
-		       ds5_ctrl_wire_to_menu(c, val, &ctrl->val);
-		goto out;
-	}
-	/* a negative range means a narrow register holds a signed value */
-	if (c->min < 0 && c->reg.extent < 4)
-		val = sign_extend32(val, c->reg.extent * 8 - 1);
-	ctrl->val = val;
-out:
 	if (buf != scalar)
 		kfree(buf);
 	return ret;
