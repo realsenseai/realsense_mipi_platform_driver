@@ -34,10 +34,13 @@ if "static int ds5_release_pipe_for_reconfigure(" in s:
     f = s[config_helper_start:config_helper_end] + f
 configure_start = s.index("static int ds5_configure(")
 configure_end = s.index("static int ds5_sensor_g_frame_interval(", configure_start)
+cache_start = s.index("static void ds5_config_cache_clear(")
+cache_end = s.index("static void ds5_invalidate_sensor(", cache_start)
 wire_start = s.index("static u8 ds5_wire_data_type(")
 wire_end = s.index("\n}", wire_start) + 2
 f = (
-    s[wire_start:wire_end]
+    s[cache_start:cache_end]
+    + s[wire_start:wire_end]
     + "\n"
     + s[configure_start:configure_end].replace(
         "static int ds5_configure(", "static int ds5_configure_production(", 1
@@ -139,6 +142,8 @@ struct ds5 {
     int reset_ref_ds5;
     int gmsl_link;
     bool is_depth, is_rgb, is_y8, is_imu;
+    bool d58x;
+    void *client;
     bool metadata_enabled;
     struct {
         unsigned dst_vc;
@@ -177,6 +182,21 @@ static int serdes_lock__, scenario, release_ret, stop_ret, released, stopped, re
     fw_on, configured, configure_ret, access_ret, allocated, pipe_setups, fw_starts;
 static bool pipe_enabled;
 static bool fail_reconfigure_release;
+static int hw_inits, hw_init_ret;
+static u16 firmware_width;
+static unsigned config_write_mask;
+static const u16 depth_registers[] = {
+    DS5_DEPTH_STREAM_DT, DS5_DEPTH_STREAM_MD, DS5_DEPTH_OVERRIDE,
+    DS5_DEPTH_FPS, DS5_DEPTH_RES_WIDTH, DS5_DEPTH_RES_HEIGHT
+};
+static inline bool ds5_is_d58x(struct ds5 *s) { return s->d58x; }
+static inline int ds5_hw_init(void *client, struct ds5 *s) {
+    (void)client;
+    assert(!s->ds5_dev->depth_streaming && !s->ds5_dev->rgb_streaming &&
+           !s->ds5_dev->ir_streaming && !s->ds5_dev->imu_streaming);
+    hw_inits++;
+    return hw_init_ret;
+}
 enum configure_mode {
     CONFIGURE_NORMAL,
     CONFIGURE_REUSE_PIPE,
@@ -235,7 +255,7 @@ static void ds5_invalidate_sensor(struct ds5 *s, struct ds5_sensor *n) {
     (void)s;
     (void)n;
 }
-static void ds5_config_cache_clear(struct ds5_sensor *s) { (void)s; }
+static void ds5_config_cache_clear(struct ds5_sensor *s);
 static void ds5_flush_idle_link(struct ds5 *s) { (void)s; }
 static int ds5_configure(struct ds5 *s, bool *armed) {
     int ret;
@@ -287,8 +307,12 @@ static int ds5_read(struct ds5 *s, u16 reg, u16 *out) {
 }
 static int ds5_write(struct ds5 *s, u16 reg, u16 value) {
     (void)s;
-    if (reg != DS5_START_STOP_STREAM)
+    if (reg != DS5_START_STOP_STREAM) {
+        for (unsigned i = 0; i < sizeof(depth_registers) / sizeof(depth_registers[0]); i++)
+            if (reg == depth_registers[i]) config_write_mask |= 1U << i;
+        if (reg == DS5_DEPTH_RES_WIDTH) firmware_width = value;
         return 0;
+    }
     if (scenario == 2 || (scenario == 4 && (value & DS5_STREAM_STOP)) ||
         (scenario == 5 && (value & DS5_STREAM_START)))
         return -121;
@@ -669,6 +693,51 @@ int main(void) {
     assert(allocated == 1 && pipe_setups == 1 && fw_starts == 1);
     assert(ds5_mux_s_stream(&sd, 0) == 0 && real_sensor->pipe_id == -1);
 
+    /* A retained host cache must replay all six registers after HKR reboot. */
+    state.d58x = true;
+    hw_inits = 0;
+    for (int cycle = 0; cycle < 3; cycle++) {
+        real_sensor->cached_width_value = 640;
+        firmware_width = 848;
+        config_write_mask = 0;
+        assert(ds5_mux_s_stream(&sd, 1) == 0);
+        assert(firmware_width == 640 && config_write_mask == 0x3f);
+        assert(hw_inits == cycle + 1 && dev.gen == state.reset_ref_ds5);
+        int old_configured = configured;
+        assert(ds5_mux_s_stream(&sd, 1) == 0);
+        assert(hw_inits == cycle + 1 && configured == old_configured);
+        assert(ds5_mux_s_stream(&sd, 0) == 0);
+    }
+    /* Joining Depth replays its registers while RGB keeps global MIPI live. */
+    dev.rgb_streaming = true;
+    firmware_width = 848;
+    real_sensor->cached_width_value = 640;
+    config_write_mask = 0;
+    assert(ds5_mux_s_stream(&sd, 1) == 0);
+    assert(hw_inits == 3 && firmware_width == 640 && config_write_mask == 0x3f);
+    assert(dev.rgb_streaming);
+    assert(ds5_mux_s_stream(&sd, 0) == 0 && dev.rgb_streaming);
+    dev.rgb_streaming = false;
+
+    /* Initialization errors propagate before configuring or starting FW. */
+    hw_init_ret = -EIO;
+    int old_configured = configured, old_starts = fw_starts;
+    config_write_mask = 0;
+    assert(ds5_mux_s_stream(&sd, 1) == -EIO);
+    assert(configured == old_configured && fw_starts == old_starts);
+    assert(!real_sensor->streaming && !dev.depth_streaming && !fw_on);
+    assert(config_write_mask == 0);
+    hw_init_ret = 0;
+
+    /* D4xx preserves its matching stream cache across ordinary restarts. */
+    state.d58x = false;
+    int old_inits = hw_inits;
+    firmware_width = 640;
+    config_write_mask = 0;
+    assert(ds5_mux_s_stream(&sd, 1) == 0);
+    assert(hw_inits == old_inits && config_write_mask == 0);
+    assert(ds5_mux_s_stream(&sd, 0) == 0);
+
     puts("PASS: serializer retry on second stop/next start, failed-start rollback, "
          "DFU-blocked stop/restart, mapped VC retry, optional serializer callback");
     puts("PASS: production d4xx normal stop, FW already idle, inaccessible FW, reset "
@@ -677,6 +746,8 @@ int main(void) {
     puts("PASS: production configure rebuilds partially released MAX9295 pipes, "
          "fails closed on continued release errors, and retries after recovery; "
          "confirmed-idle no-pipe reset after DFU/timeout with optional callback");
+    puts("PASS: D58x same-profile HKR reset replays six production registers; "
+         "duplicate start, active-peer isolation, MIPI errors and D4xx cache");
     return 0;
 }
 """
