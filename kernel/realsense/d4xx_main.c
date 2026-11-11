@@ -8550,9 +8550,26 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	if (on && !(state->ds5_dev->depth_streaming ||
 		    state->ds5_dev->rgb_streaming ||
 		    state->ds5_dev->ir_streaming ||
-		    state->ds5_dev->imu_streaming))
+		    state->ds5_dev->imu_streaming)) {
+		/* H_RST_N can reboot HKR without a driver reset-generation bump.
+		 * Restore its volatile MIPI settings before the first stream, while
+		 * the camera lock prevents a sibling from starting in between.
+		 */
+		if (ds5_is_d58x(state)) {
+			ret = ds5_hw_init(state->client, state);
+			if (ret) {
+				mutex_unlock(&state->ds5_dev->lock);
+				return ret;
+			}
+		}
 		state->ds5_dev->link_flush_pending = true;
+	}
 #endif
+	/* HKR also loses its stream registers on an external reset. Re-send
+	 * the requested configuration even when the host parameters match.
+	 */
+	if (on && ds5_is_d58x(state))
+		ds5_config_cache_clear(sensor);
 	*streaming_flag = on;
 	mutex_unlock(&state->ds5_dev->lock);
 	sensor->streaming = on;
