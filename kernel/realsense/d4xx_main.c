@@ -4545,7 +4545,7 @@ static int ds5_ctrl_wire_to_menu(const struct ds5_desc_ctrl *c, u16 wire,
 static int ds5_ctrl_reg_size(struct ds5 *state, const struct ds5_desc_ctrl *c,
 			     const struct v4l2_ctrl *ctrl, bool set)
 {
-	const struct i2c_adapter *adapter = state->client->adapter;
+	struct i2c_adapter *adapter = state->client->adapter;
 	const struct i2c_adapter_quirks *q = adapter->quirks;
 	u32 extent = c->reg.extent;
 
