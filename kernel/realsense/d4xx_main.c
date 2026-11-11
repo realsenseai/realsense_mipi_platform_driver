@@ -68,7 +68,9 @@ struct dser_interface {
 	void (*reset_oneshot)(struct device *dev);
 	/* Flush one link's pixel line buffer, after a camera HW reset and on
 	 * link cold bring-up; NULL if the deser leaves no stale buffer
-	 * (max9296). Must not be called while the link has live streams. */
+	 * (max9296), a no-op in a mode without one (max96724 tunnel).
+	 * Must not be called while the link has live streams.
+	 */
 	void (*reset_oneshot_link)(struct device *dev, u32 link);
 	void (*retrigger_datapath)(struct device *dev);
 
@@ -561,10 +563,12 @@ static const struct dser_interface max96712_interface = {
 static const struct dser_interface max96724_interface = {
 	.set_i2c_fast_plus_mode = max96724_set_i2c_fast_plus_mode,
 	.get_available_pipe_id = max96724_get_available_pipe_id,
+	.get_ser_vc_id = max96724_get_ser_vc_id,
 	.bind_ser_to_dser_pipe = max96724_bind_ser_to_dser_pipe,
 	.set_pipe = max96724_set_pipe,
 	.release_pipe = max96724_release_pipe,
 	.reset_oneshot = max96724_reset_oneshot,
+	.reset_oneshot_link = max96724_reset_oneshot_link,
 	.retrigger_datapath = max96724_retrigger_datapath,
 	.setup_link = max96724_setup_link,
 	.setup_control = max96724_setup_control,
@@ -2563,7 +2567,7 @@ static int ds5_sensor_set_fmt(struct v4l2_subdev *sd,
  *
  * The ser_pipe_id mapping depends both on the serializer and deserializer identity:
  *   - MAX96717 serializer:       ser_pipe_id = 2 (fixed)
- *   - MAX9295 + MAX96712 dser:   ser_pipe_id = ser_vc_id
+ *   - MAX9295 + MAX96712/MAX96724 dser: ser_pipe_id = ser_vc_id
  *   - MAX9295 + MAX9296 dser:    ser_pipe_id = dser_pipe_id
  */
 static int serdes_get_ser_pipe_id(struct ds5 *state, int dser_pipe_id,
@@ -2573,7 +2577,8 @@ static int serdes_get_ser_pipe_id(struct ds5 *state, int dser_pipe_id,
 		return MAX96717_PIPE_ID;
 
 	/* MAX9295 serializer: mapping depends on the deserializer */
-	if (state->dser_ops == &max96712_interface)
+	if (state->dser_ops == &max96712_interface ||
+	    state->dser_ops == &max96724_interface)
 		return ser_vc_id;
 
 	/* MAX9295 + MAX9296 deserializer */
@@ -2665,8 +2670,10 @@ static int ds5_release_pipe_for_reconfigure(struct ds5 *state,
 	return ret;
 }
 
-/* One-shot reset of this camera's GMSL link; false if the deserializer has none.
- * It drops the link (~43 ms), so camera transfers wait it out (RSDSO-21053). */
+/* One-shot reset of this camera's GMSL link; false if the deserializer has no
+ * such op. A reset drops the link (~43 ms), so camera transfers wait it out
+ * (RSDSO-21053).
+ */
 static bool ds5_reset_oneshot_link(struct ds5 *state)
 {
 	if (!state->dser_ops->reset_oneshot_link)

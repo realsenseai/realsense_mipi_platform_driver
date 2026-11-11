@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * max96724.h - MAX96724 GMSL2 Quad Deserializer driver (Tunnel Mode)
+ * max96724.h - MAX96724 GMSL2 Quad Deserializer driver
  *
  * Copyright (c) 2026, RealSense, Inc.  All rights reserved.
  *
@@ -22,7 +22,9 @@
  * <b>MAX96724 API: For Analog Devices MAX96724 GMSL2 quad deserializer</b>
  *
  * @b Description: Defines elements used to set up and use an
- *  Analog Devices MAX96724 quad GMSL2 deserializer in Tunnel Mode.
+ *  Analog Devices MAX96724 quad GMSL2 deserializer in Tunnel Mode or, with
+ *  the adi,pixel-mode DT property, in Pixel Mode (one of the four video
+ *  pipes per stream).
  */
 
 #ifndef __MAX96724_H__
@@ -34,7 +36,7 @@
 /**
  * \defgroup max96724 MAX96724 deserializer driver
  *
- * Controls the MAX96724 quad GMSL2 deserializer module (Tunnel Mode).
+ * Controls the MAX96724 quad GMSL2 deserializer module.
  *
  * @ingroup serdes_group
  * @{
@@ -45,6 +47,10 @@ int max96724_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
 		      u8 data_type2, u32 link, u32 vc_id);
 int max96724_release_pipe(struct device *dev, int pipe_id);
 void max96724_reset_oneshot(struct device *dev);
+/* Pixel mode: flush one link's line buffer. No-op in tunnel mode. */
+void max96724_reset_oneshot_link(struct device *dev, u32 link);
+/* Serializer VC that arrives on the CSI output as dser_vc. */
+int max96724_get_ser_vc_id(struct device *dev, u32 link, u32 dser_vc);
 void max96724_retrigger_datapath(struct device *dev);
 
 /**
@@ -60,7 +66,7 @@ int max96724_setup_link(struct device *dev, struct device *s_dev);
 /**
  * @brief  Sets up the deserializer link's control pipeline.
  *
- * Configures I2C pass-through and enables tunnel-mode pipe routing
+ * Configures I2C pass-through and, in tunnel mode, the pipe routing
  * for the source.
  *
  * @param  [in]  dev          The deserializer device handle.
@@ -135,8 +141,8 @@ void max96724_power_off(struct device *dev);
 /**
  * @brief  Applies initial register settings for the deserializer.
  *
- * Configures default pipe mappings, tunnel mode, and CSI output for
- * the D5xx/SC1.2 use case.
+ * Configures the CSI output and, in tunnel mode, the fixed pipe mappings;
+ * pixel mode leaves every pipe disabled until a stream claims it.
  *
  * @param  [in]  dev          The deserializer device handle.
  *
@@ -172,7 +178,8 @@ int max96724_disable_fsync(struct device *dev);
  * @brief  Maps deserializer pipe ID to serializer pipe ID.
  *
  * In tunnel mode with MAX96717, all data flows through a single pipe
- * per camera, so the mapping is 1:1.
+ * per camera, so the mapping is fixed and this is a no-op. In pixel mode
+ * it selects which link's serializer pipe feeds the deserializer pipe.
  *
  * @param  [in]  dev             The deserializer device handle.
  * @param  [in]  dser_pipe_id    Deserializer pipe ID.

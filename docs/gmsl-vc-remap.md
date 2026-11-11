@@ -1,4 +1,4 @@
-# GMSL virtual-channel remapping (MAX96712)
+# GMSL virtual-channel remapping (MAX96712, MAX96724 pixel mode)
 
 Lets a device tree state, per GMSL link, which deserializer CSI virtual channel
 each serializer virtual channel comes out on. Before this, the mapping was
@@ -6,8 +6,9 @@ hardcoded as `dser_vc = link * 4 + ser_vc`, and the link itself was derived from
 the camera's `vc-id` — so VC assignment and link topology could not be chosen
 independently.
 
-Applies to **max96712 only**. max9296 and max96724 are currently single-link in practice
-and keep using the value d4xx passes them unchanged (TODO: max96724 multi-link).
+Applies to **max96712**, and to **max96724 in pixel mode** (`adi,pixel-mode`), which parses the
+same property with the same rules. max9296 and max96724 in tunnel mode keep using the value d4xx
+passes them unchanged.
 
 ## Device tree
 
@@ -38,7 +39,7 @@ same cell array. The driver enforces the stride of 2.
 
 ### Rules
 
-- **No table for a link** → unity map, all 8 serializer VCs map to themselves.
+- **No table for a link** → unity map, all 8 serializer VCs (4 on max96724) map to themselves.
   Usable as-is only on a single-link deserializer.
 - **A table for a link** → it replaces the unity default outright. VCs the table
   does not list are left *unmapped* and rejected at stream start. Declare exactly
@@ -47,7 +48,7 @@ same cell array. The driver enforces the stride of 2.
   links both emitting VC 0-3 would be indistinguishable on the shared CSI output,
   so the unity default cannot work there. Probe fails with
   `dser VC <n> mapped more than once`.
-- Deserializer VCs are 5-bit (0-31); serializer VCs are 0-7.
+- Deserializer VCs are 5-bit (0-31); serializer VCs are 0-7. On max96724 they are 0-15 and 0-3.
 - `maxim,gmsl-link-id` is optional. Without it d4xx falls back to
   `vc-id / 4` and logs `no maxim,gmsl-link-id, using link N from vc-id M`,
   which keeps pre-existing overlays working.
@@ -59,7 +60,7 @@ useful — the Tegra side still demultiplexes on the old VC.
 
 | where | consumer |
 |---|---|
-| `maxim,linkN-vc-remap` on the deserializer | max96712 register programming |
+| `maxim,linkN-vc-remap` on the deserializer | max96712 / max96724 (pixel mode) register programming |
 | `ds5_N/ports/port@0/endpoint` `vc-id` | sensor's declared output VC |
 | `ds5_N/gmsl-link/vc-id` | d4xx `g_ctx.dst_vc` |
 | `tegra-capture-vi/ports/port@N/endpoint` `vc-id` | VI channel demux |

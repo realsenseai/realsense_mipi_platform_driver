@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) 2026 RealSense, Inc.
 /*
- * MAX96724 GMSL2 quad deserializer driver
+ * MAX96724 GMSL2 quad deserializer driver: tunnel mode, or with
+ * adi,pixel-mode, pixel mode with one video pipe per stream.
  */
 
 #include <linux/gpio/consumer.h>
@@ -57,7 +58,14 @@
 #define MAX96724_CSI_PHY_POL_SWAP	0x3F
 #define MAX96724_MIPI_CTRL_SEL_ADDR	0x08CA
 #define MAX96724_MIPI_CTRL_SEL		0xE4
-#define MAX96724_LANE_CTRL0_ADDR	0x090A
+/* 2 bits per pipe: its MIPI controller. Port A in 2x4 is controller/PHY 1. */
+#define MAX96724_MIPI_CTRL_SEL_PORT_A	0x55
+/* MIPI_TX block x (0..3) holds pipe x's mapping table and controller x's
+ * settings; controller 1 drives port A in 2x4.
+ */
+#define MAX96724_MIPI_TX10_ADDR(x)	(0x090A + 0x40 * (x))
+#define MAX96724_MIPI_TX51_ADDR(x)	(0x0933 + 0x40 * (x))
+#define MAX96724_ALT2_MEM_MAP8		BIT(4)
 
 /* Pipe X registers; subsequent pipes use a 0x40 stride. */
 #define MAX96724_TX11_PIPE_X_EN_ADDR		0x090B
@@ -70,13 +78,13 @@
 #define MAX96724_PIPE_X_DST_2_MAP_ADDR		0x0912
 #define MAX96724_PIPE_X_SRC_3_MAP_ADDR		0x0913
 #define MAX96724_PIPE_X_DST_3_MAP_ADDR		0x0914
-#define MAX96724_PIPE_X_ST_SEL_ADDR	0x0933
 #define MAX96724_TX46_PIPE_X_ADDR	0x092E
 #define MAX96724_TX47_PIPE_X_ADDR	0x092F
 #define MAX96724_TX48_PIPE_X_ADDR	0x0930
 #define MAX96724_TX49_PIPE_X_ADDR	0x0931
 #define MAX96724_PIPE0_TUN_EN_ADDR	0x0936
 #define MAX96724_PIPE0_TUN_DEST_ADDR	0x0939
+#define MAX96724_MIPI_TX_EXT0_ADDR	0x0800
 
 /* Register values. */
 #define MAX96724_SOFT_RESET		0x40
@@ -93,6 +101,7 @@
 #define MAX96724_CSI_PHY_EN_ALL		0xF0
 #define MAX96724_CSI_LANE_MAP_DEFAULT	0xE4
 #define MAX96724_LANE_CTRL_NUM_LANES(n)	(((n) - 1) << 6)
+#define MAX96724_MIPI_TX10_CSI2_VCX_EN	BIT(4)
 #define MAX96724_DPLL_FREQ_OVERRIDE	BIT(5)
 #define MAX96724_CSI_LANE_RATE_MIN_MBPS	100
 #define MAX96724_CSI_LANE_RATE_MAX_MBPS	2500
@@ -120,6 +129,14 @@
 #define MAX96724_MAX_SOURCES		4
 #define MAX96724_MAX_PIPES		4
 #define MAX96724_MAX_LINKS		4
+
+/* Pixel mode: serializer VCs per link that a remap table can name. */
+#define MAX96724_MAX_SER_VCS		4
+#define MAX96724_MAX_VCS		16
+#define MAX96724_VC_UNMAPPED		0xFF
+#define MAX96724_VC_REMAP_CELLS		2
+#define MAX96724_VID_RX0_PIXEL_VAL	0x23
+#define MAX96724_MIPI_TX54_TUN_EN	BIT(0)
 
 #define MAX96724_PIPE_X			0
 #define MAX96724_PIPE_Y			1
@@ -172,6 +189,9 @@ struct max96724 {
 	bool poc_enabled; /* FG24-4CH board POC/IO enable applied once */
 	bool datapath_retriggered;
 	u8 retriggered_pipe_mask;
+	bool pixel_mode;
+	/* Serializer VC -> deserializer VC, or MAX96724_VC_UNMAPPED. */
+	u8 vc_remap[MAX96724_MAX_LINKS][MAX96724_MAX_SER_VCS];
 };
 
 struct reg_pair {
@@ -419,8 +439,8 @@ static int max96724_configure_csi_port(struct device *dev,
 	unsigned int i;
 
 	err = max96724_set_registers(dev, map, ARRAY_SIZE(map));
-	for (i = 0; !err && i < MAX96724_MAX_PIPES; i++) {
-		u16 addr = MAX96724_LANE_CTRL0_ADDR + 0x40 * i;
+	for (i = 0; !err && !priv->pixel_mode && i < MAX96724_MAX_PIPES; i++) {
+		u16 addr = MAX96724_MIPI_TX10_ADDR(i);
 
 		err = max96724_write_reg(dev, addr,
 			MAX96724_LANE_CTRL_NUM_LANES(priv->csi_lane_count));
@@ -451,24 +471,14 @@ static int max96724_enable_error_channels(struct device *dev, u8 link_mask)
 	return err;
 }
 
-/* Caller holds priv->lock. */
-static int max96724_configure_datapath(struct device *dev, bool oneshot,
-				       bool enable_pipes)
+static int max96724_configure_csi_clock(struct device *dev, struct max96724 *priv)
 {
-	struct max96724 *priv = dev_get_drvdata(dev);
-	unsigned int i;
 	u8 dpll_freq;
-	int err;
+	unsigned int i;
+	int err = 0;
 
 	dpll_freq = MAX96724_DPLL_FREQ_OVERRIDE |
 		priv->csi_lane_rate_mbps / MAX96724_CSI_LANE_RATE_STEP_MBPS;
-
-	err = max96724_write_reg(dev, MAX96724_PIPE_EN_ADDR, 0x00);
-	err |= max96724_write_reg(dev, MAX96724_PIPE_SEL0_ADDR,
-				  MAX96724_PIPE_SEL0);
-	err |= max96724_write_reg(dev, MAX96724_PIPE_SEL1_ADDR,
-				  MAX96724_PIPE_SEL1);
-	err |= max96724_configure_csi_port(dev, priv);
 
 	for (i = 0; !err && i < MAX96724_MAX_PIPES; i++) {
 		u16 addr = MAX96724_DPLL_FREQ0_ADDR + 3 * i;
@@ -479,6 +489,26 @@ static int max96724_configure_datapath(struct device *dev, bool oneshot,
 		dev_info(dev, "CSI TX configured at %u Mbps/lane, %u lanes\n",
 			 priv->csi_lane_rate_mbps, priv->csi_lane_count);
 
+	return err;
+}
+
+/* Caller holds priv->lock. */
+static int max96724_configure_datapath(struct device *dev, bool oneshot,
+				       bool enable_pipes)
+{
+	struct max96724 *priv = dev_get_drvdata(dev);
+	unsigned int i;
+	int err;
+
+	err = max96724_write_reg(dev, MAX96724_PIPE_EN_ADDR, 0x00);
+	err |= max96724_write_reg(dev, MAX96724_PIPE_SEL0_ADDR,
+				  MAX96724_PIPE_SEL0);
+	err |= max96724_write_reg(dev, MAX96724_PIPE_SEL1_ADDR,
+				  MAX96724_PIPE_SEL1);
+	err |= max96724_configure_csi_port(dev, priv);
+	if (!err)
+		err = max96724_configure_csi_clock(dev, priv);
+
 	err |= max96724_write_reg(dev, MAX96724_MIPI_CTRL_SEL_ADDR,
 				  MAX96724_MIPI_CTRL_SEL);
 	for (i = 0; !err && i < MAX96724_MAX_PIPES; i++) {
@@ -486,7 +516,7 @@ static int max96724_configure_datapath(struct device *dev, bool oneshot,
 		u16 vid_off = MAX96724_VID_RX_STRIDE * i;
 
 		err = max96724_write_reg(dev,
-					 MAX96724_PIPE_X_ST_SEL_ADDR + pipe_off,
+					 MAX96724_MIPI_TX51_ADDR(i),
 					 0x10);
 		err |= max96724_write_reg(dev,
 			MAX96724_VID_RX0_P0_ADDR + vid_off,
@@ -526,6 +556,45 @@ static int max96724_configure_datapath(struct device *dev, bool oneshot,
 	if (enable_pipes)
 		err |= max96724_write_reg(dev, MAX96724_PIPE_EN_ADDR,
 					  MAX96724_PIPE_EN_4);
+	return err;
+}
+
+/* Caller holds priv->lock. Pipes stay disabled and unbound until a stream. */
+static int max96724_configure_pixel_datapath(struct device *dev)
+{
+	struct max96724 *priv = dev_get_drvdata(dev);
+	unsigned int tun_en;
+	unsigned int i;
+	int err;
+
+	err = max96724_write_reg(dev, MAX96724_PIPE_EN_ADDR, 0x00);
+	err |= max96724_write_reg(dev, MAX96724_PIPE_SEL0_ADDR, 0x00);
+	err |= max96724_write_reg(dev, MAX96724_PIPE_SEL1_ADDR, 0x00);
+	err |= max96724_configure_csi_port(dev, priv);
+	if (!err)
+		err = max96724_configure_csi_clock(dev, priv);
+
+	/* As on max96712: lane count, extended VCs and ALT2_MEM_MAP8 on the port-A controller. */
+	err |= max96724_write_reg(dev, MAX96724_MIPI_TX10_ADDR(1),
+				  MAX96724_LANE_CTRL_NUM_LANES(priv->csi_lane_count) |
+				  MAX96724_MIPI_TX10_CSI2_VCX_EN);
+	err |= max96724_write_reg(dev, MAX96724_MIPI_TX51_ADDR(1),
+				  MAX96724_ALT2_MEM_MAP8);
+
+	/* MAX96724-only: route every pipe to the port-A controller, and no tunnels. */
+	err |= max96724_write_reg(dev, MAX96724_MIPI_CTRL_SEL_ADDR,
+				  MAX96724_MIPI_CTRL_SEL_PORT_A);
+	for (i = 0; !err && i < MAX96724_MAX_PIPES; i++) {
+		u16 tun_addr = MAX96724_PIPE0_TUN_EN_ADDR + 0x40 * i;
+
+		err = regmap_read(priv->regmap, tun_addr, &tun_en);
+		if (!err)
+			err = max96724_write_reg(dev, tun_addr,
+						 tun_en & ~MAX96724_MIPI_TX54_TUN_EN);
+	}
+
+	err |= max96724_write_reg(dev, MAX96724_BACKTOP_EN_ADDR,
+				  MAX96724_BACKTOP_CSIB_EN);
 	return err;
 }
 
@@ -874,7 +943,7 @@ int max96724_setup_control(struct device *dev, struct device *s_dev)
 
 	source_found = source->g_ctx->serdev_found;
 
-	for (i = 0; i < MAX96724_MAX_PIPES; i++) {
+	for (i = 0; !priv->pixel_mode && i < MAX96724_MAX_PIPES; i++) {
 		err = max96724_write_reg(dev,
 					 MAX96724_PIPE0_TUN_EN_ADDR + 0x40 * i,
 					 MAX96724_TUN_EN);
@@ -968,7 +1037,15 @@ int max96724_sdev_register(struct device *dev, struct gmsl_link_ctx *g_ctx)
 			goto done;
 		}
 
-		if (g_ctx->serdes_csi_link == source->serdes_csi_link) {
+		if (priv->pixel_mode && g_ctx->ser_reg == source->g_ctx->ser_reg) {
+			dev_err(dev,
+				"%s: serializer 0x%x is already registered\n",
+				__func__, g_ctx->ser_reg);
+			err = -EBUSY;
+			goto done;
+		}
+		if (!priv->pixel_mode &&
+		    g_ctx->serdes_csi_link == source->serdes_csi_link) {
 			dev_err(dev,
 				"%s: serdes csi link %u is already registered\n",
 				__func__, g_ctx->serdes_csi_link);
@@ -1064,12 +1141,12 @@ int max96724_get_available_pipe_id(struct device *dev, int vc_id)
 	int pipe_id = -ENOMEM;
 	struct max96724 *priv = dev_get_drvdata(dev);
 
-	if (vc_id < 0 || vc_id >= MAX96724_MAX_PIPES)
+	if (!priv->pixel_mode && (vc_id < 0 || vc_id >= MAX96724_MAX_PIPES))
 		return -EINVAL;
 
 	mutex_lock(&priv->lock);
 	for (i = 0; i < MAX96724_MAX_PIPES; i++) {
-		if (i == vc_id && !priv->pipe[i].st_count) {
+		if ((priv->pixel_mode || i == vc_id) && !priv->pipe[i].st_count) {
 			priv->pipe[i].st_count++;
 			pipe_id = i;
 			break;
@@ -1081,15 +1158,68 @@ int max96724_get_available_pipe_id(struct device *dev, int vc_id)
 }
 EXPORT_SYMBOL(max96724_get_available_pipe_id);
 
+/* Caller holds priv->lock. */
+static int __max96724_bind_ser_to_dser_pipe(struct device *dev, int dser_pipe_id,
+					    int ser_pipe_id, u32 link)
+{
+	struct max96724 *priv = dev_get_drvdata(dev);
+	u16 sel_addr;
+	u32 shift;
+	unsigned int sel;
+	int err;
+
+	if (dser_pipe_id < 0 || dser_pipe_id >= MAX96724_MAX_PIPES ||
+	    ser_pipe_id < 0 || ser_pipe_id >= MAX96724_MAX_SER_VCS ||
+	    link >= MAX96724_MAX_LINKS)
+		return -EINVAL;
+
+	/* Each select register holds two pipes: <link[3:2] ser pipe[1:0]>. */
+	sel_addr = MAX96724_PIPE_SEL0_ADDR + dser_pipe_id / 2;
+	shift = 4 * (dser_pipe_id % 2);
+	err = regmap_read(priv->regmap, sel_addr, &sel);
+	if (err)
+		return err;
+
+	sel &= ~(0xF << shift);
+	sel |= ((link << 2) | ser_pipe_id) << shift;
+
+	return max96724_write_reg(dev, sel_addr, sel);
+}
+
+/* Caller holds priv->lock. The pipe stays allocated until its HW release succeeds. */
+static int max96724_release_pixel_pipe(struct device *dev, int pipe_id)
+{
+	struct max96724 *priv = dev_get_drvdata(dev);
+	unsigned int pipe_en;
+	int err;
+
+	err = regmap_read(priv->regmap, MAX96724_PIPE_EN_ADDR, &pipe_en);
+	if (!err)
+		err = max96724_write_reg(dev, MAX96724_PIPE_EN_ADDR,
+					 pipe_en & ~BIT(pipe_id));
+	if (!err)
+		err = __max96724_bind_ser_to_dser_pipe(dev, pipe_id, 0, 0);
+	if (!err)
+		priv->pipe[pipe_id].st_count = 0;
+
+	return err;
+}
+
 int max96724_release_pipe(struct device *dev, int pipe_id)
 {
 	struct max96724 *priv = dev_get_drvdata(dev);
+	int err;
 	int i;
 
 	if (pipe_id < 0 || pipe_id >= MAX96724_MAX_PIPES)
 		return -EINVAL;
 
 	mutex_lock(&priv->lock);
+	if (priv->pixel_mode) {
+		err = max96724_release_pixel_pipe(dev, pipe_id);
+		mutex_unlock(&priv->lock);
+		return err;
+	}
 	priv->pipe[pipe_id].st_count = 0;
 	priv->retriggered_pipe_mask &= ~BIT(pipe_id);
 	for (i = 0; i < MAX96724_MAX_PIPES; i++) {
@@ -1106,10 +1236,31 @@ int max96724_release_pipe(struct device *dev, int pipe_id)
 }
 EXPORT_SYMBOL(max96724_release_pipe);
 
+/*
+ * The lock keeps the write off a serializer address borrowed by
+ * max96724_{read,write}_slave_reg(); it is not held across the settle delay.
+ */
+static void max96724_reset_oneshot_link_mask(struct device *dev, u8 link_mask)
+{
+	struct max96724 *priv = dev_get_drvdata(dev);
+	int err;
+
+	mutex_lock(&priv->lock);
+	err = max96724_write_reg(dev, MAX96724_ONESHOT_ADDR, link_mask);
+	mutex_unlock(&priv->lock);
+	if (!err)
+		msleep(100);
+}
+
 void max96724_reset_oneshot(struct device *dev)
 {
 	struct max96724 *priv = dev_get_drvdata(dev);
 	int err = 0;
+
+	if (priv->pixel_mode) {
+		max96724_reset_oneshot_link_mask(dev, MAX96724_ONESHOT_ALL);
+		return;
+	}
 
 	mutex_lock(&priv->lock);
 	priv->datapath_retriggered = false;
@@ -1128,6 +1279,23 @@ void max96724_reset_oneshot(struct device *dev)
 	mutex_unlock(&priv->lock);
 }
 EXPORT_SYMBOL(max96724_reset_oneshot);
+
+/* Flushes one link's pixel line buffer; a tunnel has none to flush. */
+void max96724_reset_oneshot_link(struct device *dev, u32 link)
+{
+	struct max96724 *priv = dev_get_drvdata(dev);
+
+	if (!priv->pixel_mode)
+		return;
+	if (link >= MAX96724_MAX_LINKS) {
+		dev_err(dev, "%s: illegal link %u\n", __func__, link);
+		return;
+	}
+
+	dev_info(dev, "link %u line-buffer flush\n", link);
+	max96724_reset_oneshot_link_mask(dev, BIT(link));
+}
+EXPORT_SYMBOL(max96724_reset_oneshot_link);
 
 static int __max96724_set_pipe(struct device *dev, int pipe_id,
 			       u8 data_type1, u8 data_type2, u32 vc_id)
@@ -1191,6 +1359,52 @@ static int __max96724_set_pipe(struct device *dev, int pipe_id,
 	return err;
 }
 
+/* Caller holds priv->lock. vc_id is the serializer VC. */
+static int __max96724_set_pixel_pipe(struct device *dev, int pipe_id,
+				     u8 data_type1, u8 data_type2, u32 link,
+				     u32 vc_id)
+{
+	struct max96724 *priv = dev_get_drvdata(dev);
+	u32 dser_vc = priv->vc_remap[link][vc_id];
+	u8 src = (vc_id & 0x3) << 6;
+	u8 dst = (dser_vc & 0x3) << 6;
+	u8 ext_vc = ((vc_id >> 2) << 5) | ((dser_vc >> 2) << 2);
+	u16 ext_addr = MAX96724_MIPI_TX_EXT0_ADDR + 0x10 * pipe_id;
+	u16 off = 0x40 * pipe_id;
+	unsigned int pipe_en;
+	int err;
+	struct reg_pair map[] = {
+		{MAX96724_TX11_PIPE_X_EN_ADDR + off, data_type2 ? 0x0F : 0x07},
+		{MAX96724_PIPE_X_SRC_0_MAP_ADDR + off, src | data_type1},
+		{MAX96724_PIPE_X_DST_0_MAP_ADDR + off, dst | data_type1},
+		/* frame start */
+		{MAX96724_PIPE_X_SRC_1_MAP_ADDR + off, src | 0x00},
+		{MAX96724_PIPE_X_DST_1_MAP_ADDR + off, dst | 0x00},
+		/* frame end */
+		{MAX96724_PIPE_X_SRC_2_MAP_ADDR + off, src | 0x01},
+		{MAX96724_PIPE_X_DST_2_MAP_ADDR + off, dst | 0x01},
+		{MAX96724_PIPE_X_SRC_3_MAP_ADDR + off, src | data_type2},
+		{MAX96724_PIPE_X_DST_3_MAP_ADDR + off, dst | data_type2},
+		/* MIPI_TX_EXT<n>: the VC bits above the two in mappings 0..3 */
+		{ext_addr + 0, ext_vc},
+		{ext_addr + 1, ext_vc},
+		{ext_addr + 2, ext_vc},
+		{ext_addr + 3, ext_vc},
+		{MAX96724_TX45_PIPE_X_DST_CTRL_ADDR + off, MAX96724_ALL_MAP_CTRL1},
+		{MAX96724_VID_RX0_P0_ADDR + MAX96724_VID_RX_STRIDE * pipe_id,
+		 MAX96724_VID_RX0_PIXEL_VAL},
+	};
+
+	err = max96724_set_registers(dev, map, ARRAY_SIZE(map));
+	if (!err)
+		err = regmap_read(priv->regmap, MAX96724_PIPE_EN_ADDR, &pipe_en);
+	if (!err)
+		err = max96724_write_reg(dev, MAX96724_PIPE_EN_ADDR,
+					 pipe_en | BIT(pipe_id));
+
+	return err;
+}
+
 void max96724_retrigger_datapath(struct device *dev)
 {
 	struct max96724 *priv = dev_get_drvdata(dev);
@@ -1200,6 +1414,10 @@ void max96724_retrigger_datapath(struct device *dev)
 	bool full_retrigger;
 	unsigned int i;
 	int err = 0;
+
+	/* Only the tunnel detector needs arming against live CSI data. */
+	if (priv->pixel_mode)
+		return;
 
 	mutex_lock(&priv->lock);
 	for (i = 0; i < MAX96724_MAX_PIPES; i++)
@@ -1293,6 +1511,12 @@ int max96724_init_settings(struct device *dev)
 
 	mutex_lock(&priv->lock);
 
+	if (priv->pixel_mode) {
+		err = max96724_configure_pixel_datapath(dev);
+		mutex_unlock(&priv->lock);
+		return err;
+	}
+
 	for (i = 0; i < MAX96724_MAX_PIPES; i++)
 		err |= __max96724_set_pipe(dev, i, GMSL_CSI_DT_YUV422_8,
 					   GMSL_CSI_DT_EMBED, i);
@@ -1314,10 +1538,43 @@ EXPORT_SYMBOL(max96724_init_settings);
 int max96724_bind_ser_to_dser_pipe(struct device *dev, int dser_pipe_id,
 				   int ser_pipe_id, u32 link)
 {
-	/* In Tunnel Mode, pipe mapping is 1:1 (each camera → one pipe) */
-	return 0;
+	struct max96724 *priv = dev_get_drvdata(dev);
+	int err;
+
+	/* Tunnel mode binds each link to its pipe in the datapath setup. */
+	if (!priv->pixel_mode)
+		return 0;
+
+	mutex_lock(&priv->lock);
+	err = __max96724_bind_ser_to_dser_pipe(dev, dser_pipe_id, ser_pipe_id,
+					       link);
+	mutex_unlock(&priv->lock);
+
+	return err;
 }
 EXPORT_SYMBOL(max96724_bind_ser_to_dser_pipe);
+
+/* vc_remap is written once at probe, so this needs no lock. */
+int max96724_get_ser_vc_id(struct device *dev, u32 link, u32 dser_vc)
+{
+	struct max96724 *priv = dev_get_drvdata(dev);
+	unsigned int i;
+
+	/* A tunnel carries the serializer's VCs through unchanged. */
+	if (!priv->pixel_mode)
+		return dser_vc;
+	if (link >= MAX96724_MAX_LINKS)
+		return -EINVAL;
+
+	for (i = 0; i < MAX96724_MAX_SER_VCS; i++)
+		if (priv->vc_remap[link][i] == dser_vc)
+			return i;
+
+	dev_err(dev, "link %u has no serializer VC mapped to dser VC %u\n",
+		link, dser_vc);
+	return -EINVAL;
+}
+EXPORT_SYMBOL(max96724_get_ser_vc_id);
 
 int max96724_set_pipe(struct device *dev, int pipe_id,
 		      u8 data_type1, u8 data_type2, u32 link, u32 vc_id)
@@ -1332,12 +1589,25 @@ int max96724_set_pipe(struct device *dev, int pipe_id,
 		return -EINVAL;
 	}
 
+	if (priv->pixel_mode &&
+	    (link >= MAX96724_MAX_LINKS ||
+	     priv->vc_remap[link][vc_id] == MAX96724_VC_UNMAPPED)) {
+		dev_err(dev, "%s: link %u serializer vc %u has no deserializer VC\n",
+			__func__, link, vc_id);
+		return -EINVAL;
+	}
+
 	dev_dbg(dev, "%s pipe_id %d, data_type1 %u, data_type2 %u, vc_id %u\n",
 		__func__, pipe_id, data_type1, data_type2, vc_id);
 
 	mutex_lock(&priv->lock);
 
-	err = __max96724_set_pipe(dev, pipe_id, data_type1, data_type2, vc_id);
+	if (priv->pixel_mode)
+		err = __max96724_set_pixel_pipe(dev, pipe_id, data_type1,
+						data_type2, link, vc_id);
+	else
+		err = __max96724_set_pipe(dev, pipe_id, data_type1, data_type2,
+					  vc_id);
 
 	mutex_unlock(&priv->lock);
 
@@ -1441,6 +1711,84 @@ static const struct of_device_id max96724_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, max96724_of_match);
 
+/*
+ * maxim,link<N>-vc-remap = <ser_vc dser_vc>, ...; a link without a table maps
+ * its VCs to themselves. Output VCs must be unique across the deserializer.
+ */
+static int max96724_parse_vc_remap(struct max96724 *priv,
+				   struct device_node *np)
+{
+	struct device *dev = &priv->i2c_client->dev;
+	u32 dser_vc_seen = 0;
+	unsigned int link;
+	int n, err, i;
+
+	for (link = 0; link < MAX96724_MAX_LINKS; link++) {
+		char prop[32];
+		u32 src, dst;
+
+		for (i = 0; i < MAX96724_MAX_SER_VCS; i++)
+			priv->vc_remap[link][i] = i;
+
+		snprintf(prop, sizeof(prop), "maxim,link%u-vc-remap", link);
+		n = of_property_count_u32_elems(np, prop);
+		if (n == -EINVAL)
+			continue;
+		if (n < 0) {
+			dev_err(dev, "%s: unreadable (%d)\n", prop, n);
+			return n;
+		}
+		if (!(priv->link_mask & BIT(link))) {
+			dev_err(dev, "%s: link not enabled by link-mask 0x%x\n",
+				prop, priv->link_mask);
+			return -EINVAL;
+		}
+		if (n % MAX96724_VC_REMAP_CELLS ||
+		    n > MAX96724_MAX_SER_VCS * MAX96724_VC_REMAP_CELLS) {
+			dev_err(dev, "%s: %d cells, expected up to %d <ser dser> pairs\n",
+				prop, n, MAX96724_MAX_SER_VCS);
+			return -EINVAL;
+		}
+
+		for (i = 0; i < MAX96724_MAX_SER_VCS; i++)
+			priv->vc_remap[link][i] = MAX96724_VC_UNMAPPED;
+		for (i = 0; i < n; i += MAX96724_VC_REMAP_CELLS) {
+			err = of_property_read_u32_index(np, prop, i, &src);
+			if (!err)
+				err = of_property_read_u32_index(np, prop, i + 1,
+								 &dst);
+			if (err) {
+				dev_err(dev, "%s: read failed (%d)\n", prop, err);
+				return err;
+			}
+			if (src >= MAX96724_MAX_SER_VCS || dst >= MAX96724_MAX_VCS) {
+				dev_err(dev, "%s: illegal pair <%u %u>\n",
+					prop, src, dst);
+				return -EINVAL;
+			}
+			priv->vc_remap[link][src] = dst;
+		}
+	}
+
+	for (link = 0; link < MAX96724_MAX_LINKS; link++) {
+		if (!(priv->link_mask & BIT(link)))
+			continue;
+		for (i = 0; i < MAX96724_MAX_SER_VCS; i++) {
+			u8 vc = priv->vc_remap[link][i];
+
+			if (vc == MAX96724_VC_UNMAPPED)
+				continue;
+			if (dser_vc_seen & BIT(vc)) {
+				dev_err(dev, "dser VC %u mapped more than once\n",
+					vc);
+				return -EINVAL;
+			}
+			dser_vc_seen |= BIT(vc);
+		}
+	}
+	return 0;
+}
+
 static int max96724_parse_dt(struct max96724 *priv,
 			     struct i2c_client *client)
 {
@@ -1496,6 +1844,14 @@ static int max96724_parse_dt(struct max96724 *priv,
 		return -EINVAL;
 	}
 	priv->link_mask = value;
+
+	priv->pixel_mode = of_property_read_bool(node, "adi,pixel-mode");
+	if (priv->pixel_mode) {
+		err = max96724_parse_vc_remap(priv, node);
+		if (err)
+			return err;
+	}
+
 	priv->csi_lane_count = MAX96724_CSI_LANE_COUNT_DEFAULT;
 	if (of_find_property(node, "csi-lane-count", NULL)) {
 		err = of_property_read_u32(node, "csi-lane-count", &value);
@@ -1582,7 +1938,7 @@ static int max96724_probe(struct i2c_client *client,
 	int err = 0;
 
 	dev_info(&client->dev,
-		 "[MAX96724]: probing Quad GMSL2 Deserializer (Tunnel Mode)\n");
+		 "[MAX96724]: probing Quad GMSL2 Deserializer\n");
 
 	priv = devm_kzalloc(&client->dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)
@@ -1610,8 +1966,9 @@ static int max96724_probe(struct i2c_client *client,
 	dev_set_drvdata(&client->dev, priv);
 
 	dev_info(&client->dev,
-		 "%s: success (link_speed=%d Gbps, max_src=%d, link_mask=0x%x)\n",
-		 __func__, priv->link_speed, priv->max_src, priv->link_mask);
+		 "%s: success (%s mode, link_speed=%d Gbps, max_src=%d, link_mask=0x%x)\n",
+		 __func__, priv->pixel_mode ? "pixel" : "tunnel",
+		 priv->link_speed, priv->max_src, priv->link_mask);
 
 	return err;
 }
@@ -1658,6 +2015,6 @@ static struct i2c_driver max96724_i2c_driver = {
 
 module_i2c_driver(max96724_i2c_driver);
 
-MODULE_DESCRIPTION("Quad GMSL2 Deserializer driver max96724 (Tunnel Mode)");
+MODULE_DESCRIPTION("Quad GMSL2 Deserializer driver max96724");
 MODULE_AUTHOR("RealSense AI");
 MODULE_LICENSE("GPL v2");
