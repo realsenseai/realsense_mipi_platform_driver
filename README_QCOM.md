@@ -333,6 +333,30 @@ be confirmed on the wire.
 Open a video node only after its links are set: that is when it takes its
 controls.
 
+### Which video node carries which stream
+
+A stream reaches a node through the CSID path it is routed to, so the node is
+named after the VFE line, not after the stream. With the layout above:
+
+| Stream | Is | CSID path | Video node (entity name) |
+|---|---|---|---|
+| 0 | Depth | `msm_csid3` RDI0 | `msm_vfe3_video0` |
+| 1 | Colour | `msm_csid3` RDI1 | `msm_vfe3_video1` |
+| 2 | Infrared | `msm_csid3` RDI2 | `msm_vfe3_video2` |
+| 3 | IMU | `msm_csid3` RDI3 | `msm_vfe3_video3` |
+| 4 | Depth metadata | `msm_csid0` RDI0 | `msm_vfe0_meta0` |
+| 5 | Colour metadata | `msm_csid0` RDI1 | `msm_vfe0_meta1` |
+| 6 | Infrared metadata | `msm_csid0` RDI2 | `msm_vfe0_meta2` |
+
+Unlike Jetson, the `/dev/videoN` numbers do not follow the camera. CAMSS
+registers an image node and a metadata node for every RDI line of every VFE
+(34 nodes on this SoC), VFE by VFE, whether a camera uses them or not, and
+other drivers on the board register video devices too. A node is identified
+by its entity name (`media-ctl -p`, or `/sys/class/video4linux/videoN/name`).
+The `/dev/video-rs-depth-0`, `-depth-md-0`, … names librealsense looks for
+are udev symlinks on Jetson; the rules that create them here, keyed on the
+entity names of the chosen layout, are not written yet.
+
 ### Limits of the fork
 
 - **Seven nodes cost a camera two CSID/VFE pairs**, a lite one and a full one.
@@ -403,7 +427,11 @@ header is absent rather than only in the 5.15.136–147 window.
    nodes at all. (Qualcomm *does* have a GMSL DT model —
    `qcom,cam-gmsl-deserializer0..3`, `cam-gmsl-sensor0..15` — but only on the
    sa8775p/QCS9100 ADAS boards, under CAMX rather than CAMSS.)
-6. The build emits one `-Wunused-function` for `ds5_ctrl_driver_owned()`: the
+6. **No graph setup and no role symlinks.** Nothing yet configures the media
+   graph at boot or creates the `/dev/video-rs-*` names librealsense expects
+   (*Which video node carries which stream*). On Jetson the VI and udev rules
+   do both.
+7. The build emits one `-Wunused-function` for `ds5_ctrl_driver_owned()`: the
    descriptor control-sync block is under `CONFIG_TEGRA_CAMERA_PLATFORM`, so
    off-Tegra its only caller vanishes. That belongs to gap 3, not here.
 

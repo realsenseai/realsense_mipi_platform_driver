@@ -13,8 +13,9 @@ A metadata buffer is as large as the lines of the subdev the node is linked
 to. The node keeps its format in the multi-planar form the VFE reads and
 translates it at the ioctls, so the capture path is unchanged.
 
-The metadata nodes register after all image nodes, which keeps the image
-nodes' device numbers.
+A VFE registers its metadata nodes after its image nodes. The device
+numbers of the VFEs after the first shift by the nodes added before them;
+the entity names are what identifies a node.
 
 Two nodes now share one line's buffer list, so the node that is not linked
 must never reach it. vb2 hands the driver a node's buffers after
@@ -125,7 +126,7 @@ before any of its buffers is queued.
  		}
  	}
  
-+	/* After every image node, so that those keep their device numbers */
++	/* After this VFE's image nodes, which stay in line order */
 +	for (i = 0; i < vfe->res->line_num; i++) {
 +		struct camss_video *video_meta = &vfe->line[i].video_meta;
 +		char name[32];
