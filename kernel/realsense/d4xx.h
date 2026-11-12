@@ -90,6 +90,11 @@ enum ds5_mux_pad {
 	DS5_MUX_PAD_COUNT,
 };
 
+/* As an instance's role: DT pinned no stream, so it serves all of them.
+ * Distinct from 0, which a role holds until probe has read the DT.
+ */
+#define DS5_ROLE_ANY	DS5_MUX_PAD_COUNT
+
 enum dfu_fw_state {
 	appIDLE                = 0x0000,
 	appDETACH              = 0x0001,
@@ -257,7 +262,8 @@ struct ds5 {
 	struct regmap *regmap;
 	struct regulator *vcc;
 	const struct ds5_variant *variant;
-	int is_depth, is_y8, is_rgb, is_imu;
+	/* The stream DT cam-type pins this instance to, else DS5_ROLE_ANY. */
+	enum ds5_mux_pad role;
 	bool metadata_enabled;
 	int aggregated;
 	int reset_ref_ds5;
@@ -266,7 +272,6 @@ struct ds5 {
 	/* D58x camera behind a PIXEL-mode deserializer - requires strict
 	 * Scheduling and data sizes in HKR side */
 	bool d58x_pixel_mode;
-	u16 control_base;
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	struct gmsl_link_ctx g_ctx;
 	/* GMSL link this camera is wired to. From the serializer node's

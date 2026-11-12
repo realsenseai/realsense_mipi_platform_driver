@@ -54,7 +54,8 @@ On JetPack 5.x, `install_to_kernel.sh` refuses to install a kernel `Image` whose
 
 Tests run on-device using pytest (Python 3). Located in `test/`.
 
-**New tests are not added to this repo.** Driver test coverage lives in the `fw_tests` suite of the `perc_hw_fw-rs400` repo (`DS5_B0_DEV/fw_tests/`), which the PR check's Jenkins `test_driver` job runs. `test/standalone_tests/` holds manual, on-rig tools only, and no CI runs them. `test/host/` (RSDEV-15925, `python3 test/host/<test>.py`, no CI either) compiles text slices of `d4xx_main.c` against stubs under `gcc -Werror`, so a new call anywhere in a sliced range (the start/end markers at the top of `test_d4xx_stop_cleanup.py`) needs a stub there.
+**New tests are not added to this repo.** Driver test coverage lives in the `fw_tests` suite of the `perc_hw_fw-rs400` repo (`DS5_B0_DEV/fw_tests/`), which the PR check's Jenkins `test_driver` job runs. `test/standalone_tests/` holds manual, on-rig tools only, and no CI runs them. `test/host/` (RSDEV-15925, `python3 test/host/<test>.py`, no CI either) compiles text slices of `d4xx_main.c` against stubs under `gcc -Werror`, so a new call anywhere in a sliced range (the start/end markers at the top of `test_d4xx_stop_cleanup.py`) needs a stub there. A change to `struct ds5` fields those ranges read needs the stub struct changed
+with it: run all of `test/host/` after any such edit.
 
 ```bash
 cd test/standalone_tests
@@ -120,6 +121,20 @@ on every pad, to the sensor of its DT `cam-type` (Depth/Y8/RGB/IMU), which bound
 lock. A mux without a `cam-type` lists nothing — it has no frame sizes or settable format either,
 and every shipped DT sets one. The former combined IR-then-depth listing repeated formats and cut
 off any past the IR + depth count (RSDEV-13306).
+
+**The stream an instance serves is `state->role`, an `enum ds5_mux_pad`, and code takes it as a
+parameter** (RSDEV-15178). Probe sets it from DT `cam-type`; `DS5_ROLE_ANY` (= `DS5_MUX_PAD_COUNT`)
+means DT pinned none, and is deliberately not 0, the value the field holds until probe has read
+the DT. Three helpers are the only readers of that distinction: `ds5_serves(state, role)` for
+camera-owner work (true for the role's instance and for an any-role one), `ds5_role(state, sensor)`
+for the stream an operation acts on (the pinned role, else the sensor's `mux_pad`), and
+`ds5_role_sensor(state, role)` for the sensor behind a role (NULL for `DS5_ROLE_ANY`, which is how
+such a node lists nothing). Per-stream functions (`ds5_configure()`, the exposure helpers) take the
+role as an argument, and the control base is derived where it is used (RGB → `DS5_RGB_CONTROL_BASE`,
+else depth's). `ds5_stream_set(state, sensor, on)` is the stream start/stop body;
+`ds5_mux_s_stream()` only resolves the node's sensor and returns `-EINVAL` for an any-role
+instance, which has no single stream to start. New code must not add a per-instance stream flag
+or cache: an instance serving several streams (the single-instance RB3 model) has no one answer.
 
 ### Cross-compilation
 
