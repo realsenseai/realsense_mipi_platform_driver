@@ -37,9 +37,12 @@
 #define MEDIA_BUS_FMT_RS_JPEG_1X8	0x500c
 #endif
 
-/* Z16, Y8I, Y12I, Y16I, GREY and SGRBG16 are already upstream from v6.8, so
- * only these two are ours.
+/* Z16, Y8I, Y12I, GREY and SGRBG16 are in v6.8. Y16I came upstream later, and
+ * the other two are ours.
  */
+#ifndef V4L2_PIX_FMT_Y16I
+#define V4L2_PIX_FMT_Y16I	v4l2_fourcc('Y', '1', '6', 'I')
+#endif
 #ifndef V4L2_PIX_FMT_RW16
 #define V4L2_PIX_FMT_RW16	v4l2_fourcc('R', 'W', '1', '6')
 #endif

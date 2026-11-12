@@ -1,3 +1,0 @@
-# CAMSS fork patches go here (format rows: RGB888_1X24 / DT 0x12 / RAW16,
-# plus the VFE RDI rows and fourccs). apply_patches_qcom.sh applies *.patch
-# in order onto the copy of the kernel CAMSS driver.

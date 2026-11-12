@@ -1,0 +1,126 @@
+Subject: [PATCH 5/5] media: qcom: camss: bring-up aids
+
+ - Link frequency: a sensor behind a deserializer reports neither
+   V4L2_CID_LINK_FREQ nor a pixel rate, and the CSIPHY then refuses to
+   start. Fall back to the first link-frequencies value of the CAMSS
+   endpoint, which is where a board-fixed rate belongs.
+ - dev_dbg lines for the CSIPHY lane count and link frequency at start,
+   and for the raw receiver and RDI interrupt status when a gen2 RDI
+   stops. The per-RDI stream, virtual channel and data type are already
+   logged when the RDI is routed.
+---
+--- a/camss.c
++++ b/camss.c
+@@ -2857,7 +2857,9 @@ s64 camss_get_link_freq(struct media_ent
+ 			unsigned int lanes)
+ {
+ 	struct media_entity *sensor;
++	struct csiphy_device *csiphy;
+ 	struct v4l2_subdev *subdev;
++	s64 link_freq;
+ 
+ 	sensor = camss_find_sensor(entity);
+ 	if (!sensor)
+@@ -2865,7 +2867,19 @@ s64 camss_get_link_freq(struct media_ent
+ 
+ 	subdev = media_entity_to_v4l2_subdev(sensor);
+ 
+-	return v4l2_get_link_freq(subdev->ctrl_handler, bpp, 2 * lanes);
++	link_freq = v4l2_get_link_freq(subdev->ctrl_handler, bpp, 2 * lanes);
++	if (link_freq >= 0)
++		return link_freq;
++
++	/*
++	 * A sensor that reports no rate, such as one behind a deserializer
++	 * whose output rate the board fixes: take the endpoint's.
++	 */
++	csiphy = subdev->host_priv;
++	if (csiphy && csiphy->cfg.csi2 && csiphy->cfg.csi2->link_freq)
++		return csiphy->cfg.csi2->link_freq;
++
++	return link_freq;
+ }
+ 
+ /*
+@@ -2999,11 +3013,13 @@ static int camss_of_parse_endpoint_node(
+ 	unsigned int i;
+ 	int ret;
+ 
+-	ret = v4l2_fwnode_endpoint_parse(of_fwnode_handle(node), &vep);
++	ret = v4l2_fwnode_endpoint_alloc_parse(of_fwnode_handle(node), &vep);
+ 	if (ret)
+ 		return ret;
+ 
+ 	csd->interface.csiphy_id = vep.base.port;
++	if (vep.nr_of_link_frequencies)
++		csd->interface.csi2.link_freq = vep.link_frequencies[0];
+ 
+ 	mipi_csi2 = &vep.bus.mipi_csi2;
+ 	lncfg->clk.pos = mipi_csi2->clock_lane;
+@@ -3013,14 +3029,18 @@ static int camss_of_parse_endpoint_node(
+ 	lncfg->data = devm_kcalloc(dev,
+ 				   lncfg->num_data, sizeof(*lncfg->data),
+ 				   GFP_KERNEL);
+-	if (!lncfg->data)
++	if (!lncfg->data) {
++		v4l2_fwnode_endpoint_free(&vep);
+ 		return -ENOMEM;
++	}
+ 
+ 	for (i = 0; i < lncfg->num_data; i++) {
+ 		lncfg->data[i].pos = mipi_csi2->data_lanes[i];
+ 		lncfg->data[i].pol = mipi_csi2->lane_polarities[i + 1];
+ 	}
+ 
++	v4l2_fwnode_endpoint_free(&vep);
++
+ 	return 0;
+ }
+ 
+--- a/camss-csid-gen2.c
++++ b/camss-csid-gen2.c
+@@ -333,6 +333,14 @@ static void __csid_configure_rdi_stream(
+ 
+ static void csid_configure_rdi(struct csid_device *csid, u8 rdi, u8 enable)
+ {
++	/* Raw and undecoded: what the receiver and the RDI latched while up */
++	if (!enable)
++		dev_dbg(csid->camss->dev,
++			"CSID%u RDI%u stop: RX IRQ status 0x%08x, RDI IRQ status 0x%08x\n",
++			csid->id, rdi,
++			readl_relaxed(csid->base + CSID_CSI2_RX_IRQ_STATUS),
++			readl_relaxed(csid->base + CSID_CSI2_RDIN_IRQ_STATUS(rdi)));
++
+ 	if (csid->testgen.enabled)
+ 		__csid_configure_testgen(csid, enable, rdi);
+ 
+--- a/camss-csiphy.c
++++ b/camss-csiphy.c
+@@ -285,6 +285,10 @@ static int csiphy_stream_on(struct csiph
+ 		return -EINVAL;
+ 	}
+ 
++	dev_dbg(csiphy->camss->dev,
++		"CSIPHY%u: %u lanes, link frequency %lld Hz\n",
++		csiphy->id, num_lanes, link_freq);
++
+ 	if (csiphy->base_clk_mux) {
+ 		val = readl_relaxed(csiphy->base_clk_mux);
+ 		if (cfg->combo_mode && (lane_mask & 0x18) == 0x18) {
+--- a/camss-csiphy.h
++++ b/camss-csiphy.h
+@@ -33,8 +33,14 @@ struct csiphy_lanes_cfg {
+ 	struct csiphy_lane clk;
+ };
+ 
++/*
++ * struct csiphy_csi2_cfg - CSI-2 bus of a CSIPHY, from its endpoint
++ * @lane_cfg: Lane configuration
++ * @link_freq: First of the endpoint's link-frequencies, 0 without any
++ */
+ struct csiphy_csi2_cfg {
+ 	struct csiphy_lanes_cfg lane_cfg;
++	s64 link_freq;
+ };
+ 
+ struct csiphy_config {

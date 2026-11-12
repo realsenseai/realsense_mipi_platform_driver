@@ -1,0 +1,388 @@
+Subject: [PATCH 2/5] media: qcom: camss: csid: a format, VC and DT per source pad
+
+A CSID source pad was a copy of the sink pad: same media-bus code, same
+size, and its RDI captured virtual channel N in the data type of that one
+format. A sensor that multiplexes streams of different formats could not
+be described.
+
+Source pads now keep the code and size they are given, as long as the CSID
+can output the code. Setting the sink still propagates to them, so a
+single-stream pipeline is configured exactly as before.
+
+Each RDI takes its virtual channel and data type from the sensor's frame
+descriptor (get_frame_desc), from the entry whose stream it is set to
+capture. Four driver-private controls on the CSID subdev, "RDI0 Stream" to
+"RDI3 Stream", choose that stream and default to the RDI's own number. A
+sensor without a frame descriptor is treated as before: virtual channel N,
+data type of the pad's format.
+
+The DT_ID that forms the CSID's internal CID is the RDI number, so two RDIs
+can capture different data types of one virtual channel.
+---
+--- a/camss.c
++++ b/camss.c
+@@ -2782,12 +2782,12 @@ void camss_disable_clocks(int nclocks, s
+ }
+ 
+ /*
+- * camss_find_sensor - Find a linked media entity which represents a sensor
++ * camss_find_sensor_pad - Find the source pad of the linked sensor
+  * @entity: Media entity to start searching from
+  *
+- * Return a pointer to sensor media entity or NULL if not found
++ * Return a pointer to the sensor's source pad or NULL if not found
+  */
+-struct media_entity *camss_find_sensor(struct media_entity *entity)
++struct media_pad *camss_find_sensor_pad(struct media_entity *entity)
+ {
+ 	struct media_pad *pad;
+ 
+@@ -2803,10 +2803,48 @@ struct media_entity *camss_find_sensor(s
+ 		entity = pad->entity;
+ 
+ 		if (entity->function == MEDIA_ENT_F_CAM_SENSOR)
+-			return entity;
++			return pad;
+ 	}
+ }
+ 
++/*
++ * camss_find_sensor - Find a linked media entity which represents a sensor
++ * @entity: Media entity to start searching from
++ *
++ * Return a pointer to sensor media entity or NULL if not found
++ */
++struct media_entity *camss_find_sensor(struct media_entity *entity)
++{
++	struct media_pad *pad = camss_find_sensor_pad(entity);
++
++	return pad ? pad->entity : NULL;
++}
++
++/*
++ * camss_get_frame_desc - Get the CSI-2 frame descriptor of the linked sensor
++ * @entity: Media entity in the current pipeline
++ * @fd: Return the frame descriptor here
++ *
++ * Return 0 on success or a negative error code when the sensor is missing or
++ * does not describe its streams
++ */
++int camss_get_frame_desc(struct media_entity *entity,
++			 struct v4l2_mbus_frame_desc *fd)
++{
++	struct media_pad *pad = camss_find_sensor_pad(entity);
++	int ret;
++
++	if (!pad)
++		return -ENODEV;
++
++	ret = v4l2_subdev_call(media_entity_to_v4l2_subdev(pad->entity), pad,
++			       get_frame_desc, pad->index, fd);
++	if (ret)
++		return ret;
++
++	return fd->type == V4L2_MBUS_FRAME_DESC_TYPE_CSI2 ? 0 : -EINVAL;
++}
++
+ /**
+  * camss_get_link_freq - Get link frequency from sensor
+  * @entity: Media entity in the current pipeline
+--- a/camss-csid.c
++++ b/camss-csid.c
+@@ -729,6 +729,68 @@ static int csid_set_power(struct v4l2_su
+ }
+ 
+ /*
++ * csid_route_rdi - Resolve what an RDI captures
++ * @csid: CSID device
++ * @rdi: RDI, behind source pad MSM_CSID_PAD_FIRST_SRC + @rdi
++ *
++ * The RDI takes the virtual channel and data type of its stream from the
++ * sensor's frame descriptor. A sensor without one is a single stream on
++ * virtual channel @rdi, in the data type of the pad's format.
++ *
++ * Return 0 on success or a negative error code otherwise
++ */
++static int csid_route_rdi(struct csid_device *csid, u8 rdi)
++{
++	struct csid_rdi_route *route = &csid->route[rdi];
++	const struct csid_format_info *format;
++	struct v4l2_mbus_frame_desc fd;
++	bool found = false;
++	unsigned int i;
++
++	format = csid_get_fmt_entry(csid->res->formats->formats,
++				    csid->res->formats->nformats,
++				    csid->fmt[MSM_CSID_PAD_FIRST_SRC + rdi].code);
++
++	route->stream = v4l2_ctrl_g_ctrl(csid->rdi_stream[rdi]);
++	route->vc = rdi;
++	route->dt = format->data_type;
++	csid->phy.max_vc = max(csid->phy.max_vc, route->vc);
++
++	if (!csid->testgen.enabled &&
++	    !camss_get_frame_desc(&csid->subdev.entity, &fd)) {
++		for (i = 0; i < fd.num_entries; i++) {
++			const struct v4l2_mbus_frame_desc_entry *entry =
++				&fd.entry[i];
++
++			/* The receiver's VC mode is shared by all of its RDIs */
++			csid->phy.max_vc = max(csid->phy.max_vc,
++					       entry->bus.csi2.vc);
++
++			if (entry->stream != route->stream)
++				continue;
++
++			route->vc = entry->bus.csi2.vc;
++			route->dt = entry->bus.csi2.dt;
++			found = true;
++		}
++
++		if (!found) {
++			dev_err(csid->camss->dev,
++				"CSID%u RDI%u: the sensor has no stream %u\n",
++				csid->id, rdi, route->stream);
++			return -EINVAL;
++		}
++	}
++
++	dev_dbg(csid->camss->dev,
++		"CSID%u RDI%u: stream %u, VC %u, DT 0x%02x%s\n",
++		csid->id, rdi, route->stream, route->vc, route->dt,
++		found ? "" : " (no frame descriptor)");
++
++	return 0;
++}
++
++/*
+  * csid_set_stream - Enable/disable streaming on CSID module
+  * @sd: CSID V4L2 subdevice
+  * @enable: Requested streaming state
+@@ -756,6 +818,18 @@ static int csid_set_stream(struct v4l2_s
+ 	}
+ 
+ 	if (csid->phy.need_vc_update) {
++		u8 i;
++
++		csid->phy.max_vc = 0;
++		for (i = 0; enable && i < MSM_CSID_MAX_SRC_STREAMS; i++) {
++			if (!(csid->phy.en_vc & BIT(i)))
++				continue;
++
++			ret = csid_route_rdi(csid, i);
++			if (ret < 0)
++				return ret;
++		}
++
+ 		csid->res->hw_ops->configure_stream(csid, enable);
+ 		csid->phy.need_vc_update = false;
+ 	}
+@@ -820,15 +894,34 @@ static void csid_try_format(struct csid_
+ 
+ 		break;
+ 
+-	case MSM_CSID_PAD_SRC:
++	default:
+ 		if (!csid->testgen_mode || csid->testgen_mode->cur.val == 0) {
+-			/* Test generator is disabled, */
+-			/* keep pad formats in sync */
++			/*
++			 * Test generator is disabled. The sink may carry
++			 * several streams, so a source pad keeps the code and
++			 * size asked for; only a code the CSID cannot output
++			 * falls back to the sink's.
++			 */
++			struct v4l2_mbus_framefmt *sink_fmt;
+ 			u32 code = fmt->code;
+ 
+-			*fmt = *__csid_get_format(csid, sd_state,
+-						      MSM_CSID_PAD_SINK, which);
+-			fmt->code = csid->res->hw_ops->src_pad_code(csid, fmt->code, 0, code);
++			sink_fmt = __csid_get_format(csid, sd_state,
++						     MSM_CSID_PAD_SINK, which);
++			fmt->code = csid->res->hw_ops->src_pad_code(csid, sink_fmt->code,
++								    0, code);
++			if (fmt->code != code) {
++				for (i = 0; i < csid->res->formats->nformats; i++)
++					if (csid->res->formats->formats[i].code == code)
++						break;
++
++				if (i < csid->res->formats->nformats)
++					fmt->code = code;
++			}
++
++			fmt->width = clamp_t(u32, fmt->width, 1, 8191);
++			fmt->height = clamp_t(u32, fmt->height, 1, 8191);
++
++			fmt->field = V4L2_FIELD_NONE;
+ 		} else {
+ 			/* Test generator is enabled, set format on source */
+ 			/* pad to allow test generator usage */
+@@ -1052,6 +1145,11 @@ static int csid_s_ctrl(struct v4l2_ctrl
+ 	case V4L2_CID_TEST_PATTERN:
+ 		ret = csid_set_test_pattern(csid, ctrl->val);
+ 		break;
++	case MSM_CSID_CID_RDI_STREAM(0) ...
++	     MSM_CSID_CID_RDI_STREAM(MSM_CSID_MAX_SRC_STREAMS - 1):
++		/* Takes effect when the RDI next starts */
++		ret = 0;
++		break;
+ 	}
+ 
+ 	return ret;
+@@ -1061,6 +1159,13 @@ static const struct v4l2_ctrl_ops csid_c
+ 	.s_ctrl = csid_s_ctrl,
+ };
+ 
++static const char * const csid_rdi_stream_names[MSM_CSID_MAX_SRC_STREAMS] = {
++	"RDI0 Stream",
++	"RDI1 Stream",
++	"RDI2 Stream",
++	"RDI3 Stream",
++};
++
+ /*
+  * msm_csid_subdev_init - Initialize CSID device structure and resources
+  * @csid: CSID device
+@@ -1382,7 +1487,7 @@ int msm_csid_register_entity(struct csid
+ 		 MSM_CSID_NAME, csid->id);
+ 	v4l2_set_subdevdata(sd, csid);
+ 
+-	ret = v4l2_ctrl_handler_init(&csid->ctrls, 1);
++	ret = v4l2_ctrl_handler_init(&csid->ctrls, 1 + MSM_CSID_MAX_SRC_STREAMS);
+ 	if (ret < 0) {
+ 		dev_err(dev, "Failed to init ctrl handler: %d\n", ret);
+ 		return ret;
+@@ -1400,6 +1505,27 @@ int msm_csid_register_entity(struct csid
+ 		}
+ 	}
+ 
++	/* RDI n captures sensor stream n unless told otherwise */
++	for (i = 0; i < MSM_CSID_MAX_SRC_STREAMS; i++) {
++		struct v4l2_ctrl_config cfg = {
++			.ops = &csid_ctrl_ops,
++			.id = MSM_CSID_CID_RDI_STREAM(i),
++			.name = csid_rdi_stream_names[i],
++			.type = V4L2_CTRL_TYPE_INTEGER,
++			.max = MSM_CSID_MAX_STREAM_ID,
++			.step = 1,
++			.def = i,
++		};
++
++		csid->rdi_stream[i] = v4l2_ctrl_new_custom(&csid->ctrls, &cfg, NULL);
++	}
++
++	if (csid->ctrls.error) {
++		dev_err(dev, "Failed to init ctrl: %d\n", csid->ctrls.error);
++		ret = csid->ctrls.error;
++		goto free_ctrl;
++	}
++
+ 	csid->subdev.ctrl_handler = &csid->ctrls;
+ 
+ 	ret = csid_init_formats(sd, NULL);
+--- a/camss-csid-gen2.c
++++ b/camss-csid-gen2.c
+@@ -261,11 +261,11 @@ static void __csid_configure_testgen(str
+ 
+ static void __csid_configure_rdi_stream(struct csid_device *csid, u8 enable, u8 vc)
+ {
+-	/* Source pads matching RDI channels on hardware. Pad 1 -> RDI0, Pad 2 -> RDI1, etc. */
+-	struct v4l2_mbus_framefmt *input_format = &csid->fmt[MSM_CSID_PAD_FIRST_SRC + vc];
+-	const struct csid_format_info *format = csid_get_fmt_entry(csid->res->formats->formats,
+-								   csid->res->formats->nformats,
+-								   input_format->code);
++	/*
++	 * Source pads matching RDI channels on hardware. Pad 1 -> RDI0, Pad 2 -> RDI1, etc.
++	 * @vc is that RDI; the virtual channel it captures is the route's.
++	 */
++	const struct csid_rdi_route *route = &csid->route[vc];
+ 	u32 val;
+ 
+ 	/*
+@@ -279,6 +279,9 @@ static void __csid_configure_rdi_stream(
+ 	 * DT    : 21:16
+ 	 *
+ 	 * CID   : VC 3:0 << 2 | DT_ID 1:0
++	 *
++	 * Two RDIs may capture different data types of one virtual channel,
++	 * so the RDI number, not the channel, keeps their CIDs apart.
+ 	 */
+ 	u8 dt_id = vc & 0x03;
+ 
+@@ -287,8 +290,8 @@ static void __csid_configure_rdi_stream(
+ 	val |= 1 << RDI_CFG0_TIMESTAMP_EN;
+ 	/* note: for non-RDI path, this should be format->decode_format */
+ 	val |= DECODE_FORMAT_PAYLOAD_ONLY << RDI_CFG0_DECODE_FORMAT;
+-	val |= format->data_type << RDI_CFG0_DATA_TYPE;
+-	val |= vc << RDI_CFG0_VIRTUAL_CHANNEL;
++	val |= route->dt << RDI_CFG0_DATA_TYPE;
++	val |= route->vc << RDI_CFG0_VIRTUAL_CHANNEL;
+ 	val |= dt_id << RDI_CFG0_DT_ID;
+ 	writel_relaxed(val, csid->base + CSID_RDI_CFG0(vc));
+ 
+@@ -339,7 +342,7 @@ static void csid_configure_stream(struct
+ 				__csid_configure_testgen(csid, enable, i);
+ 
+ 			__csid_configure_rdi_stream(csid, enable, i);
+-			__csid_configure_rx(csid, &csid->phy, i);
++			__csid_configure_rx(csid, &csid->phy, csid->phy.max_vc);
+ 			__csid_ctrl_rdi(csid, enable, i);
+ 		}
+ }
+--- a/camss-csid.h
++++ b/camss-csid.h
+@@ -52,6 +52,11 @@
+ 
+ #define CSID_RESET_TIMEOUT_MS 500
+ 
++/* Driver-private control: the sensor stream an RDI captures */
++#define MSM_CSID_CID_RDI_STREAM(rdi)	(V4L2_CID_USER_BASE + 0x1f00 + (rdi))
++/* The V4L2 subdev stream id limit, which the core keeps to itself */
++#define MSM_CSID_MAX_STREAM_ID		63
++
+ enum csid_testgen_mode {
+ 	CSID_PAYLOAD_MODE_DISABLED = 0,
+ 	CSID_PAYLOAD_MODE_INCREMENTING = 1,
+@@ -93,6 +98,19 @@ struct csid_phy_config {
+ 	u32 lane_assign;
+ 	u32 en_vc;
+ 	u8 need_vc_update;
++	u8 max_vc;
++};
++
++/*
++ * struct csid_rdi_route - What an RDI captures
++ * @stream: Sensor stream, latched from the RDI's stream control
++ * @vc: CSI-2 virtual channel
++ * @dt: CSI-2 data type
++ */
++struct csid_rdi_route {
++	u8 stream;
++	u8 vc;
++	u8 dt;
+ };
+ 
+ struct csid_device;
+@@ -187,6 +205,8 @@ struct csid_device {
+ 	struct v4l2_mbus_framefmt fmt[MSM_CSID_PADS_NUM];
+ 	struct v4l2_ctrl_handler ctrls;
+ 	struct v4l2_ctrl *testgen_mode;
++	struct v4l2_ctrl *rdi_stream[MSM_CSID_MAX_SRC_STREAMS];
++	struct csid_rdi_route route[MSM_CSID_MAX_SRC_STREAMS];
+ 	const struct csid_subdev_resources *res;
+ 	struct camss_clock *clock;
+ };
+--- a/camss.h
++++ b/camss.h
+@@ -155,7 +155,10 @@ void camss_add_clock_margin(u64 *rate);
+ int camss_enable_clocks(int nclocks, struct camss_clock *clock,
+ 			struct device *dev);
+ void camss_disable_clocks(int nclocks, struct camss_clock *clock);
++struct media_pad *camss_find_sensor_pad(struct media_entity *entity);
+ struct media_entity *camss_find_sensor(struct media_entity *entity);
++int camss_get_frame_desc(struct media_entity *entity,
++			 struct v4l2_mbus_frame_desc *fd);
+ s64 camss_get_link_freq(struct media_entity *entity, unsigned int bpp,
+ 			unsigned int lanes);
+ int camss_get_pixel_clock(struct media_entity *entity, u64 *pixel_clock);

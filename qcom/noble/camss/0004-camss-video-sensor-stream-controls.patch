@@ -1,0 +1,260 @@
+Subject: [PATCH 4/5] media: qcom: camss: video: expose the sensor stream's controls
+
+Applications that drive a camera through its video nodes need the controls
+there, as the Tegra VI provides them. Each video node gets a control
+handler that inherits the controls of the sensor stream the node captures:
+for a sensor with the streams API, those of the subdev feeding the sink pad
+the stream is routed from; otherwise the sensor's own.
+
+The media graph can change between uses, so the handler is rebuilt when the
+node is opened and no other handle is open on it.
+---
+--- a/camss-csid.c
++++ b/camss-csid.c
+@@ -902,6 +902,32 @@ unlock:
+ }
+ 
+ /*
++ * msm_csid_pad_stream - The sensor stream a CSID source pad carries
++ * @sd: CSID V4L2 subdevice
++ * @pad: Source pad
++ *
++ * Return the stream the pad is capturing, or is set to capture when it starts
++ */
++u32 msm_csid_pad_stream(struct v4l2_subdev *sd, unsigned int pad)
++{
++	struct csid_device *csid = v4l2_get_subdevdata(sd);
++	u8 rdi = pad - MSM_CSID_PAD_FIRST_SRC;
++	u32 stream;
++
++	if (pad < MSM_CSID_PAD_FIRST_SRC || pad >= MSM_CSID_PADS_NUM)
++		return 0;
++
++	mutex_lock(&csid->stream_lock);
++	if (csid->streaming & BIT(rdi))
++		stream = csid->route[rdi].stream;
++	else
++		stream = v4l2_ctrl_g_ctrl(csid->rdi_stream[rdi]);
++	mutex_unlock(&csid->stream_lock);
++
++	return stream;
++}
++
++/*
+  * __csid_get_format - Get pointer to format structure
+  * @csid: CSID device
+  * @sd_state: V4L2 subdev state
+--- a/camss-csid.h
++++ b/camss-csid.h
+@@ -264,6 +264,8 @@ void msm_csid_get_csid_id(struct media_e
+ int msm_csid_stream(struct v4l2_subdev *sd, unsigned int pad, int enable,
+ 		    u32 *stream);
+ 
++u32 msm_csid_pad_stream(struct v4l2_subdev *sd, unsigned int pad);
++
+ extern const char * const csid_testgen_modes[];
+ 
+ extern const struct csid_formats csid_formats_4_1;
+--- a/camss-video.c
++++ b/camss-video.c
+@@ -11,6 +11,7 @@
+ #include <media/media-entity.h>
+ #include <media/v4l2-dev.h>
+ #include <media/v4l2-device.h>
++#include <media/v4l2-event.h>
+ #include <media/v4l2-ioctl.h>
+ #include <media/v4l2-mc.h>
+ #include <media/videobuf2-dma-sg.h>
+@@ -111,6 +112,95 @@ static int video_get_subdev_format(struc
+ 				    &video->formats[ret], video->bpl_alignment);
+ }
+ 
++/*
++ * video_stream_ctrl_handler - The control handler of one sensor stream
++ * @sd: Sensor V4L2 subdevice
++ * @pad: Source pad of the sensor
++ * @stream: Stream on that pad
++ *
++ * A sensor with the streams API routes each stream from a sink pad; the
++ * controls are those of the subdev feeding that pad, or the sensor's own when
++ * nothing does. Any other sensor is one stream with one set of controls.
++ *
++ * Return the handler, or NULL when there is none or the stream is not routed
++ */
++static struct v4l2_ctrl_handler *
++video_stream_ctrl_handler(struct v4l2_subdev *sd, u32 pad, u32 stream)
++{
++	struct v4l2_subdev_state *state;
++	struct media_pad *remote;
++	u32 sink_pad, sink_stream;
++	int ret;
++
++	if (!(sd->flags & V4L2_SUBDEV_FL_STREAMS) || !sd->active_state)
++		return sd->ctrl_handler;
++
++	state = v4l2_subdev_lock_and_get_active_state(sd);
++	ret = v4l2_subdev_routing_find_opposite_end(&state->routing, pad, stream,
++						    &sink_pad, &sink_stream);
++	v4l2_subdev_unlock_state(state);
++	if (ret)
++		return NULL;
++
++	remote = media_pad_remote_pad_first(&sd->entity.pads[sink_pad]);
++	if (!remote || !is_media_entity_v4l2_subdev(remote->entity))
++		return sd->ctrl_handler;
++
++	return media_entity_to_v4l2_subdev(remote->entity)->ctrl_handler;
++}
++
++/*
++ * video_update_ctrls - Take the controls of the stream the node captures
++ * @video: struct camss_video
++ *
++ * Follows the media graph as it is now, so it runs when the node is opened
++ * with no other handle on it: nothing then refers to the old controls.
++ */
++static void video_update_ctrls(struct camss_video *video)
++{
++	struct media_entity *entity = &video->vdev.entity;
++	struct v4l2_ctrl_handler *sensor_hdl;
++	struct media_pad *source = NULL;
++	struct v4l2_subdev *subdev;
++	struct media_pad *pad;
++	u32 stream = 0;
++	int ret;
++
++	v4l2_ctrl_handler_free(&video->ctrl_handler);
++	v4l2_ctrl_handler_init(&video->ctrl_handler, 16);
++
++	while (1) {
++		pad = &entity->pads[0];
++		if (!(pad->flags & MEDIA_PAD_FL_SINK))
++			break;
++
++		source = media_pad_remote_pad_first(pad);
++		if (!source || !is_media_entity_v4l2_subdev(source->entity))
++			return;
++
++		entity = source->entity;
++		subdev = media_entity_to_v4l2_subdev(entity);
++
++		if (subdev->grp_id == CAMSS_GRP_ID_CSID)
++			stream = msm_csid_pad_stream(subdev, source->index);
++	}
++
++	/* The walk ends on a sensor only when the graph reaches one */
++	if (!source || entity->function != MEDIA_ENT_F_CAM_SENSOR)
++		return;
++
++	sensor_hdl = video_stream_ctrl_handler(media_entity_to_v4l2_subdev(entity),
++					       source->index, stream);
++	if (!sensor_hdl)
++		return;
++
++	ret = v4l2_ctrl_add_handler(&video->ctrl_handler, sensor_hdl, NULL, true);
++	if (ret < 0)
++		dev_err(video->camss->dev,
++			"Failed to take the controls of %s: %d\n",
++			entity->name, ret);
++}
++
+ /* -----------------------------------------------------------------------------
+  * Video queue operations
+  */
+@@ -598,6 +688,8 @@ static const struct v4l2_ioctl_ops msm_v
+ 	.vidioc_enum_input		= video_enum_input,
+ 	.vidioc_g_input			= video_g_input,
+ 	.vidioc_s_input			= video_s_input,
++	.vidioc_subscribe_event		= v4l2_ctrl_subscribe_event,
++	.vidioc_unsubscribe_event	= v4l2_event_unsubscribe,
+ };
+ 
+ /* -----------------------------------------------------------------------------
+@@ -619,6 +711,9 @@ static int video_open(struct file *file)
+ 		goto error_alloc;
+ 	}
+ 
++	if (!video->users)
++		video_update_ctrls(video);
++
+ 	v4l2_fh_init(vfh, vdev);
+ 	v4l2_fh_add(vfh);
+ 
+@@ -631,6 +726,8 @@ static int video_open(struct file *file)
+ 		goto error_pm_use;
+ 	}
+ 
++	video->users++;
++
+ 	mutex_unlock(&video->lock);
+ 
+ 	return 0;
+@@ -647,9 +744,14 @@ error_alloc:
+ static int video_release(struct file *file)
+ {
+ 	struct video_device *vdev = video_devdata(file);
++	struct camss_video *video = video_drvdata(file);
+ 
+ 	vb2_fop_release(file);
+ 
++	mutex_lock(&video->lock);
++	video->users--;
++	mutex_unlock(&video->lock);
++
+ 	v4l2_pipeline_pm_put(&vdev->entity);
+ 
+ 	file->private_data = NULL;
+@@ -677,6 +779,8 @@ static void msm_video_release(struct vid
+ 
+ 	media_entity_cleanup(&vdev->entity);
+ 
++	v4l2_ctrl_handler_free(&video->ctrl_handler);
++
+ 	mutex_destroy(&video->q_lock);
+ 	mutex_destroy(&video->lock);
+ 
+@@ -769,6 +873,9 @@ int msm_video_register(struct camss_vide
+ 		goto error_video_register;
+ 	}
+ 
++	/* Filled when the node is opened, from the sensor stream it is linked to */
++	v4l2_ctrl_handler_init(&video->ctrl_handler, 16);
++
+ 	vdev->fops = &msm_vid_fops;
+ 	vdev->device_caps = V4L2_CAP_VIDEO_CAPTURE_MPLANE | V4L2_CAP_STREAMING
+ 			  | V4L2_CAP_READWRITE | V4L2_CAP_IO_MC;
+@@ -778,6 +885,7 @@ int msm_video_register(struct camss_vide
+ 	vdev->vfl_dir = VFL_DIR_RX;
+ 	vdev->queue = &video->vb2_q;
+ 	vdev->lock = &video->lock;
++	vdev->ctrl_handler = &video->ctrl_handler;
+ 	strscpy(vdev->name, name, sizeof(vdev->name));
+ 
+ 	ret = video_register_device(vdev, VFL_TYPE_VIDEO, -1);
+@@ -793,6 +901,7 @@ int msm_video_register(struct camss_vide
+ 	return 0;
+ 
+ error_video_register:
++	v4l2_ctrl_handler_free(&video->ctrl_handler);
+ 	media_entity_cleanup(&vdev->entity);
+ 	mutex_destroy(&video->lock);
+ error_vb2_init:
+--- a/camss-video.h
++++ b/camss-video.h
+@@ -13,6 +13,7 @@
+ #include <linux/mutex.h>
+ #include <linux/videodev2.h>
+ #include <media/media-entity.h>
++#include <media/v4l2-ctrls.h>
+ #include <media/v4l2-dev.h>
+ #include <media/v4l2-device.h>
+ #include <media/v4l2-fh.h>
+@@ -48,6 +49,8 @@ struct camss_video {
+ 	unsigned int line_based;
+ 	const struct camss_format_info *formats;
+ 	unsigned int nformats;
++	struct v4l2_ctrl_handler ctrl_handler;
++	unsigned int users;
+ };
+ 
+ int msm_video_register(struct camss_video *video, struct v4l2_device *v4l2_dev,
