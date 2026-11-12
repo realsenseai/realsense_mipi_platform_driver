@@ -14,7 +14,8 @@ descriptor (get_frame_desc), from the entry whose stream it is set to
 capture. Four driver-private controls on the CSID subdev, "RDI0 Stream" to
 "RDI3 Stream", choose that stream and default to the RDI's own number. A
 sensor without a frame descriptor is treated as before: virtual channel N,
-data type of the pad's format.
+data type of the pad's format. So is an RDI whose stream a single-stream
+descriptor does not list; a multi-stream descriptor without it is an error.
 
 The DT_ID that forms the CSID's internal CID is the RDI number, so two RDIs
 can capture different data types of one virtual channel.
@@ -89,7 +90,7 @@ can capture different data types of one virtual channel.
   * @entity: Media entity in the current pipeline
 --- a/camss-csid.c
 +++ b/camss-csid.c
-@@ -729,6 +729,68 @@ static int csid_set_power(struct v4l2_su
+@@ -729,6 +729,75 @@ static int csid_set_power(struct v4l2_su
  }
  
  /*
@@ -107,9 +108,9 @@ can capture different data types of one virtual channel.
 +{
 +	struct csid_rdi_route *route = &csid->route[rdi];
 +	const struct csid_format_info *format;
-+	struct v4l2_mbus_frame_desc fd;
++	struct v4l2_mbus_frame_desc fd = { };
 +	bool found = false;
-+	unsigned int i;
++	unsigned int i, num;
 +
 +	format = csid_get_fmt_entry(csid->res->formats->formats,
 +				    csid->res->formats->nformats,
@@ -122,7 +123,10 @@ can capture different data types of one virtual channel.
 +
 +	if (!csid->testgen.enabled &&
 +	    !camss_get_frame_desc(&csid->subdev.entity, &fd)) {
-+		for (i = 0; i < fd.num_entries; i++) {
++		num = min_t(unsigned int, fd.num_entries,
++			    V4L2_FRAME_DESC_ENTRY_MAX);
++
++		for (i = 0; i < num; i++) {
 +			const struct v4l2_mbus_frame_desc_entry *entry =
 +				&fd.entry[i];
 +
@@ -138,7 +142,11 @@ can capture different data types of one virtual channel.
 +			found = true;
 +		}
 +
-+		if (!found) {
++		/*
++		 * A descriptor of one stream is a plain sensor's: its other
++		 * RDIs keep virtual channel @rdi, as with no descriptor.
++		 */
++		if (!found && num > 1) {
 +			dev_err(csid->camss->dev,
 +				"CSID%u RDI%u: the sensor has no stream %u\n",
 +				csid->id, rdi, route->stream);
@@ -158,7 +166,7 @@ can capture different data types of one virtual channel.
   * csid_set_stream - Enable/disable streaming on CSID module
   * @sd: CSID V4L2 subdevice
   * @enable: Requested streaming state
-@@ -756,6 +818,18 @@ static int csid_set_stream(struct v4l2_s
+@@ -756,6 +825,18 @@ static int csid_set_stream(struct v4l2_s
  	}
  
  	if (csid->phy.need_vc_update) {
@@ -177,7 +185,7 @@ can capture different data types of one virtual channel.
  		csid->res->hw_ops->configure_stream(csid, enable);
  		csid->phy.need_vc_update = false;
  	}
-@@ -820,15 +894,34 @@ static void csid_try_format(struct csid_
+@@ -820,15 +901,34 @@ static void csid_try_format(struct csid_
  
  		break;
  
@@ -218,7 +226,7 @@ can capture different data types of one virtual channel.
  		} else {
  			/* Test generator is enabled, set format on source */
  			/* pad to allow test generator usage */
-@@ -1052,6 +1145,11 @@ static int csid_s_ctrl(struct v4l2_ctrl
+@@ -1052,6 +1152,11 @@ static int csid_s_ctrl(struct v4l2_ctrl
  	case V4L2_CID_TEST_PATTERN:
  		ret = csid_set_test_pattern(csid, ctrl->val);
  		break;
@@ -230,7 +238,7 @@ can capture different data types of one virtual channel.
  	}
  
  	return ret;
-@@ -1061,6 +1159,13 @@ static const struct v4l2_ctrl_ops csid_c
+@@ -1061,6 +1166,13 @@ static const struct v4l2_ctrl_ops csid_c
  	.s_ctrl = csid_s_ctrl,
  };
  
@@ -244,7 +252,7 @@ can capture different data types of one virtual channel.
  /*
   * msm_csid_subdev_init - Initialize CSID device structure and resources
   * @csid: CSID device
-@@ -1382,7 +1487,7 @@ int msm_csid_register_entity(struct csid
+@@ -1382,7 +1494,7 @@ int msm_csid_register_entity(struct csid
  		 MSM_CSID_NAME, csid->id);
  	v4l2_set_subdevdata(sd, csid);
  
@@ -253,7 +261,7 @@ can capture different data types of one virtual channel.
  	if (ret < 0) {
  		dev_err(dev, "Failed to init ctrl handler: %d\n", ret);
  		return ret;
-@@ -1400,6 +1505,27 @@ int msm_csid_register_entity(struct csid
+@@ -1400,6 +1512,27 @@ int msm_csid_register_entity(struct csid
  		}
  	}
  

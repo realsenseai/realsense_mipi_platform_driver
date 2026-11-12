@@ -19,7 +19,7 @@ start = next(
         s.index("static int ds5_stop_serdes(")
         if "static int ds5_stop_serdes(" in s
         else -1,
-        s.index("static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)\n{"),
+        s.index("static int ds5_stream_set("),
     )
     if index >= 0
 )
@@ -36,12 +36,17 @@ configure_start = s.index("static int ds5_configure(")
 configure_end = s.index("static int ds5_sensor_g_frame_interval(", configure_start)
 wire_start = s.index("static u8 ds5_wire_data_type(")
 wire_end = s.index("\n}", wire_start) + 2
+# ds5_role() and the per-stream helpers after it, up to ds5_role_sensor()'s end
 role_start = s.index("static inline enum ds5_mux_pad ds5_role(")
-role_end = s.index("\n}", role_start) + 2
+role_end = s.index("\n}", s.index("static inline struct ds5_sensor *ds5_role_sensor(")) + 2
+stale_start = s.index("static void ds5_invalidate_stale(")
+stale_end = s.index("\n}", stale_start) + 2
 ser_start = s.index("static inline bool ds5_ser_is_max96717(")
 ser_end = s.index("\n}", ser_start) + 2
 f = (
     s[role_start:role_end]
+    + "\n"
+    + s[stale_start:stale_end]
     + "\n"
     + s[ser_start:ser_end]
     + "\n"
@@ -52,8 +57,8 @@ f = (
     )
     + f
 )
-if "static int ds5_mux_s_stream_guarded(" in s:
-    f += s[s.index("static int ds5_mux_s_stream_guarded("):s.index("static const struct v4l2_subdev_video_ops ds5_sensor_video_ops")]
+if "static int ds5_stream_set_guarded(" in s:
+    f += s[s.index("static int ds5_stream_set_guarded("):s.index("static const struct v4l2_subdev_video_ops ds5_sensor_video_ops")]
 macros = [
     "DS5_DEPTH_CONFIG_STATUS",
     "DS5_DEPTH_STREAM_STATUS",
@@ -337,6 +342,11 @@ static int ds5_release_pipe_for_reconfigure(struct ds5 *s, struct ds5_sensor *se
 """
     stubs = stubs.replace("static int ds5_configure(", fallback + "static int ds5_configure(", 1)
 tests = r"""
+
+/* The unguarded stream op the scenarios drive: the node's own sensor. */
+static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on) {
+    return ds5_stream_set(sd->owner, sd->owner->mux.last_set, on);
+}
 
 int main(void) {
     struct ds5_format fmt = {0};

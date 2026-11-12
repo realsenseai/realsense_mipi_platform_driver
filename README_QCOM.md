@@ -212,11 +212,73 @@ is fixed by the sensor driver, and the stream → RDI choice is a CSID control.
 | Controls per node | The subdev linked to the sink pad a stream is routed from has a control handler | The bound subdev's own handler on every node |
 | Link frequency | `V4L2_CID_LINK_FREQ` | `link-frequencies` on the CAMSS endpoint |
 
-d4xx's mux satisfies the first row today. Its `get_frame_desc` is a
-placeholder with no bus type, which the fork treats as absent — and the
-fallback already fits d4xx's streams when their `vc-id`s are 0..3, since the
-pad-format rows carry the same wire data types d4xx uses. The rest is the
-single-instance work that builds on the role parameter (RSDEV-15178).
+d4xx provides every row when it is built with `CONFIG_VIDEO_D4XX_STREAMS`
+(set by `qcom/modules/Kbuild`) and its node has no `cam-type` — see *d4xx on
+this platform*. A node pinned to one stream, as on Jetson, keeps its
+placeholder `get_frame_desc`, which the fork treats as absent; the fallback
+then fits d4xx's streams when their `vc-id`s are 0..3, since the pad-format
+rows carry the same wire data types.
+
+### d4xx on this platform
+
+One d4xx instance per camera, where Jetson has four. CAMSS binds one subdev
+per CSIPHY, so the instance serves every stream and tells them apart by pad
+and stream inside the kernel:
+
+| Mux pad | Stream | Is | Source-pad stream | VC | DT |
+|---|---|---|---|---|---|
+| 1 (sink) | 0 | Depth | 0 | `vc-id` | the format's wire DT |
+| 2 (sink) | 0 | Colour | 1 | `vc-id` + 1 | 〃 |
+| 3 (sink) | 0 | Infrared | 2 | `vc-id` + 2 | 〃 |
+| 4 (sink) | 0 | IMU | 3 | `vc-id` + 3 | 〃 |
+| 1..3 (sink) | 1 | Metadata of that stream | 4, 5, 6 | as its image | `0x12` |
+
+- **Formats** are set on the sink pad of the stream (`"DS5 mux …":1` for
+  depth) or on the sensor subdev behind it. The source pad reports them: its
+  stream 0, the depth format, is the nominal format of the multiplexed link.
+- **Start and stop** come through `enable_streams` / `disable_streams`, one
+  stream at a time. The metadata streams have nothing to start: the camera
+  sends the embedded line with its image whenever metadata is on.
+- **The frame descriptor** lists the seven streams, so the fork takes each
+  RDI's VC and DT from it. The metadata RDIs select streams 4, 5 and 6:
+  `v4l2-ctl -d <msm_csid0 subdev> -c rdi0_stream=4 -c rdi1_stream=5 -c rdi2_stream=6`.
+- **Metadata** is on for depth, colour and infrared and off for the IMU, as
+  every Jetson node sets it; there is no `mode0` to carry
+  `embedded_metadata_height`.
+
+The node, in outline — the CCI bus, CSIPHY number and GPIOs are placeholders
+until the device tree is written against the mezzanine:
+
+```dts
+d4xx@10 {
+    compatible = "intel,d4xx";
+    reg = <0x10>;
+    /* no cam-type: this instance serves every stream */
+    maxim,gmsl-ser-device = <&ser_a>;
+    maxim,gmsl-dser-device = <&dser>;
+    gmsl-link {
+        /* vc-id is the depth stream's; colour, infrared and IMU follow it */
+        vc-id = <0>; st-vc = <0>; num-lanes = <2>;
+        src-csi-port = "b"; dst-csi-port = "a";
+        serdes-csi-link = "a"; csi-mode = "1x4";
+    };
+    port {
+        d4xx_ep: endpoint { remote-endpoint = <&csiphy4_ep>; };
+    };
+};
+
+&camss {
+    ports {
+        port@4 {
+            csiphy4_ep: endpoint {
+                data-lanes = <0 1 2 3>;
+                link-frequencies = /bits/ 64 <750000000>;   /* the deserializer's output rate */
+                remote-endpoint = <&d4xx_ep>;
+            };
+        };
+    };
+};
+```
 
 ### Configuring the graph
 
@@ -272,10 +334,10 @@ for n in 0 1 2; do
 done
 ```
 
-With no frame descriptor from the sensor, RDI N of that CSID captures VC N in
-data type `0x12` — the metadata of depth, colour and infrared when their
-`vc-id`s are 0, 1 and 2. With one, set `rdiN_stream` to the metadata streams
-it lists. The 68-byte line length is d4xx's payload size on Jetson and has to
+d4xx lists its metadata as streams 4, 5 and 6, so that CSID's RDIs are pointed
+at them with `rdi0_stream=4`, `rdi1_stream=5`, `rdi2_stream=6`. (A sensor with
+no frame descriptor needs nothing: RDI N then captures VC N in data type
+`0x12`.) The 68-byte line length is d4xx's payload size on Jetson and has to
 be confirmed on the wire.
 
 Open a video node only after its links are set: that is when it takes its
@@ -331,13 +393,14 @@ header is absent rather than only in the 5.15.136–147 window.
    Chunking is not viable — the camera's register file returns from the
    register address on every read. Needs either a GENI/QUP bus or an
    `i2c-qcom-cci` burst-length patch. **Top blocker.**
-2. **The CAMSS fork is untested.** It compiles and its logic was read against
-   the 6.8 source; no register it writes has been seen on hardware.
-3. **d4xx is still four instances per camera.** CAMSS binds one subdev per
-   CSIPHY, and the fork now gives that subdev what it needs to carry four
-   streams (*What the sensor has to provide*). d4xx's side — one instance, the
-   streams routing, `enable_streams`, a CSI-2 frame descriptor — is not
-   written.
+2. **The CAMSS fork is untested.** It compiles, its logic was read against the
+   6.8 source and it has had one independent review, whose defects are fixed;
+   no register it writes has been seen on hardware.
+3. **The single-instance d4xx is untested.** One instance now serves every
+   stream on this platform (*d4xx on this platform*): routing,
+   `enable_streams`, a CSI-2 frame descriptor, per-stream VC and metadata. It
+   compiles for 6.8 and leaves the Jetson build's behaviour for a pinned node
+   unchanged, but an any-role instance has never probed on hardware.
 4. **Seven nodes per camera rest on two CSIDs sharing a CSIPHY.** A CSID
    exposes 4 source streams, a VFE 3 lines (full) or 4 (lite), and a path
    captures one data type, so D457 parity is a lite pair plus a full pair per

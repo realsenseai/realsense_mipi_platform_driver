@@ -44,7 +44,7 @@ Targets **Ubuntu 24.04 LTS** (`linux-qcom` 6.8) — the newest Ubuntu Canonical 
 **The CAMSS fork (`qcom/noble/camss/0001`–`0007`) is written without hardware: compile-tested only.** What it rests on:
 
 - **One capture path takes one `(VC, DT)` on this chip, so image and embedded metadata never share a buffer** — unlike the Tegra VI, which hands the embedded lines over in a side buffer of the same channel. Checked in Qualcomm's vendor driver (`cam_ife_csid_core.c`): the register that adds a second VC/DT to a path, `csid_rdi_multi_vcdt_cfg0`, is written only for Titan 480/570/580, and sc7280's CSID (`qcom,csid165_204`) uses the 175_200 table, which has none. A full CSID has 3 RDIs, a lite one 4. **Seven nodes per camera therefore need two CSIDs on the camera's CSIPHY** (`0006`; the vendor driver does this for dual-IFE, CAMSS never has) — a lite pair for the four images and a full pair for the three metadata streams. Do not look for a way to split one buffer; there is no buffer to split.
-- **A metadata node is a second video device on the RDI line, not a mode of the image node** (`0007`, 17x VFEs only): `msm_vfeN_metaM`, `META_CAPTURE`, `D4XX`. A vb2 queue has one buffer type and which RDI carries metadata is chosen at run time, so the two nodes share the line's output and the media link picks one — the image link is enabled by default but no longer immutable, and `vfe_link_setup()` refuses a second enabled link on the pad. The node keeps its format in the multi-planar form the VFE reads (`active_fmt.fmt.pix_mp`) and translates at the ioctls; `vfe_video_to_line()` replaces `container_of(…, video_out)` and `line->video` is the linked node. The unlinked node must never reach the line: `video_buf_queue()` hands its buffers straight back and `video_start_streaming()` refuses it before anything is flushed. Other VFE hardware files still assume `video_out`, which is why they get no metadata node.
+- **A metadata node is a second video device on the RDI line, not a mode of the image node** (`0007`, 17x VFEs only): `msm_vfeN_metaM`, `META_CAPTURE`, `D4XX`. A vb2 queue has one buffer type and which RDI carries metadata is chosen at run time, so the two nodes share the line's output and the media link picks one — the image link is enabled by default but no longer immutable, and `vfe_link_setup()` refuses a second enabled link on the pad. The node keeps its format in the multi-planar form the VFE reads (`active_fmt.fmt.pix_mp`) and translates at the ioctls; `vfe_video_to_line()` replaces `container_of(…, video_out)` and `line->video` is the linked node. The unlinked node must never reach the line, and the link must be tested **once, with the graph held**: vb2 hands a node's buffers to the driver after `prepare_streaming` and before `start_streaming`, so the media pipeline starts in `video_prepare_streaming()` (which refuses an unlinked node) and stops in `video_unprepare_streaming()`. Testing the link in `buf_queue` and again in `start_streaming` — the first draft — let `media-ctl` flip it in between and strand one node's buffers on the line for the other to use after they were freed (review finding). Other VFE hardware files still assume `video_out`, which is why they get no metadata node.
 
 - **Ubuntu 6.8 compiles the userspace streams API off** (`static bool v4l2_subdev_enable_streams_api` in `v4l2-subdev.c`, false): `S_ROUTING` returns `ENOIOCTLCMD` and the core zeroes the `stream` field of the format ioctls. Enabling it means patching `videodev`, which this port does not do. The in-kernel API works, so the rule is: **never make userspace name a stream.** Every format userspace sets sits on a single-stream pad (CSID source pads, VFE lines), the sensor's routing is fixed by the sensor driver, and which sensor stream an RDI captures is a CSID control (`RDI0 Stream`…`RDI3 Stream`, default RDI N = stream N, read when the RDI starts).
 - **The sensor contract** (README_QCOM.md, *What the sensor has to provide*): `get_frame_desc` with CSI-2 entries gives each stream's VC and DT; `V4L2_SUBDEV_FL_STREAMS` + an active state with routing + `enable_streams`/`disable_streams` gives independent start/stop and per-node controls; `V4L2_CID_LINK_FREQ` or the CAMSS endpoint's `link-frequencies` gives the rate. Each has a fallback, and **the frame-descriptor fallback (RDI N = VC N, DT from the pad's format row) already fits d4xx's streams** when their `vc-id`s are 0..3 — d4xx's present `get_frame_desc` is an untyped placeholder, which the fork treats as absent.
@@ -156,10 +156,31 @@ for the stream an operation acts on (the pinned role, else the sensor's `mux_pad
 `ds5_role_sensor(state, role)` for the sensor behind a role (NULL for `DS5_ROLE_ANY`, which is how
 such a node lists nothing). Per-stream functions (`ds5_configure()`, the exposure helpers) take the
 role as an argument, and the control base is derived where it is used (RGB → `DS5_RGB_CONTROL_BASE`,
-else depth's). `ds5_stream_set(state, sensor, on)` is the stream start/stop body;
-`ds5_mux_s_stream()` only resolves the node's sensor and returns `-EINVAL` for an any-role
-instance, which has no single stream to start. New code must not add a per-instance stream flag
-or cache: an instance serving several streams (the single-instance RB3 model) has no one answer.
+else depth's). `ds5_stream_set(state, sensor, on)` is the stream start/stop body and
+`ds5_stream_set_guarded()` its DFU-admission wrapper; `ds5_mux_s_stream_guarded()` only resolves
+the node's sensor and returns `-EINVAL` for an any-role instance, which has no single stream to
+start. New code must not add a per-instance stream flag or cache: an instance serving several
+streams has no one answer.
+
+**An any-role instance is a whole camera** (RSDEV-15171; the RB3 model, built with
+`CONFIG_VIDEO_D4XX_STREAMS`, which only `qcom/modules/Kbuild` sets). What was per instance
+becomes per stream through helpers that return the old value for a pinned node, so Jetson is
+untouched: `ds5_vc_id(state, role)` (DT `vc-id`, plus the stream's index on an any-role node),
+`ds5_metadata(state, role)` (DT `embedded_metadata_height`; on an any-role node every stream but
+the IMU's, and no `mode0` is required), `ds5_invalidate_stale()` (a reset stales all four
+sensors of an any-role node, which has no sibling to drop the others), and `role_inst[]`, where
+such an instance fills every slot. The mux resolves a pad op through `ds5_mux_sensor(state, pad,
+stream)`: a pinned node answers with its role's sensor on every pad, as it always has
+(`ds5_mux_reply_pad()` keeps the returned pad the role's); an any-role node answers by pad —
+sink pad k stream 0 is sensor k, its stream 1 that sensor's metadata, and on the source pad they
+are streams k−1 and `DS5_MAX_STREAMS`+k−1. That routing is fixed in `ds5_mux_init_state()`;
+`enable_streams`/`disable_streams` run `ds5_stream_set_guarded()` per image stream and do nothing
+for a metadata stream (the camera sends the embedded line with its image); `get_frame_desc`
+lists the seven streams with VC and wire DT. A format is set on a sink pad or the sensor subdev;
+the source pad, a metadata stream and any `TRY` request only report it, because the sensor ops
+apply a `TRY` to the live config and the mux state holds routes, not formats. Any-role code that
+needs `->stream` goes through `ds5_arg_stream()` or sits under the macro: the field does not
+exist on the 5.10/5.15 kernels the same source builds for.
 
 ### Cross-compilation
 

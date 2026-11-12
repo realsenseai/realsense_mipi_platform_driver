@@ -14,8 +14,14 @@ to. The node keeps its format in the multi-planar form the VFE reads and
 translates it at the ioctls, so the capture path is unchanged.
 
 The metadata nodes register after all image nodes, which keeps the image
-nodes' device numbers. The node that is not linked hands its line no
-buffers and cannot start streaming.
+nodes' device numbers.
+
+Two nodes now share one line's buffer list, so the node that is not linked
+must never reach it. vb2 hands the driver a node's buffers after
+prepare_streaming and before start_streaming; the media pipeline therefore
+starts in prepare_streaming, where the link is tested once with the graph
+held, and stops in unprepare_streaming. An unlinked node is refused there,
+before any of its buffers is queued.
 ---
 --- a/camss-vfe-17x.c
 +++ b/camss-vfe-17x.c
@@ -130,7 +136,7 @@ buffers and cannot start streaming.
 +		sd = &vfe->line[i].subdev;
 +
 +		video_meta->ops = &vfe->video_ops;
-+		video_meta->bpl_alignment = 1;
++		video_meta->bpl_alignment = vfe_bpl_align(vfe);
 +		video_meta->line_based = 0;
 +
 +		snprintf(name, ARRAY_SIZE(name), "%s%d_%s%d",
@@ -227,34 +233,99 @@ buffers and cannot start streaming.
  /* -----------------------------------------------------------------------------
   * Helper functions
   */
-@@ -290,6 +300,15 @@ static void video_buf_queue(struct vb2_b
- 	struct camss_buffer *buffer = container_of(vbuf, struct camss_buffer,
- 						   vb);
- 
-+	/*
-+	 * A line with a metadata node has two nodes on one output. Only the
-+	 * linked one hands it buffers; the other cannot start streaming.
-+	 */
-+	if (!media_pad_remote_pad_first(&video->pad)) {
-+		vb2_buffer_done(vb, VB2_BUF_STATE_QUEUED);
-+		return;
-+	}
-+
- 	video->ops->queue_buffer(video, buffer);
+@@ -378,7 +388,19 @@ static int video_stream(struct camss_vid
+ 	return 0;
  }
  
-@@ -384,6 +403,10 @@ static int video_start_streaming(struct
+-static int video_start_streaming(struct vb2_queue *q, unsigned int count)
++/*
++ * video_prepare_streaming - Hold the media graph for a node about to stream
++ * @q: vb2 queue
++ *
++ * A line with a metadata node has two nodes on one output, and only the one
++ * its link is enabled to may hand it buffers. vb2 gives the driver its buffers
++ * after this and before start_streaming, so the pipeline starts here: links
++ * cannot change once it has, and an unlinked node is turned away before any
++ * of its buffers reaches the line.
++ *
++ * Return 0 on success or a negative error code otherwise
++ */
++static int video_prepare_streaming(struct vb2_queue *q)
+ {
+ 	struct camss_video *video = vb2_get_drv_priv(q);
  	struct video_device *vdev = &video->vdev;
- 	int ret;
- 
-+	/* It handed its line no buffer, so there is none to take back */
-+	if (!media_pad_remote_pad_first(&video->pad))
-+		return -EPIPE;
-+
+@@ -387,24 +409,34 @@ static int video_start_streaming(struct
  	ret = video_device_pipeline_alloc_start(vdev);
  	if (ret < 0) {
  		dev_err(video->camss->dev, "Failed to start media pipeline: %d\n", ret);
-@@ -645,6 +668,83 @@ static int video_s_fmt(struct file *file
+-		goto flush_buffers;
++		return ret;
+ 	}
+ 
+-	ret = video_check_format(video);
+-	if (ret < 0)
+-		goto error;
+-
+-	ret = video_stream(video, 1, NULL);
+-	if (ret < 0)
+-		goto error;
++	if (!media_pad_remote_pad_first(&video->pad)) {
++		video_device_pipeline_stop(vdev);
++		return -EPIPE;
++	}
+ 
+ 	return 0;
++}
++
++static void video_unprepare_streaming(struct vb2_queue *q)
++{
++	struct camss_video *video = vb2_get_drv_priv(q);
++
++	video_device_pipeline_stop(&video->vdev);
++}
+ 
+-error:
+-	video_device_pipeline_stop(vdev);
++static int video_start_streaming(struct vb2_queue *q, unsigned int count)
++{
++	struct camss_video *video = vb2_get_drv_priv(q);
++	int ret;
+ 
+-flush_buffers:
+-	video->ops->flush_buffers(video, VB2_BUF_STATE_QUEUED);
++	ret = video_check_format(video);
++	if (!ret)
++		ret = video_stream(video, 1, NULL);
++	if (ret < 0)
++		video->ops->flush_buffers(video, VB2_BUF_STATE_QUEUED);
+ 
+ 	return ret;
+ }
+@@ -412,12 +444,9 @@ flush_buffers:
+ static void video_stop_streaming(struct vb2_queue *q)
+ {
+ 	struct camss_video *video = vb2_get_drv_priv(q);
+-	struct video_device *vdev = &video->vdev;
+ 
+ 	video_stream(video, 0, NULL);
+ 
+-	video_device_pipeline_stop(vdev);
+-
+ 	video->ops->flush_buffers(video, VB2_BUF_STATE_ERROR);
+ }
+ 
+@@ -428,8 +457,10 @@ static const struct vb2_ops msm_video_vb
+ 	.buf_init        = video_buf_init,
+ 	.buf_prepare     = video_buf_prepare,
+ 	.buf_queue       = video_buf_queue,
++	.prepare_streaming = video_prepare_streaming,
+ 	.start_streaming = video_start_streaming,
+ 	.stop_streaming  = video_stop_streaming,
++	.unprepare_streaming = video_unprepare_streaming,
+ };
+ 
+ /* -----------------------------------------------------------------------------
+@@ -645,6 +676,86 @@ static int video_s_fmt(struct file *file
  	return 0;
  }
  
@@ -325,12 +396,15 @@ buffers and cannot start streaming.
 +static int video_s_fmt_meta(struct file *file, void *fh, struct v4l2_format *f)
 +{
 +	struct camss_video *video = video_drvdata(file);
++	struct v4l2_format fmt;
 +
 +	if (vb2_is_busy(&video->vb2_q))
 +		return -EBUSY;
 +
-+	video_meta_fmt(video, &video->active_fmt);
-+	video_meta_fill(&video->active_fmt, f);
++	/* Through a copy: the size last set is read from the active format */
++	video_meta_fmt(video, &fmt);
++	video->active_fmt = fmt;
++	video_meta_fill(&fmt, f);
 +
 +	return 0;
 +}
@@ -338,7 +412,7 @@ buffers and cannot start streaming.
  static int video_enum_input(struct file *file, void *fh,
  			    struct v4l2_input *input)
  {
-@@ -692,6 +792,25 @@ static const struct v4l2_ioctl_ops msm_v
+@@ -692,6 +803,25 @@ static const struct v4l2_ioctl_ops msm_v
  	.vidioc_unsubscribe_event	= v4l2_event_unsubscribe,
  };
  
@@ -364,7 +438,7 @@ buffers and cannot start streaming.
  /* -----------------------------------------------------------------------------
   * V4L2 file operations
   */
-@@ -808,6 +927,12 @@ static int msm_video_init_format(struct
+@@ -808,6 +938,12 @@ static int msm_video_init_format(struct
  		},
  	};
  
@@ -377,7 +451,7 @@ buffers and cannot start streaming.
  	ret = __video_try_fmt(video, &format);
  	if (ret < 0)
  		return ret;
-@@ -832,6 +957,7 @@ static int msm_video_init_format(struct
+@@ -832,6 +968,7 @@ static int msm_video_init_format(struct
  int msm_video_register(struct camss_video *video, struct v4l2_device *v4l2_dev,
  		       const char *name)
  {
@@ -385,7 +459,7 @@ buffers and cannot start streaming.
  	struct media_pad *pad = &video->pad;
  	struct video_device *vdev;
  	struct vb2_queue *q;
-@@ -839,13 +965,18 @@ int msm_video_register(struct camss_vide
+@@ -839,13 +976,18 @@ int msm_video_register(struct camss_vide
  
  	vdev = &video->vdev;
  
@@ -405,7 +479,7 @@ buffers and cannot start streaming.
  	q->io_modes = VB2_DMABUF | VB2_MMAP | VB2_READ;
  	q->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
  	q->buf_struct_size = sizeof(struct camss_buffer);
-@@ -877,9 +1008,14 @@ int msm_video_register(struct camss_vide
+@@ -877,9 +1019,14 @@ int msm_video_register(struct camss_vide
  	v4l2_ctrl_handler_init(&video->ctrl_handler, 16);
  
  	vdev->fops = &msm_vid_fops;

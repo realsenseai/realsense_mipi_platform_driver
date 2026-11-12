@@ -11,7 +11,7 @@ node is opened and no other handle is open on it.
 ---
 --- a/camss-csid.c
 +++ b/camss-csid.c
-@@ -902,6 +902,32 @@ unlock:
+@@ -909,6 +909,32 @@ unlock:
  }
  
  /*

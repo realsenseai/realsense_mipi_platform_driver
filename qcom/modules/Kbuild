@@ -16,6 +16,9 @@ obj-m += max9296.o
 
 ccflags-y += -DCONFIG_VIDEO_D4XX_SERDES
 ccflags-y += -DCONFIG_VIDEO_D4XX_SERDES_MAX9296_ONLY
+# One d4xx instance per camera, its streams told apart through the in-kernel
+# streams API: CAMSS binds one subdev per CSIPHY.
+ccflags-y += -DCONFIG_VIDEO_D4XX_STREAMS
 ccflags-y += -I$(src)/include
 # Compat shims for nvidia/conftest.h and media/camera_common.h. Last on the
 # include path so a real kernel header always wins.
