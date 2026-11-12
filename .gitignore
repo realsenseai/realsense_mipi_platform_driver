@@ -12,3 +12,6 @@ jetpack_version
 /.d4xx_build_version
 /log
 config.ini
+/sources_qcom_*
+/qcom-gcc
+qcom_version

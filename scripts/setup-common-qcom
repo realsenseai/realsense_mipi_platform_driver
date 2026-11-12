@@ -1,0 +1,107 @@
+#!/bin/bash
+# Shared settings for the Qualcomm build flow (RSDEV-15171).
+#
+# Target: Ubuntu 24.04 LTS on the RB3 Gen 2 Vision Kit (QCS6490). That is the
+# newest Ubuntu Canonical publishes for this board - the 25.10 and 26.04
+# Qualcomm images are IQ-X only - so the kernel is linux-qcom 6.8.
+#
+# Mirrors scripts/setup-common, which serves the NVIDIA Jetson flow, but is
+# deliberately separate: the Jetson flow syncs a dozen NVIDIA repos keyed by
+# L4T revision, and folding both into one file would make every JetPack change
+# a Qualcomm regression risk.
+#
+# Nothing here patches the running kernel. Everything we ship is out-of-tree
+# (see README_QCOM.md), so the board keeps Canonical's signed, updated kernel.
+
+SUPPORTED_QCOM="noble"
+
+QCOM_INPUT_VERSION="$1"
+if [[ -z "${QCOM_INPUT_VERSION}" || "$1" == "-h" ]]; then
+    QCOM_INPUT_VERSION="${SUPPORTED_QCOM%%,*}"
+    if [[ -f "qcom_version" ]]; then
+        QCOM_INPUT_VERSION="$(cat qcom_version)"
+    fi
+fi
+
+if [[ $1 == "-h" ]]; then
+    echo "supported Ubuntu series: ${SUPPORTED_QCOM}"
+    echo "pre-selected/active: ${QCOM_INPUT_VERSION:-none}"
+    exit 0
+fi
+
+export ARCH=arm64
+export QCOM_INPUT_VERSION
+export QCOM_VERSION="${QCOM_INPUT_VERSION}"
+
+# SerDes donor: max9295/max9296 have no standalone copy in this repo, they are
+# NVIDIA sources plus nvidia-oot/6.0/0002. Replaying that same carrier here
+# keeps one source of truth across all platforms.
+NVOOT_REPO="https://gitlab.com/nvidia/nv-tegra/linux-nv-oot.git"
+
+case "${QCOM_INPUT_VERSION}" in
+    noble)
+        # Canonical's kernel for the Dragonwing boards. Pinned: `reset` returns
+        # here, and the ABI our modules are checked against is this one.
+        UBUNTU_SERIES="noble"
+        QCOM_KERNEL_SRCPKG="linux-qcom"
+        QCOM_KERNEL_VER="6.8.0-1084.89"
+        QCOM_KERNEL_UPSTREAM="6.8.0"
+        NVOOT_TAG="jetson_36.4.3"
+        NVOOT_PATCH_DIR="nvidia-oot/6.0"
+        ;;
+    *)
+        echo "Unsupported series ${QCOM_INPUT_VERSION}! Supported: ${SUPPORTED_QCOM}"
+        exit 1
+        ;;
+esac
+
+LP_SRC="https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/${QCOM_KERNEL_SRCPKG}/${QCOM_KERNEL_VER}"
+export QCOM_KERNEL_ORIG_URL="${LP_SRC}/${QCOM_KERNEL_SRCPKG}_${QCOM_KERNEL_UPSTREAM}.orig.tar.gz"
+export QCOM_KERNEL_DIFF_URL="${LP_SRC}/${QCOM_KERNEL_SRCPKG}_${QCOM_KERNEL_VER}.diff.gz"
+export UBUNTU_SERIES QCOM_KERNEL_SRCPKG QCOM_KERNEL_VER QCOM_KERNEL_UPSTREAM
+export NVOOT_REPO NVOOT_TAG NVOOT_PATCH_DIR
+
+export BUILD_SRCS="sources_qcom_${QCOM_INPUT_VERSION}"
+export QCOM_KERNEL_SRC="${BUILD_SRCS}/kernel"
+export QCOM_NVOOT_SRC="${BUILD_SRCS}/nv-oot"
+export QCOM_MODULES_SRC="${BUILD_SRCS}/modules"
+
+# Host cross-build config. This is a COMPILE GATE only - the board builds these
+# modules through DKMS against its own headers, which is what guarantees the
+# ABI match. Ubuntu generates its config from debian.qcom/config/annotations at
+# package build time, so reproducing it here would buy nothing.
+export QCOM_DEFCONFIG="defconfig"
+
+function version_lt {
+    IFS='.' read -r -a v1 <<< "$1"
+    IFS='.' read -r -a v2 <<< "$2"
+    for i in 0 1 2; do
+        [[ ${v1[i]:-0} -lt ${v2[i]:-0} ]] && return 0
+        [[ ${v1[i]:-0} -gt ${v2[i]:-0} ]] && return 1
+    done
+    return 1
+}
+
+# Cross toolchain. Prefer one already in the tree or on PATH; only download as a
+# last resort. QCOM_TOOLCHAIN_URL is consumed by setup_workspace_qcom.sh.
+export QCOM_GCC_DIR="qcom-gcc"
+export QCOM_TOOLCHAIN_VER="13.3.rel1"
+export QCOM_TOOLCHAIN_URL="https://developer.arm.com/-/media/Files/downloads/gnu/${QCOM_TOOLCHAIN_VER}/binrel/arm-gnu-toolchain-${QCOM_TOOLCHAIN_VER}-x86_64-aarch64-none-linux-gnu.tar.xz"
+
+# Echo the cross-compile prefix to use, or nothing for a native aarch64 build.
+function qcom_cross_compile {
+    [[ $(uname -m) == aarch64 ]] && return 0
+    local devdir="${1:-$PWD}"
+    if [[ -x "${devdir}/${QCOM_GCC_DIR}/bin/aarch64-none-linux-gnu-gcc" ]]; then
+        echo "${devdir}/${QCOM_GCC_DIR}/bin/aarch64-none-linux-gnu-"
+    elif [[ -x "${devdir}/l4t-gcc/7.x/bin/aarch64-none-linux-gnu-gcc" ]]; then
+        # The JetPack 7.x toolchain is the same ARM GNU aarch64-none-linux-gnu
+        # build; reuse it rather than downloading a second copy.
+        echo "${devdir}/l4t-gcc/7.x/bin/aarch64-none-linux-gnu-"
+    elif command -v aarch64-linux-gnu-gcc > /dev/null; then
+        echo "aarch64-linux-gnu-"
+    fi
+}
+
+echo "Ubuntu ${QCOM_INPUT_VERSION} / ${QCOM_KERNEL_SRCPKG} ${QCOM_KERNEL_VER}"
+echo "${QCOM_INPUT_VERSION}" > qcom_version

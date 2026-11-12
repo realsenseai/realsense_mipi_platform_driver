@@ -41,12 +41,30 @@ struct dser_interface;
 struct ser_interface;
 struct ds5_variant;
 
+/* Which SerDes parts this build carries. A board that can only ever have the
+ * MAX9295/MAX9296 pair (the RB3 Gen 2 vision mezzanine) sets
+ * CONFIG_VIDEO_D4XX_SERDES_MAX9296_ONLY and ships two modules instead of five;
+ * every other build carries all of them. Drop the opt-out once no supported
+ * platform needs it - a guard nothing defines is dead code.
+ */
+#ifndef CONFIG_VIDEO_D4XX_SERDES_MAX9296_ONLY
+#define D4XX_HAVE_MAX96712
+#define D4XX_HAVE_MAX96717
+#define D4XX_HAVE_MAX96724
+#endif
+
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 #include <media/max9295.h>
 #include <media/max9296.h>
+#ifdef D4XX_HAVE_MAX96712
 #include <media/max96712.h>
+#endif
+#ifdef D4XX_HAVE_MAX96717
 #include <media/max96717.h>
+#endif
+#ifdef D4XX_HAVE_MAX96724
 #include <media/max96724.h>
+#endif
 #else
 #include <media/gmsl-link.h>
 #define GMSL_CSI_DT_YUV422_8 0x1E
@@ -89,6 +107,11 @@ enum ds5_mux_pad {
 	DS5_MUX_PAD_IMU,
 	DS5_MUX_PAD_COUNT,
 };
+
+/* As an instance's role: DT pinned no stream, so it serves all of them.
+ * Distinct from 0, which a role holds until probe has read the DT.
+ */
+#define DS5_ROLE_ANY	DS5_MUX_PAD_COUNT
 
 enum dfu_fw_state {
 	appIDLE                = 0x0000,
@@ -257,7 +280,8 @@ struct ds5 {
 	struct regmap *regmap;
 	struct regulator *vcc;
 	const struct ds5_variant *variant;
-	int is_depth, is_y8, is_rgb, is_imu;
+	/* The stream DT cam-type pins this instance to, else DS5_ROLE_ANY. */
+	enum ds5_mux_pad role;
 	bool metadata_enabled;
 	int aggregated;
 	int reset_ref_ds5;
@@ -266,7 +290,6 @@ struct ds5 {
 	/* D58x camera behind a PIXEL-mode deserializer - requires strict
 	 * Scheduling and data sizes in HKR side */
 	bool d58x_pixel_mode;
-	u16 control_base;
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	struct gmsl_link_ctx g_ctx;
 	/* GMSL link this camera is wired to. From the serializer node's

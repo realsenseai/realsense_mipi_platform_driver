@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Linux kernel driver and userspace utilities for Intel RealSense D4XX series 3D depth cameras operating over GMSL (Gigabit Multimedia Serial Link) MIPI CSI-2 interface on NVIDIA Jetson platforms. Licensed under GPL-2.0.
 
-**Supported platforms:** Jetson AGX Xavier (JetPack 5.0.2, 5.1.2) and AGX Orin (JetPack 6.0, 6.1, 6.2, 6.2.1) and AGX Thor (JetPack 7.0, 7.1)
+**Supported platforms:** Jetson AGX Xavier (JetPack 5.0.2, 5.1.2) and AGX Orin (JetPack 6.0, 6.1, 6.2, 6.2.1) and AGX Thor (JetPack 7.0, 7.1). Qualcomm QCS6490 / RB3 Gen 2 on **Ubuntu 24.04** is **build-only** so far (RSDEV-15171) — it compiles, links and packages as DKMS, it does not stream.
 **Supported cameras:** D457 (primary), D401, D40x, D41x, D43x, D45x series
 
 ## Build Commands
@@ -37,6 +37,33 @@ CI runs these three steps for each JetPack version (see `.github/workflows/build
 `reset` must come **before** the version — the arg loop `break`s on the first non-flag token, so `apply_patches.sh <version> reset` silently runs an *apply* instead (and then fails every hunk against an already-patched tree).
 The `--one-cam`/`--dual-cam` options only apply to JetPack 5.0.2. The target version is the trailing argv if given, otherwise the `jetpack_version` file (written by `setup_workspace.sh`) — so a one-off `./apply_patches.sh reset 5.1.2` does not disturb the active version. **Non-interactive:** `apply_patches.sh` prompts via `read` when a sub-repo has local changes and, under `set -e`, aborts (rc=1) on EOF — pipe confirmations with `yes '' | ./apply_patches.sh [reset]` when running headless.
 
+### Qualcomm (QCS6490 / RB3 Gen 2) build
+
+Targets **Ubuntu 24.04 LTS** (`linux-qcom` 6.8) — the newest Ubuntu Canonical publishes for this board; the 25.10/26.04 Qualcomm images are IQ-X only. A parallel flow: `setup_workspace_qcom.sh` / `apply_patches_qcom.sh` / `build_all_qcom.sh` + `scripts/setup-common-qcom`, shims and patches under `qcom/`, details in `README_QCOM.md`. Deliberately **separate** from the Jetson scripts, not a mode of them, so a JetPack change cannot regress it (and vice versa). `reset` comes before the series here too, but unlike `apply_patches.sh` the apply path resets first and is non-interactive, so re-running it is idempotent.
+
+**The CAMSS fork (`qcom/noble/camss/0001`–`0007`) is written without hardware: compile-tested only.** What it rests on:
+
+- **One capture path takes one `(VC, DT)` on this chip, so image and embedded metadata never share a buffer** — unlike the Tegra VI, which hands the embedded lines over in a side buffer of the same channel. Checked in Qualcomm's vendor driver (`cam_ife_csid_core.c`): the register that adds a second VC/DT to a path, `csid_rdi_multi_vcdt_cfg0`, is written only for Titan 480/570/580, and sc7280's CSID (`qcom,csid165_204`) uses the 175_200 table, which has none. A full CSID has 3 RDIs, a lite one 4. **Seven nodes per camera therefore need two CSIDs on the camera's CSIPHY** (`0006`; the vendor driver does this for dual-IFE, CAMSS never has) — a lite pair for the four images and a full pair for the three metadata streams. Do not look for a way to split one buffer; there is no buffer to split.
+- **A metadata node is a second video device on the RDI line, not a mode of the image node** (`0007`, 17x VFEs only): `msm_vfeN_metaM`, `META_CAPTURE`, `D4XX`. A vb2 queue has one buffer type and which RDI carries metadata is chosen at run time, so the two nodes share the line's output and the media link picks one — the image link is enabled by default but no longer immutable, and `vfe_link_setup()` refuses a second enabled link on the pad. The node keeps its format in the multi-planar form the VFE reads (`active_fmt.fmt.pix_mp`) and translates at the ioctls; `vfe_video_to_line()` replaces `container_of(…, video_out)` and `line->video` is the linked node. The unlinked node must never reach the line, and the link must be tested **once, with the graph held**: vb2 hands a node's buffers to the driver after `prepare_streaming` and before `start_streaming`, so the media pipeline starts in `video_prepare_streaming()` (which refuses an unlinked node) and stops in `video_unprepare_streaming()`. Testing the link in `buf_queue` and again in `start_streaming` — the first draft — let `media-ctl` flip it in between and strand one node's buffers on the line for the other to use after they were freed (review finding). Other VFE hardware files still assume `video_out`, which is why they get no metadata node.
+
+- **Ubuntu 6.8 compiles the userspace streams API off** (`static bool v4l2_subdev_enable_streams_api` in `v4l2-subdev.c`, false): `S_ROUTING` returns `ENOIOCTLCMD` and the core zeroes the `stream` field of the format ioctls. Enabling it means patching `videodev`, which this port does not do. The in-kernel API works, so the rule is: **never make userspace name a stream.** Every format userspace sets sits on a single-stream pad (CSID source pads, VFE lines), the sensor's routing is fixed by the sensor driver, and which sensor stream an RDI captures is a CSID control (`RDI0 Stream`…`RDI3 Stream`, default RDI N = stream N, read when the RDI starts).
+- **The sensor contract** (README_QCOM.md, *What the sensor has to provide*): `get_frame_desc` with CSI-2 entries gives each stream's VC and DT; `V4L2_SUBDEV_FL_STREAMS` + an active state with routing + `enable_streams`/`disable_streams` gives independent start/stop and per-node controls; `V4L2_CID_LINK_FREQ` or the CAMSS endpoint's `link-frequencies` gives the rate. Each has a fallback, and **the frame-descriptor fallback (RDI N = VC N, DT from the pad's format row) already fits d4xx's streams** when their `vc-id`s are 0..3 — d4xx's present `get_frame_desc` is an untyped placeholder, which the fork treats as absent.
+- **Two 6.8 core traps the fork guards against.** `v4l2_subdev_call(…, s_stream, …)` WARNs and does nothing on a second start of the same subdev, and the stock driver called it on the shared CSID, CSIPHY and sensor from every video node — hence `msm_csid_stream()` / `msm_csiphy_stream()`, which count their users. And `v4l2_subdev_enable_streams()` dereferences the active state without a NULL check, so a subdev with the op but no state oopses it: test `sd->active_state` before taking that path, as `csiphy_sensor_stream()` does.
+- **A CSID format row's data type is only a default** — the frame descriptor wins — and its decode format matters only to the test generator, since an RDI takes the payload as it is. A media-bus code may have several VFE rows; the node's fourcc picks one and the first is the default, so a new row for an existing code goes **after** the stock one.
+- **The patches are the only carrier of the fork**, cumulative, with paths `a/<file>` relative to the driver directory (`patch -p1`). To change one: copy the pristine `sources_qcom_noble/kernel/drivers/media/platform/qcom/camss`, apply the series up to the patch before it, snapshot, make the change, and write `diff -up --label a/<f> --label b/<f>` per changed file under the patch's description; then re-apply the later patches and regenerate any that no longer apply. Check every stage compiles (`make -C images/qcom-noble M=…/modules/camss modules`), not only the last.
+
+**The RB3 device tree is an overlay, `qcom/dts/qcs6490-rb3gen2-vision-mezz-d4xx.dtso`, and it is initial**: the node shapes and the properties the drivers parse are the Jetson MAX9296 overlay's, but five board values (I2C bus, MAX9296A address, reset GPIO, CSIPHY index, lane order) were written without the mezzanine schematic and are marked `BOARD` in the file. Keep new board facts in that file's `BOARD` list rather than scattering them. It is plain `/plugin/` DTS with no preprocessor, compiled by `build_all_qcom.sh` with `dtc -@`; check a change by applying it to the shipped vision-mezzanine DTB with `fdtoverlay` (extract the DTB from the Ubuntu image's `dtb.bin`; its `__symbols__` carry `cci1_i2c0`, `tlmm`, `camss`). The shipped DTB shows only the kit's IMX577, on `cci1_i2c1`: **which bus the MAX9296A is on is not documented**, so "the camera is on CCI" is an assumption until the schematic or an `i2cdetect` says so.
+
+Five rules the build flow rests on:
+
+- **Nothing is patched into the kernel.** Every consumer is out-of-tree, so the board keeps Canonical's signed, updated kernel. The RealSense private media-bus codes live in `qcom/compat-include/media/rs-formats.h`, force-included into both module trees — **not** a UAPI patch, because Z16/Y8I/Y12I/GREY/SGRBG16 are in 6.8 (Y16I is not; the header defines it) and librealsense takes its fourccs from its own headers. Do not reintroduce a kernel patch here.
+- **CAMSS is forked out-of-tree, not patched in.** `CONFIG_VIDEO_QCOM_CAMSS` is `tristate`, every object is local to its directory and it includes only public kernel headers, so the fork builds OOT. DKMS installs to `updates/dkms/`, which `depmod` prefers over `kernel/`, so it replaces the stock `qcom-camss.ko` with no blacklist and no kernel-package change. `qcom/modules/camss.Kbuild` hardcodes the object list and `apply_patches_qcom.sh` warns when the kernel's Makefile drifts from it (6.8 and 6.18 already differ).
+- **Metadata needs no kernel change here, unlike Jetson.** Tegra's VI has one channel per stream, so metadata meant teaching the VI *core* to make an extra one. CAMSS registers a `camss_video` per `vfe_line`, so **every RDI is already its own `/dev/videoN`**; metadata is just another `(VC, DT)` → RDI route. That is why the whole port stays out-of-tree.
+- **Stay on 6.8 for the VC mapping.** Ubuntu's 6.8 CAMSS passes the loop index as the virtual channel (`__csid_configure_rdi_stream(csid, enable, i)`), giving pad N → RDI N → VC N with pad N's format supplying the data type — exactly what our four streams need. Mainline later decoupled port index from VC and passes a hardcoded `0`; `qcom-6.18.y` and `qcom-7.3` still do. Moving to a newer kernel **re-introduces** VC work.
+- **No second copy of the SerDes sources.** `max9295.c`/`max9296.c` exist in this repo only as `nvidia-oot/6.0/0002`; `apply_patches_qcom.sh` replays that carrier onto a pinned `linux-nv-oot` donor and symlinks the result. Never materialise a `qcom/` copy. `CONFIG_VIDEO_D4XX_SERDES_MAX9296_ONLY` (set only by `qcom/modules/Kbuild`) drops the MAX96712/96717/96724 tables and their DT branches; the `D4XX_HAVE_MAX9671x` guards in `d4xx.h` default all of them **on**, so every other platform is untouched. Comparison sites go through `ds5_{dser,ser}_is_max96712/96724/96717()`, which compile to `false` for an absent part — add new ones there rather than open-coding an `ops ==` test. That gating also means we build no `max96712.ko`/`max96717.ko`, so the in-tree drivers of those names cannot collide; enabling the full set would require disabling `CONFIG_VIDEO_MAX96712`/`CONFIG_VIDEO_MAX96717`.
+
+The host cross-build is a **compile gate only** (arm64 `defconfig` + `modules_prepare`); the `.deb`s carry source and the board rebuilds through DKMS against its own `linux-headers-qcom`, which is what guarantees the ABI match. Off-Tegra shims live in `qcom/compat-include/`: the SerDes sources reference no symbol *declared* by NVIDIA's `camera_common.h` — what they use is its transitive includes — so that shim is just that include subset. `msleep_range()` is also a `camera_common.h` helper, and `d4xx_main.c` defines it whenever that header is absent, not only in the 5.15.136–147 window.
+
 ### Deploy to Jetson
 
 `scripts/deploy_kernel.sh` is the deploy path for **all** JetPack versions (there is no `deploy_kernel_6.2.sh`). It packages the modules, copies them to the target, updates `/boot/<REMOTE_BOOT_FOLDER>` and reboots:
@@ -54,7 +81,8 @@ On JetPack 5.x, `install_to_kernel.sh` refuses to install a kernel `Image` whose
 
 Tests run on-device using pytest (Python 3). Located in `test/`.
 
-**New tests are not added to this repo.** Driver test coverage lives in the `fw_tests` suite of the `perc_hw_fw-rs400` repo (`DS5_B0_DEV/fw_tests/`), which the PR check's Jenkins `test_driver` job runs. `test/standalone_tests/` holds manual, on-rig tools only, and no CI runs them. `test/host/` (RSDEV-15925, `python3 test/host/<test>.py`, no CI either) compiles text slices of `d4xx_main.c` against stubs under `gcc -Werror`, so a new call anywhere in a sliced range (the start/end markers at the top of `test_d4xx_stop_cleanup.py`) needs a stub there.
+**New tests are not added to this repo.** Driver test coverage lives in the `fw_tests` suite of the `perc_hw_fw-rs400` repo (`DS5_B0_DEV/fw_tests/`), which the PR check's Jenkins `test_driver` job runs. `test/standalone_tests/` holds manual, on-rig tools only, and no CI runs them. `test/host/` (RSDEV-15925, `python3 test/host/<test>.py`, no CI either) compiles text slices of `d4xx_main.c` against stubs under `gcc -Werror`, so a new call anywhere in a sliced range (the start/end markers at the top of `test_d4xx_stop_cleanup.py`) needs a stub there. A change to `struct ds5` fields those ranges read needs the stub struct changed
+with it: run all of `test/host/` after any such edit.
 
 ```bash
 cd test/standalone_tests
@@ -120,6 +148,41 @@ on every pad, to the sensor of its DT `cam-type` (Depth/Y8/RGB/IMU), which bound
 lock. A mux without a `cam-type` lists nothing — it has no frame sizes or settable format either,
 and every shipped DT sets one. The former combined IR-then-depth listing repeated formats and cut
 off any past the IR + depth count (RSDEV-13306).
+
+**The stream an instance serves is `state->role`, an `enum ds5_mux_pad`, and code takes it as a
+parameter** (RSDEV-15178). Probe sets it from DT `cam-type`; `DS5_ROLE_ANY` (= `DS5_MUX_PAD_COUNT`)
+means DT pinned none, and is deliberately not 0, the value the field holds until probe has read
+the DT. Three helpers are the only readers of that distinction: `ds5_serves(state, role)` for
+camera-owner work (true for the role's instance and for an any-role one), `ds5_role(state, sensor)`
+for the stream an operation acts on (the pinned role, else the sensor's `mux_pad`), and
+`ds5_role_sensor(state, role)` for the sensor behind a role (NULL for `DS5_ROLE_ANY`, which is how
+such a node lists nothing). Per-stream functions (`ds5_configure()`, the exposure helpers) take the
+role as an argument, and the control base is derived where it is used (RGB → `DS5_RGB_CONTROL_BASE`,
+else depth's). `ds5_stream_set(state, sensor, on)` is the stream start/stop body and
+`ds5_stream_set_guarded()` its DFU-admission wrapper; `ds5_mux_s_stream_guarded()` only resolves
+the node's sensor and returns `-EINVAL` for an any-role instance, which has no single stream to
+start. New code must not add a per-instance stream flag or cache: an instance serving several
+streams has no one answer.
+
+**An any-role instance is a whole camera** (RSDEV-15171; the RB3 model, built with
+`CONFIG_VIDEO_D4XX_STREAMS`, which only `qcom/modules/Kbuild` sets). What was per instance
+becomes per stream through helpers that return the old value for a pinned node, so Jetson is
+untouched: `ds5_vc_id(state, role)` (DT `vc-id`, plus the stream's index on an any-role node),
+`ds5_metadata(state, role)` (DT `embedded_metadata_height`; on an any-role node every stream but
+the IMU's, and no `mode0` is required), `ds5_invalidate_stale()` (a reset stales all four
+sensors of an any-role node, which has no sibling to drop the others), and `role_inst[]`, where
+such an instance fills every slot. The mux resolves a pad op through `ds5_mux_sensor(state, pad,
+stream)`: a pinned node answers with its role's sensor on every pad, as it always has
+(`ds5_mux_reply_pad()` keeps the returned pad the role's); an any-role node answers by pad —
+sink pad k stream 0 is sensor k, its stream 1 that sensor's metadata, and on the source pad they
+are streams k−1 and `DS5_MAX_STREAMS`+k−1. That routing is fixed in `ds5_mux_init_state()`;
+`enable_streams`/`disable_streams` run `ds5_stream_set_guarded()` per image stream and do nothing
+for a metadata stream (the camera sends the embedded line with its image); `get_frame_desc`
+lists the seven streams with VC and wire DT. A format is set on a sink pad or the sensor subdev;
+the source pad, a metadata stream and any `TRY` request only report it, because the sensor ops
+apply a `TRY` to the live config and the mux state holds routes, not formats. Any-role code that
+needs `->stream` goes through `ds5_arg_stream()` or sits under the macro: the field does not
+exist on the 5.10/5.15 kernels the same source builds for.
 
 ### Cross-compilation
 
