@@ -151,6 +151,17 @@ mapping an mbus code to DT `0x12`, a VFE RDI row, and the per-RDI VC selection
 All of that lives inside the CAMSS module, which is why the whole port stays
 out-of-tree.
 
+**The metadata does not share a buffer with its image here.** On Jetson the VI
+captures the embedded lines into a side buffer of the same channel, and our
+patch splits that into a second video device. On this chip the CSID
+demultiplexes by data type before any buffer exists, and one path captures
+exactly one `(VC, DT)`: Qualcomm's own driver programs a second VC/DT into a
+path (`csid_rdi_multi_vcdt_cfg0`) only on Titan 480/570/580, and the sc7280
+CSID (`qcom,csid165_204`, the 175_200 register table) has no such register. So
+the seven streams of a D4XX camera need seven paths, which is what patches
+`0006` and `0007` provide: two CSIDs on the camera's CSIPHY, and a metadata
+node beside each image node.
+
 ## The CAMSS fork
 
 `CONFIG_VIDEO_QCOM_CAMSS` is `tristate`, every object is local to its own
@@ -169,7 +180,7 @@ caught 6.8 and 6.18 differing).
 
 ### What the fork changes
 
-Five patches in `qcom/noble/camss/`, applied in order. None has run on
+Seven patches in `qcom/noble/camss/`, applied in order. None has run on
 hardware.
 
 | Patch | What it does |
@@ -179,6 +190,8 @@ hardware.
 | `0003` independent streams | A video node starts and stops only its own CSID pad and its own sensor stream. The CSIPHY lanes stay up from the first stream to the last. |
 | `0004` controls | A video node exposes the controls of the sensor stream it captures, as the Tegra VI does. Rebuilt when the node is opened with no other handle on it. |
 | `0005` bring-up aids | Link frequency from the CAMSS endpoint's `link-frequencies` when the sensor reports none; `dev_dbg` lines for lanes, link frequency, per-RDI stream/VC/DT and raw IRQ status at RDI stop. |
+| `0006` several CSIDs | A CSIPHY may be linked to more than one CSID, so a lite CSID (four RDIs) and a full one (three) together capture a camera's seven streams. |
+| `0007` metadata nodes | Each RDI line of a 17x VFE gets a second video device, `msm_vfeN_metaM`, of type `META_CAPTURE` with the `D4XX` format. The line is linked to its image node or its metadata node, never both. |
 
 **Why not the userspace streams API.** Ubuntu's 6.8 compiles it off:
 `v4l2_subdev_enable_streams_api` is a `static bool` left false in
@@ -209,8 +222,8 @@ single-instance work that builds on the role parameter (RSDEV-15178).
 
 CAMSS does not propagate formats from the sensor, so userspace sets the whole
 graph before the first stream starts — links cannot change while anything
-streams. A sketch for one camera on a lite path (four RDIs); entity numbers
-are placeholders until the device tree exists:
+streams. A sketch for the four image streams of one camera on a lite path;
+entity numbers are placeholders until the device tree exists:
 
 ```bash
 M=/dev/media0
@@ -242,17 +255,40 @@ v4l2-ctl -d /dev/video0 --set-fmt-video=width=848,height=480,pixelformat='Z16 '
 v4l2-ctl -d /dev/v4l-subdevN -c rdi3_stream=4
 ```
 
+The three metadata streams go through a second CSID on the same CSIPHY, onto
+the metadata nodes of a full VFE's lines:
+
+```bash
+media-ctl -d $M -l '"msm_csiphy4":1->"msm_csid0":0[1]'
+media-ctl -d $M -V '"msm_csid0":0[fmt:UYVY8_1X16/848x480]'      # same nominal format
+for n in 0 1 2; do
+    media-ctl -d $M -l "\"msm_csid0\":$((n + 1))->\"msm_vfe0_rdi$n\":0[1]"
+    # the embedded line of stream n: its length in bytes, one line
+    media-ctl -d $M -V "\"msm_csid0\":$((n + 1))[fmt:METADATA_FIXED/68x1]"
+    media-ctl -d $M -V "\"msm_vfe0_rdi$n\":0[fmt:METADATA_FIXED/68x1]"
+    # the line feeds its metadata node instead of its image node
+    media-ctl -d $M -l "\"msm_vfe0_rdi$n\":1->\"msm_vfe0_video$n\":0[0]"
+    media-ctl -d $M -l "\"msm_vfe0_rdi$n\":1->\"msm_vfe0_meta$n\":0[1]"
+done
+```
+
+With no frame descriptor from the sensor, RDI N of that CSID captures VC N in
+data type `0x12` — the metadata of depth, colour and infrared when their
+`vc-id`s are 0, 1 and 2. With one, set `rdiN_stream` to the metadata streams
+it lists. The 68-byte line length is d4xx's payload size on Jetson and has to
+be confirmed on the wire.
+
 Open a video node only after its links are set: that is when it takes its
 controls.
 
 ### Limits of the fork
 
-- **One CSID per CSIPHY**, so a camera gets four RDIs on a lite path
-  (CSID 3/4 → VFE 3/4) and three on a full one. Four image streams fit a lite
-  path; their three metadata streams do not fit beside them.
-- **Metadata is a capture node, not a metadata node.** An RDI set to the
-  `0x12` stream delivers the embedded lines as a `D4XX`-fourcc image.
-  librealsense's MIPI backend expects `V4L2_BUF_TYPE_META_CAPTURE`.
+- **Seven nodes cost a camera two CSID/VFE pairs**, a lite one and a full one.
+  The SoC has two lite and three full, so two cameras leave one full pair for
+  the board's own sensors.
+- **Two CSIDs on one CSIPHY is taken from the vendor driver, not seen
+  working.** Qualcomm's driver points two CSIDs at one sensor for dual-IFE;
+  CAMSS has never done it, and this board is where it gets proven.
 - **`bytesused` is the full buffer**, as on Jetson, for variable-length frames.
 - **BGGR10P stride.** The D401 passthrough line is 1612 bytes for 1288 pixels;
   the node reports 1616 (CAMSS aligns lines to 16), while the RDI writes the
@@ -261,6 +297,8 @@ controls.
   the video node does not have.
 - **Only gen2 CSIDs** (sc7280 among them) configure one RDI at a time. Other
   revisions keep the stock behaviour of configuring all linked RDIs together.
+- **Metadata nodes exist only on 17x VFEs** (sc7280 among them); the other VFE
+  hardware files assume one node per line.
 
 ## Porting shims
 
@@ -300,10 +338,11 @@ header is absent rather than only in the 5.15.136–147 window.
    streams (*What the sensor has to provide*). d4xx's side — one instance, the
    streams routing, `enable_streams`, a CSI-2 frame descriptor — is not
    written.
-4. **Concurrency budget.** A CSID exposes 4 source streams, a VFE 3 lines
-   (full) or 4 (lite), and a CSIPHY feeds one CSID. Full D457 parity is 7
-   nodes per camera, so metadata is cut for capacity unless two CSIDs can
-   share a CSIPHY — a hardware question for bring-up.
+4. **Seven nodes per camera rest on two CSIDs sharing a CSIPHY.** A CSID
+   exposes 4 source streams, a VFE 3 lines (full) or 4 (lite), and a path
+   captures one data type, so D457 parity is a lite pair plus a full pair per
+   camera. The fork allows it; whether this board's hardware does is the first
+   thing to prove at bring-up.
 5. **No device tree.** The shipped RB3 vision-mezz DTB has `camss` and both
    `cci` nodes `status = "disabled"` and only CSIPHY3 → IMX577 wired; no GMSL
    nodes at all. (Qualcomm *does* have a GMSL DT model —

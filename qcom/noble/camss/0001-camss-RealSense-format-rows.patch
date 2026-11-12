@@ -1,4 +1,4 @@
-Subject: [PATCH 1/5] media: qcom: camss: add the RealSense format rows
+Subject: [PATCH 1/7] media: qcom: camss: add the RealSense format rows
 
 The gen2 CSID, the sdm845-class CSIPHY and the 845-class VFE RDI tables
 gain the media-bus codes d4xx emits and the pixel formats they stand for:

@@ -1,0 +1,41 @@
+Subject: [PATCH 6/7] media: qcom: camss: csiphy: let a CSIPHY feed several CSIDs
+
+A CSID demultiplexes four streams at most (three RDIs on a full one), and a
+D4XX camera has seven: four images and the embedded metadata of three of
+them, each a (virtual channel, data type) of its own. On this generation of
+the CSID a path captures exactly one data type - the register that adds a
+second VC/DT to a path only exists from Titan 480 on - so the seven streams
+need seven paths.
+
+Allow more than one enabled link from a CSIPHY source pad, so that a lite
+CSID (four RDIs) and a full one (three) can both receive from the camera's
+CSIPHY. Each CSID selects its PHY input on its own, which is how the vendor
+driver runs two CSIDs on one sensor for dual-IFE. The CSIPHY already counts
+its streams across every CSID, and the sensor is started stream by stream.
+
+A CSIPHY with a clock mux that names a single CSID keeps the one-link rule.
+---
+--- a/camss-csiphy.c
++++ b/camss-csiphy.c
+@@ -790,12 +790,18 @@ static int csiphy_link_setup(struct medi
+ 		struct csiphy_device *csiphy;
+ 		struct csid_device *csid;
+ 
+-		if (media_pad_remote_pad_first(local))
+-			return -EBUSY;
+-
+ 		sd = media_entity_to_v4l2_subdev(entity);
+ 		csiphy = v4l2_get_subdevdata(sd);
+ 
++		/*
++		 * A CSID demultiplexes four streams at most, so a sensor with
++		 * more needs several CSIDs on its CSIPHY, each taking its own
++		 * share. Only a CSIPHY whose clock mux names one CSID is held
++		 * to a single link.
++		 */
++		if (csiphy->base_clk_mux && media_pad_remote_pad_first(local))
++			return -EBUSY;
++
+ 		sd = media_entity_to_v4l2_subdev(remote->entity);
+ 		csid = v4l2_get_subdevdata(sd);
+ 

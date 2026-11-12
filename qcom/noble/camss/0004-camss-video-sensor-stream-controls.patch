@@ -1,4 +1,4 @@
-Subject: [PATCH 4/5] media: qcom: camss: video: expose the sensor stream's controls
+Subject: [PATCH 4/7] media: qcom: camss: video: expose the sensor stream's controls
 
 Applications that drive a camera through its video nodes need the controls
 there, as the Tegra VI provides them. Each video node gets a control

@@ -1,4 +1,4 @@
-Subject: [PATCH 5/5] media: qcom: camss: bring-up aids
+Subject: [PATCH 5/7] media: qcom: camss: bring-up aids
 
  - Link frequency: a sensor behind a deserializer reports neither
    V4L2_CID_LINK_FREQ nor a pixel rate, and the CSIPHY then refuses to

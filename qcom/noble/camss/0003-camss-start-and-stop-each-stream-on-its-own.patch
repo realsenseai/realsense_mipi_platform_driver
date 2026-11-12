@@ -1,4 +1,4 @@
-Subject: [PATCH 3/5] media: qcom: camss: start and stop each stream on its own
+Subject: [PATCH 3/7] media: qcom: camss: start and stop each stream on its own
 
 Every video node called s_stream on the CSID, the CSIPHY and the sensor it
 shares with the other nodes of that sensor. The first start configured all

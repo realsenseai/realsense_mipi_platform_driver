@@ -1,4 +1,4 @@
-Subject: [PATCH 2/5] media: qcom: camss: csid: a format, VC and DT per source pad
+Subject: [PATCH 2/7] media: qcom: camss: csid: a format, VC and DT per source pad
 
 A CSID source pad was a copy of the sink pad: same media-bus code, same
 size, and its RDI captured virtual channel N in the data type of that one
