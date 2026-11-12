@@ -246,39 +246,29 @@ and stream inside the kernel:
   every Jetson node sets it; there is no `mode0` to carry
   `embedded_metadata_height`.
 
-The node, in outline — the CCI bus, CSIPHY number and GPIOs are placeholders
-until the device tree is written against the mezzanine:
+### Device tree
 
-```dts
-d4xx@10 {
-    compatible = "intel,d4xx";
-    reg = <0x10>;
-    /* no cam-type: this instance serves every stream */
-    maxim,gmsl-ser-device = <&ser_a>;
-    maxim,gmsl-dser-device = <&dser>;
-    gmsl-link {
-        /* vc-id is the depth stream's; colour, infrared and IMU follow it */
-        vc-id = <0>; st-vc = <0>; num-lanes = <2>;
-        src-csi-port = "b"; dst-csi-port = "a";
-        serdes-csi-link = "a"; csi-mode = "1x4";
-    };
-    port {
-        d4xx_ep: endpoint { remote-endpoint = <&csiphy4_ep>; };
-    };
-};
+`qcom/dts/qcs6490-rb3gen2-vision-mezz-d4xx.dtso` is an **initial** overlay for
+one camera on GMSL input 1, on top of the vision-mezzanine device tree Ubuntu
+ships. `build_all_qcom.sh` compiles it to `images/qcom-noble/dtbo/`.
 
-&camss {
-    ports {
-        port@4 {
-            csiphy4_ep: endpoint {
-                data-lanes = <0 1 2 3>;
-                link-frequencies = /bits/ 64 <750000000>;   /* the deserializer's output rate */
-                remote-endpoint = <&d4xx_ep>;
-            };
-        };
-    };
-};
-```
+It was written without the mezzanine schematic. What is solid: the node shapes
+and every property the drivers parse are those of the Jetson MAX9296 overlay,
+and the overlay compiles and applies cleanly to the shipped device tree
+(`fdtoverlay` resolves `cci1`, `cci1_i2c0`, `tlmm` and `camss`). What is not:
+five board values, each marked `BOARD` in the file.
+
+| | Value in the file | Where the real one comes from |
+|---|---|---|
+| 1 | I2C bus `cci1_i2c0` | Schematic, or `i2cdetect` on each camera bus with a camera attached |
+| 2 | MAX9296A at `0x48` | Its CFG pins; `i2cdetect` shows it |
+| 3 | Reset GPIO `tlmm 0` | Schematic only |
+| 4 | CSIPHY 4 | Schematic: the board calls the GMSL interfaces CSI4 and CSI5, the SoC has CSIPHY0..4 |
+| 5 | Lanes `0 1 2 3`, clock lane 7 | Schematic; the kit's IMX577 uses the same on CSIPHY3 |
+
+Not in the file at all: power-over-coax enable (if the mezzanine switches it),
+the second GMSL input, and how a `.dtbo` is applied at boot on the Ubuntu
+image, which ships one combined `dtb.bin`.
 
 ### Configuring the graph
 
@@ -383,8 +373,9 @@ header is absent rather than only in the 5.15.136–147 window.
 
 ## Known gaps
 
-1. **Qualcomm CCI caps I2C at 11 B write / 12 B read.** Proven from the shipped
-   DTB: the mezzanine camera sits on `cci1_i2c1`, and the node is
+1. **Qualcomm CCI caps I2C at 11 B write / 12 B read.** The shipped DTB puts
+   the kit's CSI camera (IMX577) on `cci1_i2c1`; which bus the MAX9296A is on
+   is not documented, and we assume a CCI bus too. The node is
    `qcom,sc7280-cci` + `qcom,msm8996-cci` → `cci_v2_data` (the driver stages
    one `CCI_I2C_WRITE` per transfer in a 12-byte buffer, 1 command byte + 11
    data; the queue itself is 64 words deep, so this reads as a driver limit
@@ -406,7 +397,8 @@ header is absent rather than only in the 5.15.136–147 window.
    captures one data type, so D457 parity is a lite pair plus a full pair per
    camera. The fork allows it; whether this board's hardware does is the first
    thing to prove at bring-up.
-5. **No device tree.** The shipped RB3 vision-mezz DTB has `camss` and both
+5. **The device tree is an initial overlay with five unconfirmed board
+   values** (*Device tree*). The shipped RB3 vision-mezz DTB has `camss` and both
    `cci` nodes `status = "disabled"` and only CSIPHY3 → IMX577 wired; no GMSL
    nodes at all. (Qualcomm *does* have a GMSL DT model —
    `qcom,cam-gmsl-deserializer0..3`, `cam-gmsl-sensor0..15` — but only on the
@@ -426,4 +418,5 @@ qcom/modules/Kbuild            d4xx + SerDes out-of-tree wiring
 qcom/modules/camss.Kbuild      CAMSS fork out-of-tree wiring
 qcom/compat-include/           off-Tegra shims + RealSense private formats
 qcom/noble/camss/*.patch       CAMSS fork patches, applied in order
+qcom/dts/*.dtso                device-tree overlays for the RB3 vision kit
 ```

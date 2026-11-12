@@ -136,11 +136,28 @@ echo "=== Packaging DKMS sources (${VERSION}) ==="
 stage_dkms realsense-d4xx  "${MODULES_SRC}/d4xx"  d4xx max9295 max9296
 stage_dkms realsense-camss "${MODULES_SRC}/camss" qcom-camss
 
+# --- Device-tree overlays -----------------------------------------------------
+# Compiled with symbols so they resolve against the labels of the device tree
+# the image ships. They are overlays: no board DTB is built or replaced here.
+if command -v dtc > /dev/null; then
+    echo "=== Compiling device-tree overlays ==="
+    mkdir -p "${OUT}/dtbo"
+    for dtso in "${DEVDIR}"/qcom/dts/*.dtso; do
+        dtc -@ -I dts -O dtb -o "${OUT}/dtbo/$(basename "${dtso%.dtso}").dtbo" "${dtso}"
+    done
+else
+    echo -e "\e[33mdtc not found - skipping the device-tree overlays.\e[0m"
+fi
+
 echo
 echo -e "\e[32mBuild complete.\e[0m Modules:"
 find "${MODULES_SRC}" -name '*.ko' -printf '  %f\n' | sort
 if [[ $MAKE_DEB == 1 ]]; then
     echo "Packages:"
     find "${OUT}/dkms" -name '*.deb' -printf '  %f\n' 2>/dev/null | sort
+fi
+if [[ -d "${OUT}/dtbo" ]]; then
+    echo "Overlays:"
+    find "${OUT}/dtbo" -name '*.dtbo' -printf '  %f\n' | sort
 fi
 echo "Output tree: ${OUT}"
