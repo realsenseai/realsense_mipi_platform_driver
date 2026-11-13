@@ -70,6 +70,8 @@ void max96712_reset_oneshot(struct device *dev);
 /* RSDEV-12608: flush one GMSL link's pixel line buffer after a camera HW reset;
  * called per-link from d4xx's ds5_hw_reset_with_recovery(). */
 void max96712_reset_oneshot_link(struct device *dev, u32 link);
+/* RSDEV-16420: reset_oneshot_link without its settle delay; 0 or -errno. */
+int max96712_trigger_oneshot_link(struct device *dev, u32 link);
 int max96712_setup_link(struct device *dev, struct device *s_dev);
 int max96712_recover_link(struct device *dev, struct device *ser_dev, u32 link);
 int max96712_setup_control(struct device *dev, struct device *s_dev);

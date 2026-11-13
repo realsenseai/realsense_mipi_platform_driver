@@ -10,8 +10,8 @@ slot users before managed resources are released during teardown.
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- drivers/media/i2c/max96712.c | 1390 lines
- 1 file changed, 1347 insertions(+), 43 deletions(-)
+ drivers/media/i2c/max96712.c | 1402 lines
+ 1 file changed, 1359 insertions(+), 43 deletions(-)
 
 diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
 index 8081385f05e72a54c33d64440e8c41b149b2714a..99ee46139d1d9e2f36570dee05a42c6bd29c0322 100644
@@ -665,7 +665,7 @@ index 8081385f05e72a54c33d64440e8c41b149b2714a..99ee46139d1d9e2f36570dee05a42c6b
  	/*set daymode by fault*/
  	dev_info(&client->dev, "%s:  success\n", __func__);
  
-@@ -243,14 +693,869 @@
+@@ -243,14 +693,881 @@
  static int
  max96712_remove(struct i2c_client *client)
  {
@@ -953,6 +953,18 @@ index 8081385f05e72a54c33d64440e8c41b149b2714a..99ee46139d1d9e2f36570dee05a42c6b
 +	max96712_reset_oneshot_link_mask(priv, 1 << link_id);
 +}
 +EXPORT_SYMBOL(max96712_reset_oneshot_link);
++
++/* RSDEV-16420: start a single link's one-shot without the settle delay, for a
++ * caller that waits for the link to come back itself. */
++int max96712_trigger_oneshot_link(struct device *dev, u32 link_id)
++{
++	struct max96712 *priv = dev_get_drvdata(dev);
++
++	if (link_id >= MAX96712_MAX_LINKS)
++		return -EINVAL;
++	return max96712_write_reg(priv, MAX96712_CTRL1_ADDR, 1 << link_id);
++}
++EXPORT_SYMBOL(max96712_trigger_oneshot_link);
 +
 +static int __max96712_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
 +			      u8 data_type2, u32 link, u32 vc_id)
@@ -1537,7 +1549,7 @@ index 8081385f05e72a54c33d64440e8c41b149b2714a..99ee46139d1d9e2f36570dee05a42c6b
  
  static const struct i2c_device_id max96712_id[] = {
  	{ "max96712", 0 },
-@@ -258,7 +1563,7 @@
+@@ -258,7 +1575,7 @@
  };
  
  const struct of_device_id max96712_of_match[] = {
@@ -1546,7 +1558,7 @@ index 8081385f05e72a54c33d64440e8c41b149b2714a..99ee46139d1d9e2f36570dee05a42c6b
  	{ },
  };
  
-@@ -268,6 +1573,7 @@
+@@ -268,6 +1585,7 @@
  	.driver = {
  		.name = "max96712",
  		.owner = THIS_MODULE,

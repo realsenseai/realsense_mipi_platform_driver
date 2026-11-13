@@ -335,8 +335,11 @@ struct ds5_dev {
 
 	/* Cold-bring-up flush request for this camera's GMSL link: the first
 	 * stream on a link the deser already served for another camera wedges
-	 * (VI discards every frame) until a one-shot. Guarded by lock. */
+	 * (VI discards every frame) until a one-shot. Set and cleared under
+	 * lock; consumed by xchg() under link_flush_lock. */
 	bool link_flush_pending;
+	/* Held across the cold flush; every stream start passes it first. */
+	struct mutex link_flush_lock;
 #endif
 
 	/* Pointer to the primary DS5 struct */
