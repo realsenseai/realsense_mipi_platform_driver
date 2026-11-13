@@ -72,6 +72,9 @@ struct dser_interface {
 	 * Must not be called while the link has live streams.
 	 */
 	void (*reset_oneshot_link)(struct device *dev, u32 link);
+	/* Optional - reset_oneshot_link() without its settle delay; the caller
+	 * waits for the link to come back. */
+	int (*trigger_oneshot_link)(struct device *dev, u32 link);
 	void (*retrigger_datapath)(struct device *dev);
 
 	/* Setup and control */
@@ -509,6 +512,7 @@ static void ds5_init_global_slots_once(void)
 	for (i = 0; i < MAX_DS5_NUM; i++) {
 		mutex_init(&ds5_inited[i].lock);
 		mutex_init(&ds5_inited[i].hwmc_lock);
+		mutex_init(&ds5_inited[i].link_flush_lock);
 	}
 
 	ds5_slots_inited = true;
@@ -548,6 +552,7 @@ static const struct dser_interface max96712_interface = {
 	.release_pipe = max96712_release_pipe,
 	.reset_oneshot = max96712_reset_oneshot,
 	.reset_oneshot_link = max96712_reset_oneshot_link,
+	.trigger_oneshot_link = max96712_trigger_oneshot_link,
 	.setup_link = max96712_setup_link,
 	.setup_control = max96712_setup_control,
 	.reset_control = max96712_reset_control,
@@ -717,7 +722,8 @@ static inline void msleep_range(unsigned int delay_base)
  * "write" describe the lock, not the direction of the I2C command.
  * Neither semaphore is held across the whole firmware download.
  *
- * Lock order: state->lock -> maintenance_sem -> serdes_lock__ -> io_sem.
+ * Lock order: state->lock -> maintenance_sem -> serdes_lock__ -> io_sem;
+ * the cold link flush takes ds5_dev->link_flush_lock just before io_sem.
  * Skip locks that the current path does not use.
  */
 static DECLARE_RWSEM(ds5_maintenance_sem);
@@ -8273,22 +8279,77 @@ static int ds5_mux_s_frame_interval(struct v4l2_subdev *sd,
 }
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
-/* RSDSO-21786: fire the link flush at most once per cold bring-up. The flag is
- * consumed under ds5_dev->lock; the flush itself runs outside it. */
+/* The one-shot drops the link ~0.6 ms after the CTRL1 write for ~40-45 ms. */
+#define DS5_LINK_FLUSH_MIN_DOWN_MS	36
+#define DS5_LINK_FLUSH_MAX_DOWN_MS	100
+#define DS5_LINK_FLUSH_POLL_US		2000
+
+/* Wait, under the caller's ds5_io_sem write hold, until the camera answers
+ * again over the reset link. ds5_read_poll() would take ds5_io_sem for read,
+ * so the probe calls regmap_raw_read() directly.
+ */
+static void ds5_wait_link_up(struct ds5 *state, ktime_t start)
+{
+	s64 down_ms;
+	u16 val;
+	int ret;
+
+	msleep(DS5_LINK_FLUSH_MIN_DOWN_MS);
+	ret = ds5_check_i2c_access(state, true);
+	if (ret) {
+		/* Cannot probe the camera: fall back to the op's full settle. */
+		dev_info(&state->client->dev, "link %u flush: i2c blocked (%d), waiting %d ms\n",
+			 state->gmsl_link, ret, DS5_LINK_FLUSH_MAX_DOWN_MS);
+		msleep(DS5_LINK_FLUSH_MAX_DOWN_MS - DS5_LINK_FLUSH_MIN_DOWN_MS);
+		return;
+	}
+	for (;;) {
+		ret = regmap_raw_read(state->regmap, DS5_FW_VERSION, &val, sizeof(val));
+		down_ms = ktime_ms_delta(ktime_get(), start);
+		if (!ret || down_ms >= DS5_LINK_FLUSH_MAX_DOWN_MS)
+			break;
+		usleep_range(DS5_LINK_FLUSH_POLL_US, DS5_LINK_FLUSH_POLL_US + 500);
+	}
+	if (ret)
+		dev_warn(&state->client->dev, "link %u flush: no camera reply after %lld ms: %d\n",
+			 state->gmsl_link, down_ms, ret);
+	else
+		dev_info(&state->client->dev, "link %u flush: camera back after %lld ms\n",
+			 state->gmsl_link, down_ms);
+}
+
+/* RSDSO-21786: fire the link flush at most once per cold bring-up.
+ * Every stream start passes link_flush_lock, so sibling starts reach the FW
+ * after the flush and inside its multi-stream start window (RSDEV-16420).
+ * ds5_io_sem keeps camera transfers off the link only while it is down.
+ */
 static void ds5_flush_idle_link(struct ds5 *state)
 {
-	bool flush;
+	const struct dser_interface *ops = state->dser_ops;
+	ktime_t start;
+	int ret;
 
-	if (!state->dser_ops->reset_oneshot_link)
+	if (!ops->reset_oneshot_link)
 		return;
 
-	mutex_lock(&state->ds5_dev->lock);
-	flush = state->ds5_dev->link_flush_pending;
-	state->ds5_dev->link_flush_pending = false;
-	mutex_unlock(&state->ds5_dev->lock);
-
-	if (flush)
-		ds5_reset_oneshot_link(state);
+	mutex_lock(&state->ds5_dev->link_flush_lock);
+	ds5_dfu_write_lock(&ds5_io_sem);
+	if (!xchg(&state->ds5_dev->link_flush_pending, false))
+		goto out;
+	if (!ops->trigger_oneshot_link) {
+		ops->reset_oneshot_link(state->dser_dev, state->gmsl_link);
+		goto out;
+	}
+	start = ktime_get();
+	ret = ops->trigger_oneshot_link(state->dser_dev, state->gmsl_link);
+	if (ret)
+		dev_warn(&state->client->dev, "link %u flush failed: %d\n",
+			 state->gmsl_link, ret);
+	else
+		ds5_wait_link_up(state, start);
+out:
+	ds5_dfu_write_unlock(&ds5_io_sem);
+	mutex_unlock(&state->ds5_dev->link_flush_lock);
 }
 #endif
 
