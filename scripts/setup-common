@@ -60,6 +60,7 @@ elif ! version_lt "$JP_INPUT_VERSION" 6.0; then
     L4T_VERSION=jetson_"${REVISION}"
 elif ! version_lt "${JP_INPUT_VERSION}" 5.0; then
 	case "${JP_INPUT_VERSION}" in
+		5.1.8) REVISION=35.7.0;;
 		5.1.6) REVISION=35.6.4;;
 		5.1.2) REVISION=35.4.1;;
 		5.0.2) REVISION=35.1
