@@ -758,7 +758,7 @@ sequenceDiagram
     activate HW
     HW->>HW: Read MIPI capabilities:<br/>- Number of lanes<br/>- PHY config<br/>- Data rate min/max
     HW->>HW: Write DS5_MIPI_LANE_NUMS (0x0400)<br/>Value: num_lanes - 1
-    HW->>HW: Write DS5_MIPI_LANE_DATARATE (0x0402)<br/>Value: 1000 Mbps (default)
+    HW->>HW: Write DS5_MIPI_LANE_DATARATE (0x0402)<br/>Value: 1254 Mbps (D4xx default; D585 1200)
     HW->>HW: Read DS5_MIPI_CONF_STATUS (0x0500)
     HW-->>V4L2: Hardware configured
     deactivate HW

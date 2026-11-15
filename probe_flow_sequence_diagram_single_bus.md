@@ -728,7 +728,7 @@ sequenceDiagram
     activate HW
     HW->>HW: Read MIPI capabilities:<br/>- Number of lanes<br/>- PHY config<br/>- Data rate min/max
     HW->>HW: Write DS5_MIPI_LANE_NUMS (0x0400)<br/>Value: num_lanes - 1
-    HW->>HW: Write DS5_MIPI_LANE_DATARATE (0x0402)<br/>Value: 1000 Mbps (default)
+    HW->>HW: Write DS5_MIPI_LANE_DATARATE (0x0402)<br/>Value: 1254 Mbps (D4xx default; D585 1200)
     HW->>HW: Read DS5_MIPI_CONF_STATUS (0x0500)
     HW-->>V4L2: Hardware configured
     deactivate HW
@@ -736,7 +736,7 @@ sequenceDiagram
 
 ### What is Hardware Initialization?
 
-Hardware initialization configures the D4xx camera's MIPI CSI-2 interface to match the platform's video capture capabilities, ensuring proper data transmission between the camera and the host processor. The driver first reads the camera's MIPI capabilities from hardware registers (0x0300-0x030A) to determine supported lane counts, PHY configuration, and data rate ranges (typically 100-1500 Mbps). Based on the platform configuration—either from the Tegra camera platform (which provides lane count via `state->mux.sd.numlanes`) or a default of 2 lanes for other platforms—the driver writes the lane configuration to register `DS5_MIPI_LANE_NUMS` (0x0400) with the value decremented by one (e.g., 4 lanes = 0x03). The MIPI data rate is set to a default of 1000 Mbps by writing to register `DS5_MIPI_LANE_DATARATE` (0x0402), which can be adjusted based on platform requirements or SerDes configuration. Finally, the driver reads the MIPI configuration status register (0x0500) to verify that the hardware has successfully applied the settings, completing the low-level interface setup required for video streaming.
+Hardware initialization configures the D4xx camera's MIPI CSI-2 interface to match the platform's video capture capabilities, ensuring proper data transmission between the camera and the host processor. The driver first reads the camera's MIPI capabilities from hardware registers (0x0300-0x030A) to determine supported lane counts, PHY configuration, and data rate ranges (typically 100-1500 Mbps). Based on the platform configuration—either from the Tegra camera platform (which provides lane count via `state->mux.sd.numlanes`) or a default of 2 lanes for other platforms—the driver writes the lane configuration to register `DS5_MIPI_LANE_NUMS` (0x0400) with the value decremented by one (e.g., 4 lanes = 0x03). The MIPI data rate is written to register `DS5_MIPI_LANE_DATARATE` (0x0402): 1254 Mbps by default on D4xx and 1200 on D585, unless the DT sets `mipi-lane-rate-mbps`. The D4xx FW boots at 1000, so the driver re-applies the rate after every camera reset it handles. Finally, the driver reads the MIPI configuration status register (0x0500) to verify that the hardware has successfully applied the settings, completing the low-level interface setup required for video streaming.
 
 ## Phase 12: MUX Registration (Async)
 ```mermaid

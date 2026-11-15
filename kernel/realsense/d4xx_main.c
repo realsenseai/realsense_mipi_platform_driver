@@ -284,7 +284,7 @@ struct ser_interface {
 #define DS5_STATUS_INVALID_RES		0x4
 #define DS5_STATUS_INVALID_FPS		0x8
 
-#define MIPI_LANE_RATE_DS5			1000
+#define MIPI_LANE_RATE_DS5			1254
 #define MIPI_LANE_RATE_HKR			1200
 
 #define MAX_DEPTH_EXP			200000
@@ -4362,6 +4362,14 @@ static int ds5_hw_reset_with_recovery_locked(struct ds5 *state)
 		ret = ds5_hw_init(state->client, state);
 		if (ret)
 			return ret;
+	} else if (dev_type != DS5_DEVICE_TYPE_D58X) {
+		/* D4xx FW boots at 1000 Mbps. A failed re-apply must not skip the
+		 * flush and ESYNC below, so it is logged, not returned. */
+		ret = ds5_hw_init(state->client, state);
+		if (ret)
+			dev_err(&state->client->dev,
+				"%s(): MIPI TX re-apply after HW reset failed (%d)\n",
+				__func__, ret);
 	} else if (state->d58x_pixel_mode &&
 		   ds5_write(state, DS5_MIPI_SERDES_PIXEL_MODE, 1)) {
 		/* Production D585 skips ds5_hw_init(), so the reboot would
