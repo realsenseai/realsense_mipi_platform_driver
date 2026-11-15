@@ -27,13 +27,13 @@ nvidia-oot 0013, so S_FMT and frame-size enumeration reach that row.
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
  drivers/media/platform/tegra/camera/vi/channel.c   | 11 +++++
- drivers/media/platform/tegra/camera/vi/core.c      | 19 +++++-
+ drivers/media/platform/tegra/camera/vi/core.c      | 17 +++++-
  drivers/media/platform/tegra/camera/vi/vi4_fops.c  | 26 +++++++++-
  .../media/platform/tegra/camera/vi/vi4_formats.h   |  12 +++
  drivers/media/platform/tegra/camera/vi/vi5_fops.c  | 23 +++++++++
  .../media/platform/tegra/camera/vi/vi5_formats.h   |  12 +++
  include/media/tegra_camera_core.h                  | 57 ++++++++++++++++++++++
- 7 files changed, 157 insertions(+), 3 deletions(-)
+ 7 files changed, 155 insertions(+), 3 deletions(-)
 
 diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
 index c2a9e6f14..fae8b3043 100644
@@ -74,15 +74,13 @@ index c2a9e6f14..fae8b3043 100644
 diff --git a/drivers/media/platform/tegra/camera/vi/core.c b/drivers/media/platform/tegra/camera/vi/core.c
 --- a/drivers/media/platform/tegra/camera/vi/core.c
 +++ b/drivers/media/platform/tegra/camera/vi/core.c
-@@ -98,6 +98,18 @@ int tegra_core_get_code_by_fourcc(struct tegra_channel *chan,
+@@ -98,6 +98,16 @@ int tegra_core_get_code_by_fourcc(struct tegra_channel *chan,
  {
  	unsigned int i;
  
-+	/* A FourCC does not uniquely identify a table row. BA10 is shared by
-+	 * the stock SGRBG10_1X10/RAW10 row and D58x calibration's
-+	 * SGRBG16_1X16/RAW16 row. The subdevice advertises the applicable
-+	 * media-bus code in fmts_bitmap, so select that row before using the
-+	 * legacy first-match fallback.
++	/* A FourCC does not uniquely identify a table row: YUYV is on both the
++	 * stock YUYV8_1X16 row and the RS_YUYV8_1X16 row. Prefer the row whose
++	 * media-bus code the subdevice advertises in fmts_bitmap.
 +	 */
 +	for (i = offset; i < chan->num_video_formats; ++i) {
 +		if (chan->video_formats[i]->fourcc == fourcc &&
@@ -93,7 +91,7 @@ diff --git a/drivers/media/platform/tegra/camera/vi/core.c b/drivers/media/platf
  	for (i = offset; i < chan->num_video_formats; ++i) {
  		if (chan->video_formats[i]->fourcc == fourcc)
  			return chan->video_formats[i]->code;
-@@ -155,8 +167,13 @@ tegra_core_get_format_by_fourcc(struct tegra_channel *chan, u32 fourcc)
+@@ -155,8 +165,13 @@ tegra_core_get_format_by_fourcc(struct tegra_channel *chan, u32 fourcc)
  {
  	unsigned int i;
  
