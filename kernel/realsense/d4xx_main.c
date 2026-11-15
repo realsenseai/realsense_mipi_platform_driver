@@ -1810,7 +1810,7 @@ static const struct ds5_format ds5_y_formats_ds5u[] = {
 	}, {
 		.data_type = DS5_FW_DT_R8L8,		/* Y8I */
 		.override_data_type = GMSL_CSI_DT_YUV422_8,
-		.mbus_code = MEDIA_BUS_FMT_VYUY8_1X16,
+		.mbus_code = MEDIA_BUS_FMT_RS_Y8I_1X16,
 		.n_resolutions = ARRAY_SIZE(y8_sizes),
 		.resolutions = y8_sizes,
 	}, {
@@ -1831,7 +1831,7 @@ static const struct ds5_format ds5_y_formats_40x[] = {
 	}, {
 		.data_type = DS5_FW_DT_R8L8,		/* Y8I */
 		.override_data_type = GMSL_CSI_DT_YUV422_8,
-		.mbus_code = MEDIA_BUS_FMT_VYUY8_1X16,
+		.mbus_code = MEDIA_BUS_FMT_RS_Y8I_1X16,
 		.n_resolutions = ARRAY_SIZE(d40x_y8_sizes),
 		.resolutions = d40x_y8_sizes,
 	}, {
@@ -1858,7 +1858,7 @@ static const struct ds5_format ds5_y_formats_41x[] = {
 	}, {
 		.data_type = DS5_FW_DT_R8L8,		/* Y8I */
 		.override_data_type = GMSL_CSI_DT_YUV422_8,
-		.mbus_code = MEDIA_BUS_FMT_VYUY8_1X16,
+		.mbus_code = MEDIA_BUS_FMT_RS_Y8I_1X16,
 		.n_resolutions = ARRAY_SIZE(y8_41x_sizes),
 		.resolutions = y8_41x_sizes,
 	}, {
@@ -1879,7 +1879,7 @@ static const struct ds5_format ds5_y_formats_45x[] = {
 	}, {
 		.data_type = DS5_FW_DT_R8L8,		/* Y8I */
 		.override_data_type = GMSL_CSI_DT_YUV422_8,
-		.mbus_code = MEDIA_BUS_FMT_VYUY8_1X16,
+		.mbus_code = MEDIA_BUS_FMT_RS_Y8I_1X16,
 		.n_resolutions = ARRAY_SIZE(y8_sizes),
 		.resolutions = y8_sizes,
 	}, {
@@ -1989,7 +1989,7 @@ static const struct ds5_format ds5_y_formats_d58x[] = {
 	}, {
 		.data_type = DS5_FW_DT_R8L8,		/* Y8I */
 		.override_data_type = GMSL_CSI_DT_YUV422_8,
-		.mbus_code = MEDIA_BUS_FMT_VYUY8_1X16,
+		.mbus_code = MEDIA_BUS_FMT_RS_Y8I_1X16,
 		.n_resolutions = ARRAY_SIZE(d58x_y8_sizes),
 		.resolutions = d58x_y8_sizes,
 	}, {

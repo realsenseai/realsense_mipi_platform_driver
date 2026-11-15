@@ -29,11 +29,11 @@ Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
  drivers/media/platform/tegra/camera/vi/channel.c   | 11 +++++
  drivers/media/platform/tegra/camera/vi/core.c      | 17 +++++-
  drivers/media/platform/tegra/camera/vi/vi4_fops.c  | 26 +++++++++-
- .../media/platform/tegra/camera/vi/vi4_formats.h   |  12 +++
+ .../media/platform/tegra/camera/vi/vi4_formats.h   |  16 +++
  drivers/media/platform/tegra/camera/vi/vi5_fops.c  | 23 +++++++++
- .../media/platform/tegra/camera/vi/vi5_formats.h   |  12 +++
+ .../media/platform/tegra/camera/vi/vi5_formats.h   |  16 +++
  include/media/tegra_camera_core.h                  | 57 ++++++++++++++++++++++
- 7 files changed, 155 insertions(+), 3 deletions(-)
+ 7 files changed, 163 insertions(+), 3 deletions(-)
 
 diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
 index c2a9e6f14..fae8b3043 100644
@@ -156,7 +156,7 @@ diff --git a/drivers/media/platform/tegra/camera/vi/vi4_formats.h b/drivers/medi
 index 02d63ab62..3d1051748 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi4_formats.h
 +++ b/drivers/media/platform/tegra/camera/vi/vi4_formats.h
-@@ -156,6 +156,18 @@ static const struct tegra_video_format vi4_video_formats[] = {
+@@ -156,6 +156,22 @@ static const struct tegra_video_format vi4_video_formats[] = {
  	TEGRA_VIDEO_FORMAT(RGB888, 24, RGB888_1X24, 4, 1, T_A8R8G8B8,
  				RGB888, Y12I, "Y12I 24"),
  
@@ -171,6 +171,10 @@ index 02d63ab62..3d1051748 100644
 +	// writer pair-swaps. Its own code leaves the stock YUYV8_1X16 row alone.
 +	TEGRA_VIDEO_FORMAT(YUV422, 16, RS_YUYV8_1X16, 2, 1, T_U8_Y8__V8_Y8,
 +				YUV422_8, YUYV, "YUV 4:2:2"),
++	// RealSense IR stereo: Y8I pairs captured with the pair-swapping
++	// writer. Its own code leaves the stock VYUY8_1X16 row alone.
++	TEGRA_VIDEO_FORMAT(YUV422, 16, RS_Y8I_1X16, 2, 1, T_U8_Y8__V8_Y8,
++				YUV422_8, Y8I, "Y8I 16"),
 +
  
  };
@@ -220,7 +224,7 @@ diff --git a/drivers/media/platform/tegra/camera/vi/vi5_formats.h b/drivers/medi
 index e59413b04..80551b449 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi5_formats.h
 +++ b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
-@@ -155,6 +155,18 @@ static const struct tegra_video_format vi5_video_formats[] = {
+@@ -155,6 +155,22 @@ static const struct tegra_video_format vi5_video_formats[] = {
  	TEGRA_VIDEO_FORMAT(RGB888, 24, RGB888_1X24, 4, 1, T_A8R8G8B8,
  				RGB888, Y12I, "Y12I 24"),
  
@@ -235,6 +239,10 @@ index e59413b04..80551b449 100644
 +	// writer pair-swaps. Its own code leaves the stock YUYV8_1X16 row alone.
 +	TEGRA_VIDEO_FORMAT(YUV422, 16, RS_YUYV8_1X16, 2, 1, T_U8_Y8__V8_Y8,
 +				YUV422_8, YUYV, "YUV 4:2:2"),
++	// RealSense IR stereo: Y8I pairs captured with the pair-swapping
++	// writer. Its own code leaves the stock VYUY8_1X16 row alone.
++	TEGRA_VIDEO_FORMAT(YUV422, 16, RS_Y8I_1X16, 2, 1, T_U8_Y8__V8_Y8,
++				YUV422_8, Y8I, "Y8I 16"),
 +
  };
  

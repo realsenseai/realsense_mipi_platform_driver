@@ -1115,12 +1115,10 @@ index de33c42fb..02d63ab62 100644
  	/* YUV422 */
 -	TEGRA_VIDEO_FORMAT(YUV422, 16, UYVY8_1X16, 2, 1, T_U8_Y8__V8_Y8,
 -				YUV422_8, UYVY, "YUV 4:2:2"),
--	TEGRA_VIDEO_FORMAT(YUV422, 16, VYUY8_1X16, 2, 1, T_V8_Y8__U8_Y8,
--				YUV422_8, VYUY, "YUV 4:2:2"),
 +	// TEGRA_VIDEO_FORMAT(YUV422, 16, UYVY8_1X16, 2, 1, T_U8_Y8__V8_Y8,
 +	// 			YUV422_8, UYVY, "YUV 4:2:2"),
-+	// TEGRA_VIDEO_FORMAT(YUV422, 16, VYUY8_1X16, 2, 1, T_V8_Y8__U8_Y8,
-+	// 			YUV422_8, VYUY, "YUV 4:2:2"),
+ 	TEGRA_VIDEO_FORMAT(YUV422, 16, VYUY8_1X16, 2, 1, T_V8_Y8__U8_Y8,
+ 				YUV422_8, VYUY, "YUV 4:2:2"),
  	TEGRA_VIDEO_FORMAT(YUV422, 16, YUYV8_1X16, 2, 1, T_Y8_U8__Y8_V8,
  				YUV422_8, YUYV, "YUV 4:2:2"),
  	TEGRA_VIDEO_FORMAT(YUV422, 16, YVYU8_1X16, 2, 1, T_Y8_V8__Y8_U8,
@@ -1132,15 +1130,13 @@ index de33c42fb..02d63ab62 100644
  	TEGRA_VIDEO_FORMAT(YUV422, 16, UYVY8_2X8, 2, 1, T_U8_Y8__V8_Y8,
  				YUV422_8, UYVY, "YUV 4:2:2 UYVY"),
  	TEGRA_VIDEO_FORMAT(YUV422, 16, VYUY8_2X8, 2, 1, T_V8_Y8__U8_Y8,
-@@ -141,6 +144,19 @@ static const struct tegra_video_format vi4_video_formats[] = {
+@@ -141,6 +144,17 @@ static const struct tegra_video_format vi4_video_formats[] = {
  				YUV422_8, YUYV, "YUV 4:2:2 YUYV"),
  	TEGRA_VIDEO_FORMAT(YUV422, 16, YVYU8_2X8, 2, 1, T_Y8_V8__Y8_U8,
  				YUV422_8, YVYU, "YUV 4:2:2 YVYU"),
 +
 +	TEGRA_VIDEO_FORMAT(YUV422, 16, UYVY8_1X16, 2, 1, T_U8_Y8__V8_Y8,
 +				YUV422_8, Z16, "Depth 16"),
-+	TEGRA_VIDEO_FORMAT(YUV422, 16, VYUY8_1X16, 2, 1, T_U8_Y8__V8_Y8,
-+				YUV422_8, Y8I, "Y8I 16"),
 +	// TODO: RealSesne calibration format Y12I should be 3-byte,
 +	// R[7:3]R[3:0] | L[3:0]R[11:8] | L[11:8]L[7:4]
 +	// but, currently, it's 4-byte, one byte is added as alignment
@@ -1559,12 +1555,10 @@ index 7ee3a6223..0c6d0ae88 100644
  	/* YUV422 */
 -	TEGRA_VIDEO_FORMAT(YUV422, 16, UYVY8_1X16, 2, 1, T_U8_Y8__V8_Y8,
 -				YUV422_8, UYVY, "YUV 4:2:2"),
--	TEGRA_VIDEO_FORMAT(YUV422, 16, VYUY8_1X16, 2, 1, T_V8_Y8__U8_Y8,
--				YUV422_8, VYUY, "YUV 4:2:2"),
 +	// TEGRA_VIDEO_FORMAT(YUV422, 16, UYVY8_1X16, 2, 1, T_U8_Y8__V8_Y8,
 +	// 			YUV422_8, UYVY, "YUV 4:2:2"),
-+	// TEGRA_VIDEO_FORMAT(YUV422, 16, VYUY8_1X16, 2, 1, T_V8_Y8__U8_Y8,
-+	// 			YUV422_8, VYUY, "YUV 4:2:2"),
+ 	TEGRA_VIDEO_FORMAT(YUV422, 16, VYUY8_1X16, 2, 1, T_V8_Y8__U8_Y8,
+ 				YUV422_8, VYUY, "YUV 4:2:2"),
  	TEGRA_VIDEO_FORMAT(YUV422, 16, YUYV8_1X16, 2, 1, T_Y8_U8__Y8_V8,
  				YUV422_8, YUYV, "YUV 4:2:2"),
  	TEGRA_VIDEO_FORMAT(YUV422, 16, YVYU8_1X16, 2, 1, T_Y8_V8__Y8_U8,
@@ -1576,15 +1570,13 @@ index 7ee3a6223..0c6d0ae88 100644
  	TEGRA_VIDEO_FORMAT(YUV422, 16, UYVY8_2X8, 2, 1, T_U8_Y8__V8_Y8,
  				YUV422_8, UYVY, "YUV 4:2:2 UYVY"),
  	TEGRA_VIDEO_FORMAT(YUV422, 16, VYUY8_2X8, 2, 1, T_V8_Y8__U8_Y8,
-@@ -141,6 +143,18 @@ static const struct tegra_video_format vi5_video_formats[] = {
+@@ -141,6 +143,16 @@ static const struct tegra_video_format vi5_video_formats[] = {
  				YUV422_8, YUYV, "YUV 4:2:2 YUYV"),
  	TEGRA_VIDEO_FORMAT(YUV422, 16, YVYU8_2X8, 2, 1, T_Y8_V8__Y8_U8,
  				YUV422_8, YVYU, "YUV 4:2:2 YVYU"),
 +
 +	TEGRA_VIDEO_FORMAT(YUV422, 16, UYVY8_1X16, 2, 1, T_U8_Y8__V8_Y8,
 +				YUV422_8, Z16, "Depth 16"),
-+	TEGRA_VIDEO_FORMAT(YUV422, 16, VYUY8_1X16, 2, 1, T_U8_Y8__V8_Y8,
-+				YUV422_8, Y8I, "Y8I 16"),
 +	// TODO: RealSesne calibration format Y12I should be 3-byte,
 +	// R[7:3]R[3:0] | L[3:0]R[11:8] | L[11:8]L[7:4]
 +	// but, currently, it's 4-byte, one byte is added as alignment
