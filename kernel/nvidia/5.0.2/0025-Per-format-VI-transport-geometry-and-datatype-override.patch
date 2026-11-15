@@ -19,15 +19,21 @@ frame_x_align 4, which gives 1288 px -> 1612 wire bytes and stays
 correct at any width. The d4xx driver can then advertise, and hand the
 FW, the true pixel width instead of the transport byte count.
 
+A second row gives RealSense colour its own media-bus code
+(RS_YUYV8_1X16), so the stock YUYV8_1X16 row stays as NVIDIA ships it.
+The fourcc lookups prefer the rows the subdevice advertises, as in
+nvidia-oot 0013, so S_FMT and frame-size enumeration reach that row.
+
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
  drivers/media/platform/tegra/camera/vi/channel.c   | 11 +++++
+ drivers/media/platform/tegra/camera/vi/core.c      | 19 +++++-
  drivers/media/platform/tegra/camera/vi/vi4_fops.c  | 26 +++++++++-
- .../media/platform/tegra/camera/vi/vi4_formats.h   |  7 +++
+ .../media/platform/tegra/camera/vi/vi4_formats.h   |  12 +++
  drivers/media/platform/tegra/camera/vi/vi5_fops.c  | 23 +++++++++
- .../media/platform/tegra/camera/vi/vi5_formats.h   |  7 +++
+ .../media/platform/tegra/camera/vi/vi5_formats.h   |  12 +++
  include/media/tegra_camera_core.h                  | 57 ++++++++++++++++++++++
- 6 files changed, 129 insertions(+), 2 deletions(-)
+ 7 files changed, 157 insertions(+), 3 deletions(-)
 
 diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
 index c2a9e6f14..fae8b3043 100644
@@ -65,6 +71,44 @@ index c2a9e6f14..fae8b3043 100644
  	return ret;
  }
  
+diff --git a/drivers/media/platform/tegra/camera/vi/core.c b/drivers/media/platform/tegra/camera/vi/core.c
+--- a/drivers/media/platform/tegra/camera/vi/core.c
++++ b/drivers/media/platform/tegra/camera/vi/core.c
+@@ -98,6 +98,18 @@ int tegra_core_get_code_by_fourcc(struct tegra_channel *chan,
+ {
+ 	unsigned int i;
+ 
++	/* A FourCC does not uniquely identify a table row. BA10 is shared by
++	 * the stock SGRBG10_1X10/RAW10 row and D58x calibration's
++	 * SGRBG16_1X16/RAW16 row. The subdevice advertises the applicable
++	 * media-bus code in fmts_bitmap, so select that row before using the
++	 * legacy first-match fallback.
++	 */
++	for (i = offset; i < chan->num_video_formats; ++i) {
++		if (chan->video_formats[i]->fourcc == fourcc &&
++		    test_bit(i, chan->fmts_bitmap))
++			return chan->video_formats[i]->code;
++	}
++
+ 	for (i = offset; i < chan->num_video_formats; ++i) {
+ 		if (chan->video_formats[i]->fourcc == fourcc)
+ 			return chan->video_formats[i]->code;
+@@ -155,8 +167,13 @@ tegra_core_get_format_by_fourcc(struct tegra_channel *chan, u32 fourcc)
+ {
+ 	unsigned int i;
+ 
++	/* Only rows this channel advertises match: the table is SoC-wide, and a
++	 * fourcc may have rows for several media-bus formats. NULL lets the
++	 * caller fall back to the channel's current format.
++	 */
+ 	for (i = 0; i < chan->num_video_formats; ++i) {
+-		if (chan->video_formats[i]->fourcc == fourcc)
++		if (chan->video_formats[i]->fourcc == fourcc &&
++		    test_bit(i, chan->fmts_bitmap))
+ 			return chan->video_formats[i];
+ 	}
+ 	spec_bar();
+
 diff --git a/drivers/media/platform/tegra/camera/vi/vi4_fops.c b/drivers/media/platform/tegra/camera/vi/vi4_fops.c
 index 9bae5563c..970c9048f 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi4_fops.c
@@ -114,7 +158,7 @@ diff --git a/drivers/media/platform/tegra/camera/vi/vi4_formats.h b/drivers/medi
 index 02d63ab62..3d1051748 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi4_formats.h
 +++ b/drivers/media/platform/tegra/camera/vi/vi4_formats.h
-@@ -156,6 +156,13 @@ static const struct tegra_video_format vi4_video_formats[] = {
+@@ -156,6 +156,18 @@ static const struct tegra_video_format vi4_video_formats[] = {
  	TEGRA_VIDEO_FORMAT(RGB888, 24, RGB888_1X24, 4, 1, T_A8R8G8B8,
  				RGB888, Y12I, "Y12I 24"),
  
@@ -124,6 +168,11 @@ index 02d63ab62..3d1051748 100644
 +	TEGRA_VIDEO_FORMAT_OVERRIDE(RAW8, 8, RS_SBGGR10P_1X8, 5, 4, T_L8,
 +				RAW8, SBGGR10P, "BGGR10P dword-aligned",
 +				0, 0, 5, 4, 1, 1, 4),
++
++	// RealSense colour: labelled YUYV but sent in UYVY pair order, so the
++	// writer pair-swaps. Its own code leaves the stock YUYV8_1X16 row alone.
++	TEGRA_VIDEO_FORMAT(YUV422, 16, RS_YUYV8_1X16, 2, 1, T_U8_Y8__V8_Y8,
++				YUV422_8, YUYV, "YUV 4:2:2"),
 +
  
  };
@@ -173,7 +222,7 @@ diff --git a/drivers/media/platform/tegra/camera/vi/vi5_formats.h b/drivers/medi
 index e59413b04..80551b449 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi5_formats.h
 +++ b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
-@@ -155,6 +155,13 @@ static const struct tegra_video_format vi5_video_formats[] = {
+@@ -155,6 +155,18 @@ static const struct tegra_video_format vi5_video_formats[] = {
  	TEGRA_VIDEO_FORMAT(RGB888, 24, RGB888_1X24, 4, 1, T_A8R8G8B8,
  				RGB888, Y12I, "Y12I 24"),
  
@@ -183,6 +232,11 @@ index e59413b04..80551b449 100644
 +	TEGRA_VIDEO_FORMAT_OVERRIDE(RAW8, 8, RS_SBGGR10P_1X8, 5, 4, T_R8,
 +				RAW8, SBGGR10P, "BGGR10P dword-aligned",
 +				0, 0, 5, 4, 1, 1, 4),
++
++	// RealSense colour: labelled YUYV but sent in UYVY pair order, so the
++	// writer pair-swaps. Its own code leaves the stock YUYV8_1X16 row alone.
++	TEGRA_VIDEO_FORMAT(YUV422, 16, RS_YUYV8_1X16, 2, 1, T_U8_Y8__V8_Y8,
++				YUV422_8, YUYV, "YUV 4:2:2"),
 +
  };
  

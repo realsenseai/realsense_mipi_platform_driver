@@ -1,7 +1,7 @@
 diff --git a/include/uapi/linux/media-bus-format.h b/include/uapi/linux/media-bus-format.h
 --- a/include/uapi/linux/media-bus-format.h
 +++ b/include/uapi/linux/media-bus-format.h
-@@ -159,4 +159,14 @@
+@@ -159,4 +159,17 @@
  #define MEDIA_BUS_FMT_S5C_UYVY_JPEG_1X8		0x5001
 -
 +/* RealSense flat NV12 bytes over an opaque 8-bit CSI carrier */
@@ -14,6 +14,9 @@ diff --git a/include/uapi/linux/media-bus-format.h b/include/uapi/linux/media-bu
 +/* RealSense H.264 and JPEG over an opaque 8-bit CSI carrier */
 +#define MEDIA_BUS_FMT_RS_H264_1X8		0x500b
 +#define MEDIA_BUS_FMT_RS_JPEG_1X8		0x500c
++
++/* RealSense colour: YUYV sent in UYVY pair order */
++#define MEDIA_BUS_FMT_RS_YUYV8_1X16		0x500d
 +
  /* HSV - next is	0x6002 */
  #define MEDIA_BUS_FMT_AHSV8888_1X32		0x6001

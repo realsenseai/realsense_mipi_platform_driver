@@ -73,9 +73,9 @@ Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
   .../media/platform/tegra/camera/vi/channel.c  | 11 +++
   .../media/platform/tegra/camera/vi/vi5_fops.c | 31 +++++++++
   drivers/media/platform/tegra/camera/vi/core.c | 19 +++++-
-  .../platform/tegra/camera/vi/vi5_formats.h    | 58 ++++++++++++++++
+  .../platform/tegra/camera/vi/vi5_formats.h    | 62 ++++++++++++++++
   include/media/tegra_camera_core.h             | 68 +++++++++++++++++++
-  5 files changed, 186 insertions(+), 1 deletion(-)
+  5 files changed, 190 insertions(+), 1 deletion(-)
 
 diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
 index 26d19f57..bc709dd1 100644
@@ -211,10 +211,14 @@ diff --git a/drivers/media/platform/tegra/camera/vi/vi5_formats.h b/drivers/medi
 index c04ca61f..d67100ac 100644
 --- a/drivers/media/platform/tegra/camera/vi/vi5_formats.h
 +++ b/drivers/media/platform/tegra/camera/vi/vi5_formats.h
-@@ -175,6 +175,64 @@ static const struct tegra_video_format vi5_video_formats[] = {
+@@ -175,6 +175,68 @@ static const struct tegra_video_format vi5_video_formats[] = {
  	// R[7:3]R[3:0] | L[3:0]R[11:8] | L[11:8]L[7:4] | ALIGN[7:0]
  	TEGRA_VIDEO_FORMAT(RGB888, 24, RGB888_1X24, 4, 1, T_A8R8G8B8,
  				RGB888, Y12I, "Y12I 24"),
++	// RealSense colour: labelled YUYV but sent in UYVY pair order, so the
++	// writer pair-swaps. Its own code leaves the stock YUYV8_1X16 row alone.
++	TEGRA_VIDEO_FORMAT(YUV422, 16, RS_YUYV8_1X16, 2, 1, T_U8_Y8__V8_Y8,
++				YUV422_8, YUYV, "YUV 4:2:2"),
 +	// D58x calib surfaces: LE 16-bit samples over RAW16, captured in wire
 +	// byte order — the DT override bypasses the RAW16 rule's CSI-2
 +	// MSB-first byte swap. Y16I is a 32bpp L/R pair riding a 16bpp wire,
