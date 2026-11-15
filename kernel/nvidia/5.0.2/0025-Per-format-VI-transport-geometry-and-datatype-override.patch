@@ -19,8 +19,9 @@ frame_x_align 4, which gives 1288 px -> 1612 wire bytes and stays
 correct at any width. The d4xx driver can then advertise, and hand the
 FW, the true pixel width instead of the transport byte count.
 
-A second row gives RealSense colour its own media-bus code
-(RS_YUYV8_1X16), so the stock YUYV8_1X16 row stays as NVIDIA ships it.
+Two more rows give RealSense colour and IR stereo their own media-bus
+codes (RS_YUYV8_1X16, RS_Y8I_1X16), so the stock YUYV8_1X16 and
+VYUY8_1X16 rows stay as NVIDIA ships them for other sensors.
 The fourcc lookups prefer the rows the subdevice advertises, as in
 nvidia-oot 0013, so S_FMT and frame-size enumeration reach that row.
 
