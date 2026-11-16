@@ -734,6 +734,7 @@
 								status = "okay";
 								reg = <0x29>;
 								compatible = "maxim,max96712";
+								maxim,fsync-from-mfp;
 								csi-mode = "2x4";
 								/* 4-lane CSI output towards the Jetson (1300 Mbps/lane). */
 								lane_cnt = <4>;
@@ -955,6 +956,7 @@
 								status = "okay";
 								reg = <0x29>;
 								compatible = "maxim,max96712";
+								maxim,fsync-from-mfp;
 								csi-mode = "2x4";
 								/* 4-lane CSI output towards the Jetson (1300 Mbps/lane). */
 								lane_cnt = <4>;
@@ -1176,6 +1178,7 @@
 								status = "okay";
 								reg = <0x29>;
 								compatible = "maxim,max96712";
+								maxim,fsync-from-mfp;
 								csi-mode = "2x4";
 								/* 4-lane CSI output towards the Jetson (1300 Mbps/lane). */
 								lane_cnt = <4>;
@@ -1397,6 +1400,7 @@
 								status = "okay";
 								reg = <0x29>;
 								compatible = "maxim,max96712";
+								maxim,fsync-from-mfp;
 								csi-mode = "2x4";
 								/* 4-lane CSI output towards the Jetson (1300 Mbps/lane). */
 								lane_cnt = <4>;

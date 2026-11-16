@@ -266,6 +266,7 @@
 								status = "okay";
 								reg = <0x29>;
 								compatible = "maxim,max96712";
+								maxim,fsync-from-mfp;
 								csi-mode = "2x4";
 								lane_cnt = <4>;
 								channel = "a";

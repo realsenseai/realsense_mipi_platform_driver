@@ -8,16 +8,26 @@ Add MAX96712 deserializer driver support for D4XX cameras.
 Keep debugfs and exported-slot lifetime bounded by the I2C binding; drain
 slot users before managed resources are released during teardown.
 
+Generate the external sync signal in the deserializer itself and broadcast
+it on GMSL GPIO channel 23, as MAX96724 does, so a board needs no host sync
+signal routed to an MFP pin. A board that does feed one in keeps that path
+with the device-tree flag "maxim,fsync-from-mfp", which also forwards the
+MFP sync pins onto the channel, so it always has a single source.
+
+The generator is one per deserializer and feeds every link, so track which
+links are slaved to it and stop it only with the last one; a camera leaving
+External sync must not drop the trigger its siblings still use.
+
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- drivers/media/i2c/max96712.c | 1390 lines
- 1 file changed, 1347 insertions(+), 43 deletions(-)
+ drivers/media/i2c/max96712.c | 1543 lines
+ 1 file changed, 1500 insertions(+), 43 deletions(-)
 
 diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
-index 8081385f05e72a54c33d64440e8c41b149b2714a..99ee46139d1d9e2f36570dee05a42c6bd29c0322 100644
+index 8081385f05e72a54c33d64440e8c41b149b2714a..ed0aea3a3d0f35509c980444f39f927b0237d335 100644
 --- a/drivers/media/i2c/max96712.c
 +++ b/drivers/media/i2c/max96712.c
-@@ -21,26 +21,198 @@
+@@ -21,26 +21,205 @@
  #include <linux/debugfs.h>
  #include <media/camera_common.h>
  #include <linux/module.h>
@@ -196,6 +206,13 @@ index 8081385f05e72a54c33d64440e8c41b149b2714a..99ee46139d1d9e2f36570dee05a42c6b
 +	bool fangzhu_fg12_reverse_lane_polarity;
 +	bool fangzhu_fg12_4ch_poc_enable;
 +	bool fangzhu_fg12_12ch_poc_enable;
++	/* The frame-sync signal is fed in on an MFP pin (host TSC or a bench
++	 * generator) instead of the deserializer's own FSYNC generator. */
++	bool fsync_from_mfp;
++	/* One generator feeds every link, so it runs while any link is still
++	 * slaved to it, at the rate the first of them asked for. */
++	u8 fsync_links;
++	u32 fsync_period;
  };
  struct max96712 *global_priv[4] ;
 +static DEFINE_MUTEX(global_priv_lock);
@@ -219,7 +236,7 @@ index 8081385f05e72a54c33d64440e8c41b149b2714a..99ee46139d1d9e2f36570dee05a42c6b
  	i2c_client = global_priv[channel]->i2c_client;
  	bak = i2c_client->addr;
  
-@@ -52,8 +224,10 @@
+@@ -52,8 +231,10 @@
  	{
  		dev_err(&i2c_client->dev, "%s: addr = 0x%x, val = 0x%x\n",
  				__func__, addr, val);
@@ -230,7 +247,7 @@ index 8081385f05e72a54c33d64440e8c41b149b2714a..99ee46139d1d9e2f36570dee05a42c6b
  	return 0;
  }
  
-@@ -66,8 +240,11 @@
+@@ -66,8 +247,11 @@
  	struct i2c_client *i2c_client = NULL;
  	int bak = 0;
  	int err;
@@ -243,7 +260,7 @@ index 8081385f05e72a54c33d64440e8c41b149b2714a..99ee46139d1d9e2f36570dee05a42c6b
  	i2c_client = global_priv[channel]->i2c_client;
  	bak = i2c_client->addr;
  	i2c_client->addr = slaveAddr / 2;
-@@ -77,13 +254,61 @@
+@@ -77,13 +261,61 @@
  	{
  		dev_err(&i2c_client->dev, "%s: addr = 0x%x, val = 0x%x\n",
  				__func__, addr, *val);
@@ -305,7 +322,7 @@ index 8081385f05e72a54c33d64440e8c41b149b2714a..99ee46139d1d9e2f36570dee05a42c6b
  
  static int max96712_read_reg(struct max96712 *priv,
  			u16 addr, unsigned int *val)
-@@ -99,6 +324,58 @@
+@@ -99,6 +331,58 @@
  	return err;
  }
  
@@ -364,7 +381,7 @@ index 8081385f05e72a54c33d64440e8c41b149b2714a..99ee46139d1d9e2f36570dee05a42c6b
  
  static int max96712_stats_show(struct seq_file *s, void *data)
  {
-@@ -147,6 +424,7 @@
+@@ -147,6 +431,7 @@
  
  
  static const struct file_operations max96712_debugfs_fops = {
@@ -372,7 +389,7 @@ index 8081385f05e72a54c33d64440e8c41b149b2714a..99ee46139d1d9e2f36570dee05a42c6b
  	.open = max96712_debugfs_open,
  	.read = seq_read,
  	.write = max96712_debugfs_write,
-@@ -154,72 +432,181 @@
+@@ -154,72 +439,181 @@
  	.release = single_release,
  };
  
@@ -588,7 +605,7 @@ index 8081385f05e72a54c33d64440e8c41b149b2714a..99ee46139d1d9e2f36570dee05a42c6b
  	priv->i2c_client = client;
  	priv->regmap = devm_regmap_init_i2c(priv->i2c_client,
  				&max96712_regmap_config);
-@@ -228,11 +615,74 @@
+@@ -228,11 +622,76 @@
  			"regmap init failed: %ld\n", PTR_ERR(priv->regmap));
  		return -ENODEV;
  	}
@@ -641,6 +658,8 @@ index 8081385f05e72a54c33d64440e8c41b149b2714a..99ee46139d1d9e2f36570dee05a42c6b
 +			of_property_read_bool(np, "fangzhu,fg12-4ch-poc-enable");
 +		priv->fangzhu_fg12_12ch_poc_enable =
 +			of_property_read_bool(np, "fangzhu,fg12-12ch-poc-enable");
++		priv->fsync_from_mfp =
++			of_property_read_bool(np, "maxim,fsync-from-mfp");
 +
 +		if (priv->fangzhu_fg12_4ch_poc_enable &&
 +		    priv->fangzhu_fg12_12ch_poc_enable) {
@@ -665,7 +684,7 @@ index 8081385f05e72a54c33d64440e8c41b149b2714a..99ee46139d1d9e2f36570dee05a42c6b
  	/*set daymode by fault*/
  	dev_info(&client->dev, "%s:  success\n", __func__);
  
-@@ -243,14 +693,869 @@
+@@ -243,14 +702,1011 @@
  static int
  max96712_remove(struct i2c_client *client)
  {
@@ -1072,6 +1091,10 @@ index 8081385f05e72a54c33d64440e8c41b149b2714a..99ee46139d1d9e2f36570dee05a42c6b
 +	 * left intact, matching how the dynamic allocation state persists here.
 +	 */
 +	memset(priv->multi_vc_configured, 0, sizeof(priv->multi_vc_configured));
++	/* A fresh dser slot owns no links yet, so drop a mask left by an earlier
++	 * bind; the next External write then reprograms the generator. */
++	priv->fsync_links = 0;
++	priv->fsync_period = 0;
 +
 +	mutex_unlock(&priv->lock);
 +
@@ -1454,6 +1477,11 @@ index 8081385f05e72a54c33d64440e8c41b149b2714a..99ee46139d1d9e2f36570dee05a42c6b
 +	struct max96712 *priv = dev_get_drvdata(dev);
 +	int err = 0;
 +
++	/* Only a pin-sourced sync needs the MFP inputs forwarded onto GMSL GPIO
++	 * channel 23; the internal generator drives that channel itself. */
++	if (!priv->fsync_from_mfp)
++		return 0;
++
 +	mutex_lock(&priv->lock);
 +
 +	/* Configure ESYNC registers for GPIO tunneling */
@@ -1469,6 +1497,132 @@ index 8081385f05e72a54c33d64440e8c41b149b2714a..99ee46139d1d9e2f36570dee05a42c6b
 +	return err;
 +}
 +EXPORT_SYMBOL(max96712_setup_control);
++
++/* Internal FSYNC generator, broadcast to serializers on GPIO channel 23.
++ * Register block, fields and values are identical to MAX96724. */
++#define MAX96712_FSYNC_0_ADDR		0x04A0	/* mode / method / enable      */
++#define MAX96712_FSYNC_PER_L_ADDR	0x04A5	/* FSYNC_PERIOD[7:0]           */
++#define MAX96712_FSYNC_PER_M_ADDR	0x04A6	/* FSYNC_PERIOD[15:8]          */
++#define MAX96712_FSYNC_PER_H_ADDR	0x04A7	/* FSYNC_PERIOD[23:16]         */
++#define MAX96712_FSYNC_15_ADDR		0x04AF	/* link select / XTAL time base*/
++#define MAX96712_FSYNC_TXID_ADDR	0x04B1	/* FSYNC_TX_ID[7:3]            */
++
++#define MAX96712_FSYNC_XTAL_HZ		25000000U
++#define MAX96712_FSYNC_FPS_DEFAULT	30U
++#define MAX96712_FSYNC_PERIOD_MAX	0x00FFFFFFU
++#define MAX96712_FSYNC_TX_CH		23
++#define MAX96712_FSYNC_15_ALL		0xCF
++#define MAX96712_FSYNC_TXID_VAL		(MAX96712_FSYNC_TX_CH << 3)
++#define MAX96712_FSYNC_0_ENABLE		0x04
++#define MAX96712_FSYNC_0_DISABLE	0x0C
++
++int max96712_setup_fsync(struct device *dev, u32 link, u32 fps)
++{
++	struct max96712 *priv = dev_get_drvdata(dev);
++	struct reg_pair map[6];
++	u32 period;
++	int err = 0;
++
++	/* A board that feeds the sync signal in on an MFP pin keeps that path. */
++	if (priv->fsync_from_mfp)
++		return 0;
++
++	if (link >= MAX96712_MAX_LINKS)
++		return -EINVAL;
++
++	if (!fps)
++		fps = MAX96712_FSYNC_FPS_DEFAULT;
++
++	/* Convert frame rate to a 24-bit period in 25MHz XTAL cycles. */
++	period = MAX96712_FSYNC_XTAL_HZ / fps;
++	if (!period || period > MAX96712_FSYNC_PERIOD_MAX) {
++		dev_err(dev, "%s: fps %u out of range (period %u)\n",
++			__func__, fps, period);
++		return -EINVAL;
++	}
++
++	/* Link select + 25MHz XTAL time base (all 4 links). */
++	map[0].addr = MAX96712_FSYNC_15_ADDR;
++	map[0].val  = MAX96712_FSYNC_15_ALL;
++	/* FSYNC period (24-bit, in XTAL cycles). */
++	map[1].addr = MAX96712_FSYNC_PER_L_ADDR;
++	map[1].val  = period & 0xFF;
++	map[2].addr = MAX96712_FSYNC_PER_M_ADDR;
++	map[2].val  = (period >> 8) & 0xFF;
++	map[3].addr = MAX96712_FSYNC_PER_H_ADDR;
++	map[3].val  = (period >> 16) & 0xFF;
++	/* Transmit FSYNC over GMSL reverse channel 23 to all SERs. */
++	map[4].addr = MAX96712_FSYNC_TXID_ADDR;
++	map[4].val  = MAX96712_FSYNC_TXID_VAL;
++	/* Enable internal FSYNC, manual mode (must be written last). */
++	map[5].addr = MAX96712_FSYNC_0_ADDR;
++	map[5].val  = MAX96712_FSYNC_0_ENABLE;
++
++	mutex_lock(&priv->lock);
++
++	if (!priv->fsync_links) {
++		err = max96712_set_registers(priv, map, ARRAY_SIZE(map));
++		if (!err)
++			priv->fsync_period = period;
++	} else if (period != priv->fsync_period) {
++		/* Retuning now would drag the links already slaved off their rate. */
++		dev_warn(dev, "%s: link %u asked %u Hz, generator stays at %u Hz\n",
++			 __func__, link, fps,
++			 MAX96712_FSYNC_XTAL_HZ / priv->fsync_period);
++	}
++
++	if (err) {
++		dev_err(dev, "%s: FSYNC setup failed (%d)\n", __func__, err);
++	} else {
++		priv->fsync_links |= BIT(link);
++		dev_info(dev,
++			 "%s: internal FSYNC enabled (%u Hz, period %u, broadcast ch%u, links 0x%x)\n",
++			 __func__, MAX96712_FSYNC_XTAL_HZ / priv->fsync_period,
++			 priv->fsync_period, MAX96712_FSYNC_TX_CH,
++			 priv->fsync_links);
++	}
++
++	mutex_unlock(&priv->lock);
++
++	return err;
++}
++EXPORT_SYMBOL(max96712_setup_fsync);
++
++int max96712_disable_fsync(struct device *dev, u32 link)
++{
++	struct max96712 *priv = dev_get_drvdata(dev);
++	struct reg_pair map[] = {
++		{MAX96712_FSYNC_0_ADDR, MAX96712_FSYNC_0_DISABLE},
++	};
++	int err = 0;
++
++	if (priv->fsync_from_mfp)
++		return 0;
++
++	if (link >= MAX96712_MAX_LINKS)
++		return -EINVAL;
++
++	mutex_lock(&priv->lock);
++
++	/* One generator feeds every link, so stop it only with the last slave. */
++	if (priv->fsync_links == BIT(link)) {
++		err = max96712_set_registers(priv, map, ARRAY_SIZE(map));
++		if (err)
++			dev_err(dev, "%s: FSYNC disable failed (%d)\n",
++				__func__, err);
++		else
++			dev_dbg(dev, "%s: internal FSYNC disabled\n", __func__);
++	}
++
++	/* Keep the link marked when the write failed: it is still running. */
++	if (!err)
++		priv->fsync_links &= ~BIT(link);
++
++	mutex_unlock(&priv->lock);
++
++	return err;
++}
++EXPORT_SYMBOL(max96712_disable_fsync);
 +
 +int max96712_reset_control(struct device *dev, struct device *s_dev)
 +{
@@ -1522,6 +1676,13 @@ index 8081385f05e72a54c33d64440e8c41b149b2714a..99ee46139d1d9e2f36570dee05a42c6b
 +void max96712_power_off(struct device *dev)
 +{
 +    struct max96712 *priv = dev_get_drvdata(dev);
++
++	/* The chip loses its FSYNC block here, so no link stays slaved to it. */
++	mutex_lock(&priv->lock);
++	priv->fsync_links = 0;
++	priv->fsync_period = 0;
++	mutex_unlock(&priv->lock);
++
 +    if (priv->pwdn_gpio > 0) {
 +        gpio_direction_output(priv->pwdn_gpio, 1);
 +        gpio_set_value(priv->pwdn_gpio, 0);
@@ -1537,7 +1698,7 @@ index 8081385f05e72a54c33d64440e8c41b149b2714a..99ee46139d1d9e2f36570dee05a42c6b
  
  static const struct i2c_device_id max96712_id[] = {
  	{ "max96712", 0 },
-@@ -258,7 +1563,7 @@
+@@ -258,7 +1714,7 @@
  };
  
  const struct of_device_id max96712_of_match[] = {
@@ -1546,7 +1707,7 @@ index 8081385f05e72a54c33d64440e8c41b149b2714a..99ee46139d1d9e2f36570dee05a42c6b
  	{ },
  };
  
-@@ -268,6 +1573,7 @@
+@@ -268,6 +1724,7 @@
  	.driver = {
  		.name = "max96712",
  		.owner = THIS_MODULE,

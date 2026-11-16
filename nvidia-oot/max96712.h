@@ -66,6 +66,36 @@ int max96712_sdev_unregister(struct device *dev, struct device *s_dev);
 int max96712_power_on(struct device *dev);
 void max96712_power_off(struct device *dev);
 int max96712_init_settings(struct device *dev);
+/**
+ * @brief  Slaves one GMSL link to the MAX96712 internal FSYNC generator.
+ *
+ * Programs the deserializer as the FSYNC master and broadcasts the generated
+ * sync signal over the GMSL GPIO channel the serializers listen on, so no host
+ * sync signal has to reach the board. The generator is one per deserializer
+ * and feeds every link, so the first link to ask sets the rate and later links
+ * join it. A no-op on a board whose device tree sets "maxim,fsync-from-mfp",
+ * which feeds the signal in on an MFP pin instead.
+ *
+ * @param  [in]  dev          The deserializer device handle.
+ * @param  [in]  link         GMSL link to slave to the generator.
+ * @param  [in]  fps          Desired frame-sync rate in Hz.
+ *
+ * @return  0 for success, or negative error code.
+ */
+int max96712_setup_fsync(struct device *dev, u32 link, u32 fps);
+
+/**
+ * @brief  Releases one GMSL link from the internal FSYNC generator.
+ *
+ * Stops the generator once no link is slaved to it any more, so a camera
+ * leaving External sync keeps the trigger running for its siblings.
+ *
+ * @param  [in]  dev          The deserializer device handle.
+ * @param  [in]  link         GMSL link to release.
+ *
+ * @return  0 for success, or negative error code.
+ */
+int max96712_disable_fsync(struct device *dev, u32 link);
 /* Caller selects a confirmed D585; false restores saved MST_BT. */
 int max96712_set_i2c_fast_plus_mode(struct device *dev, u32 link, bool enable);
 /**

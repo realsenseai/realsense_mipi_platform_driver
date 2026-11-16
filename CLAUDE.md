@@ -202,6 +202,50 @@ Each MIPI segment's lane count comes from a **different** DT property, so the ca
 - **A pure-D5xx max96712 overlay is the matching D4xx overlay with a mechanical substitution** — nothing board-, VI-, nvcsi- or TSC-related changes. The whole edit is: `compatible = "intel,d4xx"` → `"realsense,d5xx"` on every ds5 node; the serializer nodes `max9295_<x>@` → `max96717_<x>@` with `compatible = "maxim,max9295"` → `"maxim,max96717"`; and the hybrid config's two camera-side 2-lane properties (ds5 endpoint `bus-width`, `gmsl-link/num-lanes`) go to `<4>`, since D5xx is 4-lane end to end. `lane_cnt`, `link-mask`, the per-link `maxim,linkN-vc-remap` tables, every VI/nvcsi `bus-width`/`port-index`, and every `modeN` (incl. `serdes_pix_clk_hz`) are already identical. `…-fg12-16ch-cams-0-1-2-3-d5xx.dts` was derived from `…-fg12-16ch-cams-0-1-2-3.dts` this way, and replaying the same substitution on `…-cams-0-1.dts` reproduces the hand-written `…-cams-0-1-d5xx.dts` byte for byte.
 - **A mixed D5xx + D4xx overlay is the all-D5xx one with that substitution replayed backwards on the D4xx links only.** Per D4xx link: serializer node `max96717_<x>@` → `max9295_<x>@` with `compatible = "maxim,max96717"` → `"maxim,max9295"`, the four ds5 nodes' `compatible` → `"intel,d4xx"`, and their ds5-endpoint `bus-width` / `gmsl-link/num-lanes` back to `<2>`. Two things the pure substitution does not cover: the max9295 nodes need `external_addr_reassign` (the max96712 already hands out `0x40 + link_id`; it is a no-op on max96717, whose `max96717_setup_control()` never writes its own `DEV_ADDR`), and the `tegra-camera-platform/modules` `badge` strings for those links go `d5xx_*` → `d4xx_*`. Everything deserializer-side stays put — `lane_cnt`, VI/nvcsi `bus-width`, ds5-endpoint `port-index` (unique 0..15 per overlay), every `modeN`. `…-fg12-16ch-cams-0-1-2-3-d5xx-3d4xx.dts` and `…-fg12-4ch-cams-0-1-2-3-d5xx-3d4xx.dts` are both D5xx on link 0 + D4xx on links 1..3 built this way.
 
+## Frame sync (external sync) source
+
+The camera's `camera_sync_mode` = External only says *that* the camera is slaved; what
+drives the pulse is a deserializer-level, board-level fact, and the two sources must never
+both drive it.
+
+- The signal reaches the camera over **GMSL GPIO channel 23** on every board: both
+  serializers receive it there (`max9295` GPIO0 `RX_ID` `0x17`, `max96717` GPIO0 the same),
+  and `ds5_set_ser_esync_tunneling()` arms that on the serializer before touching the
+  deserializer.
+- **max96724 and max96712 both generate the pulse themselves by default**, from the 25 MHz
+  crystal, at the depth stream's rate (`setup_fsync`/`disable_fsync` in `dser_interface`).
+  **One generator feeds every link of its deserializer**, so both ops take the GMSL link:
+  the first link to ask programs the rate and later links join it, and the generator stops
+  only with the last link that leaves. A per-camera enable/disable without that ownership
+  drops the trigger for the siblings still in External sync, and a second camera at another
+  fps would retune the ones already running — so a later link at a different rate is warned
+  about and joins at the running rate instead.
+  The MAX96712 and MAX96724 FSYNC blocks are **register-for-register identical** —
+  `FSYNC_0` `0x04A0`, period `0x04A5..0x04A7`, `FSYNC_15` `0x04AF`, `FSYNC_17` `0x04B1`,
+  same fields, same decodes — so `max96712_setup_fsync()` is a literal port of
+  `max96724_setup_fsync()`; keep them in step.
+- **A board that feeds a host sync signal in on a deserializer MFP pin opts out with
+  `maxim,fsync-from-mfp`** on its max96712 node. Only then does `max96712_setup_control()`
+  program the MFP2/MFP6 GPIO-TX forwarding onto channel 23, and only then do the two fsync
+  ops become no-ops. The **tegra234** fg12-16ch overlays (Orin AGX TSC →
+  `MAX<n>_CSI_SYNC` → MFP2) are the only ones that set it; every other max96712 overlay
+  uses the internal generator. The host path needs two separate things and only fg12-16ch
+  has both in-tree: an Orin TSC generator, and a board route from an Orin pad to a
+  deserializer MFP pin. FG12-4CH and Seeed are Orin Nano carriers with no TSC at all
+  (RSDEV-15310; the Seeed overlays say so in their own `overlay-name`), and Advantech ships
+  both tegra234 and tegra264/Thor max96712 overlays. **Never infer a carrier's module from
+  an overlay's `#include` or `jetson-header-name`** — every Seeed overlay includes the AGX
+  `tegra234-p3737-0000+p3701-0000.h` and declares "Jetson AGX CSI Connector" while being an
+  Orin Nano board. The internal generator makes the whole question moot, which is its
+  point: no host signal, no routing, no schematics. Set the flag on **every** max96712 node of such an overlay,
+  even a deserializer whose pin needs a jumper (fg12-16ch `dser_c`/`MAX3_CSI_SYNC`), so one
+  source feeds all links. The **JP5/Xavier** `tegra194-camera-d4xx-fg12-16ch*.dtsi` files
+  carry no TSC fragments and so do not set it: on JP5 this adds external sync where the
+  board never had a signal to forward, rather than replacing one.
+- `max96712.c` is patch-delivered, so this lives in all three carriers
+  (`nvidia-oot/6.0/0003`, `kernel/nvidia/5.1.2/0007`, `kernel/nvidia/5.0.2/0017`) and both
+  `max96712.h` copies. max9296 generates nothing and wires neither op.
+
 ## Kernel ABI / module compatibility notes
 
 - Never add a member to a public kernel struct referenced by exported symbols (e.g. `struct i2c_adapter` in `include/linux/i2c.h`). genksyms recomputes the CRC of every exported symbol referencing that struct, so prebuilt out-of-tree modules built against the unpatched headers — notably the BSP NVIDIA display stack (`nvidia.ko`/`nvidia-modeset.ko`/`nvidia-drm.ko`) — fail to load with "disagrees about version of symbol". Add only new exported functions; keep private state out of public headers. After any kernel-header patch, diff the rebuilt `vmlinux.symvers`/`Module.symvers` against what the BSP modules require (`modprobe --dump-modversions <module>.ko`).
