@@ -14,7 +14,7 @@ diff --git a/include/uapi/linux/media-bus-format.h b/include/uapi/linux/media-bu
 index 90d71ce..d733896 100644
 --- a/include/uapi/linux/media-bus-format.h
 +++ b/include/uapi/linux/media-bus-format.h
-@@ -170,6 +170,11 @@
+@@ -170,6 +170,19 @@
   * up to the declared height, over an opaque 8-bit CSI carrier */
  #define MEDIA_BUS_FMT_RS_VARLEN_1X8		0x500a
  
@@ -22,6 +22,14 @@ index 90d71ce..d733896 100644
 + * carrier rows never match another sensor's standard H.264 or JPEG code. */
 +#define MEDIA_BUS_FMT_RS_H264_1X8		0x500b
 +#define MEDIA_BUS_FMT_RS_JPEG_1X8		0x500c
++
++/* RealSense colour: YUYV sent in UYVY pair order. Its own code keeps the
++ * stock YUYV8_1X16 VI row unchanged for other sensors. */
++#define MEDIA_BUS_FMT_RS_YUYV8_1X16		0x500d
++
++/* RealSense IR stereo Y8I pairs: own code keeps the stock VYUY8_1X16
++ * VI row unchanged for other sensors. */
++#define MEDIA_BUS_FMT_RS_Y8I_1X16		0x500e
 +
  /* HSV - next is	0x6002 */
  #define MEDIA_BUS_FMT_AHSV8888_1X32		0x6001
