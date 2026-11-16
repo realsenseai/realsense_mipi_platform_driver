@@ -156,23 +156,30 @@ int max96724_set_i2c_fast_plus_mode(struct device *dev, u32 link, bool enable);
  * @brief  Enables the MAX96724 internal FSYNC generator.
  *
  * Programs the deserializer as the FSYNC master and broadcasts the
- * generated sync signal over the configured GMSL GPIO channel.
+ * generated sync signal over the configured GMSL GPIO channel. The
+ * generator is one per deserializer and feeds every link, so the first
+ * link to ask sets the rate and later links join it.
  *
  * @param  [in]  dev          The deserializer device handle.
+ * @param  [in]  link         GMSL link to slave to the generator.
  * @param  [in]  fps          Desired frame-sync rate in Hz.
  *
  * @return  0 for success, or negative error code.
  */
-int max96724_setup_fsync(struct device *dev, u32 fps);
+int max96724_setup_fsync(struct device *dev, u32 link, u32 fps);
 
 /**
- * @brief  Disables the MAX96724 internal FSYNC generator.
+ * @brief  Releases one GMSL link from the internal FSYNC generator.
+ *
+ * Stops the generator once no link is slaved to it any more, so a camera
+ * leaving External sync keeps the trigger running for its siblings.
  *
  * @param  [in]  dev          The deserializer device handle.
+ * @param  [in]  link         GMSL link to release.
  *
  * @return  0 for success, or negative error code.
  */
-int max96724_disable_fsync(struct device *dev);
+int max96724_disable_fsync(struct device *dev, u32 link);
 
 /**
  * @brief  Maps deserializer pipe ID to serializer pipe ID.

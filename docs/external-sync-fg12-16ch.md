@@ -7,7 +7,7 @@ External sync replaces the D4XX camera's internal frame clock with a shared exte
 1. **Option A — Orin TSC via MFP2** (per-deserializer): Use the Tegra234 TSC signal generators to produce a hardware FSYNC pulse routed to each MAX96712's MFP2 pin individually.
 2. **Option B — External signal generator via MFP6** (shared): Connect an external signal generator to the `CAM_SYNCALL` pin (PCC.00 / `spi2_sck_pcc0`), which is wired to all MAX96712 MFP6 inputs simultaneously.
 
-The MAX96712 driver configures ESYNC tunneling on **both** MFP2 and MFP6 at probe time, so both paths are always active. The cameras will sync to whichever signal is present.
+Both paths feed the deserializer a signal from outside it, so both need `maxim,fsync-from-mfp` on the max96712 node — every fg12-16ch overlay sets it. The driver then configures ESYNC tunneling on **both** MFP2 and MFP6 at probe time, so both paths are always active and the cameras sync to whichever signal is present. Without the flag the deserializer generates the pulse itself and ignores the pins (see `docs/gpio-tunneling-external-sync.md`), which is the default on every other max96712 board.
 
 ## Signal Paths
 
@@ -74,7 +74,7 @@ All overlays configure:
    - Pin multiplexing to route pads to TSC function
    - Power regulators and PWDN GPIOs
 
-3. **MAX96712 MFP2 ESYNC tunneling:** Configured automatically by the max96712 driver at probe time (registers `0x306`–`0x3AA`). No user action needed.
+3. **MAX96712 MFP2 ESYNC tunneling:** Configured automatically by the max96712 driver at probe time (registers `0x306`–`0x3AA`), for each max96712 node carrying `maxim,fsync-from-mfp`. No user action needed with a shipped fg12-16ch overlay; a new overlay for this board must set that flag on **every** max96712 node, or those deserializers free-run on their internal generator instead of following the TSC.
 
 ## Using ext_sync_gen.py
 

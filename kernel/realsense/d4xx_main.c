@@ -79,8 +79,10 @@ struct dser_interface {
 	int (*setup_control)(struct device *dev, struct device *s_dev);
 	int (*reset_control)(struct device *dev, struct device *s_dev);
 	int (*recover_link)(struct device *dev, struct device *ser_dev, u32 link);
-	int (*setup_fsync)(struct device *dev, u32 fps);
-	int (*disable_fsync)(struct device *dev);
+	/* Slave/release one link to the deserializer's own FSYNC generator.
+	 * The generator is shared, so it stops with the last slaved link. */
+	int (*setup_fsync)(struct device *dev, u32 link, u32 fps);
+	int (*disable_fsync)(struct device *dev, u32 link);
 
 	/* Device registration */
 	int (*sdev_register)(struct device *dev, struct gmsl_link_ctx *g_ctx);
@@ -552,6 +554,8 @@ static const struct dser_interface max96712_interface = {
 	.setup_control = max96712_setup_control,
 	.reset_control = max96712_reset_control,
 	.recover_link = max96712_recover_link,
+	.setup_fsync = max96712_setup_fsync,
+	.disable_fsync = max96712_disable_fsync,
 	.sdev_register = max96712_sdev_register,
 	.sdev_unregister = max96712_sdev_unregister,
 	.power_on = max96712_power_on,
@@ -4040,8 +4044,10 @@ static int ds5_set_ser_esync_tunneling(struct ds5 *state, bool enable)
 			fps = state->mux.last_set->config.framerate;
 		}
 		ret = enable ?
-			state->dser_ops->setup_fsync(state->dser_dev, fps) :
-			state->dser_ops->disable_fsync(state->dser_dev);
+			state->dser_ops->setup_fsync(state->dser_dev,
+						     state->gmsl_link, fps) :
+			state->dser_ops->disable_fsync(state->dser_dev,
+						       state->gmsl_link);
 	}
 
 	if (ret)

@@ -192,6 +192,10 @@ struct max96724 {
 	bool pixel_mode;
 	/* Serializer VC -> deserializer VC, or MAX96724_VC_UNMAPPED. */
 	u8 vc_remap[MAX96724_MAX_LINKS][MAX96724_MAX_SER_VCS];
+	/* One generator feeds every link, so it runs while any link is still
+	 * slaved to it, at the rate the first of them asked for. */
+	u8 fsync_links;
+	u32 fsync_period;
 };
 
 struct reg_pair {
@@ -668,6 +672,10 @@ static void max96724_power_off_locked(struct max96724 *priv)
 {
 	if (!priv->pw_ref || --priv->pw_ref)
 		return;
+
+	/* The chip loses its FSYNC block here, so no link stays slaved to it. */
+	priv->fsync_links = 0;
+	priv->fsync_period = 0;
 
 	usleep_range(1, 2);
 	if (priv->reset_gpio)
@@ -1511,6 +1519,11 @@ int max96724_init_settings(struct device *dev)
 
 	mutex_lock(&priv->lock);
 
+	/* A fresh dser slot owns no links yet, so drop a mask left by an earlier
+	 * bind; the next External write then reprograms the generator. */
+	priv->fsync_links = 0;
+	priv->fsync_period = 0;
+
 	if (priv->pixel_mode) {
 		err = max96724_configure_pixel_datapath(dev);
 		mutex_unlock(&priv->lock);
@@ -1632,12 +1645,15 @@ EXPORT_SYMBOL(max96724_set_pipe);
 #define MAX96724_FSYNC_0_ENABLE		0x04
 #define MAX96724_FSYNC_0_DISABLE	0x0C
 
-int max96724_setup_fsync(struct device *dev, u32 fps)
+int max96724_setup_fsync(struct device *dev, u32 link, u32 fps)
 {
 	struct max96724 *priv = dev_get_drvdata(dev);
 	struct reg_pair map[6];
 	u32 period;
-	int err;
+	int err = 0;
+
+	if (link >= MAX96724_MAX_LINKS)
+		return -EINVAL;
 
 	if (!fps)
 		fps = MAX96724_FSYNC_FPS_DEFAULT;
@@ -1669,13 +1685,27 @@ int max96724_setup_fsync(struct device *dev, u32 fps)
 
 	mutex_lock(&priv->lock);
 
-	err = max96724_set_registers(dev, map, ARRAY_SIZE(map));
-	if (err)
+	if (!priv->fsync_links) {
+		err = max96724_set_registers(dev, map, ARRAY_SIZE(map));
+		if (!err)
+			priv->fsync_period = period;
+	} else if (period != priv->fsync_period) {
+		/* Retuning now would drag the links already slaved off their rate. */
+		dev_warn(dev, "%s: link %u asked %u Hz, generator stays at %u Hz\n",
+			 __func__, link, fps,
+			 MAX96724_FSYNC_XTAL_HZ / priv->fsync_period);
+	}
+
+	if (err) {
 		dev_err(dev, "%s: FSYNC setup failed (%d)\n", __func__, err);
-	else
+	} else {
+		priv->fsync_links |= BIT(link);
 		dev_info(dev,
-			 "%s: internal FSYNC enabled (%u Hz, period %u, broadcast ch%u to all links)\n",
-			 __func__, fps, period, MAX96724_FSYNC_TX_CH);
+			 "%s: internal FSYNC enabled (%u Hz, period %u, broadcast ch%u, links 0x%x)\n",
+			 __func__, MAX96724_FSYNC_XTAL_HZ / priv->fsync_period,
+			 priv->fsync_period, MAX96724_FSYNC_TX_CH,
+			 priv->fsync_links);
+	}
 
 	mutex_unlock(&priv->lock);
 
@@ -1683,21 +1713,32 @@ int max96724_setup_fsync(struct device *dev, u32 fps)
 }
 EXPORT_SYMBOL(max96724_setup_fsync);
 
-int max96724_disable_fsync(struct device *dev)
+int max96724_disable_fsync(struct device *dev, u32 link)
 {
 	struct max96724 *priv = dev_get_drvdata(dev);
 	struct reg_pair map[] = {
 		{MAX96724_FSYNC_0_ADDR, MAX96724_FSYNC_0_DISABLE},
 	};
-	int err;
+	int err = 0;
+
+	if (link >= MAX96724_MAX_LINKS)
+		return -EINVAL;
 
 	mutex_lock(&priv->lock);
 
-	err = max96724_set_registers(dev, map, ARRAY_SIZE(map));
-	if (err)
-		dev_err(dev, "%s: FSYNC disable failed (%d)\n", __func__, err);
-	else
-		dev_dbg(dev, "%s: internal FSYNC disabled\n", __func__);
+	/* One generator feeds every link, so stop it only with the last slave. */
+	if (priv->fsync_links == BIT(link)) {
+		err = max96724_set_registers(dev, map, ARRAY_SIZE(map));
+		if (err)
+			dev_err(dev, "%s: FSYNC disable failed (%d)\n",
+				__func__, err);
+		else
+			dev_dbg(dev, "%s: internal FSYNC disabled\n", __func__);
+	}
+
+	/* Keep the link marked when the write failed: it is still running. */
+	if (!err)
+		priv->fsync_links &= ~BIT(link);
 
 	mutex_unlock(&priv->lock);
 

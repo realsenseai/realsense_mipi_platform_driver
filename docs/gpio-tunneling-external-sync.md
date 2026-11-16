@@ -1,5 +1,21 @@
 # GPIO Tunneling for External Sync — Design Document
 
+> **Deserializer side superseded by RSDEV-15310.** This document describes the design as of
+> RSDEV-13332, when the deserializer's only job was forwarding a host sync signal from an MFP
+> pin. It is kept for the serializer-side design and the history, which are unchanged and still
+> accurate.
+>
+> Every statement below that the deserializer is **configured once at probe and untouched at
+> runtime**, that **only the serializer changes on a sync-mode write**, or that a sync-mode
+> change has **no deserializer-side effect**, no longer holds — in Key Changes, Assumptions,
+> R1/R3/R9, New Design — Multi-Camera Behavior, and Phases 2, 5 and 6 alike. Treat the whole
+> deserializer side of this document as historical and read **Sync Source** at the end for what
+> it does now: the deserializer runs an internal FSYNC generator, programmed and stopped on
+> sync-mode changes, shared by every link and owned per link.
+>
+> Some individual statements below also carry an inline superseded marker. The absence of one
+> is **not** a sign that a statement was checked and still holds — this banner governs.
+
 ## Overview
 
 External sync (ESYNC) allows multiple D4XX cameras to synchronize frame capture via a shared GPIO signal routed through the GMSL link. The GPIO tunneling patches configure ESYNC registers on both the MAX9295 serializer and the MAX96712 deserializer to establish this signal path. MAX96712 only.
@@ -7,14 +23,18 @@ External sync (ESYNC) allows multiple D4XX cameras to synchronize frame capture 
 ## Signal Path
 
 ```
-External sync source (GPIO)
+MAX96712 internal FSYNC generator (0x04A0, 0x04A5–0x04A7, 0x04AF, 0x04B1)   [default]
+  — or —
+External sync source on an MFP pin ("maxim,fsync-from-mfp")
     ↓
-MAX96712 deserializer (ESYNC registers 0x306–0x308, 0x313–0x315)
-    ↓ GMSL link
+MAX96712 deserializer (MFP forwarding: ESYNC registers 0x306–0x308, 0x313–0x315)
+    ↓ GMSL link, GPIO channel 23
 MAX9295 serializer (ESYNC registers 0x2BE–0x2C3)
     ↓
 D4XX camera module
 ```
+
+See *Sync Source* below for which of the two drives channel 23.
 
 Both ends must be configured for external sync to function.
 
@@ -104,16 +124,16 @@ Each serializer–deserializer pair was configured independently at probe. Same 
 
 | Aspect | Old Design | New Design |
 |--------|-----------|------------|
-| Deserializer ESYNC | Always at probe | At probe, fixed — no runtime changes |
+| Deserializer ESYNC | Always at probe | At probe, fixed — no runtime changes *(superseded: the generator is programmed on a sync-mode change, see Sync Source)* |
 | Serializer tunneling | Always at probe | On demand, only for the camera changing sync mode |
-| Default state | Tunneling ON (both) | Deserializer ON at probe; serializer OFF until mode 2 |
+| Default state | Tunneling ON (both) | Deserializer ON at probe; serializer OFF until mode 2 *(superseded: `max96712_setup_control()` writes nothing at probe without `maxim,fsync-from-mfp`)* |
 | Runtime control | None | Per-camera `DS5_CAMERA_CID_SYNC_MODE` controls its serializer |
 | After HW reset | Camera/serializer could diverge | Recovering camera serializer is reset to default to match reset camera FW |
 | Scope | All MAX96712 setups | MAX96712 only; serializer side per-camera |
 
 ## Assumptions
 
-- The deserializer ESYNC configuration is set once at probe and never modified at runtime. It is a shared, permanent configuration for the deserializer.
+- The deserializer ESYNC configuration is set once at probe and never modified at runtime. It is a shared, permanent configuration for the deserializer. **Superseded by *Sync Source* below:** the internal generator's `FSYNC_0`/`FSYNC_15`/period are written on every sync-mode change.
 - Each camera's serializer ESYNC is independent. Enabling ESYNC on camera A does not affect camera B's serializer.
 - Mixed sync modes on the same deserializer are supported: camera A can be in mode 2 (External Sync) while camera B is in mode 0 (Default). Each camera controls only its own serializer.
 
@@ -129,11 +149,11 @@ it does not renumber the menu):
 | 1 | Master | Disable (if currently on) |
 | 2 | External Sync | **Enable** (if currently off) |
 
-Deserializer ESYNC is **not toggled** at runtime.
+Deserializer ESYNC is **not toggled** at runtime. **Superseded by *Sync Source* below:** the MFP forwarding still is not, but the internal generator is started and stopped per sync-mode change.
 
 ## Requirements
 
-**R1 — Deserializer ESYNC at probe.** Keep ESYNC register writes in `max96712_setup_control()`. The deserializer is configured once at probe and never changed afterward.
+**R1 — Deserializer ESYNC at probe.** Keep ESYNC register writes in `max96712_setup_control()`. The deserializer is configured once at probe and never changed afterward. **Superseded by *Sync Source* below:** these writes are now conditional on `maxim,fsync-from-mfp`.
 
 **R2 — Serializer update policy.** On mode 2 (External Sync), program this camera's serializer to ESYNC-enabled. On mode 0/1, program this camera's serializer to default (ESYNC-disabled).
 
@@ -147,11 +167,11 @@ Deserializer ESYNC is **not toggled** at runtime.
 
 **R7 — MAX96712 only.** All serializer tunneling logic gated on `dser_ops == &max96712_interface`. No effect on MAX9296 setups.
 
-**R8 — Per-camera independence.** Enabling ESYNC on one camera has no side-effect on sibling cameras. No iteration over `ds5_inited[]` on mode change.
+**R8 — Per-camera independence.** Enabling ESYNC on one camera has no side-effect on sibling cameras. No iteration over `ds5_inited[]` on mode change. **Superseded by *Sync Source* below:** this holds serializer-side, but the internal generator is shared by every link, which is exactly what the per-link ownership (`fsync_links`) manages — a camera leaving External sync must not stop the trigger its siblings still use.
 
 **R9 — New SerDes API pairs.** Enable/disable functions for the serializer; deserializer uses existing `setup_control` path:
 - `max9295_enable_gpio_tunneling()` / `max9295_disable_gpio_tunneling()`
-- Deserializer: no new API needed (ESYNC remains in `max96712_setup_control()`)
+- Deserializer: no new API needed (ESYNC remains in `max96712_setup_control()`) — superseded, see *Sync Source* below for `max96712_setup_fsync()`/`_disable_fsync()`
 
 ## New Design — Call Sites
 
@@ -207,7 +227,7 @@ If a camera undergoes HW reset, only that camera's serializer is driven back to 
 - Add `max9295_disable_gpio_tunneling()` — restores `MAX9295_PWDN_GPIO` (0x90), `MAX9295_RESET_SRC` (0x60), zeroes `0x2C0`–`0x2C3`
 - Export both, declare in `max9295.h`
 
-**MAX96712 deserializer** — no API change. ESYNC register writes remain in `max96712_setup_control()` as before. No `enable_esync`/`disable_esync` functions needed.
+**MAX96712 deserializer** — no API change. ESYNC register writes remain in `max96712_setup_control()` as before. No `enable_esync`/`disable_esync` functions needed. **Superseded by *Sync Source* below:** these writes are now conditional on `maxim,fsync-from-mfp`.
 
 ### Phase 2 — `dser_interface` — no change
 
@@ -236,7 +256,7 @@ if (state->is_depth && state->dser_ops == &max96712_interface) {
 ### Phase 5 — Remove probe-time serializer tunneling (`d4xx.c`)
 
 - Delete `max9295_setup_gpio_tunneling()` call from `ds5_board_setup()`
-- Deserializer ESYNC writes in `max96712_setup_control()` are kept — deserializer is configured at probe and stays configured
+- Deserializer ESYNC writes in `max96712_setup_control()` are kept — deserializer is configured at probe and stays configured (superseded, see *Sync Source* below)
 
 ### Phase 6 — Recovery path (`d4xx.c`)
 
@@ -256,3 +276,58 @@ if (state->dser_ops == &max96712_interface) {
 | `kernel/realsense/d4xx.c` | helper, `s_ctrl` hook, probe cleanup (remove serializer tunneling call), recovery |
 | `nvidia-oot/*/0004-*max9295*tunneling*.patch` | Rename enable, add disable, update header |
 | `.github/copilot-instructions.md` | (no change needed) |
+
+---
+
+# Sync Source (RSDEV-15310): deserializer-generated by default
+
+The split above decides *when* the pulse is tunnelled; this decides *where it comes from*.
+Only one source may drive GMSL GPIO channel 23.
+
+| Source | Selected by | Boards |
+|--------|-------------|--------|
+| MAX96712 internal FSYNC generator | default | every max96712 board except the tegra234 fg12-16ch overlays |
+| Host signal on a deserializer MFP pin | `maxim,fsync-from-mfp` on the max96712 node | tegra234 fg12-16ch (Orin AGX TSC → `MAX<n>_CSI_SYNC` → MFP2) |
+
+JP5/Xavier is Orin-less: `tegra194-camera-d4xx-fg12-16ch{,-dual}.dtsi` carry no TSC
+fragments, so they do not set the flag and take the internal generator. That *adds*
+external sync on JP5, where the deserializer had no signal to forward in the first place.
+
+The host-generated path needs two independent things, and only fg12-16ch has both
+in-tree: an Orin TSC signal generator, and a board route from an Orin pad to a deserializer
+MFP pin. FG12-4CH and Seeed are Orin Nano carriers and have no generator at all
+(RSDEV-15310, and the Seeed overlays name the module in their own `overlay-name`).
+Advantech ships both tegra234 and tegra264/Thor max96712 overlays. Where a generator does
+exist, whether any pad reaches the deserializer's MFP is a board question that takes the
+schematics to answer.
+
+Do not read a carrier's module off an overlay's `#include` or `jetson-header-name`: every
+Seeed overlay includes the AGX `tegra234-p3737-0000+p3701-0000.h` and declares "Jetson AGX
+CSI Connector" while being an Orin Nano board. The internal generator removes the question
+entirely — no host signal, no routing, no schematics.
+MAX96724 already generated the pulse itself;
+its FSYNC block is register-for-register identical to MAX96712's, so
+`max96712_setup_fsync()` / `max96712_disable_fsync()` are a literal port of the MAX96724
+pair: 24-bit period from the 25 MHz crystal (`25000000 / fps`), `FSYNC_15 = 0xCF`
+(XTAL time base, GMSL2 type, all four links), `FSYNC_TX_ID = 23`, `FSYNC_0 = 0x04` to
+enable (generation on, manual method) and `0x0C` to disable.
+
+- Both ops are wired into `max96712_interface`, so `ds5_set_ser_esync_tunneling()` drives
+  them exactly as it already did for MAX96724: enabled on `camera_sync_mode` = External at
+  the depth stream's rate, disabled otherwise.
+- **The generator is one per deserializer and feeds all four links**, so both ops take the
+  link (`state->gmsl_link`) and the driver tracks which links are slaved to it: the first
+  programs the rate, later links join it, and the generator stops only with the last one.
+  Without that, a camera leaving External sync would stop the trigger its siblings still
+  use, and a second camera at another fps would retune the ones already running — a later
+  link asking for a different rate is warned about and joins at the running rate. MAX96724
+  carries the same ownership, since its generator is shared the same way.
+- With `maxim,fsync-from-mfp` the two ops are no-ops and `max96712_setup_control()` keeps
+  programming the MFP2/MFP6 GPIO-TX forwarding — unchanged behaviour for fg12-16ch.
+  Without it, that forwarding is skipped, so the generator is the channel's only source.
+- Set the flag on **every** max96712 node of such an overlay, including a deserializer
+  whose sync pin is only reachable with a jumper (fg12-16ch `dser_c` / `MAX3_CSI_SYNC`):
+  a link left on the internal generator would free-run against the TSC-synced ones.
+- `max96712.c` has no repo copy, so the change lives in all three patch carriers
+  (`nvidia-oot/6.0/0003`, `kernel/nvidia/5.1.2/0007`, `kernel/nvidia/5.0.2/0017`) and the
+  prototypes in both `max96712.h` copies. max9296 generates nothing and wires neither op.
