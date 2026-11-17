@@ -22,7 +22,7 @@ while [[ $# -gt 0 ]]; do
         ACTION="reset"
     elif [[ $1 == "-h" ]]; then
         echo Usage:
-        echo "$0 [--one-cam | --dual-cam | --max96712-EVB | --fg12-16ch | --fg12-16ch-dual ] [reset] [-h]"
+        echo "$0 [--one-cam | --dual-cam | --max96712-EVB | --fg12-16ch | --fg12-16ch-dual ] [reset] [JetPack] [-h]"
         echo -e 'reset\t: hard reset (git) to version from jetpack_version file'
         echo -e '-h\t: show this help'
         exit 0
@@ -38,6 +38,28 @@ if version_lt "$JETPACK_VERSION" "6.0"; then
 else
     D4XX_SRC_DST=nvidia-oot
 fi
+
+if [[ ! -d "${BUILD_SRCS}" ]]; then
+    echo "Sources folder not found. Run ./setup_workspace.sh first"
+    exit 2
+fi
+# git -C on a plain dir silently resolves to the enclosing driver checkout, so require
+# each patched dir to be the top of its own repo before any apply or reset.
+for repo in "${PATCHED_REPOS[@]}"; do
+    dir="${BUILD_SRCS}/$repo"
+    if [[ ! -e "$dir/.git" ]]; then
+        echo "$dir is not a git tree. Remove ${BUILD_SRCS}, then recreate it with ./setup_workspace.sh [--sources-archive public_sources.tbz2] $JP_INPUT_VERSION"
+        exit 2
+    fi
+    if ! top="$(git -C "$dir" rev-parse --show-toplevel)"; then
+        echo "git refused $dir: run as the user that owns it, or chown it / add it to safe.directory"
+        exit 3
+    fi
+    if [[ "$top" != "$(cd "$dir" && pwd -P)" ]]; then
+        echo "$dir is not a git tree of its own (resolves to $top)"
+        exit 2
+    fi
+done
 
 # Create nvethernetrm symlink for JP 6.x (moved from source_sync_6.x.sh)
 # JP 5.x handles nvethernetrm differently (full path clone, not a symlink)
@@ -70,11 +92,6 @@ apply_external_patches() {
         git -C "${source}" reset --hard $L4T_VERSION
     fi
 }
-
-if [[ ! -d "${BUILD_SRCS}" ]]; then
-    echo "Sources folder not found. Run ./setup_workspace.sh first"
-    exit 2
-fi
 
 apply_external_patches "$JP_INPUT_VERSION" "$D4XX_SRC_DST"
 apply_external_patches "$JP_INPUT_VERSION" "$KERNEL_DIR"

@@ -59,43 +59,18 @@ Note: dev_dbg() log support will not be enabled by default. If needed, run the `
 
 
 
-## JetPack manual build - cross compile x86-64 (CI deploy)
+## JetPack build from NVIDIA public sources (as Jenkins builds it)
 
-[NVIDIA® JetPack 6.2: Jetson Linux 36.4.3](https://developer.nvidia.com/embedded/jetson-linux-r3643)
-1. Download Jetson Linux Driver Package - [JetPack 6.2 BSP sources](https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v4.3/release/jetson_linux_r36.4.3_aarch64.tbz2)
-2. Download Toolchain ARM64 compiler - [Bootlin Toolchain gcc 11.3](https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v3.0/toolchain/aarch64--glibc--stable-2022.08-1.tar.bz2)
-3. Apply patches for kernel drivers, nvidia-oot module and tegra devicetree.
-4. Build cross-compile project on host (Build PC) or natively on target (Jetson).
-5. Apply build results to target (Jetson).
-6. Configure target.
+The same three scripts, fed NVIDIA's `public_sources.tbz2` instead of a git clone.
+`setup_workspace.sh --sources-archive` unpacks it, including the nested kernel, OOT-module and display bundles, and makes each patched directory its own git repo, so `apply_patches.sh` and `apply_patches.sh reset` work exactly as on a cloned workspace.
 
 ```
-# JetPack 6.2
-mkdir -p l4t-gcc/6.x
-cd ./l4t-gcc/6.x
-wget https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v3.0/toolchain/aarch64--glibc--stable-2022.08-1.tar.bz2 -O aarch64--glibc--stable-final.tar.bz2
-tar xf aarch64--glibc--stable-final.tar.bz2 --strip-components 1
-cd ../..
 wget https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v4.3/sources/public_sources.tbz2
-tar xjf public_sources.tbz2
-cd Linux_for_Tegra/source
-tar xjf kernel_src.tbz2
-tar xjf kernel_oot_modules_src.tbz2
-tar xjf nvidia_kernel_display_driver_source.tbz2
-cd ../..
-
-./apply_patches_ext.sh 6.2 Linux_for_Tegra/source
-
-cp ./nvidia-oot/Makefile Linux_for_Tegra/source
-cp ./kernel/kernel-jammy-src/Makefile Linux_for_Tegra/source/kernel
-
-# build kernel, dtb and D457 driver
-./build_all.sh 6.2 ./Linux_for_Tegra/source
+./setup_workspace.sh --sources-archive public_sources.tbz2 6.2
+./apply_patches.sh 6.2
+./build_all.sh 6.2
 ```
-Note: dev_dbg() log support will not be enabled by default. If needed, run the `./build_all.sh` script with `--dev-dbg` option like below.
-```
-./build_all.sh --dev-dbg 6.2 ./Linux_for_Tegra/source
-```
+Run all three as the same user and do not run only `setup_workspace.sh` with sudo: git refuses a tree owned by another user, and `apply_patches.sh` then stops with exit code 3.
 
 ## Archive JetPack 6.x build results (optional)
 Assuming 6.2 (or 6.1) build the kernel version is 5.15.148-tegra.

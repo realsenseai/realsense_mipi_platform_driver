@@ -27,54 +27,24 @@ Please follow the [instruction](https://docs.nvidia.com/sdk-manager/install-with
 <details>
 <summary>JetPack manual build</summary>
 
-Download Jetson Linux source code tarball from 
+Download the Jetson Linux source code tarball:
 - [JetPack 5.1.2 BSP sources](https://developer.nvidia.com/downloads/embedded/l4t/r35_release_v4.1/sources/public_sources.tbz2)
 - [JetPack 5.0.2 BSP sources](https://developer.nvidia.com/embedded/l4t/r35_release_v1.0/sources/public_sources.tbz2)
-- [JetPack 5.x.2 Toolchain](https://developer.nvidia.com/embedded/jetson-linux/bootlin-toolchain-gcc-93)
 
-
-## JetPack 5.1.2
-```
-mkdir -p l4t-gcc/5.x
-cd ./l4t-gcc/5.x
-wget https://developer.nvidia.com/embedded/jetson-linux/bootlin-toolchain-gcc-93 -O aarch64--glibc--stable-final.tar.gz
-tar xf aarch64--glibc--stable-final.tar.gz
-cd ../..
-wget https://developer.nvidia.com/downloads/embedded/l4t/r35_release_v4.1/sources/public_sources.tbz2
-tar xjf public_sources.tbz2
-cd Linux_for_Tegra/source/public
-tar xjf kernel_src.tbz2
-cd ../../..
-```
-## JetPack 5.0.2
-```
-mkdir -p l4t-gcc/5.x
-cd ./l4t-gcc/5.x
-wget https://developer.nvidia.com/embedded/jetson-linux/bootlin-toolchain-gcc-93 -O aarch64--glibc--stable-final.tar.gz
-tar xf aarch64--glibc--stable-final.tar.gz --strip-components 1
-cd ../..
-wget https://developer.nvidia.com/embedded/l4t/r35_release_v1.0/sources/public_sources.tbz2
-tar xjf public_sources.tbz2
-cd Linux_for_Tegra/source/public
-tar xjf kernel_src.tbz2
-cd ../../..
-```
-
-## Apply D457 patches and build the kernel image, dtb and D457 driver.
-
+Then run the same scripts as the git-clone flow below. `setup_workspace.sh --sources-archive` unpacks the tarball and its nested `kernel_src.tbz2`, makes each patched directory its own git repo, and installs the toolchain:
 ```
 # install dependencies
 sudo apt install build-essential bc flex bison
 
-# apply patches
-./apply_patches_ext.sh 5.1.2 ./Linux_for_Tegra/source/public
-
-# build kernel, dtb and D457 driver
-./build_all.sh 5.1.2 ./Linux_for_Tegra/source/public
+./setup_workspace.sh --sources-archive public_sources.tbz2 5.1.2
+./apply_patches.sh 5.1.2
+./build_all.sh 5.1.2
 ```
+Run all three as the same user and do not run only `setup_workspace.sh` with sudo: git refuses a tree owned by another user, and `apply_patches.sh` then stops with exit code 3.
+
 Note: dev_dbg() log support will not be enabled by default. If needed, run the `./build_all.sh` script with `--dev-dbg` option like below.
 ```
-./build_all.sh --dev-dbg 5.1.2 ./Linux_for_Tegra/source/public
+./build_all.sh --dev-dbg 5.1.2
 ```
 
 </details>
