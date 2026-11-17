@@ -200,6 +200,7 @@ sudo ln -s /boot/initrd.img-5.15.148-tegra /boot/initrd
     | `tegra234-camera-d4xx-overlay-advantech.dtbo` | Advantech board with one camera connected to bottom right of the left port |
     | `tegra234-camera-d4xx-overlay-avermedia.dtbo` | AverMedia board with one camera connected to bottom right of the right port |
     | `tegra234-camera-d4xx-overlay-avermedia-d5xx.dtbo` | AverMedia board with one D5xx camera (max96717 serializer, 4-lane) connected to bottom right of the right port |
+    | `tegra234-camera-d4xx-overlay-avermedia-cams-0-3-d5xx.dtbo` | AverMedia board with two D5xx cameras (max96717 serializer, 4-lane) connected to the bottom two links of the right port |
     | `tegra234-camera-d4xx-overlay-seeed.dtbo` | Seeed reComputer board with one camera connected to top right link |
     | `tegra234-camera-d4xx-overlay-seeed-d5xx.dtbo` | Seeed reComputer board with one D5xx camera (max96717 serializer, 4-lane) connected to top right link |
     | `tegra234-camera-d4xx-overlay-seeed-cams-0-1.dtbo` | Seeed reComputer board with two cameras connected to top two links |
