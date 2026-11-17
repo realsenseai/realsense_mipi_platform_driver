@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * ds5.c - Intel(R) RealSense(TM) D4XX camera driver
+ * d4xx_main.c - Intel(R) RealSense(TM) D4XX camera driver
  *
  * Copyright (c) 2017-2023, INTEL CORPORATION.  All rights reserved.
  *
@@ -18,12 +18,10 @@
  */
 
 #include <linux/bitops.h>
-#include <linux/crc32.h>
 #include <linux/delay.h>
 #include <linux/gpio.h>
 #include <linux/i2c.h>
 #include <linux/kernel.h>
-#include <linux/list.h>
 #include <linux/media.h>
 #include <linux/module.h>
 #include <linux/of_gpio.h>
@@ -40,13 +38,13 @@
 #include <media/v4l2-subdev.h>
 #include <media/v4l2-mediabus.h>
 
-#ifdef CONFIG_VIDEO_D4XX_SERDES
-#include <media/max9295.h>
-#include <media/max9296.h>
-#include <media/max96712.h>
-#include <media/max96717.h>
-#include <media/max96724.h>
+#include <linux/list.h>		/* list_for_each_entry() over a handler's ctrl_refs */
+#include "d4xx.h"
+#ifdef CONFIG_TEGRA_CAMERA_PLATFORM
+#include <media/mc_common.h>	/* TEGRA_CHANNEL_CMD_REFRESH_CTRLS */
+#endif
 
+#ifdef CONFIG_VIDEO_D4XX_SERDES
 /* Deserializer interface structure for abstraction */
 struct dser_interface {
 	/* Pipeline management. */
@@ -78,11 +76,11 @@ struct dser_interface {
 	int (*recover_link)(struct device *dev, struct device *ser_dev, u32 link);
 	int (*setup_fsync)(struct device *dev, u32 fps);
 	int (*disable_fsync)(struct device *dev);
-	
+
 	/* Device registration */
 	int (*sdev_register)(struct device *dev, struct gmsl_link_ctx *g_ctx);
 	int (*sdev_unregister)(struct device *dev, struct device *s_dev);
-	
+
 	/* Power management */
 	int (*power_on)(struct device *dev);
 	void (*power_off)(struct device *dev);
@@ -117,12 +115,6 @@ struct ser_interface {
 	const char *name;
 };
 
-#else
-#include <media/gmsl-link.h>
-#define GMSL_CSI_DT_YUV422_8 0x1E
-#define GMSL_CSI_DT_RGB_888 0x24
-#define GMSL_CSI_DT_RAW_8 0x2A
-#define GMSL_CSI_DT_EMBED 0x12
 #endif
 
 /* D40x FW CSI-PT mode selector for the OV9782 (not a MIPI wire DT). */
@@ -155,77 +147,6 @@ struct ser_interface {
 #define DS5_DEVICE_TYPE_D43X		5
 #define DS5_DEVICE_TYPE_UNKNOWN		0
 
-/* Camera-resident format descriptor: a little-endian blob in a read-only
- * register aperture, read host-native like every other FW register here.
- * Every TOC entry carries its record stride, so a driver built against
- * older records strides past fields newer FW appends.
- */
-#define RS_DESC_BASE            0x6000  /* FW: REG_BASE_MIPI_FORMAT_DESC (I2cSlaveHostIf.h) */
-#define RS_DESC_MAX_SIZE        2048
-#define RS_DESC_CHUNK           256
-#define RS_DESC_MAGIC           0x53445352      /* "RSDS" */
-#define RS_DESC_VER_MAJOR       1
-
-struct rs_desc_header {
-	u32 magic;
-	u16 header_size;       /* offset of the TOC */
-	u16 total_size;
-	u8 ver_major;          /* bump = incompatible layout */
-	u8 ver_minor;          /* bump = fields appended */
-	u8 n_tables;
-	u8 rsvd;
-	u32 crc32;             /* CRC-32 (zlib) over [header_size, total_size) */
-} __packed;
-
-struct rs_desc_toc {
-	u16 type;
-	u16 entry_size;
-	u16 n_entries;
-	u16 offset;
-} __packed;
-
-enum rs_desc_table {
-	RS_DESC_T_STREAM = 1,
-	RS_DESC_T_FORMAT,
-	RS_DESC_T_RESOLUTION,
-	RS_DESC_T_FRAMERATE,    /* flat u16 pool */
-	RS_DESC_T_MAX = RS_DESC_T_FRAMERATE,
-};
-
-struct rs_desc_stream {
-	u16 stream_id;         /* DS5_STREAM_*: the FW's own ids */
-	u16 fmt_first;         /* range into the FORMAT table */
-	u16 fmt_count;
-} __packed;
-
-struct rs_desc_format {
-	u16 pixfmt_id;         /* enum rs_pixfmt, never a Linux mbus code */
-	u8 src_data_type;      /* CSI DT for this format - (wire DT unless using override) */
-	u8 rsvd;               /* keeps every field naturally aligned */
-	u16 res_first;         /* range into the RESOLUTION table */
-	u16 res_count;
-} __packed;
-
-struct rs_desc_resolution {
-	u16 width;
-	u16 height;
-	u16 fps_first;         /* range into the FRAMERATE pool */
-	u16 fps_count;
-} __packed;
-
-/* Pixel-format registry shared with firmware. */
-enum rs_pixfmt {
-	RS_PIXFMT_Z16 = 1,
-	RS_PIXFMT_Y8,
-	RS_PIXFMT_Y8I,
-	RS_PIXFMT_Y12I,
-	RS_PIXFMT_Y16I,
-	RS_PIXFMT_UYVY,
-	RS_PIXFMT_NV12_FLAT,
-	RS_PIXFMT_GRBG16,
-	RS_PIXFMT_SBGGR10P,
-	RS_PIXFMT_IMU,
-};
 /*
  * FW version major byte identifies the family in recovery, where DEVICE_TYPE
  * (0x0310) is not served: D58x reports 7 or 8, D4xx reports 5.
@@ -251,10 +172,6 @@ enum rs_pixfmt {
 #define DS5_IMU_STREAM_STATUS		0x100C
 #define DS5_IR_STREAM_STATUS		0x1014
 
-#define DS5_STREAM_DEPTH		0x0
-#define DS5_STREAM_RGB			0x1
-#define DS5_STREAM_IMU			0x2
-#define DS5_STREAM_IR			0x4
 #define DS5_STREAM_STOP			0x100
 #define DS5_STREAM_START		0x200
 #define DS5_STREAM_IDLE			0x1
@@ -266,14 +183,12 @@ enum rs_pixfmt {
 #define DS5_DEPTH_RES_HEIGHT	 0x4008
 #define DS5_DEPTH_FPS			 0x400C
 #define DS5_DEPTH_OVERRIDE		 0x401C
-#define DS5_DEPTH_CONTROL_STATUS 0x401E
 
 #define DS5_RGB_STREAM_DT		0x4020
 #define DS5_RGB_STREAM_MD		0x4022
 #define DS5_RGB_RES_WIDTH		0x4024
 #define DS5_RGB_RES_HEIGHT		0x4028
 #define DS5_RGB_FPS				0x402C
-#define DS5_RGB_CONTROL_STATUS 	0x402E
 #define DS5_RGB_OVERRIDE		0x403C
 
 /* SerDes startup I2C readiness polling (defer probe if not responsive) */
@@ -285,7 +200,6 @@ enum rs_pixfmt {
 #define DS5_IMU_RES_WIDTH		0x4044
 #define DS5_IMU_RES_HEIGHT		0x4048
 #define DS5_IMU_FPS				0x404C
-#define DS5_IMU_CONTROL_STATUS 	0x404E
 
 #define DS5_IR_STREAM_DT		0x4080
 #define DS5_IR_STREAM_MD		0x4082
@@ -293,7 +207,6 @@ enum rs_pixfmt {
 #define DS5_IR_RES_HEIGHT		0x4088
 #define DS5_IR_FPS				0x408C
 #define DS5_IR_OVERRIDE			0x409C
-#define DS5_IR_CONTROL_STATUS 	0x409E
 
 #define DS5_DEPTH_CONTROL_BASE		0x4100
 #define DS5_RGB_CONTROL_BASE		0x4200
@@ -327,14 +240,20 @@ enum rs_pixfmt {
 #define DS5_RGB_CONTRAST		0x0028
 #define DS5_RGB_GAMMA			0x002C
 
-/* D58x-only telemetry offsets relative to DS5_DEPTH_CONTROL_BASE.
+/* Telemetry offsets relative to DS5_DEPTH_CONTROL_BASE (temperatures: D58x only).
  * DS5_SOC_PVT_TEMPERATURE overlaps the D4xx readout-shaping offset, so
  * ds5_ctrl_init() registers exactly one interpretation per detected SKU.
  */
 #define DS5_SOC_PVT_TEMPERATURE		0x0030
 #define DS5_OHM_TEMPERATURE		0x0034
 #define DS5_PROJECTOR_TEMPERATURE	0x0038
+/* Read-to-clear on D58x and on D4xx FW >= DS5_FW_ERROR_CODE_MIN. */
 #define DS5_ERROR_CODE			0x003C
+
+#define DS5_FW_VER(major, minor, patch) \
+	((u32)(major) << 16 | (u32)(minor) << 8 | (patch))
+/* Older D4xx FW answers DS5_ERROR_CODE with the manual-exposure register. */
+#define DS5_FW_ERROR_CODE_MIN		DS5_FW_VER(5, 17, 6)
 
 /* D58x RGB controls use a separate extension window. The same offsets in the
  * depth block carry temperature and error telemetry.
@@ -365,15 +284,6 @@ enum rs_pixfmt {
 #define DEF_DEPTH_EXP			33000
 #define DEF_RGB_EXP			1660
 
-enum ds5_mux_pad {
-	DS5_MUX_PAD_EXTERNAL,
-	DS5_MUX_PAD_DEPTH,
-	DS5_MUX_PAD_RGB,
-	DS5_MUX_PAD_IR,
-	DS5_MUX_PAD_IMU,
-	DS5_MUX_PAD_COUNT,
-};
-
 #define DS5_N_CONTROLS			8
 
 #define DS5_MAX_STREAMS	4
@@ -395,6 +305,8 @@ enum ds5_mux_pad {
 #define DS5_START_POLL_TIME	10
 #define DS5_START_MAX_TIME	2000
 #define DS5_START_MAX_COUNT	(DS5_START_MAX_TIME / DS5_START_POLL_TIME)
+/* Existing SDK Prepare Flash Download command; SET has no paired GET. */
+#define DS5_HWMC_PFD_OPCODE	0x3b
 /*
  * RSDEV-12089: max wall-clock to wait for an HWMC command to complete. Must cover
  * a worst-case low-fps stream re-arm (ds5_mux_s_stream, bounded by
@@ -428,29 +340,6 @@ enum ds5_mux_pad {
 #define ds5_raw_write_with_check(state, addr, buf, size) {\
 	if (ds5_raw_write(state, addr, buf, size)) \
 		return -EINVAL; }
-
-enum dfu_fw_state {
-	appIDLE                = 0x0000,
-	appDETACH              = 0x0001,
-	dfuIDLE                = 0x0002,
-	dfuDNLOAD_SYNC         = 0x0003,
-	dfuDNBUSY              = 0x0004,
-	dfuDNLOAD_IDLE         = 0x0005,
-	dfuMANIFEST_SYNC       = 0x0006,
-	dfuMANIFEST            = 0x0007,
-	dfuMANIFEST_WAIT_RESET = 0x0008,
-	dfuUPLOAD_IDLE         = 0x0009,
-	dfuERROR               = 0x000a
-};
-
-enum dfu_state {
-	DS5_DFU_IDLE = 0,
-	DS5_DFU_RECOVERY,
-	DS5_DFU_OPEN,
-	DS5_DFU_IN_PROGRESS,
-	DS5_DFU_DONE,
-	DS5_DFU_ERROR
-} dfu_state_t;
 
 struct hwm_cmd {
 	u16 header;
@@ -574,236 +463,15 @@ struct __fw_status {
 
 /*************************/
 
-struct ds5_ctrls {
-	struct v4l2_ctrl_handler handler;
-	struct v4l2_ctrl_handler handler_depth;
-	struct v4l2_ctrl_handler handler_rgb;
-	struct v4l2_ctrl_handler handler_y8;
-	struct v4l2_ctrl_handler handler_imu;
-	struct {
-		struct v4l2_ctrl *log;
-		struct v4l2_ctrl *fw_version;
-		struct v4l2_ctrl *gvd;
-		struct v4l2_ctrl *get_depth_calib;
-		struct v4l2_ctrl *set_depth_calib;
-		struct v4l2_ctrl *get_coeff_calib;
-		struct v4l2_ctrl *set_coeff_calib;
-		struct v4l2_ctrl *ae_roi_get;
-		struct v4l2_ctrl *ae_roi_set;
-		struct v4l2_ctrl *ae_setpoint_get;
-		struct v4l2_ctrl *ae_setpoint_set;
-		struct v4l2_ctrl *ae_mode;
-		struct v4l2_ctrl *erb;
-		struct v4l2_ctrl *ewb;
-		struct v4l2_ctrl *hwmc;
-		struct v4l2_ctrl *laser_power;
-		struct v4l2_ctrl *manual_laser_power;
-		struct v4l2_ctrl *auto_exp;
-		struct v4l2_ctrl *exposure;
-		/* in DS5 manual gain only works with manual exposure */
-		struct v4l2_ctrl *gain;
-		struct v4l2_ctrl *link_freq;
-		struct v4l2_ctrl *query_sub_stream;
-		struct v4l2_ctrl *set_sub_stream;
-		struct v4l2_ctrl *sync_mode;
-		struct v4l2_ctrl *device_mode;
-		struct v4l2_ctrl *dual_rgb_ae_policy;
-		struct v4l2_ctrl *minz;
-		/* RGB-only ISP controls. Only ae_priority needs a stored
-		 * pointer because it must be disabled per-SKU after probe
-		 * (D40X/D401 does not support it). The remaining controls
-		 * are owned by the V4L2 handler and looked up by CID at dispatch.
-		 */
-		struct v4l2_ctrl *ae_priority;
-	};
-};
-
-struct ds5_resolution {
-	u16 width;
-	u16 height;
-	u8 n_framerates;
-	const u16 *framerates;
-};
-
-struct ds5_format {
-	unsigned int n_resolutions;
-	const struct ds5_resolution *resolutions;
-	u32 mbus_code;
-	u8 data_type;		/* Source format DT programmed into HKR. */
-	u8 override_data_type;	/* Non-zero CSI packet DT override on the wire. */
-};
-
-struct ds5_sensor {
-	struct v4l2_subdev sd;
-	struct media_pad pad;
-	struct v4l2_mbus_framefmt format;
-	u16 mux_pad;
-	struct {
-		const struct ds5_format *format;
-		const struct ds5_resolution *resolution;
-		u16 framerate;
-	} config;
-	bool streaming;
-	const struct ds5_format *formats;
-	unsigned int n_formats;
-	int pipe_id;
-	u16 pipe_data_type1;
-	u16 pipe_data_type2;
-	u32 pipe_vc_id;
-	u16 cached_dt_value;
-	u16 cached_md_value;
-	u16 cached_override_value;
-	u16 cached_fps_value;
-	u16 cached_width_value;
-	u16 cached_height_value;
-};
-
-#ifdef CONFIG_TEGRA_CAMERA_PLATFORM
-#include <media/camera_common.h>
-#define ds5_mux_subdev camera_common_data
-#else
-struct ds5_mux_subdev {
-	struct v4l2_subdev subdev;
-};
-#endif
-
 struct ds5_variant {
 	const struct ds5_format *formats;
 	unsigned int n_formats;
-};
-
-struct ds5_dfu_dev {
-	struct cdev ds5_cdev;
-	struct class *ds5_class;
-	int device_open_count;
-	enum dfu_state dfu_state_flag;
-	enum dfu_fw_state manifest_state;
-	bool manifest_complete;
-	unsigned char *dfu_msg;
-	u16 msg_write_once;
-	// unsigned char init_v4l_f; // need refactoring
-	u32 bus_clk_rate;
 };
 
 enum {
 	DS5_DS5U,
 	DS5_ASR,
 	DS5_AWG,
-};
-
-struct ds5 {
-	struct { struct ds5_sensor sensor; } depth;
-	struct { struct ds5_sensor sensor; } ir;
-	struct { struct ds5_sensor sensor; } rgb;
-	struct { struct ds5_sensor sensor; } imu;
-	struct {
-		struct ds5_mux_subdev sd;
-		struct media_pad pads[DS5_MUX_PAD_COUNT];
-		struct ds5_sensor *last_set;
-	} mux;
-	struct ds5_ctrls ctrls;
-	struct ds5_dfu_dev dfu_dev;
-	bool power;
-	struct i2c_client *client;
-	/* All below pointers are used for writing, cannot be const */
-	struct mutex lock;
-	struct regmap *regmap;
-	struct regulator *vcc;
-	const struct ds5_variant *variant;
-	int is_depth, is_y8, is_rgb, is_imu;
-	bool metadata_enabled;
-	int aggregated;
-	int reset_ref_ds5;
-	u16 fw_version;
-	u16 fw_build;
-	/* D58x camera behind a PIXEL-mode deserializer - requires strict
-	 * Scheduling and data sizes in HKR side */
-	bool d58x_pixel_mode;
-	u16 control_base;
-	u16 control_status_reg;
-#ifdef CONFIG_VIDEO_D4XX_SERDES
-	struct gmsl_link_ctx g_ctx;
-	/* GMSL link this camera is wired to. From the serializer node's
-	 * "maxim,gmsl-link-id"; no longer derivable from dst_vc once a
-	 * deserializer remaps virtual channels. */
-	u32 gmsl_link;
-	struct device *ser_dev;
-	struct device *dser_dev;
-	struct i2c_client *ser_i2c;
-	struct i2c_client *dser_i2c;
-	const struct dser_interface *dser_ops;
-	const struct ser_interface *ser_ops;
-	bool ser_primary; /* true for the first instance per serializer (first stream of a specific camera) */
-	bool dser_primary; /* true for the first instance per deserializer (first camera of a specific dser) */
-#endif
-	struct ds5_dev *ds5_dev; /* pointer to DS5 device struct */
-};
-
-enum ds5_desc_state {
-	DS5_DESC_UNKNOWN,
-	DS5_DESC_READY,
-	DS5_DESC_ABSENT,        /* none served, or rejected: static tables in use */
-};
-
-struct ds5_desc;
-
-struct ds5_dev {
-	struct mutex lock;
-
-	/*
-	* Per-camera reset generation counter.
-	* Incremented whenever the camera undergoes a HW reset,
-	*  either from its own instance or a sibling's instance.
-	* Each instance stores the last seen generation count
-	*  and compares it on each access to detect if a reset has occurred
-	*  and invalidates its own state if so.
-	*/
-	atomic_t reset_gen;
-
-	/* Cached device type from post-reset device-type polling.
-	* During probe the first instance resets the camera, causing DS5_DEVICE_TYPE
-	* to temporarily return 0. The reset path polls until the register is valid
-	* and stores the result here so that all four probe instances (and any
-	* post-reset code path) can use the confirmed value even if the register
-	* read still returns 0.
-	*/
-	u16 cached_device_type;
-	u16 d585_product_id;
-
-	/* Camera-resident format descriptor, parsed once per camera. Written
-	 * under lock before any subdev registers; the tables it points at live
-	 * until module exit, so stream-time readers need no lock.
-	 */
-	struct ds5_desc *desc;
-	enum ds5_desc_state desc_state;
-
-	/* Timestamp (jiffies) of last completed HW reset.
-	* Used to enforce DS5_HW_RESET_COOLDOWN_MS between consecutive resets
-	* and prevent GMSL link degradation from rapid reset cycles.
-	*/
-	unsigned long last_reset_jiffies;
-
-#ifdef CONFIG_VIDEO_D4XX_SERDES
- 	/* Pointer to the deserializer dev */
-	struct dser_control *dser_control;
-
-	/* Cold-bring-up flush request for this camera's GMSL link: the first
-	 * stream on a link the deser already served for another camera wedges
-	 * (VI discards every frame) until a one-shot. Guarded by lock. */
-	bool link_flush_pending;
-#endif
-
-	/* Pointer to the primary DS5 struct */
-	struct ds5 *ds5_primary;
-	bool serdes_setup_complete;
-	int configured_device_mode;
-	int active_device_mode;
-	bool device_mode_valid;
-
-	bool depth_streaming;
-	bool ir_streaming;
-	bool rgb_streaming;
-	bool imu_streaming;
 };
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
@@ -828,8 +496,10 @@ static void ds5_init_global_slots_once(void)
 		return;
 	}
 
-	for (i = 0; i < MAX_DS5_NUM; i++)
+	for (i = 0; i < MAX_DS5_NUM; i++) {
 		mutex_init(&ds5_inited[i].lock);
+		mutex_init(&ds5_inited[i].hwmc_lock);
+	}
 
 	for (i = 0; i < MAX_DSER_NUM; i++)
 		mutex_init(&dser_inited[i].lock);
@@ -950,6 +620,7 @@ static void ds5_init_global_slots_once(void)
 	mutex_lock(&ds5_slots_lock__);
 	if (!ds5_slots_inited) {
 		mutex_init(&ds5_inited[0].lock);
+		mutex_init(&ds5_inited[0].hwmc_lock);
 		ds5_slots_inited = true;
 	}
 	mutex_unlock(&ds5_slots_lock__);
@@ -976,6 +647,12 @@ static inline bool ds5_is_d58x(struct ds5 *state)
 }
 
 static int ds5_hw_init(struct i2c_client *c, struct ds5 *state);
+
+/* Compares major.minor.patch (fw_build's high byte); refreshed on DFU and HW reset. */
+static inline bool ds5_fw_at_least(struct ds5 *state, u32 fw_ver)
+{
+	return ((u32)state->fw_version << 8 | state->fw_build >> 8) >= fw_ver;
+}
 
 static inline u16 ds5_rgb_ctrl_offset(struct ds5 *state, u16 d4xx_offset,
 				      u16 d58x_offset)
@@ -1108,7 +785,7 @@ static int ds5_read_poll(struct ds5 *state, u16 reg, u16 *val)
 	return regmap_raw_read(state->regmap, reg, val, 2);
 }
 
-static int ds5_raw_read(struct ds5 *state, u16 reg, void *val, size_t val_len)
+int ds5_raw_read(struct ds5 *state, u16 reg, void *val, size_t val_len)
 {
 	int ret;
 	int retry;
@@ -1131,589 +808,6 @@ static int ds5_raw_read(struct ds5 *state, u16 reg, void *val, size_t val_len)
 			__func__, DS5_I2C_RETRY_COUNT, reg, (int)val_len, ret);
 
 	return ret;
-}
-
-/* Camera-resident format descriptor: fetch, validate, parse. */
-
-struct ds5_desc_stream {
-	struct ds5_format *formats;
-	unsigned int n_formats;
-};
-
-/* Wire stream ids are the FW's (depth 0, RGB 1, IMU 2, IR 4); slot 3 is unused. */
-static const u8 ds5_desc_stream_ids[] = {
-	DS5_STREAM_DEPTH, DS5_STREAM_RGB, DS5_STREAM_IMU, DS5_STREAM_IR,
-};
-
-#define DS5_DESC_STREAM_SLOTS	(DS5_STREAM_IR + 1)
-
-struct ds5_desc {
-	struct list_head node;
-	struct ds5_desc_stream streams[DS5_DESC_STREAM_SLOTS];
-	u16 *framerates;
-	u32 crc;
-	u8 ver_major;
-	u8 ver_minor;
-};
-
-/* A sibling subdev can outlive the primary that owns the slot (sysfs unbind),
- * so parsed tables are never freed while the module is loaded.
- */
-static LIST_HEAD(ds5_desc_all);
-static DEFINE_MUTEX(ds5_desc_all_lock);
-
-/* Static table mapping the RS pixel formats to the host side MBUS codes,
- * and if the FW DT cannot be serviced by SERDES/NVCSI, the wire DT for override
- * If wire_dt == 0, that means no override is needed, and the wire_dt will be
- * the DT exposed by FW.
- */
-static const struct {
-	u16 pixfmt;
-	u32 mbus_code;
-	u8 wire_dt;
-} ds5_desc_pixfmt_map[] = {
-	/* Z16 and Y8I are asked for with a user-defined FW token and sent as
-	 * YUV422-8, which is all Tegra VI will carry at full rate.
-	 */
-	{ RS_PIXFMT_Z16,        MEDIA_BUS_FMT_UYVY8_1X16, GMSL_CSI_DT_YUV422_8 },
-	{ RS_PIXFMT_Y8,         MEDIA_BUS_FMT_Y8_1X8 },
-	{ RS_PIXFMT_Y8I,        MEDIA_BUS_FMT_VYUY8_1X16, GMSL_CSI_DT_YUV422_8 },
-	{ RS_PIXFMT_Y12I,       MEDIA_BUS_FMT_RGB888_1X24 },
-	{ RS_PIXFMT_Y16I,       MEDIA_BUS_FMT_ARGB8888_1X32 },
-	{ RS_PIXFMT_UYVY,       MEDIA_BUS_FMT_YUYV8_1X16 },
-	/* Flat NV12 bytes ride RAW8 as an opaque 8-bit carrier */
-	{ RS_PIXFMT_NV12_FLAT,  MEDIA_BUS_FMT_RS_NV12_FLAT_1X8, GMSL_CSI_DT_RAW_8 },
-	{ RS_PIXFMT_GRBG16,     MEDIA_BUS_FMT_SGRBG16_1X16 },
-	/* D401 CSI passthrough: 10bit data riding an opeque 8-bit carrier. */
-	{ RS_PIXFMT_SBGGR10P,   MEDIA_BUS_FMT_RS_SBGGR10P_1X8, GMSL_CSI_DT_RAW_8 },
-	{ RS_PIXFMT_IMU,        MEDIA_BUS_FMT_Y8_1X8 },
-};
-
-/* Probed a word at a time: legacy FW loads one 16-bit word for an unmapped
- * register and wedges if the master clocks past it. Bare reads, because a
- * camera without a descriptor returns junk and retrying that is only log noise.
- */
-static int ds5_desc_check_magic(struct ds5 *state)
-{
-	u16 word;
-	unsigned int i;
-	int ret;
-
-	for (i = 0; i < sizeof(u32) / sizeof(word); i++) {
-		ret = regmap_raw_read(state->regmap,
-				      RS_DESC_BASE + i * sizeof(word),
-				      &word, sizeof(word));
-		if (ret < 0)
-			return ret;
-		if (word != ((RS_DESC_MAGIC >> (16 * i)) & 0xffff))
-			return -ENODEV;
-	}
-	return 0;
-}
-
-static bool ds5_desc_stream_valid(u16 id)
-{
-	unsigned int i;
-
-	for (i = 0; i < ARRAY_SIZE(ds5_desc_stream_ids); i++)
-		if (ds5_desc_stream_ids[i] == id)
-			return true;
-	return false;
-}
-
-static int ds5_desc_pixfmt_slot(u16 pixfmt)
-{
-	unsigned int i;
-
-	for (i = 0; i < ARRAY_SIZE(ds5_desc_pixfmt_map); i++)
-		if (ds5_desc_pixfmt_map[i].pixfmt == pixfmt)
-			return i;
-	return -1;
-}
-
-static void ds5_desc_free(struct ds5_desc *desc)
-{
-	unsigned int s, f;
-
-	if (!desc)
-		return;
-	for (s = 0; s < DS5_DESC_STREAM_SLOTS; s++) {
-		for (f = 0; f < desc->streams[s].n_formats; f++)
-			kfree(desc->streams[s].formats[f].resolutions);
-		kfree(desc->streams[s].formats);
-	}
-	kfree(desc->framerates);
-	kfree(desc);
-}
-
-/* The blob's stride may be shorter (older FW: missing fields read as 0)
- * or longer (newer FW: extra fields skipped) than the driver's record.
- */
-static void ds5_desc_rec(const u8 *blob, const struct rs_desc_toc *toc,
-			 unsigned int i, void *dst, size_t dst_size)
-{
-	size_t stride = toc->entry_size;
-
-	memset(dst, 0, dst_size);
-	memcpy(dst, blob + toc->offset + i * stride,
-	       min(dst_size, stride));
-}
-
-static int ds5_desc_read_blob(struct ds5 *state, u8 **blob_out)
-{
-	struct rs_desc_header header;
-	size_t header_size, total, off;
-	u8 *blob;
-	u32 crc;
-	int ret;
-
-	ret = ds5_desc_check_magic(state);
-	if (ret < 0)
-		return ret;
-	ret = ds5_raw_read(state, RS_DESC_BASE, &header, sizeof(header));
-	if (ret < 0)
-		return ret;
-	if (header.magic != RS_DESC_MAGIC)
-		return -ENODEV;
-	if (header.ver_major != RS_DESC_VER_MAJOR) {
-		dev_warn(&state->client->dev,
-			 "format descriptor v%u.%u unsupported (driver v%u)\n",
-			 header.ver_major, header.ver_minor, RS_DESC_VER_MAJOR);
-		return -EPROTONOSUPPORT;
-	}
-	header_size = header.header_size;
-	total = header.total_size;
-	if (header_size < sizeof(header) || total > RS_DESC_MAX_SIZE ||
-	    total < header_size + header.n_tables * sizeof(struct rs_desc_toc)) {
-		dev_warn(&state->client->dev,
-			 "format descriptor: bad sizes (header %zu, total %zu, %u tables)\n",
-			 header_size, total, header.n_tables);
-		return -EINVAL;
-	}
-
-	blob = kzalloc(total, GFP_KERNEL);
-	if (!blob)
-		return -ENOMEM;
-	memcpy(blob, &header, sizeof(header));
-	for (off = sizeof(header); off < total; off += RS_DESC_CHUNK) {
-		ret = ds5_raw_read(state, (u16)(RS_DESC_BASE + off), blob + off,
-				   min_t(size_t, RS_DESC_CHUNK, total - off));
-		if (ret < 0)
-			goto err;
-	}
-	crc = crc32_le(~0, blob + header_size, total - header_size) ^ ~0;
-	if (crc != header.crc32) {
-		dev_warn(&state->client->dev,
-			 "format descriptor CRC 0x%08x, expected 0x%08x\n",
-			 crc, header.crc32);
-		ret = -EBADMSG;
-		goto err;
-	}
-	*blob_out = blob;
-	return 0;
-err:
-	kfree(blob);
-	return ret;
-}
-
-static int ds5_desc_find_tables(struct ds5 *state, const u8 *blob,
-				const struct rs_desc_toc **tabs)
-{
-	const struct rs_desc_header *header = (const void *)blob;
-	const struct rs_desc_toc *toc =
-		(const void *)(blob + header->header_size);
-	u32 total = header->total_size;
-	unsigned int i;
-
-	memset(tabs, 0, sizeof(*tabs) * (RS_DESC_T_MAX + 1));
-	for (i = 0; i < header->n_tables; i++, toc++) {
-		u32 type = toc->type;
-		u32 stride = toc->entry_size;
-		u32 n = toc->n_entries;
-		u32 off = toc->offset;
-
-		if (!stride || !n || off + n * stride > total) {
-			dev_warn(&state->client->dev,
-				 "format descriptor: toc[%u] type %u: %u x %u @ %u exceeds %u\n",
-				 i, type, n, stride, off, total);
-			return -EINVAL;
-		}
-		/* Table types this driver predates are skipped by contract. */
-		if (type == 0 || type > RS_DESC_T_MAX)
-			continue;
-		if (tabs[type]) {
-			dev_warn(&state->client->dev,
-				 "format descriptor: duplicate table type %u\n", type);
-			return -EINVAL;
-		}
-		tabs[type] = toc;
-	}
-	for (i = RS_DESC_T_STREAM; i <= RS_DESC_T_MAX; i++) {
-		if (!tabs[i]) {
-			dev_warn(&state->client->dev,
-				 "format descriptor: table type %u missing\n", i);
-			return -EINVAL;
-		}
-	}
-	if (tabs[RS_DESC_T_FRAMERATE]->entry_size != sizeof(u16)) {
-		dev_warn(&state->client->dev,
-			 "format descriptor: framerate stride %u != 2\n",
-			 tabs[RS_DESC_T_FRAMERATE]->entry_size);
-		return -EINVAL;
-	}
-	return 0;
-}
-
-static int ds5_desc_parse_framerates(struct ds5 *state, struct ds5_desc *desc,
-				     const u8 *blob,
-				     const struct rs_desc_toc *toc,
-				     unsigned int *n_out)
-{
-	unsigned int n = toc->n_entries, i;
-	const u8 *src = blob + toc->offset;
-
-	desc->framerates = kcalloc(n, sizeof(u16), GFP_KERNEL);
-	if (!desc->framerates)
-		return -ENOMEM;
-	for (i = 0; i < n; i++) {
-		u16 v;
-
-		memcpy(&v, src + i * sizeof(v), sizeof(v));
-		desc->framerates[i] = v;
-		if (!desc->framerates[i]) {
-			dev_warn(&state->client->dev, "format descriptor: framerate[%u] is 0\n", i);
-			return -EINVAL;
-		}
-	}
-	*n_out = n;
-	return 0;
-}
-
-static struct ds5_resolution *
-ds5_desc_build_resolutions(struct ds5 *state, const struct ds5_desc *desc,
-			   unsigned int n_fps, const u8 *blob,
-			   const struct rs_desc_toc *toc,
-			   unsigned int first, unsigned int count)
-{
-	struct ds5_resolution *res;
-	unsigned int i;
-
-	if (!count || first + count > toc->n_entries) {
-		dev_warn(&state->client->dev,
-			 "format descriptor: resolution range %u+%u exceeds %u\n",
-			 first, count, toc->n_entries);
-		return ERR_PTR(-EINVAL);
-	}
-	res = kcalloc(count, sizeof(*res), GFP_KERNEL);
-	if (!res)
-		return ERR_PTR(-ENOMEM);
-	for (i = 0; i < count; i++) {
-		struct rs_desc_resolution rec;
-		unsigned int fps_first;
-		u16 width, height;
-
-		ds5_desc_rec(blob, toc, first + i, &rec, sizeof(rec));
-		width = rec.width;
-		height = rec.height;
-		fps_first = rec.fps_first;
-		if (!width || !height || !rec.fps_count ||
-		    rec.fps_count > U8_MAX ||
-		    fps_first + rec.fps_count > n_fps) {
-			dev_warn(&state->client->dev,
-				 "format descriptor: resolution[%u] %ux%u fps %u+%u invalid (pool %u)\n",
-				 first + i, width, height, fps_first,
-				 rec.fps_count, n_fps);
-			kfree(res);
-			return ERR_PTR(-EINVAL);
-		}
-		res[i].width = width;
-		res[i].height = height;
-		res[i].n_framerates = rec.fps_count;
-		res[i].framerates = &desc->framerates[fps_first];
-		dev_dbg(&state->client->dev,
-			"format descriptor:   res[%u] %ux%u, %u fps from %u (first %u)\n",
-			first + i, width, height, rec.fps_count, fps_first,
-			desc->framerates[fps_first]);
-	}
-	return res;
-}
-
-static int ds5_desc_build_stream(struct ds5 *state, struct ds5_desc *desc,
-				 unsigned int n_fps, const u8 *blob,
-				 const struct rs_desc_toc **tabs,
-				 const struct rs_desc_stream *st)
-{
-	const struct rs_desc_toc *ftoc = tabs[RS_DESC_T_FORMAT];
-	struct ds5_desc_stream *out;
-	unsigned int first = st->fmt_first;
-	unsigned int count = st->fmt_count;
-	unsigned int i;
-
-	if (!ds5_desc_stream_valid(st->stream_id)) {
-		dev_warn(&state->client->dev,
-			 "format descriptor: stream id %u unknown\n", st->stream_id);
-		return -EINVAL;
-	}
-	out = &desc->streams[st->stream_id];
-	if (out->formats || !count ||
-	    first + count > ftoc->n_entries) {
-		dev_warn(&state->client->dev,
-			 "format descriptor: stream %u: format range %u+%u exceeds %u%s\n",
-			 st->stream_id, first, count, ftoc->n_entries,
-			 out->formats ? " (duplicate stream)" : "");
-		return -EINVAL;
-	}
-	out->formats = kcalloc(count, sizeof(*out->formats), GFP_KERNEL);
-	if (!out->formats)
-		return -ENOMEM;
-
-	for (i = 0; i < count; i++) {
-		struct rs_desc_format rec;
-		struct ds5_resolution *res;
-		struct ds5_format *fmt;
-		int slot;
-
-		ds5_desc_rec(blob, ftoc, first + i, &rec, sizeof(rec));
-		/* DT 0 is illegal; rsvd must-be-zero.
-		 * Newer fields, if any, arrive via a longer entry_size.
-		 */
-		if (!rec.src_data_type || rec.rsvd) {
-			dev_warn(&state->client->dev,
-				 "format descriptor: format[%u] dt 0x%02x rsvd 0x%02x invalid\n",
-				 first + i, rec.src_data_type, rec.rsvd);
-			return -EINVAL;
-		}
-		slot = ds5_desc_pixfmt_slot(rec.pixfmt_id);
-		if (slot < 0) {
-			dev_warn(&state->client->dev,
-				 "format descriptor: pixfmt %u unknown, skipped\n",
-				 rec.pixfmt_id);
-			continue;
-		}
-		dev_dbg(&state->client->dev,
-			"format descriptor: stream %u fmt[%u] pixfmt %u dt 0x%02x override 0x%02x, %u res\n",
-			st->stream_id, i, rec.pixfmt_id, rec.src_data_type,
-			ds5_desc_pixfmt_map[slot].wire_dt, rec.res_count);
-		res = ds5_desc_build_resolutions(state, desc, n_fps, blob,
-						 tabs[RS_DESC_T_RESOLUTION],
-						 rec.res_first,
-						 rec.res_count);
-		if (IS_ERR(res))
-			return PTR_ERR(res);
-
-		fmt = &out->formats[out->n_formats];
-		fmt->mbus_code = ds5_desc_pixfmt_map[slot].mbus_code;
-		fmt->data_type = rec.src_data_type;
-		fmt->override_data_type = ds5_desc_pixfmt_map[slot].wire_dt;
-		fmt->resolutions = res;
-		fmt->n_resolutions = rec.res_count;
-		out->n_formats++;
-	}
-	return out->n_formats ? 0 : -EINVAL;
-}
-
-/* Anything transient - a CRC miss, a glitched transfer - is worth one retry.
- * Latching on the first failure would drop the camera to the static tables
- * for the life of the module.
- */
-static int ds5_desc_fetch(struct ds5 *state, u8 **blob)
-{
-	unsigned int attempt;
-	int ret;
-
-	for (attempt = 0; attempt < 2; attempt++) {
-		ret = ds5_desc_read_blob(state, blob);
-		/* A verdict about the descriptor itself: a reread cannot change it. */
-		if (!ret || ret == -ENODEV || ret == -EPROTONOSUPPORT ||
-		    ret == -EINVAL || ret == -ENOMEM)
-			break;
-	}
-	return ret;
-}
-
-/* Parse a fetched, CRC-checked blob. Returns ERR_PTR on any rejection,
- * having freed whatever it had built.
- */
-static struct ds5_desc *ds5_desc_build(struct ds5 *state, const u8 *blob)
-{
-	const struct rs_desc_header *header = (const void *)blob;
-	const struct rs_desc_toc *tabs[RS_DESC_T_MAX + 1];
-	unsigned int n_fps = 0, i;
-	struct ds5_desc *desc;
-	int ret;
-
-	ret = ds5_desc_find_tables(state, blob, tabs);
-	if (ret)
-		return ERR_PTR(ret);
-	desc = kzalloc(sizeof(*desc), GFP_KERNEL);
-	if (!desc)
-		return ERR_PTR(-ENOMEM);
-	desc->crc = header->crc32;
-	desc->ver_major = header->ver_major;
-	desc->ver_minor = header->ver_minor;
-
-	ret = ds5_desc_parse_framerates(state, desc, blob,
-					tabs[RS_DESC_T_FRAMERATE],
-					&n_fps);
-	if (ret)
-		goto err;
-	for (i = 0; i < tabs[RS_DESC_T_STREAM]->n_entries; i++) {
-		struct rs_desc_stream st;
-
-		ds5_desc_rec(blob, tabs[RS_DESC_T_STREAM], i, &st, sizeof(st));
-		ret = ds5_desc_build_stream(state, desc, n_fps, blob, tabs, &st);
-		if (ret)
-			goto err;
-	}
-	/* Every subdev registers unconditionally, so each needs a format list. */
-	for (i = 0; i < ARRAY_SIZE(ds5_desc_stream_ids); i++) {
-		if (!desc->streams[ds5_desc_stream_ids[i]].n_formats) {
-			dev_warn(&state->client->dev, "format descriptor: stream %u missing\n",
-				 ds5_desc_stream_ids[i]);
-			ret = -EINVAL;
-			goto err;
-		}
-	}
-	return desc;
-err:
-	ds5_desc_free(desc);
-	return ERR_PTR(ret);
-}
-
-/* Tables are never freed once published, so publishing is the last step.
- * A rebind reparses the same blob, so an identical set is reused rather than
- * stranding the previous copy on the list for the life of the module.
- */
-static void ds5_desc_publish(struct ds5 *state, struct ds5_desc *desc)
-{
-	struct ds5_dev *dd = state->ds5_dev;
-	struct ds5_desc *pub = NULL, *d;
-
-	mutex_lock(&ds5_desc_all_lock);
-	list_for_each_entry(d, &ds5_desc_all, node) {
-		if (d->crc == desc->crc && d->ver_major == desc->ver_major &&
-		    d->ver_minor == desc->ver_minor) {
-			pub = d;
-			break;
-		}
-	}
-	if (!pub) {
-		list_add(&desc->node, &ds5_desc_all);
-		pub = desc;
-		desc = NULL;
-	}
-	mutex_unlock(&ds5_desc_all_lock);
-	ds5_desc_free(desc);
-	dd->desc = pub;
-	dd->desc_state = DS5_DESC_READY;
-	dev_info(&state->client->dev,
-		 "format descriptor v%u.%u crc 0x%08x: %u/%u/%u/%u formats (depth/ir/rgb/imu)\n",
-		 pub->ver_major, pub->ver_minor, pub->crc,
-		 pub->streams[DS5_STREAM_DEPTH].n_formats,
-		 pub->streams[DS5_STREAM_IR].n_formats,
-		 pub->streams[DS5_STREAM_RGB].n_formats,
-		 pub->streams[DS5_STREAM_IMU].n_formats);
-}
-
-/* Caller holds ds5_dev->lock. */
-static int ds5_desc_load_locked(struct ds5 *state)
-{
-	struct ds5_desc *desc = NULL;
-	u8 *blob = NULL;
-	int ret;
-
-	ret = ds5_desc_fetch(state, &blob);
-	if (!ret) {
-		desc = ds5_desc_build(state, blob);
-		if (IS_ERR(desc)) {
-			ret = PTR_ERR(desc);
-			desc = NULL;
-		}
-	}
-	kfree(blob);
-	if (ret) {
-		state->ds5_dev->desc_state = DS5_DESC_ABSENT;
-		if (ret == -ENODEV)
-			dev_warn(&state->client->dev,
-				 "format descriptors not provided by camera, using built-in tables\n");
-		else
-			dev_warn(&state->client->dev,
-				 "format descriptor rejected (%d), using built-in tables\n",
-				 ret);
-		return ret;
-	}
-	ds5_desc_publish(state, desc);
-	return 0;
-}
-
-static void ds5_desc_apply_sensor(struct ds5_sensor *sensor,
-				  const struct ds5_desc_stream *st, u16 mux_pad)
-{
-	if (!sensor || !st)
-		return;
-
-	sensor->formats = st->formats;
-	sensor->n_formats = st->n_formats;
-	sensor->mux_pad = mux_pad;
-}
-
-/* True when the camera's descriptor supplied every sensor's format table. */
-static bool ds5_desc_apply(struct ds5 *state)
-{
-	struct ds5_dev *dd = state->ds5_dev;
-	const struct ds5_desc *desc = NULL;
-
-	mutex_lock(&dd->lock);
-	if (dd->desc_state == DS5_DESC_UNKNOWN)
-		ds5_desc_load_locked(state);
-	if (dd->desc_state == DS5_DESC_READY)
-		desc = dd->desc;
-	mutex_unlock(&dd->lock);
-	if (!desc)
-		return false;
-
-	ds5_desc_apply_sensor(&state->depth.sensor,
-			      &desc->streams[DS5_STREAM_DEPTH],
-			      DS5_MUX_PAD_DEPTH);
-	ds5_desc_apply_sensor(&state->ir.sensor,
-			      &desc->streams[DS5_STREAM_IR], DS5_MUX_PAD_IR);
-	ds5_desc_apply_sensor(&state->rgb.sensor,
-			      &desc->streams[DS5_STREAM_RGB], DS5_MUX_PAD_RGB);
-	ds5_desc_apply_sensor(&state->imu.sensor,
-			      &desc->streams[DS5_STREAM_IMU], DS5_MUX_PAD_IMU);
-	return true;
-}
-
-/* The V4L2 topology cannot be re-plumbed on a live device, so a descriptor
- * that changed across a HW reset is reported rather than re-applied.
- */
-static void ds5_desc_recheck(struct ds5 *state)
-{
-	struct ds5_dev *dd = state->ds5_dev;
-	struct rs_desc_header header;
-	bool present;
-	u32 crc = 0;
-	int ret;
-
-	ret = ds5_desc_check_magic(state);
-	if (ret < 0 && ret != -ENODEV)
-		return;
-	present = !ret;
-	if (present) {
-		if (ds5_raw_read(state, RS_DESC_BASE, &header, sizeof(header)))
-			return;
-		crc = header.crc32;
-	}
-
-	mutex_lock(&dd->lock);
-	if (dd->desc_state == DS5_DESC_READY && crc != dd->desc->crc)
-		dev_warn(&state->client->dev,
-			 "format descriptor changed across reset (crc 0x%08x -> 0x%08x); reload d4xx to apply\n",
-			 dd->desc->crc, crc);
-	else if (dd->desc_state == DS5_DESC_ABSENT && present)
-		dev_warn(&state->client->dev,
-			 "camera now serves a format descriptor; reload d4xx to apply\n");
-	mutex_unlock(&dd->lock);
 }
 
 /* Pad ops */
@@ -2343,7 +1437,7 @@ static const struct ds5_resolution d58x_depth_sizes[] = {
 	DS5_RES(640, 480, ds5_framerate_to_90)
 	DS5_RES(480, 270, ds5_framerate_to_90)
 	DS5_RES(424, 240, ds5_framerate_to_90)
-	DS5_RES(256, 144, ds5_framerate_to_90)
+	DS5_RES(256, 144, ds5_framerate_90)
 };
 
 static const struct ds5_resolution d58x_y8_sizes[] = {
@@ -2354,7 +1448,7 @@ static const struct ds5_resolution d58x_y8_sizes[] = {
 	DS5_RES(640, 480, ds5_framerate_to_90)
 	DS5_RES(480, 270, ds5_framerate_to_90)
 	DS5_RES(424, 240, ds5_framerate_to_90)
-	DS5_RES(256, 144, ds5_framerate_to_90)
+	DS5_RES(256, 144, ds5_framerate_90)
 };
 
 static const struct ds5_resolution d58x_calibration_sizes[] = {
@@ -2490,6 +1584,123 @@ static const struct v4l2_mbus_framefmt ds5_mbus_framefmt_template = {
 	.xfer_func = V4L2_XFER_FUNC_DEFAULT,
 };
 
+/* Assign the built-in per-SKU format tables to @state's four sensors and
+ * drop their control records. Used at probe when the camera serves no
+ * descriptor, and by the post-HW-reset reload when it stops serving one.
+ * Pure pointer assignment - no I2C.
+ */
+void ds5_apply_builtin_tables(struct ds5 *state, u16 dev_type)
+{
+	struct ds5_sensor *sensors[] = {
+		&state->depth.sensor, &state->ir.sensor,
+		&state->rgb.sensor, &state->imu.sensor,
+	};
+	struct ds5_sensor *sensor;
+	unsigned int i;
+
+	/* No records: dispatch takes the built-in arms */
+	for (i = 0; i < ARRAY_SIZE(sensors); i++) {
+		sensors[i]->desc_ctrls = NULL;
+		sensors[i]->n_desc_ctrls = 0;
+	}
+
+	sensor = &state->depth.sensor;
+	switch (dev_type) {
+	case DS5_DEVICE_TYPE_D41X:
+		sensor->formats = ds5_depth_formats_d41x;
+		break;
+	case DS5_DEVICE_TYPE_D40X:
+		sensor->formats = ds5_depth_formats_d40x;
+		break;
+	case DS5_DEVICE_TYPE_D43X:
+		sensor->formats = ds5_depth_formats_d43x;
+		break;
+	case DS5_DEVICE_TYPE_D45X:
+		sensor->formats = ds5_depth_formats_d43x;
+		break;
+	case DS5_DEVICE_TYPE_D58X:
+		sensor->formats = ds5_depth_formats_d58x;
+		break;
+	default:
+		dev_warn(&state->client->dev,
+			 "%s(): unknown device type 0x%x, using D43X format tables\n",
+			 __func__, dev_type);
+		sensor->formats = ds5_depth_formats_d43x;
+	}
+	sensor->n_formats = 1;
+	sensor->mux_pad = DS5_MUX_PAD_DEPTH;
+
+	sensor = &state->ir.sensor;
+	switch (dev_type) {
+	case DS5_DEVICE_TYPE_D40X:
+		sensor->formats = ds5_y_formats_40x;
+		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_40x);
+		break;
+	case DS5_DEVICE_TYPE_D41X:
+		sensor->formats = ds5_y_formats_41x;
+		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_41x);
+		break;
+	case DS5_DEVICE_TYPE_D45X:
+		sensor->formats = ds5_y_formats_45x;
+		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_45x);
+		break;
+	case DS5_DEVICE_TYPE_D58X:
+		sensor->formats = ds5_y_formats_d58x;
+		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_d58x);
+		break;
+	default:
+		sensor->formats = state->variant->formats;
+		sensor->n_formats = state->variant->n_formats;
+	}
+	sensor->mux_pad = DS5_MUX_PAD_IR;
+
+	sensor = &state->rgb.sensor;
+	switch (dev_type) {
+	case DS5_DEVICE_TYPE_D43X:
+		sensor->formats = &ds5_onsemi_rgb_format;
+		sensor->n_formats = DS5_ONSEMI_RGB_N_FORMATS;
+		break;
+	case DS5_DEVICE_TYPE_D41X:
+		sensor->formats = &ds5_41x_rgb_format;
+		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
+		break;
+	case DS5_DEVICE_TYPE_D40X:
+		sensor->formats = ds5_40x_rgb_formats;
+		sensor->n_formats = ARRAY_SIZE(ds5_40x_rgb_formats);
+		break;
+	case DS5_DEVICE_TYPE_D45X:
+		sensor->formats = &ds5_rlt_rgb_format;
+		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
+		break;
+	case DS5_DEVICE_TYPE_D58X:
+		sensor->formats = ds5_rgb_formats_d58x;
+		sensor->n_formats = ARRAY_SIZE(ds5_rgb_formats_d58x);
+		break;
+	default:
+		sensor->formats = &ds5_onsemi_rgb_format;
+		sensor->n_formats = DS5_ONSEMI_RGB_N_FORMATS;
+	}
+	sensor->mux_pad = DS5_MUX_PAD_RGB;
+
+	sensor = &state->imu.sensor;
+	/* Firmware 5.16 (0x0510) and later report 32-bit IMU axis values. D58x
+	 * always carries the 38-byte extended record; in serdes pixel mode the
+	 * line is zero-padded to 256 to meet GMSL2 minimum sync spacing.
+	 */
+	if (dev_type == DS5_DEVICE_TYPE_D58X) {
+		if (state->d58x_pixel_mode)
+			sensor->formats = ds5_imu_formats_extended_d58x_pixel_mode;
+		else
+			sensor->formats = d58x_imu_formats_extended_tunnel_mode;
+	} else if (state->fw_version >= 0x510) {
+		sensor->formats = ds5_imu_formats_extended;
+	} else {
+		sensor->formats = ds5_imu_formats;
+	}
+	sensor->n_formats = 1;
+	sensor->mux_pad = DS5_MUX_PAD_IMU;
+}
+
 /* Get readable sensor name */
 static const char *ds5_get_sensor_name(struct ds5 *state)
 {
@@ -2517,6 +1728,17 @@ static void ds5_set_state_last_set(struct ds5 *state)
 		state->mux.last_set = &state->imu.sensor;
 }
 
+static u16 ds5_resolution_default_framerate(const struct ds5_resolution *res)
+{
+	unsigned int i;
+
+	for (i = 0; i < res->n_framerates; i++)
+		if (res->framerates[i] == ds5_framerate_30)
+			return ds5_framerate_30;
+
+	return res->framerates[0];
+}
+
 /* This is needed for .get_fmt()
  * and if streaming is started without .set_fmt()
  */
@@ -2524,7 +1746,6 @@ static void ds5_sensor_format_init(struct ds5_sensor *sensor)
 {
 	const struct ds5_format *fmt;
 	struct v4l2_mbus_framefmt *ffmt;
-	unsigned int i;
 
 	if (sensor->config.format)
 		return;
@@ -2543,16 +1764,13 @@ static void ds5_sensor_format_init(struct ds5_sensor *sensor)
 	sensor->config.format = fmt;
 	sensor->config.resolution = fmt->resolutions;
 	/* Set default framerate to 30, or to 1st one if not supported */
-	for (i = 0; i < fmt->resolutions->n_framerates; i++) {
-		if (fmt->resolutions->framerates[i] == ds5_framerate_30 /* fps */) {
-			sensor->config.framerate = ds5_framerate_30;
-			return;
-		}
-	}
-	sensor->config.framerate = fmt->resolutions->framerates[0];
+	sensor->config.framerate =
+		ds5_resolution_default_framerate(sensor->config.resolution);
 }
 
-/* No locking needed for enumeration methods */
+/* The formats/n_formats pair is republished at runtime by the post-reset
+ * descriptor reload under ds5_dev->lock; readers snapshot under the same lock.
+ */
 static int ds5_sensor_enum_mbus_code(struct v4l2_subdev *sd,
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
 				     struct v4l2_subdev_pad_config *cfg,
@@ -2562,18 +1780,22 @@ static int ds5_sensor_enum_mbus_code(struct v4l2_subdev *sd,
 				     struct v4l2_subdev_mbus_code_enum *mce)
 {
 	struct ds5_sensor *sensor = container_of(sd, struct ds5_sensor, sd);
+	struct ds5 *state = v4l2_get_subdevdata(sd);
+	int ret = 0;
 
 	dev_dbg(sensor->sd.dev, "%s(): sensor %s pad: %d index: %d\n",
 		__func__, sensor->sd.name, mce->pad, mce->index);
 	if (mce->pad)
 		return -EINVAL;
 
+	mutex_lock(&state->ds5_dev->lock);
 	if (mce->index >= sensor->n_formats)
-		return -EINVAL;
+		ret = -EINVAL;
+	else
+		mce->code = sensor->formats[mce->index].mbus_code;
+	mutex_unlock(&state->ds5_dev->lock);
 
-	mce->code = sensor->formats[mce->index].mbus_code;
-
-	return 0;
+	return ret;
 }
 
 static int ds5_sensor_enum_frame_size(struct v4l2_subdev *sd,
@@ -2592,12 +1814,17 @@ static int ds5_sensor_enum_frame_size(struct v4l2_subdev *sd,
 	dev_dbg(sensor->sd.dev, "%s(): sensor %s is %s\n",
 		__func__, sensor->sd.name, ds5_get_sensor_name(state));
 
+	/* Table contents are immutable; only the pair needs the lock. */
+	mutex_lock(&state->ds5_dev->lock);
 	for (i = 0, fmt = sensor->formats; i < sensor->n_formats; i++, fmt++)
 		if (fse->code == fmt->mbus_code)
 			break;
 
-	if (i == sensor->n_formats)
+	if (i == sensor->n_formats) {
+		mutex_unlock(&state->ds5_dev->lock);
 		return -EINVAL;
+	}
+	mutex_unlock(&state->ds5_dev->lock);
 
 	if (fse->index >= fmt->n_resolutions)
 		return -EINVAL;
@@ -2617,16 +1844,21 @@ static int ds5_sensor_enum_frame_interval(struct v4l2_subdev *sd,
 		struct v4l2_subdev_frame_interval_enum *fie)
 {
 	struct ds5_sensor *sensor = container_of(sd, struct ds5_sensor, sd);
+	struct ds5 *state = v4l2_get_subdevdata(sd);
 	const struct ds5_format *fmt;
 	const struct ds5_resolution *res;
 	unsigned int i;
 
+	mutex_lock(&state->ds5_dev->lock);
 	for (i = 0, fmt = sensor->formats; i < sensor->n_formats; i++, fmt++)
 		if (fie->code == fmt->mbus_code)
 			break;
 
-	if (i == sensor->n_formats)
+	if (i == sensor->n_formats) {
+		mutex_unlock(&state->ds5_dev->lock);
 		return -EINVAL;
+	}
+	mutex_unlock(&state->ds5_dev->lock);
 
 	for (i = 0, res = fmt->resolutions; i < fmt->n_resolutions; i++, res++)
 		if (res->width == fie->width && res->height == fie->height)
@@ -2688,8 +1920,11 @@ static int ds5_sensor_get_fmt(struct v4l2_subdev *sd,
 	return ret;
 }
 
-/* Called with lock held */
+/* Called with state->lock held. @state is passed in, not derived from the
+ * subdev: the probe path reaches this before ds5_sensor_init() sets subdevdata.
+ */
 static const struct ds5_format *ds5_sensor_find_format(
+		struct ds5 *state,
 		struct ds5_sensor *sensor,
 		struct v4l2_mbus_framefmt *ffmt,
 		const struct ds5_resolution **best)
@@ -2699,19 +1934,20 @@ static const struct ds5_format *ds5_sensor_find_format(
 	unsigned long best_delta = ~0;
 	unsigned int i;
 
+	mutex_lock(&state->ds5_dev->lock);
 	for (i = 0, fmt = sensor->formats; i < sensor->n_formats; i++, fmt++) {
 		if (fmt->mbus_code == ffmt->code)
 			break;
 	}
-	dev_dbg(sensor->sd.dev, "%s(): mbus_code = %x, code = %x \n",
-		__func__, fmt->mbus_code, ffmt->code);
-
 	if (i == sensor->n_formats) {
 		/* Not found, use default */
 		dev_dbg(sensor->sd.dev, "%s:%d Not found, use default\n",
 			__func__, __LINE__);
 		fmt = sensor->formats;
 	}
+	mutex_unlock(&state->ds5_dev->lock);
+	dev_dbg(sensor->sd.dev, "%s(): mbus_code = %x, code = %x\n",
+		__func__, fmt->mbus_code, ffmt->code);
 	for (i = 0, res = fmt->resolutions; i < fmt->n_resolutions; i++, res++) {
 		unsigned long delta = abs(ffmt->width * ffmt->height -
 				res->width * res->height);
@@ -2748,6 +1984,8 @@ static const struct ds5_format *ds5_sensor_find_format(
 /* 1-8 */
 #define MIPI_CSI2_TYPE_USER_DEF(i)	(0x30 + (i) - 1)
 
+static u16 __ds5_probe_framerate(const struct ds5_resolution *res, u16 target);
+
 static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
 		struct v4l2_subdev_pad_config *cfg,
@@ -2758,7 +1996,6 @@ static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 {
 	struct v4l2_mbus_framefmt *mf;// = &fmt->format;
 	int ret = 0;
-	//unsigned r;
 
 	dev_dbg(sensor->sd.dev, "%s(): state %p, "
 		"sensor %p, fmt %p, fmt->format %p\n",
@@ -2771,12 +2008,14 @@ static int __ds5_sensor_set_fmt(struct ds5 *state, struct ds5_sensor *sensor,
 
 	mutex_lock(&state->lock);
 
-	sensor->config.format = ds5_sensor_find_format(sensor, mf,
-						&sensor->config.resolution);
-	//r = DS5_FRAMERATE_DEFAULT_IDX < sensor->config.resolution->n_framerates ?
-	//	DS5_FRAMERATE_DEFAULT_IDX : 0;
-	/* FIXME: check if a framerate has been set */
-	//sensor->config.framerate = sensor->config.resolution->framerates[r];
+	sensor->config.format = ds5_sensor_find_format(state, sensor, mf,
+						       &sensor->config.resolution);
+	if (sensor->config.framerate)
+		sensor->config.framerate = __ds5_probe_framerate(
+			sensor->config.resolution, sensor->config.framerate);
+	else
+		sensor->config.framerate =
+			ds5_resolution_default_framerate(sensor->config.resolution);
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
 	if (cfg && fmt->which == V4L2_SUBDEV_FORMAT_TRY)
@@ -2847,7 +2086,8 @@ static int serdes_get_ser_pipe_id(struct ds5 *state, int dser_pipe_id,
 }
 
 static int ds5_setup_pipeline(struct ds5 *state, u8 data_type1, u8 data_type2,
-			      int pipe_id, u32 vc_id, int ser_vc_id)
+			      int pipe_id, u32 vc_id, int ser_vc_id,
+			      bool *ser_pipe_armed)
 {
 	int ret = 0;
 	/* ser_pipe_id depends on both the serializer and the deserializer
@@ -2860,6 +2100,9 @@ static int ds5_setup_pipeline(struct ds5 *state, u8 data_type1, u8 data_type2,
 			"set ser pipe %d, dser pipe %d, data_type1: 0x%x, data_type2: 0x%x, link: %u, ser_vc_id: %u, vc_id: %u\n",
 			ser_pipe_id, pipe_id, data_type1, data_type2, state->gmsl_link,
 			ser_vc_id, vc_id);
+	/* A failed set_pipe may still arm the VC. Keep this attempt across
+	 * retries so a later allocation error cannot skip its cleanup. */
+	*ser_pipe_armed = true;
 	ret |= state->ser_ops->set_pipe(state->ser_dev, ser_pipe_id,
 				data_type1, data_type2, ser_vc_id);
 	ret |= state->dser_ops->set_pipe(state->dser_dev, pipe_id,
@@ -2903,14 +2146,14 @@ static u8 ds5_wire_data_type(const struct ds5_format *format)
 		format->data_type;
 }
 
-static int ds5_configure(struct ds5 *state)
+static int ds5_configure(struct ds5 *state, bool *ser_pipe_armed)
 {
 	struct ds5_sensor *sensor;
 	u16 md_fmt, vc_id;
 #ifdef CONFIG_VIDEO_D4XX_SERDES
 	u16 data_type1, data_type2;
 	bool is_calib = 0;
-	int ser_vc_id;
+	int ser_vc_id, pipe_id;
 #endif
 	u16 md_vc = 0;
 	u16 dt_addr, md_addr, override_addr, fps_addr, width_addr, height_addr;
@@ -3005,20 +2248,25 @@ static int ds5_configure(struct ds5 *state)
 		 */
 		if (state->ser_ops == &max96717_interface &&
 		    state->dser_ops->get_multi_vc_pipe_id)
-			sensor->pipe_id =
+			pipe_id =
 				state->dser_ops->get_multi_vc_pipe_id(state->dser_dev,
 								      state->gmsl_link);
 		else
-			sensor->pipe_id =
+			pipe_id =
 				state->dser_ops->get_available_pipe_id(state->dser_dev, (int)vc_id);
 		mutex_unlock(&serdes_lock__);
-		if (sensor->pipe_id < 0) {
+		if (pipe_id < 0) {
+			/* Cache an allocated ID or the sentinel, never an errno:
+			 * same-format retries must allocate and configure again. */
+			sensor->pipe_id = PIPE_NOT_CONFIGURED;
 			dev_err(&state->client->dev, "No free pipe in %s\n",state->dser_ops->name);
 			return -ENOSR;
 		}
+		sensor->pipe_id = pipe_id;
 		mutex_lock(&serdes_lock__);
 		ret = ds5_setup_pipeline(state, data_type1, data_type2,
-					 sensor->pipe_id, vc_id, ser_vc_id);
+					 sensor->pipe_id, vc_id, ser_vc_id,
+					 ser_pipe_armed);
 		// reset data path when switching to Y12I
 		if (is_calib)
 			state->dser_ops->reset_oneshot(state->dser_dev);
@@ -3126,8 +2374,6 @@ static int ds5_sensor_g_frame_interval(struct v4l2_subdev *sd,
 
 	return 0;
 }
-static u16 __ds5_probe_framerate(const struct ds5_resolution *res, u16 target);
-
 static int ds5_sensor_s_frame_interval(struct v4l2_subdev *sd,
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
 		struct v4l2_subdev_state *state,
@@ -3251,7 +2497,6 @@ static int ds5_hw_set_exposure(struct ds5 *state, u32 base, s32 val)
 #define DS5_MAX_LOG_POLL (DS5_MAX_LOG_WAIT / DS5_MAX_LOG_SLEEP)
 
 // TODO: why to use DS5_DEPTH_Y_STREAMS_DT?
-#define DS5_CAMERA_CID_BASE	(V4L2_CTRL_CLASS_CAMERA | DS5_DEPTH_STREAM_DT)
 
 #define DS5_CAMERA_CID_LOG			(DS5_CAMERA_CID_BASE+0)
 #define DS5_CAMERA_CID_LASER_POWER		(DS5_CAMERA_CID_BASE+1)
@@ -3266,10 +2511,9 @@ static int ds5_hw_set_exposure(struct ds5 *state, u32 base, s32 val)
 #define DS5_CAMERA_CID_AE_ROI_SET		(DS5_CAMERA_CID_BASE+10)
 #define DS5_CAMERA_CID_AE_SETPOINT_GET		(DS5_CAMERA_CID_BASE+11)
 #define DS5_CAMERA_CID_AE_SETPOINT_SET		(DS5_CAMERA_CID_BASE+12)
-#define DS5_CAMERA_CID_ERB			(DS5_CAMERA_CID_BASE+13)
-#define DS5_CAMERA_CID_EWB			(DS5_CAMERA_CID_BASE+14)
-#define DS5_CAMERA_CID_HWMC			(DS5_CAMERA_CID_BASE+15)
 #define DS5_CAMERA_CID_SYNC_MODE		(DS5_CAMERA_CID_BASE+16)
+/* D585 2C Dual RGB Passive Depth Mode: maps to USB XU selector 0x1B */
+#define D500_CAMERA_CID_PASSIVE_DEPTH		(DS5_CAMERA_CID_BASE+17)
 #define DS5_CAMERA_CID_VISUAL_PRESET		(DS5_CAMERA_CID_BASE+21)
 
 /* Sync mode public values (RSDEV-6449).  FW maps EXTERNAL → Slave or SlaveFull
@@ -3289,10 +2533,8 @@ enum ds5_sync_mode {
 /* the HWMC will remain for legacy tools compatibility,
  * HWMC_RW used for UVC compatibility
  */
-#define DS5_CAMERA_CID_HWMC_RW		(DS5_CAMERA_CID_BASE+32)
 
 /* HW reset with recovery for GMSL connections */
-#define DS5_CAMERA_CID_HW_RESET		(DS5_CAMERA_CID_BASE+33)
 #define DS5_CAMERA_CID_READOUT_SHAPING	(DS5_CAMERA_CID_BASE+34)
 
 /* Depth AE mode: single R/W control, maps to librealsense XU selector 0x11 */
@@ -3300,6 +2542,10 @@ enum ds5_sync_mode {
 #define D500_CAMERA_CID_DEVICE_MODE	(DS5_CAMERA_CID_BASE + 36)
 #define D500_CAMERA_CID_DUAL_RGB_AE_POLICY (DS5_CAMERA_CID_BASE + 37)
 #define D500_CAMERA_CID_GYRO_SENSITIVITY (DS5_CAMERA_CID_BASE + 38)
+#define D500_CAMERA_CID_ACCEL_SENSITIVITY (DS5_CAMERA_CID_BASE + 39)
+/* USB Inference XU 0x01: single R/W control. */
+#define D500_CAMERA_CID_OD_DISTANCE	(DS5_CAMERA_CID_BASE + 40)
+/* Reserve CID offsets +41..+43 for future allocation across camera nodes. */
 
 enum d500_device_mode {
 	D500_DEVICE_MODE_3C = 0,
@@ -3313,6 +2559,13 @@ enum d500_2c_ae_mode {
 	D500_2C_AE_POLICY_HYBRID = 3,
 };
 
+/* Mirrors FW PARAM_DUAL_RGB_PASSIVE_DEPTH; passed through unchanged. */
+enum d500_passive_depth_mode {
+	D500_PASSIVE_DEPTH_DISABLED = 0,
+	D500_PASSIVE_DEPTH_ALTERNATING = 1,
+	D500_PASSIVE_DEPTH_FULL = 2,
+};
+
 enum d500_gyro_sensitivity {
 	D500_GYRO_SENSITIVITY_2000_DPS = 0,
 	D500_GYRO_SENSITIVITY_1000_DPS,
@@ -3321,9 +2574,22 @@ enum d500_gyro_sensitivity {
 	D500_GYRO_SENSITIVITY_125_DPS,
 };
 
+enum d500_accel_sensitivity {
+	D500_ACCEL_SENSITIVITY_3_G = 0,
+	D500_ACCEL_SENSITIVITY_6_G,
+	D500_ACCEL_SENSITIVITY_12_G,
+	D500_ACCEL_SENSITIVITY_24_G,
+};
+
 #define D500_DEVICE_MODE_XU_BASE		0x4528
 #define D500_DUAL_RGB_AE_XU_BASE	0x4530
 #define D500_GYRO_SENSITIVITY_XU_BASE	0x4538
+#define D500_ACCEL_SENSITIVITY_XU_BASE	0x4539
+/* FW-assigned bridge address; replaces PR #702's 0x453a placeholder. */
+#define D500_PASSIVE_DEPTH_XU_BASE	0x4531
+/* HKR ACKs writes to registers it lacks and reads them back as this byte. */
+#define D500_GMSL_READ_FILL_BYTE	0xff
+#define D500_OD_DISTANCE_XU_BASE	0x4598
 
 /* Auto-exposure algorithm types — mirrors FW ETAeType */
 enum ds5_ae_type {
@@ -3334,19 +2600,20 @@ enum ds5_ae_type {
 #define D500_CAMERA_CID_MINZ			(DS5_CAMERA_CID_BASE + 44)
 #define D500_CAMERA_CID_DECIMATION	(DS5_CAMERA_CID_BASE + 49)
 #define D500_CAMERA_CID_TEMPORAL	(DS5_CAMERA_CID_BASE + 51)
+/* USB depth XU 0x10: single R/W control. */
+#define D500_CAMERA_CID_ALIGNED_DEPTH	(DS5_CAMERA_CID_BASE + 55)
 #define D500_MINZ_XU_BASE		0x4500
 #define D500_DECIMATION_XU_BASE		0x4540
 #define D500_TEMPORAL_XU_BASE		0x4568
+#define D500_ALIGNED_DEPTH_XU_BASE	0x4599
+/*
+ * D500 DPP controls are passed between FW and userspace as the whole
+ * struct d500_dpp_xu_control. The driver is only a pipe: it neither builds
+ * nor validates the params, FW does. The only checks are structural: the
+ * header version on read (a FW without the window answers 0xFF) and
+ * param_count within the struct on write.
+ */
 #define D500_DPP_XU_VERSION		1
-#define D500_DPP_XU_DECIMATION_CONTROL_ID	BIT(0)
-#define D500_DPP_XU_TEMPORAL_CONTROL_ID		BIT(1)
-#define D500_DPP_XU_MINZ_CONTROL_ID	BIT(3)
-#define D500_DPP_XU_DECIMATION_PARAM_COUNT	2
-#define D500_DPP_XU_TEMPORAL_PARAM_COUNT	4
-#define D500_DPP_XU_MINZ_PARAM_COUNT	7
-#define D500_DPP_XU_INTEGER_PARAMS	0
-/* params[1] is a floating-point alpha encoded in milli-units by the XU ABI. */
-#define D500_DPP_XU_TEMPORAL_PARAM_TYPE	BIT(1)
 
 enum d500_minz_param_index {
 	D500_MINZ_ENABLE = 0,
@@ -3356,46 +2623,6 @@ enum d500_minz_param_index {
 	D500_MINZ_SHIFT_PIXELS,
 	D500_MINZ_THRESHOLD_MODE,
 	D500_MINZ_THRESHOLD_MM,
-};
-
-static const u32 d500_minz_min[D500_DPP_XU_MINZ_PARAM_COUNT] = {
-	0, 0, 1, 0, 0, 0, 0,
-};
-
-static const u32 d500_minz_max[D500_DPP_XU_MINZ_PARAM_COUNT] = {
-	1, 1, 2, 2, 256, 2, 65535,
-};
-
-static const u32 d500_decimation_min[D500_DPP_XU_DECIMATION_PARAM_COUNT] = {
-	0, 2,
-};
-
-static const u32 d500_decimation_max[D500_DPP_XU_DECIMATION_PARAM_COUNT] = {
-	1, 2,
-};
-
-static const u32 d500_decimation_step[D500_DPP_XU_DECIMATION_PARAM_COUNT] = {
-	1, 1,
-};
-
-static const u32 d500_decimation_def[D500_DPP_XU_DECIMATION_PARAM_COUNT] = {
-	0, 2,
-};
-
-static const u32 d500_temporal_min[D500_DPP_XU_TEMPORAL_PARAM_COUNT] = {
-	0, 0, 1, 0,
-};
-
-static const u32 d500_temporal_max[D500_DPP_XU_TEMPORAL_PARAM_COUNT] = {
-	1, 1000, 100, 8,
-};
-
-static const u32 d500_temporal_step[D500_DPP_XU_TEMPORAL_PARAM_COUNT] = {
-	1, 10, 1, 1,
-};
-
-static const u32 d500_temporal_def[D500_DPP_XU_TEMPORAL_PARAM_COUNT] = {
-	0, 400, 20, 3,
 };
 
 struct d500_dpp_xu_header {
@@ -3413,104 +2640,45 @@ struct d500_dpp_xu_control {
 
 struct d500_dpp_ctrl_desc {
 	u16 base;
-	u16 control_id;
-	u8 param_count;
-	u8 param_type;
 	bool idle_only;
-	const u32 *min;
-	const u32 *max;
-	const u32 *step;
-	const u32 *def;
 };
 
 static int d500_dpp_xu_read(struct ds5 *state,
 			    const struct d500_dpp_ctrl_desc *desc,
 			    struct d500_dpp_xu_control *control)
 {
-	int ret;
+	int ret = ds5_raw_read(state, desc->base, control, sizeof(*control));
 
-	ret = ds5_raw_read(state, desc->base, control,
-			   sizeof(*control));
 	if (ret)
 		return ret;
-	if (control->header.version != D500_DPP_XU_VERSION ||
-	    le16_to_cpu(control->header.control_id) !=
-		desc->control_id ||
-	    control->param_count != desc->param_count ||
-	    control->param_type != desc->param_type)
-		return -EBADMSG;
-	return 0;
+	return control->header.version == D500_DPP_XU_VERSION ? 0 : -EOPNOTSUPP;
 }
 
 static int d500_dpp_xu_write(struct ds5 *state,
 			     const struct d500_dpp_ctrl_desc *desc,
 			     const struct d500_dpp_xu_control *control)
 {
-	return ds5_raw_write(state, desc->base, control,
-			     sizeof(*control));
+	return ds5_raw_write(state, desc->base, control, sizeof(*control));
 }
 
 static const struct d500_dpp_ctrl_desc d500_minz_desc = {
 	.base = D500_MINZ_XU_BASE,
-	.control_id = D500_DPP_XU_MINZ_CONTROL_ID,
-	.param_count = D500_DPP_XU_MINZ_PARAM_COUNT,
-	.param_type = D500_DPP_XU_INTEGER_PARAMS,
-	.idle_only = true,
 };
 
 static const struct d500_dpp_ctrl_desc d500_decimation_desc = {
 	.base = D500_DECIMATION_XU_BASE,
-	.control_id = D500_DPP_XU_DECIMATION_CONTROL_ID,
-	.param_count = D500_DPP_XU_DECIMATION_PARAM_COUNT,
-	.param_type = D500_DPP_XU_INTEGER_PARAMS,
 	.idle_only = true,
-	.min = d500_decimation_min,
-	.max = d500_decimation_max,
-	.step = d500_decimation_step,
-	.def = d500_decimation_def,
 };
 
 static const struct d500_dpp_ctrl_desc d500_temporal_desc = {
 	.base = D500_TEMPORAL_XU_BASE,
-	.control_id = D500_DPP_XU_TEMPORAL_CONTROL_ID,
-	.param_count = D500_DPP_XU_TEMPORAL_PARAM_COUNT,
-	.param_type = D500_DPP_XU_TEMPORAL_PARAM_TYPE,
-	.min = d500_temporal_min,
-	.max = d500_temporal_max,
-	.step = d500_temporal_step,
-	.def = d500_temporal_def,
 };
-
-static bool d500_minz_params_valid(const u32 *params)
-{
-	u8 i;
-
-	for (i = 0; i < D500_DPP_XU_MINZ_PARAM_COUNT; i++)
-		if (params[i] < d500_minz_min[i] ||
-		    params[i] > d500_minz_max[i])
-			return false;
-	return true;
-}
-
-static bool d500_dpp_params_valid(const struct d500_dpp_ctrl_desc *desc,
-				  const u32 *params)
-{
-	u8 i;
-
-	if (!desc->min || !desc->max || !desc->step)
-		return false;
-
-	for (i = 0; i < desc->param_count; i++)
-		if (params[i] < desc->min[i] || params[i] > desc->max[i] ||
-		    !desc->step[i] ||
-		    (params[i] - desc->min[i]) % desc->step[i])
-			return false;
-	return true;
-}
 
 static const struct d500_dpp_ctrl_desc *d500_dpp_ctrl_desc(u32 ctrl_id)
 {
 	switch (ctrl_id) {
+	case D500_CAMERA_CID_MINZ:
+		return &d500_minz_desc;
 	case D500_CAMERA_CID_DECIMATION:
 		return &d500_decimation_desc;
 	case D500_CAMERA_CID_TEMPORAL:
@@ -3520,110 +2688,6 @@ static const struct d500_dpp_ctrl_desc *d500_dpp_ctrl_desc(u32 ctrl_id)
 	}
 }
 
-/* V4L2 U32 arrays otherwise apply one scalar default/range to every slot. */
-static bool d500_dpp_ctrl_equal_elem(u32 idx, union v4l2_ctrl_ptr ptr1,
-				     union v4l2_ctrl_ptr ptr2)
-{
-	return ptr1.p_u32[idx] == ptr2.p_u32[idx];
-}
-
-static void d500_dpp_ctrl_init_elem(const struct v4l2_ctrl *ctrl, u32 idx,
-				    union v4l2_ctrl_ptr ptr)
-{
-	const struct d500_dpp_ctrl_desc *desc =
-		d500_dpp_ctrl_desc(ctrl->id);
-
-	ptr.p_u32[idx] = desc && desc->def && idx < desc->param_count ?
-		desc->def[idx] : 0;
-}
-
-static void d500_dpp_ctrl_log(const struct v4l2_ctrl *ctrl)
-{
-	pr_cont("%u", (unsigned int)*ctrl->p_cur.p_u32);
-}
-
-static int d500_dpp_ctrl_validate_elem(const struct v4l2_ctrl *ctrl, u32 idx,
-				       union v4l2_ctrl_ptr ptr)
-{
-	const struct d500_dpp_ctrl_desc *desc =
-		d500_dpp_ctrl_desc(ctrl->id);
-	u32 value;
-
-	if (!desc || !desc->min || !desc->max || !desc->step ||
-	    idx >= desc->param_count || !desc->step[idx])
-		return -EINVAL;
-
-	value = clamp(ptr.p_u32[idx], desc->min[idx], desc->max[idx]);
-	value = desc->min[idx] +
-		DIV_ROUND_CLOSEST(value - desc->min[idx], desc->step[idx]) *
-		desc->step[idx];
-	ptr.p_u32[idx] = min(value, desc->max[idx]);
-	return 0;
-}
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
-static bool d500_dpp_ctrl_equal(const struct v4l2_ctrl *ctrl,
-				union v4l2_ctrl_ptr ptr1,
-				union v4l2_ctrl_ptr ptr2)
-{
-	u32 idx;
-
-	for (idx = 0; idx < ctrl->elems; idx++)
-		if (!d500_dpp_ctrl_equal_elem(idx, ptr1, ptr2))
-			return false;
-	return true;
-}
-
-static void d500_dpp_ctrl_init(const struct v4l2_ctrl *ctrl, u32 from_idx,
-			       union v4l2_ctrl_ptr ptr)
-{
-	u32 idx;
-
-	for (idx = from_idx; idx < ctrl->elems; idx++)
-		d500_dpp_ctrl_init_elem(ctrl, idx, ptr);
-}
-
-static int d500_dpp_ctrl_validate(const struct v4l2_ctrl *ctrl,
-				  union v4l2_ctrl_ptr ptr)
-{
-	u32 idx;
-	int ret;
-
-	for (idx = 0; idx < ctrl->new_elems; idx++) {
-		ret = d500_dpp_ctrl_validate_elem(ctrl, idx, ptr);
-		if (ret)
-			return ret;
-	}
-	return 0;
-}
-#else
-static bool d500_dpp_ctrl_equal(const struct v4l2_ctrl *ctrl, u32 idx,
-				union v4l2_ctrl_ptr ptr1,
-				union v4l2_ctrl_ptr ptr2)
-{
-	return d500_dpp_ctrl_equal_elem(idx, ptr1, ptr2);
-}
-
-static void d500_dpp_ctrl_init(const struct v4l2_ctrl *ctrl, u32 idx,
-			       union v4l2_ctrl_ptr ptr)
-{
-	d500_dpp_ctrl_init_elem(ctrl, idx, ptr);
-}
-
-static int d500_dpp_ctrl_validate(const struct v4l2_ctrl *ctrl, u32 idx,
-				  union v4l2_ctrl_ptr ptr)
-{
-	return d500_dpp_ctrl_validate_elem(ctrl, idx, ptr);
-}
-#endif
-
-static const struct v4l2_ctrl_type_ops d500_dpp_ctrl_type_ops = {
-	.equal = d500_dpp_ctrl_equal,
-	.init = d500_dpp_ctrl_init,
-	.log = d500_dpp_ctrl_log,
-	.validate = d500_dpp_ctrl_validate,
-};
-
 #define DS5_HWMC_DATA			0x4900
 #define DS5_HWMC_STATUS			0x4904
 #define DS5_HWMC_RESP_LEN		0x4908
@@ -3632,8 +2696,6 @@ static const struct v4l2_ctrl_type_ops d500_dpp_ctrl_type_ops = {
 #define DS5_HWMC_STATUS_OK		0
 #define DS5_HWMC_STATUS_ERR		1
 #define DS5_HWMC_STATUS_WIP		2
-#define DS5_HWMC_BUFFER_SIZE	1024
-
 enum DS5_HWMC_ERR {
 	DS5_HWMC_ERR_SUCCESS = 0,
 	DS5_HWMC_ERR_CMD     = -1,
@@ -3643,11 +2705,12 @@ enum DS5_HWMC_ERR {
 	DS5_HWMC_ERR_LAST,
 };
 
-static int ds5_hwmc_wait(struct ds5 *state)
+static int ds5_hwmc_wait(struct ds5 *state, int *fw_error)
 {
 	int ret = 0;
 	u16 status = DS5_HWMC_STATUS_WIP;
 	int errorCode;
+
 	/*
 	 * RSDEV-12089: bound the poll by wall-clock (DS5_HWMC_MAX_TIME) rather than a
 	 * fixed retry count. The old ~100 ms budget was too short on MIPI: a concurrent
@@ -3658,6 +2721,8 @@ static int ds5_hwmc_wait(struct ds5 *state)
 	 */
 	unsigned long timeout = jiffies + msecs_to_jiffies(DS5_HWMC_MAX_TIME);
 	bool first = true;
+
+	*fw_error = 0;
 	do {
 		if (!first)
 			msleep_range(1);
@@ -3673,41 +2738,55 @@ static int ds5_hwmc_wait(struct ds5 *state)
 		__func__, ret, status);
 	if (!ret) {
 		if (status == DS5_HWMC_STATUS_ERR) {
-			ds5_raw_read(state, DS5_HWMC_DATA, &errorCode, sizeof(errorCode));
-			ret = errorCode;
+			ret = ds5_raw_read(state, DS5_HWMC_DATA, &errorCode,
+					   sizeof(errorCode));
+			if (!ret) {
+				if (!errorCode)
+					return -EBADMSG;
+				dev_dbg(&state->client->dev,
+					"%s(): firmware error 0x%08x\n",
+					__func__, errorCode);
+				*fw_error = errorCode;
+			}
 		} else if (status == DS5_HWMC_STATUS_WIP) {
 			ret = -ETIMEDOUT;
 			dev_warn(&state->client->dev,
 				"%s(): HWMC command timed out\n", __func__);
+		} else if (status != DS5_HWMC_STATUS_OK) {
+			ret = -EBADMSG;
 		}
-	} else {
-		ret = DS5_HWMC_ERR_LAST;
 	}
 	return ret;
 }
 
 static int ds5_get_hwmc(struct ds5 *state, unsigned char *data,
-		u16 cmdDataLen, u16 *dataLen)
+		u16 cmdDataLen, u16 *dataLen, bool raw_response, bool allow_empty)
 {
 	int ret = 0;
+	int fw_error;
 	u16 tmp_len = 0;
 
 	if (!data)
 		return -ENOBUFS;
 
+	if (dataLen)
+		*dataLen = 0;
 	memset(data, 0, cmdDataLen);
-	ret = ds5_hwmc_wait(state);
-	if (ret) {
+	ret = ds5_hwmc_wait(state, &fw_error);
+	if (ret)
+		return ret;
+	if (fw_error) {
 		dev_dbg(&state->client->dev,
 			"%s(): HWMC status not clear, ret: %d\n",
-			__func__, ret);
-		if (ret != DS5_HWMC_ERR_LAST) {
-			int *p = (int *)data;
-			*p = ret;
-			return 0;
-		} else {
-			return ret;
-		}
+			__func__, fw_error);
+		if (!raw_response)
+			return -EREMOTEIO;
+		if (cmdDataLen < sizeof(fw_error))
+			return -ENOBUFS;
+		memcpy(data, &fw_error, sizeof(fw_error));
+		if (dataLen)
+			*dataLen = sizeof(fw_error);
+		return 0;
 	}
 
 	ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN,
@@ -3718,9 +2797,13 @@ static int ds5_get_hwmc(struct ds5 *state, unsigned char *data,
 	if (tmp_len > cmdDataLen)
 		return -ENOBUFS;
 
-	if (tmp_len == 0) {
+	/* An empty native LOG response means there are no pending logs. */
+	if (!tmp_len && allow_empty)
+		return 0;
+	if (tmp_len < sizeof(u32)) {
 		dev_err(&state->client->dev,
-			"%s(): HWMC response length is 0\n", __func__);
+			"%s(): HWMC response length %u is too short\n",
+			__func__, tmp_len);
 		return -ENODATA;
 	}
 
@@ -3751,6 +2834,72 @@ static int ds5_hwmc_send(struct ds5 *state,
 	return 0;
 }
 
+/* DFU has no HWMC response. Use the same generation transition for
+ * legacy HWMC, HWMC_RW and the DFU character-device entry point. */
+static int ds5_hwmc_send_dfu_locked(struct ds5 *state, u16 cmd_len,
+				    const struct hwm_cmd *cmd)
+{
+	atomic_inc(ds5_get_reset_gen(state));
+	return ds5_hwmc_send(state, cmd_len, cmd);
+}
+
+static int ds5_hwmc_send_dfu(struct ds5 *state, u16 cmd_len,
+			   const struct hwm_cmd *cmd)
+{
+	int ret;
+
+	mutex_lock(&state->ds5_dev->hwmc_lock);
+	ret = ds5_hwmc_send_dfu_locked(state, cmd_len, cmd);
+	mutex_unlock(&state->ds5_dev->hwmc_lock);
+	return ret;
+}
+
+/*
+ * HKR exposes one HW-monitor engine for the whole camera, while Linux exposes
+ * it through multiple V4L2 subdevices.  Serialize the complete transaction,
+ * not only the DATA/EXEC writes: a second command issued before the first
+ * response is consumed overwrites the shared FW status/response registers.
+ */
+/* Caller holds hwmc_lock. Native controls return FW errors as errno; raw
+ * HWMC controls preserve the firmware response word for librealsense. The
+ * native LOG caller opts into empty responses through allow_empty. */
+static int ds5_hwmc_xfer_locked(struct ds5 *state, u16 cmd_len,
+			      const struct hwm_cmd *cmd, unsigned char *data,
+			      u16 data_size, u16 *data_len, bool raw_response,
+			      bool allow_empty)
+{
+	int ret, fw_error;
+
+	if (cmd_len < sizeof(*cmd) || cmd_len > DS5_HWMC_BUFFER_SIZE)
+		return -EINVAL;
+	ret = ds5_hwmc_send(state, cmd_len, cmd);
+	if (ret)
+		return ret;
+	if (data)
+		return ds5_get_hwmc(state, data, data_size, data_len, raw_response,
+				    allow_empty);
+
+	ret = ds5_hwmc_wait(state, &fw_error);
+	if (ret)
+		return ret;
+	return fw_error ? -EREMOTEIO : 0;
+}
+
+static int ds5_hwmc_xfer(struct ds5 *state, u16 cmd_len,
+			  const struct hwm_cmd *cmd, unsigned char *data,
+			  u16 data_size, u16 *data_len, bool raw_response,
+			  bool allow_empty)
+{
+	int ret;
+
+	mutex_lock(&state->ds5_dev->hwmc_lock);
+	ret = ds5_hwmc_xfer_locked(state, cmd_len, cmd, data, data_size,
+				  data_len, raw_response, allow_empty);
+	mutex_unlock(&state->ds5_dev->hwmc_lock);
+
+	return ret;
+}
+
 /* Caller must hold state->ds5_dev->lock. */
 static bool d500_camera_is_idle_locked(struct ds5 *state)
 {
@@ -3758,6 +2907,19 @@ static bool d500_camera_is_idle_locked(struct ds5 *state)
 	       !state->ds5_dev->rgb_streaming &&
 	       !state->ds5_dev->ir_streaming &&
 	       !state->ds5_dev->imu_streaming;
+}
+
+/* Caller must hold state->ds5_dev->lock. FW applies alignment while IMU, or
+ * in 3C the stereo-independent Color, streams; Depth and IR always block it.
+ */
+static bool d500_aligned_depth_is_idle_locked(struct ds5 *state)
+{
+	struct ds5_dev *ds5_dev = state->ds5_dev;
+	bool rgb_ok = ds5_dev->device_mode_valid &&
+		      ds5_dev->active_device_mode == D500_DEVICE_MODE_3C;
+
+	return !ds5_dev->depth_streaming && !ds5_dev->ir_streaming &&
+	       (rgb_ok || !ds5_dev->rgb_streaming);
 }
 
 static int d500_get_device_mode(struct ds5 *state, u32 *mode)
@@ -3871,21 +3033,270 @@ static int d500_get_gyro_sensitivity(struct ds5 *state, u32 *sensitivity)
 	return 0;
 }
 
+/* Write a one-byte D58x IMU XU register while the IMU is idle, then verify. */
+static int d500_set_imu_xu_byte(struct ds5 *state, u16 reg, u8 value)
+{
+	u8 readback;
+	int ret;
+
+	mutex_lock(&state->ds5_dev->lock);
+	if (state->ds5_dev->imu_streaming) {
+		ret = -EBUSY;
+		goto out;
+	}
+
+	ret = ds5_raw_write(state, reg, &value, sizeof(value));
+	if (ret)
+		goto out;
+
+	/* HKR dispatches the write before serving this read, so it returns the
+	 * value FW accepted; a mismatch is a rejected write (retryable -EIO).
+	 */
+	ret = ds5_raw_read(state, reg, &readback, sizeof(readback));
+	if (ret)
+		goto out;
+	if (readback == D500_GMSL_READ_FILL_BYTE)
+		ret = -EOPNOTSUPP;
+	else if (readback != value)
+		ret = -EIO;
+out:
+	mutex_unlock(&state->ds5_dev->lock);
+
+	return ret;
+}
+
 static int d500_set_gyro_sensitivity(struct ds5 *state, u32 sensitivity)
+{
+	if (sensitivity > D500_GYRO_SENSITIVITY_125_DPS)
+		return -EINVAL;
+
+	return d500_set_imu_xu_byte(state, D500_GYRO_SENSITIVITY_XU_BASE,
+				    sensitivity);
+}
+
+static int d500_get_accel_sensitivity(struct ds5 *state, u32 *sensitivity)
 {
 	u8 value;
 	int ret;
 
-	if (sensitivity > D500_GYRO_SENSITIVITY_125_DPS)
+	if (!sensitivity)
 		return -EINVAL;
-	value = sensitivity;
+
+	ret = ds5_raw_read(state, D500_ACCEL_SENSITIVITY_XU_BASE,
+			   &value, sizeof(value));
+	if (ret)
+		return ret;
+	if (value > D500_ACCEL_SENSITIVITY_24_G)
+		return -EBADMSG;
+
+	*sensitivity = value;
+	return 0;
+}
+
+static int d500_set_accel_sensitivity(struct ds5 *state, u32 sensitivity)
+{
+	if (sensitivity > D500_ACCEL_SENSITIVITY_24_G)
+		return -EINVAL;
+
+	return d500_set_imu_xu_byte(state, D500_ACCEL_SENSITIVITY_XU_BASE,
+				    sensitivity);
+}
+
+/* Caller must hold state->ds5_dev->lock. One-byte read is safe on FW that
+ * lacks the window; such FW reads it back as 0xFF. */
+static int d500_read_aligned_depth_locked(struct ds5 *state, u8 *value)
+{
+	int ret;
+
+	ret = ds5_raw_read(state, D500_ALIGNED_DEPTH_XU_BASE, value,
+			   sizeof(*value));
+	if (ret)
+		return ret;
+	if (*value == D500_GMSL_READ_FILL_BYTE)
+		return -EOPNOTSUPP;
+	if (*value > 1)
+		return -EBADMSG;
+
+	return 0;
+}
+
+static int d500_get_aligned_depth(struct ds5 *state, s32 *val)
+{
+	u8 value;
+	int ret;
 
 	mutex_lock(&state->ds5_dev->lock);
-	if (state->ds5_dev->imu_streaming)
+	ret = d500_read_aligned_depth_locked(state, &value);
+	mutex_unlock(&state->ds5_dev->lock);
+	if (!ret)
+		*val = value;
+
+	return ret;
+}
+
+/* Caller must hold state->ds5_dev->lock. One-byte read is safe on FW that
+ * lacks the register; such FW reads it back as 0xFF. */
+static int d500_read_passive_depth_locked(struct ds5 *state, u8 *value)
+{
+	int ret;
+
+	ret = ds5_raw_read(state, D500_PASSIVE_DEPTH_XU_BASE, value,
+			   sizeof(*value));
+	if (ret)
+		return ret;
+	if (*value == D500_GMSL_READ_FILL_BYTE)
+		return -EOPNOTSUPP;
+	if (*value > D500_PASSIVE_DEPTH_FULL)
+		return -EBADMSG;
+
+	return 0;
+}
+
+static int d500_get_passive_depth(struct ds5 *state, u32 *mode)
+{
+	u8 value;
+	int ret;
+
+	if (!mode)
+		return -EINVAL;
+
+	mutex_lock(&state->ds5_dev->lock);
+	ret = (!state->ds5_dev->device_mode_valid ||
+	       state->ds5_dev->active_device_mode != D500_DEVICE_MODE_2C) ?
+		-EOPNOTSUPP : 0;
+	if (!ret)
+		ret = d500_read_passive_depth_locked(state, &value);
+	mutex_unlock(&state->ds5_dev->lock);
+	if (ret)
+		return ret;
+
+	*mode = value;
+	return 0;
+}
+
+/* The mode changes the shared sensor rate, so FW accepts it only while Depth,
+ * IR, RGB and IMU are all stopped. */
+static int d500_set_passive_depth(struct ds5 *state, u32 mode)
+{
+	u8 value, applied;
+	int ret;
+
+	if (mode > D500_PASSIVE_DEPTH_FULL)
+		return -EINVAL;
+	value = mode;
+
+	mutex_lock(&state->ds5_dev->lock);
+	ret = (!state->ds5_dev->device_mode_valid ||
+	       state->ds5_dev->active_device_mode != D500_DEVICE_MODE_2C) ?
+		-EOPNOTSUPP : 0;
+	if (!ret && !d500_camera_is_idle_locked(state))
 		ret = -EBUSY;
-	else
-		ret = ds5_raw_write(state, D500_GYRO_SENSITIVITY_XU_BASE,
+	/* HKR ACKs a write to a register it lacks; probe first so such FW is
+	 * never written to. An unknown current mode must not block a valid SET. */
+	if (!ret)
+		ret = d500_read_passive_depth_locked(state, &applied);
+	if (ret == -EBADMSG)
+		ret = 0;
+	if (!ret)
+		ret = ds5_raw_write(state, D500_PASSIVE_DEPTH_XU_BASE,
 				    &value, sizeof(value));
+	/* HKR dispatches the write before serving this read, so it returns the
+	 * mode FW accepted; a mismatch is a rejected write. */
+	if (!ret)
+		ret = d500_read_passive_depth_locked(state, &applied);
+	if (!ret && applied != value)
+		ret = -EIO;
+	mutex_unlock(&state->ds5_dev->lock);
+
+	return ret;
+}
+
+static int d500_set_aligned_depth(struct ds5 *state, s32 val)
+{
+	u8 value = val ? 1 : 0;
+	u8 applied;
+	int ret;
+
+	mutex_lock(&state->ds5_dev->lock);
+	if (!d500_aligned_depth_is_idle_locked(state)) {
+		ret = -EBUSY;
+		goto unlock;
+	}
+	ret = ds5_raw_write(state, D500_ALIGNED_DEPTH_XU_BASE, &value,
+			    sizeof(value));
+	if (ret)
+		goto unlock;
+	/* A refused write still ACKs on I2C; only the readback shows it. */
+	ret = d500_read_aligned_depth_locked(state, &applied);
+	if (!ret && applied != value)
+		ret = -EIO;
+unlock:
+	mutex_unlock(&state->ds5_dev->lock);
+
+	return ret;
+}
+
+/* Probe-time only, on the depth instance whose handler is exposed: the FW
+ * default does not change across a HW reset.
+ */
+static void d500_refresh_aligned_depth_default(struct ds5 *state)
+{
+	struct v4l2_ctrl *ctrl = READ_ONCE(state->ctrls.aligned_depth);
+	s32 val;
+
+	if (!state->is_depth || !ctrl || d500_get_aligned_depth(state, &val))
+		return;
+
+	WRITE_ONCE(ctrl->default_value, val);
+}
+
+/* Caller holds ds5_dev->lock; one-byte reads are safe on older FW. */
+static int d500_read_od_distance_locked(struct ds5 *state, u8 *value)
+{
+	int ret;
+
+	ret = ds5_raw_read(state, D500_OD_DISTANCE_XU_BASE, value,
+			   sizeof(*value));
+	if (ret)
+		return ret;
+	if (*value == D500_GMSL_READ_FILL_BYTE)
+		return -EOPNOTSUPP;
+	if (*value > 1)
+		return -EBADMSG;
+
+	return 0;
+}
+
+static int d500_get_od_distance(struct ds5 *state, s32 *val)
+{
+	u8 value;
+	int ret;
+
+	mutex_lock(&state->ds5_dev->lock);
+	ret = d500_read_od_distance_locked(state, &value);
+	mutex_unlock(&state->ds5_dev->lock);
+	if (!ret)
+		*val = value;
+
+	return ret;
+}
+
+static int d500_set_od_distance(struct ds5 *state, s32 val)
+{
+	u8 value = val ? 1 : 0;
+	u8 applied;
+	int ret;
+
+	mutex_lock(&state->ds5_dev->lock);
+	ret = ds5_raw_write(state, D500_OD_DISTANCE_XU_BASE, &value,
+			    sizeof(value));
+	if (ret)
+		goto unlock;
+	/* A refused write still ACKs on I2C; only the readback shows it. */
+	ret = d500_read_od_distance_locked(state, &applied);
+	if (!ret && applied != value)
+		ret = -EBUSY;
+unlock:
 	mutex_unlock(&state->ds5_dev->lock);
 
 	return ret;
@@ -3927,6 +3338,8 @@ static int d500_refresh_device_mode(struct ds5 *state, bool boot_mode)
 	 * device does not enumerate them at all. */
 	ds5_v4l2_ctrl_set_disabled(state->ctrls.dual_rgb_ae_policy,
 				   ret || mode != D500_DEVICE_MODE_2C);
+	ds5_v4l2_ctrl_set_disabled(state->ctrls.passive_depth,
+				   ret || mode != D500_DEVICE_MODE_2C);
 
 	return ret;
 }
@@ -3936,11 +3349,7 @@ static int ds5_set_calibration_data(struct ds5 *state,
 {
 	int ret;
 
-	ret = ds5_hwmc_send(state, length, cmd);
-	if (ret)
-		return ret;
-
-	ret = ds5_hwmc_wait(state);
+	ret = ds5_hwmc_xfer(state, length, cmd, NULL, 0, NULL, false, false);
 	if (ret) {
 		dev_err(&state->client->dev,
 				"%s(): Failed to set calibration table %d, error: %d\n",
@@ -3975,6 +3384,10 @@ static int ds5_set_calibration_data(struct ds5 *state,
  */
 #define DS5_HW_RESET_READY_SCRATCH_VAL	0x00AD
 #define DS5_HW_RESET_READY_EXPECTED_VAL	0x0000
+/* A reserved word of the depth stream record: every FW zeroes it at boot
+ * and none writes it, so a late control result cannot restore it early
+ */
+#define DS5_HW_RESET_READY_REG		0x400E
 
 /*
  * Register holding DFU magic (0x5020).
@@ -4044,8 +3457,19 @@ static int ds5_set_ser_esync_tunneling(struct ds5 *state, bool enable)
 		ret = state->ser_ops->disable_gpio_tunneling(state->ser_dev);
 
 	if (!ret && state->dser_ops->setup_fsync) {
-		if (state->mux.last_set)
+		struct ds5 *depth = state;
+
+		/* the trigger runs at the depth stream's rate, whichever node set it */
+		if (state->ds5_dev) {
+			mutex_lock(&state->ds5_dev->lock);
+			if (state->ds5_dev->role_inst[DS5_MUX_PAD_DEPTH])
+				depth = state->ds5_dev->role_inst[DS5_MUX_PAD_DEPTH];
+			if (depth->mux.last_set)
+				fps = depth->mux.last_set->config.framerate;
+			mutex_unlock(&state->ds5_dev->lock);
+		} else if (state->mux.last_set) {
 			fps = state->mux.last_set->config.framerate;
+		}
 		ret = enable ?
 			state->dser_ops->setup_fsync(state->dser_dev, fps) :
 			state->dser_ops->disable_fsync(state->dser_dev);
@@ -4066,6 +3490,9 @@ static int ds5_set_ser_esync_tunneling(struct ds5 *state, bool enable)
 #endif
 }
 
+static int ds5_sync_mode_serdes(struct ds5 *state, struct v4l2_ctrl *ctrl,
+				s32 mode);
+
 /*
  * ds5_hw_reset_with_recovery - Perform hardware reset with readiness polling
  * @state: Driver state structure
@@ -4079,18 +3506,19 @@ static int ds5_set_ser_esync_tunneling(struct ds5 *state, bool enable)
  *
  * Returns 0 on success, negative error code on failure.
  */
-static int ds5_hw_reset_with_recovery(struct ds5 *state)
+static int ds5_hw_reset_with_recovery_locked(struct ds5 *state)
 {
 	int ret;
 	int retry;
 	u16 dev_type = DS5_DEVICE_TYPE_UNKNOWN;
 	u16 ready_status = 0;
-	u16 ready_reg = state->control_status_reg;
+	const u16 ready_reg = DS5_HW_RESET_READY_REG;
 	struct hwm_cmd reset_cmd;
 	bool depth_streaming;
 	bool rgb_streaming;
 	bool ir_streaming;
 	bool imu_streaming;
+	struct v4l2_ctrl *sync_mode;
 	u16 d585_product_id = READ_ONCE(state->ds5_dev->d585_product_id);
 	bool d585_proto_reset = d585_product_id == D585_2C_PROTO_PID ||
 				 d585_product_id == D585_3C_PROTO_PID;
@@ -4184,7 +3612,8 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	if (imu_streaming)
 		ds5_write(state, DS5_START_STOP_STREAM,	DS5_STREAM_STOP | DS5_STREAM_IMU);
 
-	/* 2. Increment DS5 reset generation.
+	/* 2. Increment reset generation under hwmc_lock, after cooldown and
+	 *    stream stop, preserving the original reset invalidation point.
 	 *    After HW reset the device loses all configuration, so driver
 	 *    state must be brought in sync, like clearing streaming flags so that
 	 *    ds5_mux_s_stream() won't silently skip the next stream-start.
@@ -4205,13 +3634,12 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 			   DS5_DEVICE_TYPE_UNKNOWN);
 	ds5_reset_streaming_flags(state->ds5_dev);
 
-	/* 3. Scratch one control-status register before reset.
-	 *    FW restores them to default 0x0000 only after reset completes.
+	/* 3. Scratch the readiness word before reset; FW restores its 0x0000
+	 *    only once the reboot completes.
 	 */
-	if (!ready_reg)
-		ready_reg = DS5_DEPTH_CONTROL_STATUS;
-
+	mutex_lock(&state->ds5_dev->lock);
 	ret = ds5_write(state, ready_reg, DS5_HW_RESET_READY_SCRATCH_VAL);
+	mutex_unlock(&state->ds5_dev->lock);
 	if (ret) {
 		dev_err(&state->client->dev,
 			"%s(): scratch write failed reg 0x%04x (%d)\n",
@@ -4368,7 +3796,7 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 			 "FW has no serdes_pixel_mode support (reg 0x0404)\n");
 	}
 
-	ds5_desc_recheck(state);
+	ds5_desc_reload_after_reset(state, dev_type);
 
 	dev_info(&state->client->dev,
 		"%s(): HW reset complete. Device type 0x%04x, firmware: %d.%d.%d.%d\n",
@@ -4382,16 +3810,16 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	if (state->dser_ops->reset_oneshot_link)
 		state->dser_ops->reset_oneshot_link(state->dser_dev, state->gmsl_link);
 
-	/* Re-apply ESYNC tunneling to match cached sync_mode control */
-	if (state->ctrls.sync_mode) {
-		int sync_val = state->ctrls.sync_mode->cur.val;
-		bool need_esync = (sync_val == DS5_SYNC_MODE_EXTERNAL);
-
-		ret = ds5_set_ser_esync_tunneling(state, need_esync);
+	/* Re-apply ESYNC tunneling to match cached sync_mode control; a
+	 * re-sync on a sibling node may swap the pointer meanwhile.
+	 */
+	sync_mode = READ_ONCE(state->ctrls.sync_mode);
+	if (sync_mode) {
+		ret = ds5_sync_mode_serdes(state, sync_mode, sync_mode->cur.val);
 		if (ret)
 			dev_warn(&state->client->dev,
-				"%s(): serializer ESYNC %s after HW reset failed (%d)\n",
-				__func__, need_esync ? "enable" : "disable", ret);
+				"%s(): serializer ESYNC after HW reset failed (%d)\n",
+				__func__, ret);
 	}
 
 	if (dev_type == DS5_DEVICE_TYPE_D58X) {
@@ -4413,36 +3841,505 @@ static int ds5_hw_reset_with_recovery(struct ds5 *state)
 	return 0;
 }
 
+/* Keep all peer HWMC commands out of the entire reset,
+ * including failure exits. Lock order is hwmc_lock, then ds5_dev->lock. */
+static int ds5_hw_reset_with_recovery(struct ds5 *state)
+{
+	struct ds5_dev *dev = state->ds5_dev;
+	int ret;
+
+	mutex_lock(&dev->hwmc_lock);
+	ret = ds5_hw_reset_with_recovery_locked(state);
+	mutex_unlock(&dev->hwmc_lock);
+
+	return ret;
+}
+
 static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on);
 
-static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
+/* --- Descriptor-published controls: generic executors ---------------------
+ * docs/camera-control-descriptor.md §12.3. A control the camera published is
+ * operated from its record alone; the four that keep driver code are the
+ * switch arms in ds5_s_ctrl()/ds5_g_volatile_ctrl(), reached by ds5_ctrl_hooked().
+ */
+
+/* The instance owning @ctrl's handler. Each sensor has a handler of its own,
+ * so the handler identifies the node; the MUX's is the last form.
+ */
+static struct ds5 *ds5_ctrl_state(struct v4l2_ctrl *ctrl)
 {
-	struct ds5 *state = container_of(ctrl->handler, struct ds5,
-					 ctrls.handler);
-	struct v4l2_subdev *sd = &state->mux.sd.subdev;
-	struct ds5_sensor *sensor = (struct ds5_sensor *)ctrl->priv;
-	const struct d500_dpp_ctrl_desc *dpp_desc;
-	int ret = -EINVAL;
-	u16 base;
+	struct ds5_sensor *sensor = ctrl->priv;
 
 	if (sensor) {
 		switch (sensor->mux_pad) {
 		case DS5_MUX_PAD_DEPTH:
-			state = container_of(ctrl->handler, struct ds5, ctrls.handler_depth);
-			break;
+			return container_of(ctrl->handler, struct ds5,
+					    ctrls.handler_depth);
 		case DS5_MUX_PAD_RGB:
-			state = container_of(ctrl->handler, struct ds5, ctrls.handler_rgb);
-			break;
+			return container_of(ctrl->handler, struct ds5,
+					    ctrls.handler_rgb);
 		case DS5_MUX_PAD_IR:
-			state = container_of(ctrl->handler, struct ds5, ctrls.handler_y8);
-			break;
+			return container_of(ctrl->handler, struct ds5,
+					    ctrls.handler_y8);
 		case DS5_MUX_PAD_IMU:
-			state = container_of(ctrl->handler, struct ds5, ctrls.handler_imu);
-			break;
+			return container_of(ctrl->handler, struct ds5,
+					    ctrls.handler_imu);
 		default:
 			break;
 		}
 	}
+	return container_of(ctrl->handler, struct ds5, ctrls.handler);
+}
+
+/* The record for @cid on @sensor, or NULL for a built-in control. */
+static const struct ds5_desc_ctrl *
+ds5_ctrl_record(struct ds5 *state, const struct ds5_sensor *sensor, u32 cid)
+{
+	const struct ds5_desc_ctrl *ctrls;
+	unsigned int i, n;
+
+	if (!sensor)
+		return NULL;
+	/* The pair is republished by a post-reset reload; snapshot it as the
+	 * format readers do. Records themselves are module-lifetime.
+	 */
+	mutex_lock(&state->ds5_dev->lock);
+	ctrls = sensor->desc_ctrls;
+	n = sensor->n_desc_ctrls;
+	mutex_unlock(&state->ds5_dev->lock);
+	for (i = 0; i < n; i++)
+		if (ctrls[i].cid == cid)
+			return &ctrls[i];
+	return NULL;
+}
+
+/* A reload can swap in a record of another shape under the same CID; the
+ * registered storage is what the executors copy into.
+ */
+/* One control object serves both the records and the built-in arms, so what
+ * must agree is the storage both read: value or pointer, element count and
+ * size. The built-in exposure is an INTEGER relabelled U32, same storage.
+ */
+static bool ds5_ctrl_shape_eq(const struct v4l2_ctrl *ctrl, u32 type,
+			      bool is_ptr, u32 elems, u32 elem_size)
+{
+	if (ctrl->is_ptr != is_ptr || ctrl->elems != elems ||
+	    ctrl->elem_size != elem_size)
+		return false;
+	if (ctrl->type == type)
+		return true;
+	return !is_ptr &&
+	       (ctrl->type == V4L2_CTRL_TYPE_INTEGER ||
+		ctrl->type == V4L2_CTRL_TYPE_U32) &&
+	       (type == V4L2_CTRL_TYPE_INTEGER || type == V4L2_CTRL_TYPE_U32);
+}
+
+static bool ds5_ctrl_record_fits(const struct ds5_desc_ctrl *c,
+				 const struct v4l2_ctrl *ctrl)
+{
+	return ds5_ctrl_shape_eq(ctrl, c->type,
+				 c->type >= V4L2_CTRL_COMPOUND_TYPES || c->elems > 1,
+				 c->elems, c->elem_size);
+}
+
+/* External sync also carries the trigger through the serializer: enabled for
+ * External, disabled for any other mode. @mode is the menu index, whose
+ * meaning is shared across cameras; the wire value behind it is the camera's.
+ */
+static int ds5_sync_mode_serdes(struct ds5 *state, struct v4l2_ctrl *ctrl,
+				s32 mode)
+{
+	bool need_esync = mode == DS5_SYNC_MODE_EXTERNAL;
+
+	if (ctrl->is_ptr) {
+		dev_warn_once(&state->client->dev,
+			      "%s(): sync mode holds no single value; SerDes left as is\n",
+			      __func__);
+		return 0;
+	}
+	dev_dbg(&state->client->dev, "%s(): sync_mode=%d -> serializer ESYNC %s\n",
+		__func__, mode, need_esync ? "enable" : "disable");
+	return ds5_set_ser_esync_tunneling(state, need_esync);
+}
+
+/* The raw passthroughs carry their opcode in the caller's payload, so no
+ * record can describe them: the driver registers and serves them itself.
+ */
+static bool ds5_ctrl_driver_owned(u32 cid)
+{
+	return cid == DS5_CAMERA_CID_HWMC || cid == DS5_CAMERA_CID_HWMC_RW;
+}
+
+/* Controls that keep driver code (§10.1). Their records register from the
+ * blob, but every read and write takes the existing switch arm, which is the
+ * hook: hw_reset sequences the SerDes link and the driver's own lifecycle,
+ * erb/ewb carry a librealsense payload convention, 2c_ae_policy gates on
+ * boot-time device mode.
+ */
+static bool ds5_ctrl_hooked(u32 cid)
+{
+	switch (cid) {
+	case DS5_CAMERA_CID_HW_RESET:
+	case DS5_CAMERA_CID_ERB:
+	case DS5_CAMERA_CID_EWB:
+	case D500_CAMERA_CID_DUAL_RGB_AE_POLICY:
+		return true;
+	default:
+		return false;
+	}
+}
+
+/* The errno uvcvideo returns for a UVC Request Error Code (§8.1), so a
+ * refusal reads the same over GMSL as over USB.
+ */
+static int ds5_ctrl_uvc_errno(u16 code)
+{
+	switch (code) {
+	case 1:		/* not ready */
+		return -EBUSY;
+	case 2:		/* wrong state */
+		return -EILSEQ;
+	case 3:		/* power */
+		return -EREMOTE;
+	case 4:		/* out of range */
+		return -ERANGE;
+	case 5:		/* invalid unit */
+	case 6:		/* invalid control */
+	case 7:		/* invalid request */
+		return -EIO;
+	case 8:		/* invalid value within range */
+		return -EINVAL;
+	default:
+		return -EPIPE;
+	}
+}
+
+/* An asynchronous result (§8.1, §13 B1a/B2): the sequence word advancing past
+ * seq0 makes the status this write's; a refusal carries its UVC code beside
+ * it. An advance that still reads WIP was another write completing first.
+ */
+static int ds5_ctrl_seq_status(struct ds5 *state, u16 status_addr, u16 seq0)
+{
+	unsigned long timeout = jiffies + msecs_to_jiffies(DS5_HWMC_MAX_TIME);
+	u16 seq, status = RS_CTRL_STATUS_WIP, code;
+	int ret;
+
+	do {
+		ret = ds5_read_poll(state, status_addr - RS_CTRL_SEQ_BELOW, &seq);
+		if (!ret && seq != seq0) {
+			ret = ds5_read_poll(state, status_addr, &status);
+			if (!ret && status != RS_CTRL_STATUS_WIP)
+				break;
+			if (!ret)
+				seq0 = seq;
+		}
+		msleep_range(1);
+	} while (time_before(jiffies, timeout));
+	if (ret)
+		return ret;
+	if (status == RS_CTRL_STATUS_WIP)
+		return -ETIMEDOUT;
+	if (status == RS_CTRL_STATUS_OK)
+		return 0;
+	ret = ds5_read(state, status_addr - RS_CTRL_CODE_BELOW, &code);
+	if (ret)
+		return ret;
+	dev_dbg(&state->client->dev, "%s(): 0x%04x reports %u, code %u\n",
+		__func__, status_addr, status, code);
+	if (code)
+		return ds5_ctrl_uvc_errno(code);
+	return status == RS_CTRL_STATUS_BUSY ? -EBUSY : -EIO;
+}
+
+/* Menu translation (§12.3): entry i of the run is the firmware value for
+ * V4L2 index i; without a run the index is the value. The reverse search
+ * skips masked indices, whose entries hold nothing meaningful.
+ */
+static u16 ds5_ctrl_menu_to_wire(const struct ds5_desc_ctrl *c, s32 index)
+{
+	return c->wire_map ? c->wire_map[index] : (u16)index;
+}
+
+static int ds5_ctrl_wire_to_menu(const struct ds5_desc_ctrl *c, u16 wire,
+				 s32 *index)
+{
+	s32 i;
+
+	if (!c->wire_map) {
+		if (wire > c->max || (c->menu_mask & BIT(wire)))
+			return -EBADMSG;
+		*index = wire;
+		return 0;
+	}
+	for (i = 0; i <= c->max; i++) {
+		if (c->menu_mask & BIT(i))
+			continue;
+		if (c->wire_map[i] == wire) {
+			*index = i;
+			return 0;
+		}
+	}
+	return -EBADMSG;
+}
+
+/* REG transport (§5): extent bytes at the resolved address. A scalar is
+ * little-endian in a 1/2/4-byte register, an array is the payload verbatim.
+ * F_LSW_LATCH is two 16-bit writes, high half first, because firmware acts
+ * on the write to the low one. The write and the status poll sit under
+ * ds5_dev->lock: three nodes share one result register.
+ */
+static int ds5_ctrl_reg_set(struct ds5 *state, const struct ds5_desc_ctrl *c,
+			    struct v4l2_ctrl *ctrl)
+{
+	u8 buf[RS_CTRL_MAX_EXTENT] = { 0 };
+	u16 seq0 = 0;
+	int ret;
+
+	/* A U8/U16/U32 control keeps even a single value behind p_new */
+	if (ctrl->is_ptr) {
+		memcpy(buf, ctrl->p_new.p_u8, min_t(u32, c->reg.extent,
+						    ctrl->elems * ctrl->elem_size));
+	} else {
+		u32 val = c->type == V4L2_CTRL_TYPE_MENU ?
+			  ds5_ctrl_menu_to_wire(c, ctrl->val) : (u32)ctrl->val;
+
+		buf[0] = val;
+		buf[1] = val >> 8;
+		buf[2] = val >> 16;
+		buf[3] = val >> 24;
+	}
+
+	mutex_lock(&state->ds5_dev->lock);
+	if (c->status_addr) {
+		ret = ds5_read(state, c->status_addr - RS_CTRL_SEQ_BELOW, &seq0);
+		if (ret)
+			goto unlock;
+	}
+	if (c->flags & RS_CTRL_F_LSW_LATCH) {
+		ret = ds5_raw_write(state, c->reg.addr + 2, buf + 2, 2);
+		if (!ret)
+			ret = ds5_raw_write(state, c->reg.addr, buf, 2);
+	} else {
+		ret = ds5_raw_write(state, c->reg.addr, buf, c->reg.extent);
+	}
+	if (!ret && c->status_addr)
+		ret = ds5_ctrl_seq_status(state, c->status_addr, seq0);
+unlock:
+	mutex_unlock(&state->ds5_dev->lock);
+	return ret;
+}
+
+static int ds5_ctrl_reg_get(struct ds5 *state, const struct ds5_desc_ctrl *c,
+			    struct v4l2_ctrl *ctrl)
+{
+	u8 buf[RS_CTRL_MAX_EXTENT] = { 0 };
+	u32 val;
+	int ret;
+
+	/* The register file loads one 16-bit word per read; clocking past it
+	 * returns that word again and risks wedging the I2C slave.
+	 */
+	if (c->flags & (RS_CTRL_F_LSW_LATCH | RS_CTRL_F_MSW_FIRST)) {
+		u16 hi = (c->flags & RS_CTRL_F_MSW_FIRST) ? 0 : 2;
+
+		/* a sibling node's two-word write runs under the same lock */
+		mutex_lock(&state->ds5_dev->lock);
+		ret = ds5_raw_read(state, c->reg.addr + hi, buf + 2, 2);
+		if (!ret)
+			ret = ds5_raw_read(state, c->reg.addr + (2 - hi), buf, 2);
+		mutex_unlock(&state->ds5_dev->lock);
+	} else {
+		ret = ds5_raw_read(state, c->reg.addr, buf, c->reg.extent);
+	}
+	if (ret)
+		return ret;
+	if (ctrl->is_ptr) {
+		memcpy(ctrl->p_new.p_u8, buf, min_t(u32, c->reg.extent,
+						    ctrl->elems * ctrl->elem_size));
+		return 0;
+	}
+	val = buf[0] | buf[1] << 8 | buf[2] << 16 | buf[3] << 24;
+	if (c->type == V4L2_CTRL_TYPE_MENU)
+		return val > U16_MAX ? -EBADMSG :
+		       ds5_ctrl_wire_to_menu(c, val, &ctrl->val);
+	/* a negative range means a narrow register holds a signed value */
+	if (c->min < 0 && c->reg.extent < 4)
+		val = sign_extend32(val, c->reg.extent * 8 - 1);
+	ctrl->val = val;
+	return 0;
+}
+
+/* HWMC transport (§5): a hwm_cmd built from the record. The value rides in
+ * param1..4 from value_param, or in Data; every other param is zero.
+ * A read lands in the command's own Data. An array gets the reply as-is,
+ * opcode echo first, as hwmc_rw and the USB hw monitor return it; a scalar
+ * takes its value from after the echo. FW may answer more than the control
+ * holds (D4xx GETAEROI: 14 B); a published resp_bytes is the least it may send.
+ */
+static int ds5_ctrl_hwmc_xfer(struct ds5 *state, const struct ds5_desc_ctrl *c,
+			      struct v4l2_ctrl *ctrl, bool set)
+{
+	u32 payload = c->elems * c->elem_size;
+	bool raw = ctrl->is_ptr;
+	u32 skip = raw ? 0 : 4;
+	u32 in_data = (set && !c->hwmc.value_param) ? payload : 0;
+	u32 resp_cap = set ? 0 : DS5_HWMC_BUFFER_SIZE;
+	u8 opcode = set ? c->hwmc.opcode_set : c->hwmc.opcode_get;
+	struct hwm_cmd *cmd;
+	bool fw_error;
+	u32 *params;
+	u16 got = 0;
+	int ret;
+
+	if (opcode == 0xFF)
+		return -EACCES;
+	cmd = kzalloc(sizeof(*cmd) + max(in_data, resp_cap), GFP_KERNEL);
+	if (!cmd)
+		return -ENOMEM;
+	cmd->header = 0x14 + in_data;
+	cmd->magic_word = 0xCDAB;
+	cmd->opcode = opcode;
+	params = &cmd->param1;
+	if (set) {
+		if (c->hwmc.value_param) {
+			unsigned int i;
+
+			for (i = 0; i < c->elems; i++) {
+				u32 v;
+
+				if (ctrl->is_ptr)
+					v = c->elem_size == 1 ? ctrl->p_new.p_u8[i] :
+					    c->elem_size == 2 ? ctrl->p_new.p_u16[i] :
+								ctrl->p_new.p_u32[i];
+				else if (c->type == V4L2_CTRL_TYPE_MENU)
+					v = ds5_ctrl_menu_to_wire(c, ctrl->val);
+				else
+					v = ctrl->val;
+				params[c->hwmc.value_param - 1 + i] = v;
+			}
+		} else if (ctrl->is_ptr) {
+			memcpy(cmd->Data, ctrl->p_new.p_u8, payload);
+		} else {
+			u32 v = c->type == V4L2_CTRL_TYPE_MENU ?
+				ds5_ctrl_menu_to_wire(c, ctrl->val) : ctrl->val;
+
+			memcpy(cmd->Data, &v, min_t(u32, payload, sizeof(v)));
+		}
+	}
+	/* raw_response: an array's reply carries a firmware failure as its
+	 * first 4 bytes; a scalar's comes back as -EREMOTEIO.
+	 */
+	ret = ds5_hwmc_xfer(state, sizeof(*cmd) + in_data, cmd,
+			    set ? NULL : cmd->Data, resp_cap, &got, raw, false);
+	if (ret || set)
+		goto out;
+	fw_error = raw && got == sizeof(s32) &&
+		   memcmp(cmd->Data, &cmd->opcode, sizeof(cmd->opcode));
+	if (!fw_error &&
+	    (memcmp(cmd->Data, &cmd->opcode, sizeof(cmd->opcode)) ||
+	     got < c->hwmc.resp_bytes ||
+	     (!raw && got < skip + payload))) {
+		ret = -EBADMSG;
+		goto out;
+	}
+	if (raw) {
+		memset(ctrl->p_new.p_u8, 0, payload);
+		memcpy(ctrl->p_new.p_u8, cmd->Data, min_t(u32, got, payload));
+	} else {
+		u32 val = 0;
+
+		memcpy(&val, cmd->Data + skip, min_t(u32, payload, sizeof(val)));
+		if (c->type == V4L2_CTRL_TYPE_MENU)
+			ret = val > U16_MAX ? -EBADMSG :
+			      ds5_ctrl_wire_to_menu(c, val, &ctrl->val);
+		else
+			ctrl->val = val;
+	}
+out:
+	kfree(cmd);
+	return ret;
+}
+
+/* Both directions return -EBUSY mid HW reset, when the device type - and so
+ * the D4xx/D58x register map - is not yet known.
+ */
+static int ds5_ctrl_desc_set(struct ds5 *state, const struct ds5_desc_ctrl *c,
+			     struct v4l2_ctrl *ctrl)
+{
+	if (READ_ONCE(state->ds5_dev->cached_device_type) == DS5_DEVICE_TYPE_UNKNOWN)
+		return -EBUSY;
+	if (!ds5_ctrl_record_fits(c, ctrl))
+		return -EIO;
+	/* The core validated against the registered range; the record's
+	 * may be newer, and the wire map is only as long as its max.
+	 */
+	if (c->type == V4L2_CTRL_TYPE_MENU &&
+	    (ctrl->val < 0 || ctrl->val > c->max ||
+	     (c->menu_mask & BIT(ctrl->val))))
+		return -ERANGE;
+	if (c->transport == RS_CTRL_XPORT_REG)
+		return ds5_ctrl_reg_set(state, c, ctrl);
+	return ds5_ctrl_hwmc_xfer(state, c, ctrl, true);
+}
+
+static int ds5_ctrl_desc_get(struct ds5 *state, const struct ds5_desc_ctrl *c,
+			     struct v4l2_ctrl *ctrl);
+
+/* A sync-mode write and the SerDes step after it. If that step fails, the
+ * camera goes back to the mode it had, read first: the control is volatile,
+ * so the core never updates cur.val.
+ */
+static int ds5_sync_mode_set(struct ds5 *state, const struct ds5_desc_ctrl *c,
+			     struct v4l2_ctrl *ctrl)
+{
+	s32 mode = ctrl->val, prev = ctrl->default_value;
+	int ret;
+
+	if (!ctrl->is_ptr && !ds5_ctrl_desc_get(state, c, ctrl))
+		prev = ctrl->val;
+	ctrl->val = mode;
+	ret = ds5_ctrl_desc_set(state, c, ctrl);
+	if (ret)
+		return ret;
+	ret = ds5_sync_mode_serdes(state, ctrl, mode);
+	if (!ret || ctrl->is_ptr)
+		return ret;
+	dev_warn(&state->client->dev,
+		 "%s(): sync mode %d: SerDes step failed (%d), restoring mode %d\n",
+		 __func__, mode, ret, prev);
+	ctrl->val = prev;
+	if (ds5_ctrl_desc_set(state, c, ctrl))
+		dev_err(&state->client->dev,
+			"%s(): camera left in sync mode %d\n", __func__, mode);
+	else
+		ds5_sync_mode_serdes(state, ctrl, prev);
+	ctrl->val = mode;
+	return ret;
+}
+
+static int ds5_ctrl_desc_get(struct ds5 *state, const struct ds5_desc_ctrl *c,
+			     struct v4l2_ctrl *ctrl)
+{
+	if (READ_ONCE(state->ds5_dev->cached_device_type) == DS5_DEVICE_TYPE_UNKNOWN)
+		return -EBUSY;
+	if (!ds5_ctrl_record_fits(c, ctrl))
+		return -EIO;
+	if (c->transport == RS_CTRL_XPORT_REG)
+		return ds5_ctrl_reg_get(state, c, ctrl);
+	return ds5_ctrl_hwmc_xfer(state, c, ctrl, false);
+}
+
+static bool ds5_ctrl_arm_fits(const struct v4l2_ctrl *ctrl);
+
+static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
+{
+	struct ds5 *state = ds5_ctrl_state(ctrl);
+	struct v4l2_subdev *sd = &state->mux.sd.subdev;
+	struct ds5_sensor *sensor = (struct ds5_sensor *)ctrl->priv;
+	const struct ds5_desc_ctrl *desc_ctrl;
+	const struct d500_dpp_ctrl_desc *dpp_desc;
+	int ret = -EINVAL;
+	u16 base;
 
 	base = state->control_base;
 	v4l2_dbg(3, 1, sd, "ctrl: %s, value: %d\n", ctrl->name, ctrl->val);
@@ -4450,51 +4347,67 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 		__func__, ds5_get_sensor_name(state), ctrl->name, ctrl->val);
 
 	mutex_lock(&state->lock);
-	if (ctrl->id == D500_CAMERA_CID_MINZ) {
-		struct d500_dpp_xu_control control = {
-			.header.version = D500_DPP_XU_VERSION,
-			.header.control_id =
-				cpu_to_le16(D500_DPP_XU_MINZ_CONTROL_ID),
-			.param_count = D500_DPP_XU_MINZ_PARAM_COUNT,
-			.param_type = D500_DPP_XU_INTEGER_PARAMS,
-		};
-		u8 i;
-
-		if (sensor && sensor->streaming) {
-			ret = -EBUSY;
-			goto unlock;
-		}
-		if (!d500_minz_params_valid(ctrl->p_new.p_u32)) {
-			ret = -EINVAL;
-			goto unlock;
-		}
-		for (i = 0; i < D500_DPP_XU_MINZ_PARAM_COUNT; i++)
-			control.params[i] = cpu_to_le32(ctrl->p_new.p_u32[i]);
-		ret = d500_dpp_xu_write(state, &d500_minz_desc, &control);
+	/* A control the camera published is operated from its record; the
+	 * four hooked ones are served by their switch arms below.
+	 */
+	desc_ctrl = ds5_ctrl_record(state, sensor, ctrl->id);
+	if (desc_ctrl && !ds5_ctrl_hooked(ctrl->id)) {
+		if (ctrl->id == DS5_CAMERA_CID_SYNC_MODE)
+			ret = ds5_sync_mode_set(state, desc_ctrl, ctrl);
+		else
+			ret = ds5_ctrl_desc_set(state, desc_ctrl, ctrl);
+		goto unlock;
+	}
+	if (!ds5_ctrl_arm_fits(ctrl)) {
+		ret = -EIO;
 		goto unlock;
 	}
 	dpp_desc = d500_dpp_ctrl_desc(ctrl->id);
 	if (dpp_desc) {
-		struct d500_dpp_xu_control control = {
-			.header.version = D500_DPP_XU_VERSION,
-			.header.control_id =
-				cpu_to_le16(dpp_desc->control_id),
-			.param_count = dpp_desc->param_count,
-			.param_type = dpp_desc->param_type,
-		};
-		u8 i;
+		const struct d500_dpp_xu_control *control =
+			(const struct d500_dpp_xu_control *)ctrl->p_new.p_u8;
+		bool minz_locked = false;
 
+		if (control->param_count > ARRAY_SIZE(control->params)) {
+			ret = -EINVAL;
+			goto unlock;
+		}
 		if (dpp_desc->idle_only && sensor && sensor->streaming) {
 			ret = -EBUSY;
 			goto unlock;
 		}
-		if (!d500_dpp_params_valid(dpp_desc, ctrl->p_new.p_u32)) {
-			ret = -EINVAL;
-			goto unlock;
+		if (ctrl->id == D500_CAMERA_CID_MINZ) {
+			struct d500_dpp_xu_control current_control;
+			bool geometry_changed;
+
+			/*
+			 * Serialize MinZ XU I/O against sibling stream changes.
+			 */
+			mutex_lock(&state->ds5_dev->lock);
+			minz_locked = true;
+			if (state->ds5_dev->depth_streaming ||
+			    state->ds5_dev->ir_streaming) {
+				ret = d500_dpp_xu_read(state, dpp_desc,
+							&current_control);
+				if (ret)
+					goto unlock_dpp;
+				geometry_changed =
+					memcmp(control, &current_control,
+					       offsetof(struct d500_dpp_xu_control, params)) ||
+					control->params[D500_MINZ_FILTER_TYPE] !=
+						current_control.params[D500_MINZ_FILTER_TYPE] ||
+					control->params[D500_MINZ_DOWNSCALE_RATIO] !=
+						current_control.params[D500_MINZ_DOWNSCALE_RATIO];
+				if (geometry_changed) {
+					ret = -EBUSY;
+					goto unlock_dpp;
+				}
+			}
 		}
-		for (i = 0; i < dpp_desc->param_count; i++)
-			control.params[i] = cpu_to_le32(ctrl->p_new.p_u32[i]);
-		ret = d500_dpp_xu_write(state, dpp_desc, &control);
+		ret = d500_dpp_xu_write(state, dpp_desc, control);
+unlock_dpp:
+		if (minz_locked)
+			mutex_unlock(&state->ds5_dev->lock);
 		goto unlock;
 	}
 
@@ -4645,7 +4558,7 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			}
 		}
 		break;
-	case DS5_CAMERA_CID_AE_ROI_SET: 
+	case DS5_CAMERA_CID_AE_ROI_SET:
 		if (ctrl->p_new.p_u16) {
 			struct hwm_cmd ae_roi_cmd;
 			memcpy(&ae_roi_cmd, &set_ae_roi, sizeof(ae_roi_cmd));
@@ -4653,10 +4566,8 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			ae_roi_cmd.param2 = *((u16 *)ctrl->p_new.p_u16 + 1);
 			ae_roi_cmd.param3 = *((u16 *)ctrl->p_new.p_u16 + 2);
 			ae_roi_cmd.param4 = *((u16 *)ctrl->p_new.p_u16 + 3);
-			ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd),
-				&ae_roi_cmd);
-			if (!ret)
-				ret = ds5_hwmc_wait(state);
+			ret = ds5_hwmc_xfer(state, sizeof(struct hwm_cmd),
+				&ae_roi_cmd, NULL, 0, NULL, false, false);
 		}
 		break;
 	case DS5_CAMERA_CID_AE_SETPOINT_SET:
@@ -4675,10 +4586,8 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			}
 			memcpy(ae_setpoint_cmd, &set_ae_setpoint, sizeof (set_ae_setpoint));
 			memcpy(ae_setpoint_cmd->Data, (u8 *)ctrl->p_new.p_s32, 4);
-			ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd) + 4,
-					ae_setpoint_cmd);
-			if (!ret)
-				ret = ds5_hwmc_wait(state);
+			ret = ds5_hwmc_xfer(state, sizeof(struct hwm_cmd) + 4,
+					ae_setpoint_cmd, NULL, 0, NULL, false, false);
 			devm_kfree(&state->client->dev, ae_setpoint_cmd);
 		}
 		break;
@@ -4690,9 +4599,8 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 		ae_type_cmd.param1 = ctrl->val;
 		dev_dbg(&state->client->dev, "%s(): AE_MODE set %d\n",
 			__func__, ctrl->val);
-		ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd), &ae_type_cmd);
-		if (!ret)
-			ret = ds5_hwmc_wait(state);
+		ret = ds5_hwmc_xfer(state, sizeof(struct hwm_cmd), &ae_type_cmd,
+				     NULL, 0, NULL, false, false);
 		}
 		break;
 	case DS5_CAMERA_CID_ERB:
@@ -4709,7 +4617,12 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 
 			dev_dbg(&state->client->dev, "%s(): offset %x, size: %x\n",
 							__func__, offset, size);
-			len = sizeof(struct hwm_cmd) + size;
+			if (size > ctrl->dims[0] - 4) {
+				ret = -EINVAL;
+				break;
+			}
+			/* FW returns the opcode followed by the requested EEPROM bytes. */
+			len = sizeof(struct hwm_cmd) + size + sizeof(u32);
 			erb_cmd = devm_kzalloc(&state->client->dev,	len, GFP_KERNEL);
 			if (!erb_cmd) {
 				dev_err(&state->client->dev,
@@ -4721,16 +4634,17 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			memcpy(erb_cmd, &erb, sizeof(struct hwm_cmd));
 			erb_cmd->param1 = offset;
 			erb_cmd->param2 = size;
-			ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd), erb_cmd);
-			if (!ret)
-				ret = ds5_get_hwmc(state, erb_cmd->Data, len, &size);
-			if (ret) {
+			ret = ds5_hwmc_xfer(state, sizeof(struct hwm_cmd), erb_cmd,
+					erb_cmd->Data, len - sizeof(*erb_cmd),
+					&size, false, false);
+			if (ret || size < sizeof(u32)) {
 				dev_err(&state->client->dev,
 					"%s(): ERB cmd failed, ret: %d,"
 					"requested size: %d, actual size: %d\n",
 					__func__, ret, erb_cmd->param2, size);
 				devm_kfree(&state->client->dev, erb_cmd);
-				return -EAGAIN;
+				ret = -EAGAIN;
+				break;
 			}
 
 			// Actual size returned from FW
@@ -4758,6 +4672,12 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			size = *((u8 *)ctrl->p_new.p_u8 + 2) << 8;
 			size |= *((u8 *)ctrl->p_new.p_u8 + 3);
 
+			if (size > ctrl->dims[0] - 4 ||
+			    sizeof(*ewb_cmd) + size > DS5_HWMC_BUFFER_SIZE) {
+				ret = -EINVAL;
+				break;
+			}
+
 			dev_dbg(&state->client->dev, "%s():0x%x 0x%x 0x%x 0x%x\n",
 					__func__,
 					*((u8 *)ctrl->p_new.p_u8),
@@ -4780,16 +4700,16 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			ewb_cmd->param1 = offset; // start index
 			ewb_cmd->param2 = size; // size
 			memcpy(ewb_cmd->Data, (u8 *)ctrl->p_new.p_u8 + 4, size);
-			ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd) + size, ewb_cmd);
-			if (!ret)
-				ret = ds5_hwmc_wait(state);
+			ret = ds5_hwmc_xfer(state, sizeof(struct hwm_cmd) + size,
+					ewb_cmd, NULL, 0, NULL, false, false);
 			if (ret) {
 				dev_err(&state->client->dev,
 					"%s(): EWB cmd failed, ret: %d,"
 					"requested size: %d, actual size: %d\n",
 					__func__, ret, ewb_cmd->param2, size);
 				devm_kfree(&state->client->dev, ewb_cmd);
-				return -EAGAIN;
+				ret = -EAGAIN;
+				break;
 			}
 
 			devm_kfree(&state->client->dev, ewb_cmd);
@@ -4799,20 +4719,30 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 		if (ctrl->p_new.p_u8) {
 			u16 size = 0;
 			struct hwm_cmd *cmd = (struct hwm_cmd *)ctrl->p_new.p_u8;
+			u32 cmd_len = (u32)cmd->header + 4;
 
 			u16 pid = READ_ONCE(state->ds5_dev->d585_product_id);
 
+			if (cmd_len < sizeof(*cmd) || cmd_len > DS5_HWMC_BUFFER_SIZE) {
+				ret = -EINVAL;
+				break;
+			}
 			if (cmd->opcode == 0x20 &&
-			    (pid == D585_2C_PROTO_PID ||
+			    (ds5_is_d58x(state) || pid == D585_2C_PROTO_PID ||
 			     pid == D585_3C_PROTO_PID)) {
 				ret = ds5_hw_reset_with_recovery(state);
 				break;
 			}
+			if (ds5_is_d58x(state) &&
+			    cmd->opcode == cmd_switch_to_dfu.opcode) {
+				ret = ds5_hwmc_send_dfu(state, cmd_len, cmd);
+				break;
+			}
 
-			size = *((u8 *)ctrl->p_new.p_u8 + 1) << 8;
-			size |= *((u8 *)ctrl->p_new.p_u8 + 0);
-			ret = ds5_hwmc_send(state, size + 4, cmd);
-			ret = ds5_get_hwmc(state, cmd->Data, ctrl->dims[0], &size);
+			ret = ds5_hwmc_xfer(state, cmd_len, cmd, cmd->Data,
+					     ctrl->dims[0] - sizeof(*cmd) - 4, &size, true, false);
+			if (ret)
+				break;
 			if (ctrl->dims[0] < DS5_HWMC_BUFFER_SIZE) {
 				ret = -ENODATA;
 				break;
@@ -4826,18 +4756,43 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 	case DS5_CAMERA_CID_HWMC_RW:
 		if (ctrl->p_new.p_u8) {
 			struct hwm_cmd *cmd = (struct hwm_cmd *)ctrl->p_new.p_u8;
-			u16 size = *((u8 *)ctrl->p_new.p_u8 + 1) << 8;
-			size |= *((u8 *)ctrl->p_new.p_u8 + 0);
+			u32 cmd_len = (u32)cmd->header + 4;
 
-			/* Check if this is a HW reset command (opcode 0x20) */
-			if (cmd->opcode == 0x20) {
-				dev_info(&state->client->dev,
-					"%s(): HW reset detected via HWMC_RW, using recovery path\n",
-					__func__);
-				ret = ds5_hw_reset_with_recovery(state);
-			} else {
-				ret = ds5_hwmc_send(state, size + 4, cmd);
+			if (!sensor) {
+				ret = -EINVAL;
+				break;
 			}
+
+			if (cmd_len < sizeof(*cmd) || cmd_len > DS5_HWMC_BUFFER_SIZE) {
+				ret = -EINVAL;
+				break;
+			}
+
+			if (cmd->opcode == 0x20) {
+				ret = ds5_hw_reset_with_recovery(state);
+				break;
+			}
+
+			mutex_lock(&state->ds5_dev->hwmc_lock);
+			sensor->hwmc_rw_response_valid = false;
+			sensor->hwmc_rw_response_len = 0;
+			if (cmd->opcode == cmd_switch_to_dfu.opcode) {
+				ret = ds5_hwmc_send_dfu_locked(state, cmd_len, cmd);
+			} else if (cmd->opcode == DS5_HWMC_PFD_OPCODE) {
+				/* SDK unsigned updates already issue PFD with
+				 * require_response=false. Preserve that SET-only path
+				 * when executing HWMC_RW during SET. */
+				ret = ds5_hwmc_xfer_locked(state, cmd_len, cmd, NULL,
+							 0, NULL, false, false);
+			} else {
+				ret = ds5_hwmc_xfer_locked(state, cmd_len, cmd,
+						 sensor->hwmc_rw_response,
+						 sizeof(sensor->hwmc_rw_response),
+						 &sensor->hwmc_rw_response_len, true, false);
+			}
+			sensor->hwmc_rw_response_gen = atomic_read(ds5_get_reset_gen(state));
+			sensor->hwmc_rw_response_valid = !ret && sensor->hwmc_rw_response_len;
+			mutex_unlock(&state->ds5_dev->hwmc_lock);
 		}
 		break;
 	case DS5_CAMERA_CID_HW_RESET:
@@ -4857,15 +4812,8 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 			ret = ds5_write(state, base | DS5_CAMERA_SYNC_MODE, ctrl->val);
 			dev_info(&state->client->dev, "%s(): SYNC_MODE command passed to FW, addr: 0x%x, value: %d, ret: %d\n",
 				__func__, base | DS5_CAMERA_SYNC_MODE, ctrl->val, ret);
-			if (!ret) {
-				bool need_esync = (ctrl->val == DS5_SYNC_MODE_EXTERNAL);
-
-				dev_dbg(&state->client->dev,
-					"%s(): sync_mode=%d -> serializer ESYNC %s\n",
-					__func__, ctrl->val,
-					need_esync ? "enable" : "disable");
-				ret = ds5_set_ser_esync_tunneling(state, need_esync);
-			}
+			if (!ret)
+				ret = ds5_sync_mode_serdes(state, ctrl, ctrl->val);
 		}
 		break;
 	case D500_CAMERA_CID_DEVICE_MODE:
@@ -4885,6 +4833,30 @@ static int ds5_s_ctrl(struct v4l2_ctrl *ctrl)
 		    READ_ONCE(state->ds5_dev->cached_device_type) ==
 			    DS5_DEVICE_TYPE_D58X)
 			ret = d500_set_gyro_sensitivity(state, ctrl->val);
+		break;
+	case D500_CAMERA_CID_ACCEL_SENSITIVITY:
+		if (state->is_imu &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X)
+			ret = d500_set_accel_sensitivity(state, ctrl->val);
+		break;
+	case D500_CAMERA_CID_ALIGNED_DEPTH:
+		if (state->is_depth &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X)
+			ret = d500_set_aligned_depth(state, ctrl->val);
+		break;
+	case D500_CAMERA_CID_PASSIVE_DEPTH:
+		if (state->is_depth &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X)
+			ret = d500_set_passive_depth(state, ctrl->val);
+		break;
+	case D500_CAMERA_CID_OD_DISTANCE:
+		if (state->is_depth &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X)
+			ret = d500_set_od_distance(state, ctrl->val);
 		break;
 	case DS5_CAMERA_CID_PWM:
 		if (state->is_depth)
@@ -4910,7 +4882,7 @@ static int ds5_get_calibration_data(struct ds5 *state, enum table_id id,
 {
 	struct hwm_cmd *cmd;
 	int ret;
-	u16 table_length;
+	u16 table_length = 0;
 
 	cmd = devm_kzalloc(&state->client->dev,
 			sizeof(struct hwm_cmd) + length + 4, GFP_KERNEL);
@@ -4921,14 +4893,8 @@ static int ds5_get_calibration_data(struct ds5 *state, enum table_id id,
 
 	memcpy(cmd, &get_calib_data, sizeof(get_calib_data));
 	cmd->param1 = id;
-	ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd), cmd);
-	if (ret) {
-		devm_kfree(&state->client->dev, cmd);
-		return ret;
-	}
-
-	ret = ds5_hwmc_wait(state);
-
+	ret = ds5_hwmc_xfer(state, sizeof(struct hwm_cmd), cmd, cmd->Data,
+			     length + 4, &table_length, false, false);
 	if (ret) {
 		dev_err(&state->client->dev,
 				"%s(): Failed to get calibration table %d, error: %d\n",
@@ -4937,24 +4903,14 @@ static int ds5_get_calibration_data(struct ds5 *state, enum table_id id,
 		return ret;
 	}
 
-	// get table length from fw
-	ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN,
-			&table_length, sizeof(table_length)); /* Read response length */
-	if (ret) {
-		devm_kfree(&state->client->dev, cmd);
-		return ret;
-	}
-
-	if (table_length > length + 4) {
+	if (table_length != length + 4 ||
+	    memcmp(cmd->Data, &get_calib_data.opcode, sizeof(u32))) {
 		dev_err(&state->client->dev,
-			"%s(): calibration table %d response length %u exceeds buffer size %u\n",
+			"%s(): invalid calibration table %d response (length %u, expected %u)\n",
 			__func__, id, table_length, length + 4);
 		devm_kfree(&state->client->dev, cmd);
-		return -ENOBUFS;
+		return -EBADMSG;
 	}
-
-	// read table
-	ds5_raw_read_with_check(state, DS5_HWMC_DATA, cmd->Data, table_length); /* Read table data */
 
 	// first 4 bytes are opcode HWM, not part of calibration table
 	memcpy(table, cmd->Data + 4, length);
@@ -4964,99 +4920,49 @@ static int ds5_get_calibration_data(struct ds5 *state, enum table_id id,
 
 static int ds5_gvd(struct ds5 *state, unsigned char *data, u32 buf_len)
 {
-	struct hwm_cmd cmd;
-	int ret;
 	u16 length = 0;
+	int ret;
 
-	memcpy(&cmd, &gvd, sizeof(gvd));
-	ret = ds5_hwmc_send(state, sizeof(cmd), &cmd);
+	ret = ds5_hwmc_xfer(state, sizeof(gvd), &gvd, data, buf_len,
+			    &length, false, false);
 	if (ret)
 		return ret;
-
-	ret = ds5_hwmc_wait(state);
-	if (ret) {
-		dev_err(&state->client->dev,
-			"%s(): Failed to read GVD, error: %d\n",
-			__func__, ret);
-		return -EIO;
-	}
-
-	ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN, &length, sizeof(length)); /* Read response length */
-	if (ret)
-		return ret;
-
-	if (!length)
+	/* Native GVD controls have a fixed product-specific size. Do not expose
+	 * a zero-filled tail as firmware metadata when the response is truncated.
+	 */
+	if (length != buf_len)
 		return -ENODATA;
-
-	if (length > buf_len) {
-		dev_err(&state->client->dev,
-			"%s(): GVD response length %u exceeds buffer size %u\n",
-			__func__, length, buf_len);
-		return -ENOBUFS;
-	}
-
-	ds5_raw_read_with_check(state, DS5_HWMC_DATA, data, length); /* Read response data */
-
+	if (memcmp(data, &gvd.opcode, sizeof(gvd.opcode)))
+		return -EBADMSG;
 	return 0;
 }
 
 static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 {
-	struct ds5 *state = container_of(ctrl->handler, struct ds5,
-			ctrls.handler);
-			
+	struct ds5 *state = ds5_ctrl_state(ctrl);
 	u32 data;
+	const struct ds5_desc_ctrl *desc_ctrl;
 	const struct d500_dpp_ctrl_desc *dpp_desc;
 	int ret = 0;
 	struct ds5_sensor *sensor = (struct ds5_sensor *)ctrl->priv;
 	u16 base;
 	u16 reg;
 
-	if (sensor) {
-		switch (sensor->mux_pad) {
-		case DS5_MUX_PAD_DEPTH:
-			state = container_of(ctrl->handler, struct ds5, ctrls.handler_depth);
-			break;
-		case DS5_MUX_PAD_RGB:
-			state = container_of(ctrl->handler, struct ds5, ctrls.handler_rgb);
-			break;
-		case DS5_MUX_PAD_IR:
-			state = container_of(ctrl->handler, struct ds5, ctrls.handler_y8);
-			break;
-		case DS5_MUX_PAD_IMU:
-			state = container_of(ctrl->handler, struct ds5, ctrls.handler_imu);
-			break;
-		default:
-			break;
-		}
-	}
 	base = state->control_base;
+
+	desc_ctrl = ds5_ctrl_record(state, sensor, ctrl->id);
+	if (desc_ctrl && !ds5_ctrl_hooked(ctrl->id))
+		return ds5_ctrl_desc_get(state, desc_ctrl, ctrl);
+	if (!ds5_ctrl_arm_fits(ctrl))
+		return -EIO;
 
 	dev_dbg(&state->client->dev, "%s(): %s - ctrl: %s \n",
 		__func__, ds5_get_sensor_name(state), ctrl->name);
 
-	if (ctrl->id == D500_CAMERA_CID_MINZ) {
-		struct d500_dpp_xu_control control;
-		u8 i;
-
-		ret = d500_dpp_xu_read(state, &d500_minz_desc, &control);
-		if (ret)
-			return ret;
-		for (i = 0; i < D500_DPP_XU_MINZ_PARAM_COUNT; i++)
-			ctrl->p_new.p_u32[i] = le32_to_cpu(control.params[i]);
-		return 0;
-	}
 	dpp_desc = d500_dpp_ctrl_desc(ctrl->id);
 	if (dpp_desc) {
-		struct d500_dpp_xu_control control;
-		u8 i;
-
-		ret = d500_dpp_xu_read(state, dpp_desc, &control);
-		if (ret)
-			return ret;
-		for (i = 0; i < dpp_desc->param_count; i++)
-			ctrl->p_new.p_u32[i] = le32_to_cpu(control.params[i]);
-		return 0;
+		return d500_dpp_xu_read(state, dpp_desc,
+					(struct d500_dpp_xu_control *)ctrl->p_new.p_u8);
 	}
 
 	switch (ctrl->id) {
@@ -5184,24 +5090,19 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 
 	case DS5_CAMERA_CID_LOG:
-		ret = ds5_hwmc_send(state, sizeof(log_prepare), &log_prepare);
-		if (ret)
-			return ret;
+		{
+			u16 log_size = 0;
 
-		ret = ds5_hwmc_wait(state);
-		if (ret)
-			return ret;
-
-		ret = ds5_raw_read(state, DS5_HWMC_RESP_LEN, &data, sizeof(data)); /* Read response length */
+			ret = ds5_hwmc_xfer(state, sizeof(log_prepare), &log_prepare,
+					     ctrl->p_new.p_u8, ctrl->dims[0],
+					     &log_size, false, true);
+			data = log_size;
+		}
 		dev_dbg(&state->client->dev, "%s(): log size 0x%x\n", __func__, data);
 		if (ret < 0)
 			return ret;
 		if (!data)
 			return 0;
-		if (data > 1024)
-			return -ENOBUFS;
-		ret = ds5_raw_read(state, DS5_HWMC_DATA,
-				ctrl->p_new.p_u8, data);
 		break;
 	case DS5_CAMERA_DEPTH_CALIBRATION_TABLE_GET:
 		ret = ds5_get_calibration_data(state, DEPTH_CALIBRATION_ID,
@@ -5223,7 +5124,8 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 	case DS5_CAMERA_CID_AE_ROI_GET:
 		if (ctrl->p_new.p_u16) {
-			u16 len = sizeof(struct hwm_cmd) + 12;
+			/* D4xx FW answers 14 B, D58x 12: echo, the four corners, maybe more */
+			u16 len = sizeof(struct hwm_cmd) + DS5_HWMC_BUFFER_SIZE;
 			u16 dataLen = 0;
 			struct hwm_cmd *ae_roi_cmd;
 			ae_roi_cmd = devm_kzalloc(&state->client->dev, len, GFP_KERNEL);
@@ -5235,13 +5137,12 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 				break;
 			}
 			memcpy(ae_roi_cmd, &get_ae_roi, sizeof(struct hwm_cmd));
-			ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd), ae_roi_cmd);
-			if (ret) {
-				devm_kfree(&state->client->dev, ae_roi_cmd);
-				return ret;
-			}
-			ret = ds5_get_hwmc(state, ae_roi_cmd->Data, len, &dataLen);
-			if (!ret && dataLen <= ctrl->dims[0])
+			ret = ds5_hwmc_xfer(state, sizeof(struct hwm_cmd), ae_roi_cmd,
+						ae_roi_cmd->Data, len - sizeof(*ae_roi_cmd),
+					&dataLen, false, false);
+			if (!ret && dataLen < 4 + 8)
+				ret = -EBADMSG;
+			if (!ret)
 				memcpy(ctrl->p_new.p_u16, ae_roi_cmd->Data + 4, 8);
 			devm_kfree(&state->client->dev, ae_roi_cmd);
 		}
@@ -5260,12 +5161,9 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			break;
 		}
 		memcpy(ae_setpoint_cmd, &get_ae_setpoint, sizeof(struct hwm_cmd));
-		ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd), ae_setpoint_cmd);
-		if (ret) {		
-			devm_kfree(&state->client->dev, ae_setpoint_cmd);
-			return ret;
-		}
-		ret = ds5_get_hwmc(state, ae_setpoint_cmd->Data, len, &dataLen);
+		ret = ds5_hwmc_xfer(state, sizeof(struct hwm_cmd), ae_setpoint_cmd,
+				    ae_setpoint_cmd->Data, len - sizeof(*ae_setpoint_cmd),
+				    &dataLen, false, false);
 		memcpy(ctrl->p_new.p_s32, ae_setpoint_cmd->Data + 4, 4);
 		dev_dbg(&state->client->dev, "%s(): len: %d, 0x%x \n",
 			__func__, dataLen, *(ctrl->p_new.p_s32));
@@ -5289,12 +5187,9 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			break;
 		}
 		memcpy(ae_type_cmd, &get_ae_type, sizeof(struct hwm_cmd));
-		ret = ds5_hwmc_send(state, sizeof(struct hwm_cmd), ae_type_cmd);
-		if (ret) {
-			devm_kfree(&state->client->dev, ae_type_cmd);
-			return ret;
-		}
-		ret = ds5_get_hwmc(state, ae_type_cmd->Data, len, &dataLen);
+		ret = ds5_hwmc_xfer(state, sizeof(struct hwm_cmd), ae_type_cmd,
+				    ae_type_cmd->Data, len - sizeof(*ae_type_cmd),
+				    &dataLen, false, false);
 		if (!ret)
 			memcpy(&ae_type, ae_type_cmd->Data + 4, sizeof(ae_type));
 		*(ctrl->p_new.p_s32) = ae_type;
@@ -5303,19 +5198,41 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		devm_kfree(&state->client->dev, ae_type_cmd);
 		}
 		break;
-	case DS5_CAMERA_CID_HWMC_RW: 
+	case DS5_CAMERA_CID_HWMC_RW:
 		if (ctrl->p_new.p_u8) {
 			unsigned char *data = (unsigned char *)ctrl->p_new.p_u8;
-			u16 dataLen = 0;
+			u16 dataLen;
 			u16 bufLen = ctrl->dims[0];
-			ret = ds5_get_hwmc(state, data,	bufLen, &dataLen);
+
+			if (!sensor) {
+				ret = -EINVAL;
+				break;
+			}
+
+			mutex_lock(&state->ds5_dev->hwmc_lock);
+			dataLen = sensor->hwmc_rw_response_len;
+			if (!sensor->hwmc_rw_response_valid ||
+			    sensor->hwmc_rw_response_gen != atomic_read(ds5_get_reset_gen(state))) {
+				ret = -ENODATA;
+				mutex_unlock(&state->ds5_dev->hwmc_lock);
+				break;
+			}
+			if ((dataLen < 4) || (dataLen > bufLen - 4)) {
+				ret = -EBADMSG;
+				sensor->hwmc_rw_response_valid = false;
+				mutex_unlock(&state->ds5_dev->hwmc_lock);
+				break;
+			}
+			memset(data, 0, bufLen);
+			memcpy(data, sensor->hwmc_rw_response, dataLen);
 			/* This is needed for librealsense, to align there code with UVC,
-		 	 * last word is length - 4 bytes header length */
+			 * last word is length - 4 bytes header length */
 			dataLen -= 4;
 			data[bufLen - 4] = (unsigned char)(dataLen & 0x00FF);
 			data[bufLen - 3] = (unsigned char)((dataLen & 0xFF00) >> 8);
 			data[bufLen - 2] = 0;
 			data[bufLen - 1] = 0;
+			mutex_unlock(&state->ds5_dev->hwmc_lock);
 		}
 		break;
 	case DS5_CAMERA_CID_VISUAL_PRESET:
@@ -5349,10 +5266,22 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 	case DS5_CAMERA_CID_ERROR_CODE:
 		if (!state->is_depth)
 			return -EINVAL;
-		ret = ds5_read(state, base | DS5_ERROR_CODE, &reg);
-		if (!ret)
-			*ctrl->p_new.p_s32 = reg & 0xff;
-		break;
+		{
+			u16 dev_type = state->ds5_dev ?
+				READ_ONCE(state->ds5_dev->cached_device_type) :
+				DS5_DEVICE_TYPE_UNKNOWN;
+
+			/* UNKNOWN (mid-reset): a read could hit the D4xx exposure alias. */
+			if (dev_type == DS5_DEVICE_TYPE_UNKNOWN)
+				return -EBUSY;
+			if (dev_type != DS5_DEVICE_TYPE_D58X &&
+			    !ds5_fw_at_least(state, DS5_FW_ERROR_CODE_MIN))
+				return -EOPNOTSUPP;
+			ret = ds5_read(state, base | DS5_ERROR_CODE, &reg);
+			if (!ret)
+				*ctrl->p_new.p_s32 = reg & 0xff;
+			break;
+		}
 	case DS5_CAMERA_CID_SYNC_MODE:
 		if (state->is_depth)
 			ds5_read(state, base | DS5_CAMERA_SYNC_MODE, ctrl->p_new.p_u16);
@@ -5393,6 +5322,40 @@ static int ds5_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 			if (!ret)
 				*ctrl->p_new.p_s32 = sensitivity;
 		}
+		break;
+	case D500_CAMERA_CID_ACCEL_SENSITIVITY:
+		if (state->is_imu && ctrl->p_new.p_s32 &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X) {
+			u32 sensitivity;
+
+			ret = d500_get_accel_sensitivity(state, &sensitivity);
+			if (!ret)
+				*ctrl->p_new.p_s32 = sensitivity;
+		}
+		break;
+	case D500_CAMERA_CID_ALIGNED_DEPTH:
+		if (state->is_depth &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X)
+			ret = d500_get_aligned_depth(state, &ctrl->val);
+		break;
+	case D500_CAMERA_CID_PASSIVE_DEPTH:
+		if (state->is_depth && ctrl->p_new.p_s32 &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X) {
+			u32 mode;
+
+			ret = d500_get_passive_depth(state, &mode);
+			if (!ret)
+				*ctrl->p_new.p_s32 = mode;
+		}
+		break;
+	case D500_CAMERA_CID_OD_DISTANCE:
+		if (state->is_depth &&
+		    READ_ONCE(state->ds5_dev->cached_device_type) ==
+			    DS5_DEVICE_TYPE_D58X)
+			ret = d500_get_od_distance(state, &ctrl->val);
 		break;
 	case DS5_CAMERA_CID_PWM:
 		if (state->is_depth)
@@ -5543,11 +5506,10 @@ static const struct v4l2_ctrl_config ds5_ctrl_ae_roi_set = {
 	.ops = &ds5_ctrl_ops,
 	.id = DS5_CAMERA_CID_AE_ROI_SET,
 	.name = "ae roi set",
-	.type = V4L2_CTRL_TYPE_U8,
-	.dims = {8},
-	.elem_size = sizeof(u16),
+	.type = V4L2_CTRL_TYPE_U16,
+	.dims = {4},
 	.min = 0,
-	.max = 0xFFFFFFFF,
+	.max = U16_MAX,
 	.def = 240,
 	.step = 1,
 };
@@ -5614,6 +5576,49 @@ static const struct v4l2_ctrl_config ds5_ctrl_ewb = {
 	.step = 1,
 	.step = 1,
 };
+
+/* The switch arms copy their built-in config's size. A control still shaped
+ * like a record that has vanished (until its node re-syncs, or on a subdev
+ * node, which never does) must not reach an arm larger than its storage.
+ */
+static bool ds5_ctrl_arm_fits(const struct v4l2_ctrl *ctrl)
+{
+	u32 need;
+
+	switch (ctrl->id) {
+	case DS5_CAMERA_CID_LOG:
+		need = ds5_ctrl_log.dims[0];
+		break;
+	case DS5_CAMERA_DEPTH_CALIBRATION_TABLE_GET:
+	case DS5_CAMERA_DEPTH_CALIBRATION_TABLE_SET:
+		need = ds5_ctrl_get_depth_calib.dims[0];
+		break;
+	case DS5_CAMERA_COEFF_CALIBRATION_TABLE_GET:
+	case DS5_CAMERA_COEFF_CALIBRATION_TABLE_SET:
+		need = ds5_ctrl_get_coeff_calib.dims[0];
+		break;
+	case D500_CAMERA_CID_MINZ:
+	case D500_CAMERA_CID_DECIMATION:
+	case D500_CAMERA_CID_TEMPORAL:
+		need = sizeof(struct d500_dpp_xu_control);
+		break;
+	case DS5_CAMERA_CID_ERB:
+	case DS5_CAMERA_CID_EWB:
+		need = ds5_ctrl_erb.dims[0];
+		break;
+	case DS5_CAMERA_CID_AE_ROI_GET:
+	case DS5_CAMERA_CID_AE_ROI_SET:
+		need = 4 * sizeof(u16);
+		break;
+	default:
+		/* the remaining arms move one scalar through p_u16/p_s32/p_u32 */
+		need = sizeof(u32);
+		if (!ctrl->is_ptr)
+			return true;
+		break;
+	}
+	return ctrl->is_ptr && ctrl->elems * ctrl->elem_size >= need;
+}
 
 static const struct v4l2_ctrl_config ds5_ctrl_hwmc = {
 	.ops = &ds5_ctrl_ops,
@@ -5799,6 +5804,69 @@ static const struct v4l2_ctrl_config ds5_ctrl_gyro_sensitivity_d58x = {
 	.max = D500_GYRO_SENSITIVITY_125_DPS,
 	.def = D500_GYRO_SENSITIVITY_125_DPS,
 	.qmenu = d500_gyro_sensitivity_menu,
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
+static const char * const d500_accel_sensitivity_menu[] = {
+	[D500_ACCEL_SENSITIVITY_3_G] = "3 g",
+	[D500_ACCEL_SENSITIVITY_6_G] = "6 g",
+	[D500_ACCEL_SENSITIVITY_12_G] = "12 g",
+	[D500_ACCEL_SENSITIVITY_24_G] = "24 g",
+};
+
+static const struct v4l2_ctrl_config ds5_ctrl_accel_sensitivity_d58x = {
+	.ops = &ds5_ctrl_ops,
+	.id = D500_CAMERA_CID_ACCEL_SENSITIVITY,
+	.name = "Accel Sensitivity",
+	.type = V4L2_CTRL_TYPE_MENU,
+	.min = D500_ACCEL_SENSITIVITY_3_G,
+	.max = D500_ACCEL_SENSITIVITY_24_G,
+	.def = D500_ACCEL_SENSITIVITY_3_G,
+	.qmenu = d500_accel_sensitivity_menu,
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
+/* FW emits aligned depth at the configured depth WxH and Z16 on the same VC,
+ * so the existing depth formats and frame sizes serve both settings. */
+static const struct v4l2_ctrl_config d500_ctrl_aligned_depth = {
+	.ops = &ds5_ctrl_ops,
+	.id = D500_CAMERA_CID_ALIGNED_DEPTH,
+	.name = "Enable Aligned Depth",
+	.type = V4L2_CTRL_TYPE_BOOLEAN,
+	.min = 0,
+	.max = 1,
+	.step = 1,
+	.def = 0,
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
+static const char * const d58x_passive_depth_menu[] = {
+	[D500_PASSIVE_DEPTH_DISABLED] = "Disabled",
+	[D500_PASSIVE_DEPTH_ALTERNATING] = "Alternating Passive",
+	[D500_PASSIVE_DEPTH_FULL] = "Full Passive",
+};
+
+static const struct v4l2_ctrl_config ds5_ctrl_passive_depth_d58x = {
+	.ops = &ds5_ctrl_ops,
+	.id = D500_CAMERA_CID_PASSIVE_DEPTH,
+	.name = "2C Passive Depth Mode",
+	.type = V4L2_CTRL_TYPE_MENU,
+	.min = D500_PASSIVE_DEPTH_DISABLED,
+	.max = D500_PASSIVE_DEPTH_FULL,
+	.def = D500_PASSIVE_DEPTH_DISABLED,
+	.qmenu = d58x_passive_depth_menu,
+	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+};
+
+static const struct v4l2_ctrl_config d500_ctrl_od_distance = {
+	.ops = &ds5_ctrl_ops,
+	.id = D500_CAMERA_CID_OD_DISTANCE,
+	.name = "Detection Distance",
+	.type = V4L2_CTRL_TYPE_BOOLEAN,
+	.min = 0,
+	.max = 1,
+	.step = 1,
+	.def = 1,
 	.flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 };
 
@@ -6542,92 +6610,201 @@ static const struct v4l2_ctrl_config d500_ctrl_minz = {
 	.ops = &ds5_ctrl_ops,
 	.id = D500_CAMERA_CID_MINZ,
 	.name = "MinZ Configuration",
-	.type = V4L2_CTRL_TYPE_U32,
+	.type = V4L2_CTRL_TYPE_U8,
 	.min = 0,
-	.max = U32_MAX,
+	.max = U8_MAX,
 	.step = 1,
 	.def = 0,
-	.dims = { D500_DPP_XU_MINZ_PARAM_COUNT },
-	.elem_size = sizeof(u32),
+	.dims = { sizeof(struct d500_dpp_xu_control) },
+	.elem_size = sizeof(u8),
 	.flags = V4L2_CTRL_FLAG_VOLATILE |
 		 V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 };
 
 static const struct v4l2_ctrl_config d500_ctrl_decimation = {
 	.ops = &ds5_ctrl_ops,
-	.type_ops = &d500_dpp_ctrl_type_ops,
 	.id = D500_CAMERA_CID_DECIMATION,
 	.name = "D500 Decimation Configuration",
-	.type = V4L2_CTRL_TYPE_U32,
+	.type = V4L2_CTRL_TYPE_U8,
 	.min = 0,
-	.max = U32_MAX,
+	.max = U8_MAX,
 	.step = 1,
 	.def = 0,
-	.dims = { D500_DPP_XU_DECIMATION_PARAM_COUNT },
-	.elem_size = sizeof(u32),
+	.dims = { sizeof(struct d500_dpp_xu_control) },
+	.elem_size = sizeof(u8),
 	.flags = V4L2_CTRL_FLAG_VOLATILE |
 		 V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 };
 
 static const struct v4l2_ctrl_config d500_ctrl_temporal = {
 	.ops = &ds5_ctrl_ops,
-	.type_ops = &d500_dpp_ctrl_type_ops,
 	.id = D500_CAMERA_CID_TEMPORAL,
 	.name = "D500 Temporal Configuration",
-	.type = V4L2_CTRL_TYPE_U32,
+	.type = V4L2_CTRL_TYPE_U8,
 	.min = 0,
-	.max = U32_MAX,
+	.max = U8_MAX,
 	.step = 1,
 	.def = 0,
-	.dims = { D500_DPP_XU_TEMPORAL_PARAM_COUNT },
-	.elem_size = sizeof(u32),
+	.dims = { sizeof(struct d500_dpp_xu_control) },
+	.elem_size = sizeof(u8),
 	.flags = V4L2_CTRL_FLAG_VOLATILE |
 		 V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
 };
 
-static int ds5_ctrl_init(struct ds5 *state, int sid)
+/* Register one published control (docs/camera-control-descriptor.md §12.1).
+ * A rejected registration is contained: v4l2_ctrl_new() sets hdl->error and
+ * every later v4l2_ctrl_new*() early-returns while it is set, so the error is
+ * cleared here rather than dropping every control after this one.
+ */
+/* The hooked arms (ds5_ctrl_hooked()) read the control's storage the way
+ * the built-in configs declare it; a record of another shape is not
+ * registered, so the arm is never entered on it.
+ */
+static bool ds5_ctrl_hooked_shape_ok(const struct ds5_desc_ctrl *c)
+{
+	switch (c->cid) {
+	case DS5_CAMERA_CID_HW_RESET:
+		return c->type == V4L2_CTRL_TYPE_BUTTON;
+	case D500_CAMERA_CID_DUAL_RGB_AE_POLICY:
+		return c->type == V4L2_CTRL_TYPE_MENU;
+	case DS5_CAMERA_CID_ERB:
+		return c->type == V4L2_CTRL_TYPE_U8 &&
+		       c->elems == ds5_ctrl_erb.dims[0];
+	case DS5_CAMERA_CID_EWB:
+		return c->type == V4L2_CTRL_TYPE_U8 &&
+		       c->elems == ds5_ctrl_ewb.dims[0];
+	default:
+		return true;
+	}
+}
+
+static struct v4l2_ctrl *ds5_ctrl_new_from_desc(struct ds5 *state,
+						struct v4l2_ctrl_handler *hdl,
+						struct ds5_sensor *sensor,
+						const struct ds5_desc_ctrl *c)
+{
+	struct v4l2_ctrl_config cfg = {
+		.ops = &ds5_ctrl_ops,
+		.id = c->cid,
+		.name = c->name,
+		.type = c->type,
+		.min = c->min,
+		.max = c->max,
+		.step = c->step,
+		.def = c->def,
+		.flags = c->v4l2_flags,
+		.menu_skip_mask = c->menu_mask,
+		.qmenu = c->qmenu,
+	};
+	struct v4l2_ctrl *ctrl;
+	int saved = hdl->error;
+
+	if (!ds5_ctrl_hooked_shape_ok(c)) {
+		dev_warn(&state->client->dev,
+			 "control descriptor: %s (0x%x) published as type %u x %u, not the driver's\n",
+			 c->name, c->cid, c->type, c->elems);
+		return NULL;
+	}
+	if (c->elems > 1 || c->type >= V4L2_CTRL_COMPOUND_TYPES)
+		cfg.dims[0] = c->elems;
+	ctrl = v4l2_ctrl_new_custom(hdl, &cfg, sensor);
+	if (!ctrl)
+		dev_warn(&state->client->dev,
+			 "control descriptor: %s (0x%x) not registered (%d)\n",
+			 c->name, c->cid, hdl->error);
+	if (hdl->error && !saved)
+		hdl->error = 0;
+	return ctrl;
+}
+
+/* Register this sensor's published controls; d4xx_desc.c has resolved and
+ * validated every record, so this is a loop.
+ */
+static void ds5_ctrl_init_from_desc(struct ds5 *state,
+				    struct v4l2_ctrl_handler *hdl,
+				    struct ds5_sensor *sensor)
+{
+	unsigned int i, n = 0;
+
+	for (i = 0; i < sensor->n_desc_ctrls; i++)
+		if (ds5_ctrl_new_from_desc(state, hdl, sensor,
+					   &sensor->desc_ctrls[i]))
+			n++;
+	dev_dbg(&state->client->dev,
+		"%s(): %s: %u of %u published controls registered\n",
+		__func__, ds5_get_sensor_name(state), n, sensor->n_desc_ctrls);
+}
+
+/* The control pointers the rest of the driver dereferences, found by CID:
+ * HW-reset recovery re-applies ESYNC from sync_mode, d500_refresh_device_mode()
+ * hides the 2C-only ones, d500_refresh_aligned_depth_default() rewrites a default.
+ */
+static const struct {
+	u32 cid;
+	size_t slot;	/* offset of the pointer in struct ds5_ctrls */
+} ds5_ctrl_stored_tbl[] = {
+	{ DS5_CAMERA_CID_SYNC_MODE, offsetof(struct ds5_ctrls, sync_mode) },
+	{ D500_CAMERA_CID_DEVICE_MODE, offsetof(struct ds5_ctrls, device_mode) },
+	{ D500_CAMERA_CID_DUAL_RGB_AE_POLICY,
+	  offsetof(struct ds5_ctrls, dual_rgb_ae_policy) },
+	{ D500_CAMERA_CID_PASSIVE_DEPTH,
+	  offsetof(struct ds5_ctrls, passive_depth) },
+	{ D500_CAMERA_CID_ALIGNED_DEPTH,
+	  offsetof(struct ds5_ctrls, aligned_depth) },
+	{ V4L2_CID_EXPOSURE_AUTO_PRIORITY,
+	  offsetof(struct ds5_ctrls, ae_priority) },
+};
+#define DS5_N_STORED ARRAY_SIZE(ds5_ctrl_stored_tbl)
+
+static struct v4l2_ctrl **ds5_ctrl_stored(struct ds5_ctrls *ctrls,
+					  unsigned int i)
+{
+	return (struct v4l2_ctrl **)((u8 *)ctrls + ds5_ctrl_stored_tbl[i].slot);
+}
+
+static struct v4l2_subdev *ds5_role_sd(struct ds5 *state);
+
+/* A control published on several streams has a copy per sensor; keep the role
+ * sensor's, the one the video node serves, else the first one offered.
+ */
+static void ds5_ctrl_offer(struct ds5 *state, struct ds5_sensor *sensor,
+			   struct v4l2_ctrl *found[], struct v4l2_ctrl *ctrl)
+{
+	unsigned int i;
+
+	for (i = 0; ctrl && i < DS5_N_STORED; i++)
+		if (ctrl->id == ds5_ctrl_stored_tbl[i].cid &&
+		    (!found[i] || &sensor->sd == ds5_role_sd(state)))
+			found[i] = ctrl;
+}
+
+static void ds5_ctrl_find_stored(struct ds5 *state,
+				 struct v4l2_ctrl_handler *hdl,
+				 struct ds5_sensor *sensor)
+{
+	struct v4l2_ctrl *found[DS5_N_STORED];
+	unsigned int i;
+
+	for (i = 0; i < DS5_N_STORED; i++)
+		found[i] = *ds5_ctrl_stored(&state->ctrls, i);
+	for (i = 0; i < DS5_N_STORED; i++)
+		ds5_ctrl_offer(state, sensor, found,
+			       v4l2_ctrl_find(hdl, ds5_ctrl_stored_tbl[i].cid));
+	for (i = 0; i < DS5_N_STORED; i++)
+		WRITE_ONCE(*ds5_ctrl_stored(&state->ctrls, i), found[i]);
+}
+
+/* The built-in control set for @sid, into @hdl; the control pointers the
+ * driver keeps land in @ctrls. Probe passes the live ones, the post-reset
+ * re-sync a scratch copy (ds5_ctrl_sync_to_builtin()).
+ */
+static void ds5_ctrl_add_builtin(struct ds5 *state, struct ds5_ctrls *ctrls,
+				 struct v4l2_ctrl_handler *hdl,
+				 struct ds5_sensor *sensor, int sid)
 {
 	const struct v4l2_ctrl_ops *ops = &ds5_ctrl_ops;
-	struct ds5_ctrls *ctrls = &state->ctrls;
-	struct v4l2_ctrl_handler *hdl = &ctrls->handler;
-	struct v4l2_subdev *sd = &state->mux.sd.subdev;
-	int ret = -1;
-	struct ds5_sensor *sensor = NULL;
-	bool is_d58x;
-
-	is_d58x = READ_ONCE(state->ds5_dev->cached_device_type) ==
-			DS5_DEVICE_TYPE_D58X;
-
-	switch (sid) {
-	case DEPTH_SID:
-		hdl = &ctrls->handler_depth;
-		sensor = &state->depth.sensor;
-		break;
-	case RGB_SID:
-		hdl = &ctrls->handler_rgb;
-		sensor = &state->rgb.sensor;
-		break;
-	case IR_SID:
-		hdl = &ctrls->handler_y8;
-		sensor = &state->ir.sensor;
-		break;
-	case IMU_SID:
-		hdl = &ctrls->handler_imu;
-		sensor = &state->imu.sensor;
-		break;
-	default:
-		/* control for MUX */
-		hdl = &ctrls->handler;
-		sensor = NULL;
-		break;
-	}
-
-	dev_dbg(NULL, "%s():%d sid: %d\n", __func__, __LINE__, sid);
-	ret = v4l2_ctrl_handler_init(hdl, DS5_N_CONTROLS);
-	if (ret < 0) {
-		v4l2_err(sd, "cannot init ctrl handler (%d)\n", ret);
-		return ret;
-	}
+	bool is_d58x = READ_ONCE(state->ds5_dev->cached_device_type) ==
+		       DS5_DEVICE_TYPE_D58X;
 
 	if (sid == DEPTH_SID || sid == IR_SID) {
 		ctrls->laser_power = v4l2_ctrl_new_custom(hdl,
@@ -6805,13 +6982,6 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 		}
 	}
 
-	if (hdl->error) {
-		v4l2_err(sd, "error creating controls (%d)\n", hdl->error);
-		ret = hdl->error;
-		v4l2_ctrl_handler_free(hdl);
-		return ret;
-	}
-
 	// Add these after v4l2_ctrl_handler_setup so they won't be set up
 	if (sid >= DEPTH_SID && sid < IMU_SID) {
 		/* GVD payload size differs per product line. */
@@ -6864,25 +7034,101 @@ static int ds5_ctrl_init(struct ds5 *state, int sid)
 					     sensor);
 			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_projector_temperature,
 					     sensor);
-			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_error_code, sensor);
 			ctrls->minz = v4l2_ctrl_new_custom(hdl, &d500_ctrl_minz, sensor);
 			v4l2_ctrl_new_custom(hdl, &d500_ctrl_decimation, sensor);
 			v4l2_ctrl_new_custom(hdl, &d500_ctrl_temporal, sensor);
+			ctrls->aligned_depth =
+				v4l2_ctrl_new_custom(hdl, &d500_ctrl_aligned_depth,
+						     sensor);
+			ctrls->passive_depth =
+				v4l2_ctrl_new_custom(hdl, &ds5_ctrl_passive_depth_d58x,
+						     sensor);
+			ds5_v4l2_ctrl_set_disabled(ctrls->passive_depth, true);
+			v4l2_ctrl_new_custom(hdl, &d500_ctrl_od_distance, sensor);
 		} else {
 			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_readout_shaping,
 					     sensor);
 		}
 		v4l2_ctrl_new_custom(hdl, &ds5_ctrl_pwm, sensor);
+		v4l2_ctrl_new_custom(hdl, &ds5_ctrl_error_code, sensor);
 	}
 	// IMU custom
 	if (sid == IMU_SID) {
 		ctrls->fw_version = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_fw_version, sensor);
-		if (is_d58x)
+		if (is_d58x) {
 			v4l2_ctrl_new_custom(hdl,
 					     &ds5_ctrl_gyro_sensitivity_d58x,
 					     sensor);
+			v4l2_ctrl_new_custom(hdl,
+					     &ds5_ctrl_accel_sensitivity_d58x,
+					     sensor);
+		}
+	}
+}
+
+static int ds5_ctrl_init(struct ds5 *state, int sid)
+{
+	struct ds5_ctrls *ctrls = &state->ctrls;
+	struct v4l2_ctrl_handler *hdl = &ctrls->handler;
+	struct v4l2_subdev *sd = &state->mux.sd.subdev;
+	int ret = -1;
+	struct ds5_sensor *sensor = NULL;
+
+	switch (sid) {
+	case DEPTH_SID:
+		hdl = &ctrls->handler_depth;
+		sensor = &state->depth.sensor;
+		break;
+	case RGB_SID:
+		hdl = &ctrls->handler_rgb;
+		sensor = &state->rgb.sensor;
+		break;
+	case IR_SID:
+		hdl = &ctrls->handler_y8;
+		sensor = &state->ir.sensor;
+		break;
+	case IMU_SID:
+		hdl = &ctrls->handler_imu;
+		sensor = &state->imu.sensor;
+		break;
+	default:
+		/* control for MUX */
+		hdl = &ctrls->handler;
+		sensor = NULL;
+		break;
 	}
 
+	dev_dbg(NULL, "%s():%d sid: %d\n", __func__, __LINE__, sid);
+	ret = v4l2_ctrl_handler_init(hdl, DS5_N_CONTROLS);
+	if (ret < 0) {
+		v4l2_err(sd, "cannot init ctrl handler (%d)\n", ret);
+		return ret;
+	}
+
+	/* A camera that published its controls registers them from the wire;
+	 * the built-in set below serves one that did not. The MUX has no
+	 * sensor and keeps its own handler either way.
+	 */
+	if (sensor && sensor->desc_ctrls) {
+		ds5_ctrl_init_from_desc(state, hdl, sensor);
+		if (sid >= DEPTH_SID && sid < IMU_SID) {
+			ctrls->hwmc = v4l2_ctrl_new_custom(hdl, &ds5_ctrl_hwmc,
+							   sensor);
+			v4l2_ctrl_new_custom(hdl, &ds5_ctrl_hwmc_rw, sensor);
+		}
+		ds5_ctrl_find_stored(state, hdl, sensor);
+		goto attach;
+	}
+
+	ds5_ctrl_add_builtin(state, ctrls, hdl, sensor, sid);
+	if (hdl->error) {
+		v4l2_err(sd, "error creating controls (%d)\n", hdl->error);
+		ret = hdl->error;
+		v4l2_ctrl_handler_free(hdl);
+		return ret;
+	}
+
+attach:
 	switch (sid) {
 	case DEPTH_SID:
 		state->depth.sensor.sd.ctrl_handler = hdl;
@@ -7025,7 +7271,21 @@ static int ds5_imu_init(struct i2c_client *c, struct ds5 *state)
 		       &ds5_subdev_ops, "imu");
 }
 
-/* No locking needed */
+/* The sensor a node streams from, per its DT cam-type; NULL without one. */
+static struct v4l2_subdev *ds5_role_sd(struct ds5 *state)
+{
+	if (state->is_imu)
+		return &state->imu.sensor.sd;
+	if (state->is_y8)
+		return &state->ir.sensor.sd;
+	if (state->is_depth)
+		return &state->depth.sensor.sd;
+	if (state->is_rgb)
+		return &state->rgb.sensor.sd;
+	return NULL;
+}
+
+/* Every pad lists the node's own sensor; a mux without a role has none. */
 static int ds5_mux_enum_mbus_code(struct v4l2_subdev *sd,
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
 				     struct v4l2_subdev_pad_config *cfg,
@@ -7036,54 +7296,14 @@ static int ds5_mux_enum_mbus_code(struct v4l2_subdev *sd,
 {
 	struct ds5 *state = container_of(sd, struct ds5, mux.sd.subdev);
 	struct v4l2_subdev_mbus_code_enum tmp = *mce;
-	struct v4l2_subdev *remote_sd;
-	int ret = -1;
+	struct v4l2_subdev *remote_sd = ds5_role_sd(state);
+	int ret;
 
 	dev_dbg(&state->client->dev, "%s(): %s \n", __func__, sd->name);
-	switch (mce->pad) {
-	case DS5_MUX_PAD_IR:
-		remote_sd = &state->ir.sensor.sd;
-		break;
-	case DS5_MUX_PAD_DEPTH:
-		remote_sd = &state->depth.sensor.sd;
-		break;
-	case DS5_MUX_PAD_RGB:
-		remote_sd = &state->rgb.sensor.sd;
-		break;
-	case DS5_MUX_PAD_IMU:
-		remote_sd = &state->imu.sensor.sd;
-		break;
-	case DS5_MUX_PAD_EXTERNAL:
-		if (mce->index >= state->ir.sensor.n_formats +
-				state->depth.sensor.n_formats)
-			return -EINVAL;
-
-		/*
-		 * First list Left node / Motion Tracker formats, then depth.
-		 * This should also help because D16 doesn't have a direct
-		 * analog in MIPI CSI-2.
-		 */
-		if (mce->index < state->ir.sensor.n_formats) {
-			remote_sd = &state->ir.sensor.sd;
-		} else {
-			tmp.index = mce->index - state->ir.sensor.n_formats;
-			remote_sd = &state->depth.sensor.sd;
-		}
-
-		break;
-	default:
+	if (!remote_sd)
 		return -EINVAL;
-	}
 
 	tmp.pad = 0;
-	if (state->is_rgb)
-		remote_sd = &state->rgb.sensor.sd;
-	if (state->is_depth)
-		remote_sd = &state->depth.sensor.sd;
-	if (state->is_y8)
-		remote_sd = &state->ir.sensor.sd;
-	if (state->is_imu)
-		remote_sd = &state->imu.sensor.sd;
 	/* Locks internally */
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 10)
 	ret = ds5_sensor_enum_mbus_code(remote_sd, cfg, &tmp);
@@ -7457,6 +7677,7 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 	struct ds5_sensor *sensor = state->mux.last_set;
 	u16 expected_streaming_state;
 	bool ds5_config_done = !on; /* for stop, skip config */
+	bool ser_pipe_armed = false;
 	bool reset_invalidated = false;
 	bool *streaming_flag = NULL;
 	int cur_ds5 = atomic_read(ds5_get_reset_gen(state));
@@ -7610,11 +7831,11 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			time_before(jiffies, timeout); i++, msleep_range(i*DS5_START_POLL_TIME))
 	{
 		if (!ds5_config_done) {
-			ret = ds5_configure(state);
+			ret = ds5_configure(state, &ser_pipe_armed);
 			if (ret < 0) {
 				if (ret == -ENOSR) {
 					/* No recovery can help if no resources are available */
-					return ret;
+					goto restore_streaming;
 				}
 				dev_warn(&state->client->dev, "stream %d config failed, retry %d, %dms\n",
 					stream_id, i, jiffies_to_msecs(jiffies - ts));
@@ -7694,23 +7915,38 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			ds5_write(state, DS5_START_STOP_STREAM,
 				(on ? DS5_STREAM_STOP : DS5_STREAM_START) | stream_id);
 		}
+		ret = -EAGAIN;
+restore_streaming:
 #ifdef CONFIG_VIDEO_D4XX_SERDES
+		/* Also reached after allocation failure on a later retry. The
+		 * serializer attempt is independent of the current pipe ID. */
 		if (on && sensor->pipe_id >= 0) {
+			int cleanup_ret;
+
 			mutex_lock(&serdes_lock__);
-			ret = state->dser_ops->release_pipe(state->dser_dev, sensor->pipe_id);
+			cleanup_ret = state->dser_ops->release_pipe(state->dser_dev,
+								 sensor->pipe_id);
 			mutex_unlock(&serdes_lock__);
-			if (ret < 0) {
+			if (cleanup_ret < 0) {
 				dev_warn(&state->client->dev, "release pipe failed\n");
 			} else {
 				sensor->pipe_id = PIPE_NOT_CONFIGURED;
 			}
+		}
+		if (on && ser_pipe_armed && state->ser_ops->stream_stop) {
+			int ser_vc_id = state->dser_ops->get_ser_vc_id ?
+				state->dser_ops->get_ser_vc_id(state->dser_dev,
+							state->gmsl_link, vc_id) :
+				(int)vc_id;
+
+			if (ser_vc_id >= 0)
+				state->ser_ops->stream_stop(state->ser_dev, ser_vc_id);
 		}
 #endif
 		mutex_lock(&state->ds5_dev->lock);
 		*streaming_flag = restore_val;
 		mutex_unlock(&state->ds5_dev->lock);
 		sensor->streaming = restore_val;
-		ret = -EAGAIN;
 	}
 	else if (!on)
 	{
@@ -7780,9 +8016,369 @@ static const struct v4l2_subdev_pad_ops ds5_mux_pad_ops = {
 	.get_frame_desc		= ds5_mux_get_frame_desc,
 };
 
+#ifdef CONFIG_TEGRA_CAMERA_PLATFORM
+/* Scalars __v4l2_ctrl_modify_range() handles safely: it compares and resets
+ * through p_s32, 4 bytes, so a U8 scalar keeps its range like an array does.
+ */
+static bool ds5_ctrl_rangeable(const struct v4l2_ctrl *ctrl)
+{
+	if (ctrl->is_array)
+		return false;
+	switch (ctrl->type) {
+	case V4L2_CTRL_TYPE_INTEGER:
+	case V4L2_CTRL_TYPE_BOOLEAN:
+	case V4L2_CTRL_TYPE_MENU:
+	case V4L2_CTRL_TYPE_U32:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static void ds5_adjust_sync_mode_control(struct i2c_client *client,
+					 struct ds5 *state);
+static void ds5_adjust_rgb_controls(struct i2c_client *client,
+				    struct ds5 *state);
+static void d500_adjust_device_mode_controls(struct i2c_client *client,
+					     struct ds5 *state);
+
+static int ds5_sensor_sid(struct ds5 *state, struct ds5_sensor *sensor)
+{
+	if (sensor == &state->depth.sensor)
+		return DEPTH_SID;
+	if (sensor == &state->rgb.sensor)
+		return RGB_SID;
+	if (sensor == &state->ir.sensor)
+		return IR_SID;
+	return IMU_SID;
+}
+
+/* Bring @ctrl to its new range, mask and default. QUERYMENU reads qmenu[] and
+ * maximum unlocked, so a longer label run goes in before the range grows and
+ * a shorter one after it shrinks. Caller holds the handler lock.
+ */
+/* A sensor handler other than the node's role is reached only through its
+ * subdev node and never drives the camera, so it takes its new range without
+ * s_ctrl, which would write through this instance's control block.
+ */
+static void ds5_ctrl_rerange_quiet(struct v4l2_ctrl *ctrl,
+				   const char * const *qmenu, s64 min, s64 max,
+				   u64 step_or_mask, s64 def)
+{
+	bool menu = ctrl->type == V4L2_CTRL_TYPE_MENU;
+
+	if (min > max || def < min || def > max ||
+	    (!menu && !step_or_mask) ||
+	    (menu && (def > 63 || (step_or_mask & BIT_ULL(def)))))
+		return;
+	if (qmenu && max >= ctrl->maximum)
+		ctrl->qmenu = qmenu;
+	ctrl->minimum = min;
+	ctrl->maximum = max;
+	ctrl->step = step_or_mask;	/* a menu's skip mask shares it */
+	ctrl->default_value = def;
+	if (qmenu)
+		ctrl->qmenu = qmenu;
+	if (!ctrl->is_ptr &&
+	    (ctrl->cur.val < min || ctrl->cur.val > max ||
+	     (menu && (step_or_mask & BIT_ULL(ctrl->cur.val)))))
+		ctrl->cur.val = ctrl->val = def;
+}
+
+static void ds5_ctrl_rerange(struct ds5 *state, struct v4l2_ctrl *ctrl,
+			     bool quiet, const char * const *qmenu, s64 min,
+			     s64 max, u64 step_or_mask, s64 def)
+{
+	const char * const *old_qmenu = ctrl->qmenu;
+	int ret;
+
+	if (quiet) {
+		ds5_ctrl_rerange_quiet(ctrl, qmenu, min, max, step_or_mask, def);
+		return;
+	}
+	if (!ds5_ctrl_rangeable(ctrl)) {
+		/* The core re-ranges value scalars only. Here the range bounds
+		 * later writes and nothing re-validates the stored value.
+		 */
+		if (ctrl->is_ptr && step_or_mask && min <= max &&
+		    def >= min && def <= max) {
+			ctrl->minimum = min;
+			ctrl->maximum = max;
+			ctrl->step = step_or_mask;
+			ctrl->default_value = def;
+		}
+		return;
+	}
+	if (qmenu && max >= ctrl->maximum)
+		ctrl->qmenu = qmenu;
+	ret = __v4l2_ctrl_modify_range(ctrl, min, max, step_or_mask, def);
+	if (qmenu && !ret && ctrl->qmenu == old_qmenu)
+		ctrl->qmenu = qmenu;
+	if (ret && ctrl->maximum != max)
+		ctrl->qmenu = old_qmenu;
+	if (ret)
+		dev_warn(&state->client->dev,
+			 "control %s (0x%x) keeps its old range (%d)\n",
+			 ctrl->name, ctrl->id, ret);
+}
+
+/* The one change a live control cannot follow: its storage is fixed at
+ * registration and its CID cannot be re-registered.
+ */
+static void ds5_ctrl_warn_shape(struct ds5 *state, const struct v4l2_ctrl *ctrl)
+{
+	dev_warn(&state->client->dev,
+		 "control %s (0x%x) changed shape across the firmware update; reload the driver to use it\n",
+		 ctrl->name, ctrl->id);
+}
+
+/* Records installed: re-range the controls they describe, disable the rest,
+ * register a record that has no control yet.
+ */
+static void ds5_ctrl_sync_to_desc(struct ds5 *state,
+				  struct v4l2_ctrl_handler *hdl,
+				  struct ds5_sensor *sensor,
+				  struct v4l2_ctrl *found[])
+{
+	bool quiet = &sensor->sd != ds5_role_sd(state);
+	const struct ds5_desc_ctrl *ctrls;
+	struct v4l2_ctrl_ref *ref;
+	unsigned int i, n;
+
+	mutex_lock(hdl->lock);
+	list_for_each_entry(ref, &hdl->ctrl_refs, node) {
+		struct v4l2_ctrl *ctrl = ref->ctrl;
+		const struct ds5_desc_ctrl *c;
+
+		if (ctrl->handler != hdl ||
+		    ctrl->type == V4L2_CTRL_TYPE_CTRL_CLASS ||
+		    ds5_ctrl_driver_owned(ctrl->id))
+			continue;
+		c = ds5_ctrl_record(state, sensor, ctrl->id);
+		if (c && !ds5_ctrl_record_fits(c, ctrl))
+			ds5_ctrl_warn_shape(state, ctrl);
+		if (!c || !ds5_ctrl_record_fits(c, ctrl)) {
+			ds5_v4l2_ctrl_set_disabled(ctrl, true);
+			continue;
+		}
+		ctrl->name = c->name;
+		if (!ctrl->is_ptr)
+			ctrl->type = c->type;	/* INTEGER <-> relabelled U32 */
+		/* as registering the record would set them: its flags, plus
+		 * what the core adds to a button
+		 */
+		ctrl->flags = c->v4l2_flags;
+		if (ctrl->type == V4L2_CTRL_TYPE_BUTTON)
+			ctrl->flags |= V4L2_CTRL_FLAG_WRITE_ONLY |
+				       V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
+		ds5_ctrl_rerange(state, ctrl, quiet, c->qmenu, c->min, c->max,
+				 ctrl->type == V4L2_CTRL_TYPE_MENU ?
+				 c->menu_mask : c->step, c->def);
+		ds5_ctrl_offer(state, sensor, found, ctrl);
+	}
+	mutex_unlock(hdl->lock);
+
+	mutex_lock(&state->ds5_dev->lock);
+	ctrls = sensor->desc_ctrls;
+	n = sensor->n_desc_ctrls;
+	mutex_unlock(&state->ds5_dev->lock);
+	for (i = 0; i < n; i++)
+		if (!v4l2_ctrl_find(hdl, ctrls[i].cid))
+			ds5_ctrl_offer(state, sensor, found,
+				       ds5_ctrl_new_from_desc(state, hdl, sensor,
+							      &ctrls[i]));
+}
+
+/* A built-in control the node does not have yet, configured as @src. */
+static struct v4l2_ctrl *ds5_ctrl_new_like(struct ds5 *state,
+					   struct v4l2_ctrl_handler *hdl,
+					   struct ds5_sensor *sensor,
+					   const struct v4l2_ctrl *src)
+{
+	bool relabelled = !src->is_ptr && src->type == V4L2_CTRL_TYPE_U32;
+	struct v4l2_ctrl_config cfg = {
+		.ops = &ds5_ctrl_ops,
+		.id = src->id,
+		.name = src->name,
+		.type = relabelled ? V4L2_CTRL_TYPE_INTEGER : src->type,
+		.min = src->minimum,
+		.max = src->maximum,
+		.def = src->default_value,
+		.flags = src->flags,
+		.qmenu = src->qmenu,
+	};
+	struct v4l2_ctrl *ctrl;
+	int saved = hdl->error;
+
+	if (src->type == V4L2_CTRL_TYPE_MENU)
+		cfg.menu_skip_mask = src->menu_skip_mask;
+	else
+		cfg.step = src->step;
+	if (src->is_array)
+		memcpy(cfg.dims, src->dims, sizeof(cfg.dims));
+	ctrl = v4l2_ctrl_new_custom(hdl, &cfg, sensor);
+	if (ctrl && relabelled)
+		ctrl->type = V4L2_CTRL_TYPE_U32;
+	if (!ctrl)
+		dev_warn(&state->client->dev,
+			 "built-in control %s (0x%x) not registered (%d)\n",
+			 src->name, src->id, hdl->error);
+	if (hdl->error && !saved)
+		hdl->error = 0;
+	return ctrl;
+}
+
+/* No records: the node serves the built-in set, built into a scratch handler
+ * so the live control pointers never point at it. A control of the same
+ * storage takes its built-in range and flags; a missing one is registered;
+ * a control with no built-in counterpart is disabled.
+ */
+static void ds5_ctrl_sync_to_builtin(struct ds5 *state,
+				     struct v4l2_ctrl_handler *hdl,
+				     struct ds5_sensor *sensor,
+				     struct v4l2_ctrl *found[])
+{
+	bool quiet = &sensor->sd != ds5_role_sd(state);
+	struct ds5_ctrls *scratch;
+	struct v4l2_ctrl_ref *ref;
+
+	scratch = kzalloc(sizeof(*scratch), GFP_KERNEL);
+	if (!scratch)
+		return;
+	if (v4l2_ctrl_handler_init(&scratch->handler, DS5_N_CONTROLS)) {
+		kfree(scratch);
+		return;
+	}
+	ds5_ctrl_add_builtin(state, scratch, &scratch->handler, sensor,
+			     ds5_sensor_sid(state, sensor));
+
+	mutex_lock(hdl->lock);
+	list_for_each_entry(ref, &hdl->ctrl_refs, node) {
+		struct v4l2_ctrl *ctrl = ref->ctrl;
+		struct v4l2_ctrl *src;
+
+		if (ctrl->handler != hdl ||
+		    ctrl->type == V4L2_CTRL_TYPE_CTRL_CLASS ||
+		    ds5_ctrl_driver_owned(ctrl->id))
+			continue;
+		src = v4l2_ctrl_find(&scratch->handler, ctrl->id);
+		if (!src || !ds5_ctrl_shape_eq(ctrl, src->type, src->is_ptr,
+					       src->elems, src->elem_size)) {
+			if (src)
+				ds5_ctrl_warn_shape(state, ctrl);
+			ds5_v4l2_ctrl_set_disabled(ctrl, true);
+			continue;
+		}
+		ctrl->name = src->name;
+		if (!ctrl->is_ptr)
+			ctrl->type = src->type;	/* INTEGER <-> relabelled U32 */
+		ctrl->flags = src->flags;
+		ds5_ctrl_rerange(state, ctrl, quiet, src->qmenu, src->minimum,
+				 src->maximum,
+				 ctrl->type == V4L2_CTRL_TYPE_MENU ?
+				 src->menu_skip_mask : src->step,
+				 src->default_value);
+		ds5_ctrl_offer(state, sensor, found, ctrl);
+	}
+	mutex_unlock(hdl->lock);
+
+	list_for_each_entry(ref, &scratch->handler.ctrl_refs, node)
+		if (ref->ctrl->type != V4L2_CTRL_TYPE_CTRL_CLASS &&
+		    !v4l2_ctrl_find(hdl, ref->ctrl->id))
+			ds5_ctrl_offer(state, sensor, found,
+				       ds5_ctrl_new_like(state, hdl, sensor,
+							 ref->ctrl));
+	v4l2_ctrl_handler_free(&scratch->handler);
+	kfree(scratch);
+}
+
+static DEFINE_MUTEX(ds5_ctrl_refresh_lock);
+
+/* Re-sync the instance's control sets after a post-reset reload (design
+ * §12.4): to the records when the camera publishes them, to the built-in set
+ * when it does not, either direction across a DFU. Reached from the VI's
+ * control-ioctl path ahead of video_ioctl2, so no video or handler lock is
+ * held; the records are module-lifetime, and the reload marks the channel
+ * only after swapping them, so a refresh racing the swap is followed by
+ * another.
+ */
+
+static void ds5_ctrl_refresh(struct ds5 *state)
+{
+	struct ds5_sensor *sensors[] = {
+		&state->depth.sensor, &state->ir.sensor,
+		&state->rgb.sensor, &state->imu.sensor,
+	};
+	bool from_desc[ARRAY_SIZE(sensors)];
+	struct v4l2_ctrl *found[DS5_N_STORED] = {};
+	struct v4l2_subdev *role = ds5_role_sd(state);
+	unsigned int i;
+
+	/* The built-in set depends on the SKU; mid-reset it is not known yet */
+	if (READ_ONCE(state->ds5_dev->cached_device_type) ==
+	    DS5_DEVICE_TYPE_UNKNOWN) {
+		tegra_channel_mark_ctrls_dirty(
+			v4l2_get_subdev_hostdata(&state->mux.sd.subdev));
+		return;
+	}
+
+	mutex_lock(&ds5_ctrl_refresh_lock);
+	/* The video node shows its role's sensor; each sensor's subdev node
+	 * shows its own handler, so all four follow the firmware.
+	 */
+	for (i = 0; i < ARRAY_SIZE(sensors); i++) {
+		struct v4l2_ctrl_handler *hdl = sensors[i]->sd.ctrl_handler;
+
+		mutex_lock(&state->ds5_dev->lock);
+		from_desc[i] = sensors[i]->desc_ctrls;
+		mutex_unlock(&state->ds5_dev->lock);
+		if (!hdl)
+			continue;
+		if (from_desc[i])
+			ds5_ctrl_sync_to_desc(state, hdl, sensors[i], found);
+		else
+			ds5_ctrl_sync_to_builtin(state, hdl, sensors[i], found);
+	}
+	/* Only controls the new set serves; a withdrawn one leaves its slot NULL
+	 * so no pass below can re-enable it.
+	 */
+	for (i = 0; i < DS5_N_STORED; i++)
+		WRITE_ONCE(*ds5_ctrl_stored(&state->ctrls, i), found[i]);
+	/* One hop up; the VI re-merges the mux into its channel. */
+	if (role && role->ctrl_handler)
+		v4l2_ctrl_add_handler(&state->ctrls.handler, role->ctrl_handler,
+				      NULL, true);
+
+	/* The probe-time passes, for the set each sensor now serves */
+	if (!from_desc[0] && state->ctrls.sync_mode) {
+		v4l2_ctrl_lock(state->ctrls.sync_mode);
+		ds5_adjust_sync_mode_control(state->client, state);
+		v4l2_ctrl_unlock(state->ctrls.sync_mode);
+	}
+	if (!from_desc[2])
+		ds5_adjust_rgb_controls(state->client, state);
+	d500_adjust_device_mode_controls(state->client, state);
+	mutex_unlock(&ds5_ctrl_refresh_lock);
+}
+
+static long ds5_mux_command(struct v4l2_subdev *sd, unsigned int cmd,
+			    void *arg)
+{
+	struct ds5 *state = container_of(sd, struct ds5, mux.sd.subdev);
+
+	if (cmd != TEGRA_CHANNEL_CMD_REFRESH_CTRLS)
+		return -ENOIOCTLCMD;
+	ds5_ctrl_refresh(state);
+	return 0;
+}
+#endif
+
 static const struct v4l2_subdev_core_ops ds5_mux_core_ops = {
 	//.s_power = ds5_mux_set_power,
 	.log_status = v4l2_ctrl_subdev_log_status,
+#ifdef CONFIG_TEGRA_CAMERA_PLATFORM
+	.command = ds5_mux_command,
+#endif
 };
 
 static const struct v4l2_subdev_video_ops ds5_mux_video_ops = {
@@ -8058,7 +8654,6 @@ e_entity:
 
 static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 {
-	struct ds5_sensor *sensor;
 	u16 cfg0 = 0, cfg0_md = 0, cfg1 = 0, cfg1_md = 0;
 	u16 dw = 0, dh = 0, yw = 0, yh = 0, dev_type = 0;
 	bool link_mode_configured = true;
@@ -8116,104 +8711,7 @@ static int ds5_fixed_configuration(struct i2c_client *client, struct ds5 *state)
 	if (link_mode_configured && ds5_desc_apply(state))
 		goto formats_done;
 
-	sensor = &state->depth.sensor;
-	switch (dev_type) {
-	case DS5_DEVICE_TYPE_D41X:
-		sensor->formats = ds5_depth_formats_d41x;
-		break;
-	case DS5_DEVICE_TYPE_D40X:
-		sensor->formats = ds5_depth_formats_d40x;
-		break;
-	case DS5_DEVICE_TYPE_D43X:
-		sensor->formats = ds5_depth_formats_d43x;
-		break;
-	case DS5_DEVICE_TYPE_D45X:
-		sensor->formats = ds5_depth_formats_d43x;
-		break;
-	case DS5_DEVICE_TYPE_D58X:
-		sensor->formats = ds5_depth_formats_d58x;
-		break;
-	default:
-		dev_warn(&client->dev,
-			"%s(): unknown device type 0x%x, using D43X format tables\n",
-			__func__, dev_type);
-		sensor->formats = ds5_depth_formats_d43x;
-	}
-	sensor->n_formats = 1;
-	sensor->mux_pad = DS5_MUX_PAD_DEPTH;
-
-	sensor = &state->ir.sensor;
-	switch (dev_type) {
-	case DS5_DEVICE_TYPE_D40X:
-        sensor->formats = ds5_y_formats_40x;
-        sensor->n_formats = ARRAY_SIZE(ds5_y_formats_40x);
-        break;
-	case DS5_DEVICE_TYPE_D41X:
-		sensor->formats = ds5_y_formats_41x;
-		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_41x);
-		break;
-	case DS5_DEVICE_TYPE_D45X:
-		sensor->formats = ds5_y_formats_45x;
-		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_45x);
-		break;
-	case DS5_DEVICE_TYPE_D58X:
-		sensor->formats = ds5_y_formats_d58x;
-		sensor->n_formats = ARRAY_SIZE(ds5_y_formats_d58x);
-		break;
-	default:
-		sensor->formats = state->variant->formats;
-		sensor->n_formats = state->variant->n_formats;
-	}
-	sensor->mux_pad = DS5_MUX_PAD_IR;
-
-	sensor = &state->rgb.sensor;
-	switch (dev_type) {
-	case DS5_DEVICE_TYPE_D43X:
-		sensor->formats = &ds5_onsemi_rgb_format;
-		sensor->n_formats = DS5_ONSEMI_RGB_N_FORMATS;
-		break;
-	case DS5_DEVICE_TYPE_D41X:
-		sensor->formats = &ds5_41x_rgb_format;
-		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
-		break;
-	case DS5_DEVICE_TYPE_D40X:
-		sensor->formats = ds5_40x_rgb_formats;
-		sensor->n_formats = ARRAY_SIZE(ds5_40x_rgb_formats);
-		break;
-	case DS5_DEVICE_TYPE_D45X:
-		sensor->formats = &ds5_rlt_rgb_format;
-		sensor->n_formats = DS5_RLT_RGB_N_FORMATS;
-		break;
-	case DS5_DEVICE_TYPE_D58X:
-		sensor->formats = ds5_rgb_formats_d58x;
-		sensor->n_formats = ARRAY_SIZE(ds5_rgb_formats_d58x);
-		break;
-	default:
-		sensor->formats = &ds5_onsemi_rgb_format;
-		sensor->n_formats = DS5_ONSEMI_RGB_N_FORMATS;
-	}
-	sensor->mux_pad = DS5_MUX_PAD_RGB;
-
-	sensor = &state->imu.sensor;
-
-	/* For fimware version starting from: 5.16,
-	   IMU will have 32bit axis values.
- 	   5.16.x.y = firmware version: 0x0510 */
-	if (dev_type == DS5_DEVICE_TYPE_D58X) {
-		/* D58x always carries the 38-byte extended IMU record; in serdes
-		 * pixel mode the line is zero-padded (256) to meet GMSL2 pixel-mode
-		 * minimum sync spacing when sharing the pipe with video. */
-		if (state->d58x_pixel_mode)
-			sensor->formats = ds5_imu_formats_extended_d58x_pixel_mode;
-		else
-			sensor->formats = d58x_imu_formats_extended_tunnel_mode;
-	} else if (state->fw_version >= 0x510)
-		sensor->formats = ds5_imu_formats_extended;
-	else
-		sensor->formats = ds5_imu_formats;
-	
-	sensor->n_formats = 1;
-	sensor->mux_pad = DS5_MUX_PAD_IMU;
+	ds5_apply_builtin_tables(state, dev_type);
 
 formats_done:
 	/* Development: set a configuration during probing */
@@ -8317,15 +8815,17 @@ static int ds5_dfu_switch_to_dfu(struct ds5 *state)
 	int i = DS5_START_MAX_COUNT;
 	u16 status;
 
-	ret = ds5_hwmc_send(state, sizeof(cmd_switch_to_dfu),
-			    (struct hwm_cmd *)&cmd_switch_to_dfu);
-	if (ret)
-		return ret;
-	/*Wait for DFU fw to boot*/
-	do {
-		msleep_range(DS5_START_POLL_TIME*10);
-		ret = ds5_read(state, 0x5000, &status);
-	} while (ret && i--);
+	mutex_lock(&state->ds5_dev->hwmc_lock);
+	ret = ds5_hwmc_send_dfu_locked(state, sizeof(cmd_switch_to_dfu),
+				      &cmd_switch_to_dfu);
+	if (!ret) {
+		/* Wait for DFU FW to boot before admitting another HWMC command. */
+		do {
+			msleep_range(DS5_START_POLL_TIME * 10);
+			ret = ds5_read(state, 0x5000, &status);
+		} while (ret && i--);
+	}
+	mutex_unlock(&state->ds5_dev->hwmc_lock);
 	return ret;
 };
 
@@ -8625,7 +9125,7 @@ static int ds5_dfu_device_open(struct inode *inode, struct file *file)
 #if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)
 	/* get i2c controller and set dfu bus clock rate */
 	while (parent && i2c_parent_is_i2c_adapter(parent))
-		parent = i2c_parent_is_i2c_adapter(state->client->adapter);
+		parent = i2c_parent_is_i2c_adapter(parent);
 
 	if (!parent) {
 		mutex_unlock(&state->lock);
@@ -8691,12 +9191,21 @@ static void ds5_adjust_sync_mode_control(struct i2c_client *client, struct ds5 *
 	case DS5_DEVICE_TYPE_D41X:
 	case DS5_DEVICE_TYPE_D43X:
 	case DS5_DEVICE_TYPE_D45X:
-	case DS5_DEVICE_TYPE_D58X:
 		/* Unified 3-value public interface (RSDEV-6449): Default/Master/External */
 		__v4l2_ctrl_modify_range(state->ctrls.sync_mode,
 					 0, DS5_SYNC_MODE_EXTERNAL, 0, 0);
 		state->ctrls.sync_mode->qmenu = sync_mode_menu;
 		dev_dbg(&client->dev, "%s(): sync mode: 0-2 (Default/Master/External)\n",
+			__func__);
+		break;
+	case DS5_DEVICE_TYPE_D58X:
+		/* D58x has no master role, so Master is skip-masked out of the menu
+		 * (RSDEV-14614). The mask keeps External's FW wire value at 2. */
+		__v4l2_ctrl_modify_range(state->ctrls.sync_mode,
+					 0, DS5_SYNC_MODE_EXTERNAL,
+					 BIT(DS5_SYNC_MODE_MASTER), 0);
+		state->ctrls.sync_mode->qmenu = sync_mode_menu;
+		dev_dbg(&client->dev, "%s(): sync mode: 0,2 (Default/External)\n",
 			__func__);
 		break;
 	default:
@@ -8721,8 +9230,9 @@ static void d500_adjust_device_mode_controls(struct i2c_client *client,
 	ret = d500_refresh_device_mode(state, true);
 	if (ret)
 		dev_warn(&client->dev,
-			 "%s(): failed to read D58x device mode; 2C AE Policy remains inactive (%d)\n",
+			 "%s(): failed to read D58x device mode; 2C-only controls remain inactive (%d)\n",
 			 __func__, ret);
+	d500_refresh_aligned_depth_default(state);
 }
 
 /* Per-SKU adjustment of the RGB ISP controls registered in ds5_ctrl_init().
@@ -8784,14 +9294,17 @@ static int ds5_v4l_init(struct i2c_client *c, struct ds5 *state)
 	if (ret < 0)
 		goto e_imu;
 
-	/* Adjust sync_mode control range based on device type - must be done
-	 * after ds5_mux_init() creates the control */
-	ds5_adjust_sync_mode_control(c, state);
+	/* Per-SKU fixups of the built-in controls, after ds5_mux_init() has
+	 * registered them. A camera that published its own carries the sync
+	 * mode mask and the SKU differences in the blob, so those two passes
+	 * would only overwrite it; the device-mode refresh is boot state the
+	 * 2c_ae_policy hook needs either way.
+	 */
+	if (!state->depth.sensor.desc_ctrls)
+		ds5_adjust_sync_mode_control(c, state);
 	d500_adjust_device_mode_controls(c, state);
-
-	/* Adjust RGB ISP controls per SKU (e.g. hide AE Priority on D40X) -
-	 * must be done after ds5_mux_init() registered them. */
-	ds5_adjust_rgb_controls(c, state);
+	if (!state->rgb.sensor.desc_ctrls)
+		ds5_adjust_rgb_controls(c, state);
 
 	ret = ds5_hw_init(c, state);
 	if (ret < 0)
@@ -8839,7 +9352,7 @@ static int ds5_dfu_device_release(struct inode *inode, struct file *file)
 #if defined(CONFIG_TEGRA_CAMERA_PLATFORM) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)
 	/* get i2c controller and restore bus clock rate */
 	while (parent && i2c_parent_is_i2c_adapter(parent))
-		parent = i2c_parent_is_i2c_adapter(state->client->adapter);
+		parent = i2c_parent_is_i2c_adapter(parent);
 	if (!parent) {
 		mutex_unlock(&state->lock);
 		return 0;
@@ -9178,22 +9691,18 @@ static int ds5_probe(struct i2c_client *c
 	if (!ret && !strncmp(str, "Depth", strlen("Depth"))) {
 		state->is_depth = 1;
 		state->control_base = DS5_DEPTH_CONTROL_BASE;
-		state->control_status_reg = DS5_DEPTH_CONTROL_STATUS;
 	}
 	if (!ret && !strncmp(str, "Y8", strlen("Y8"))) {
 		state->is_y8 = 1;
 		state->control_base = DS5_DEPTH_CONTROL_BASE;
-		state->control_status_reg = DS5_DEPTH_CONTROL_STATUS;
 	}
 	if (!ret && !strncmp(str, "RGB", strlen("RGB"))) {
 		state->is_rgb = 1;
 		state->control_base = DS5_RGB_CONTROL_BASE;
-		state->control_status_reg = DS5_RGB_CONTROL_STATUS;
 	}
 	if (!ret && !strncmp(str, "IMU", strlen("IMU"))) {
 		state->is_imu = 1;
 		state->control_base = DS5_DEPTH_CONTROL_BASE;
-		state->control_status_reg = DS5_DEPTH_CONTROL_STATUS;
 	}
 
 	mode0_node = of_get_child_by_name(state->client->dev.of_node, "mode0");
@@ -9218,13 +9727,11 @@ static int ds5_probe(struct i2c_client *c
 #else
 	state->is_depth = 1;
 	state->control_base = DS5_DEPTH_CONTROL_BASE;
-	state->control_status_reg = DS5_DEPTH_CONTROL_STATUS;
 #endif
 
-	if (!state->control_base) {
+	if (!state->control_base)
 		state->control_base = DS5_DEPTH_CONTROL_BASE;
-		state->control_status_reg = DS5_DEPTH_CONTROL_STATUS;
-	}
+
 	/* create DFU chardev once */
 	if (state->is_depth) {
 		ret = ds5_chrdev_init(c, state);
@@ -9292,6 +9799,19 @@ static int ds5_probe(struct i2c_client *c
 	if (ret < 0)
 		goto e_chardev;
 
+	/* Probe succeeded: publish this per-role instance so the post-HW-reset
+	 * reload can reach its VI channel. Done last, after every failure path.
+	 */
+	if (state->ds5_dev) {
+		int role_pad = ds5_state_to_pad(state);
+
+		if (role_pad >= DS5_MUX_PAD_DEPTH && role_pad < DS5_MUX_PAD_COUNT) {
+			mutex_lock(&state->ds5_dev->lock);
+			state->ds5_dev->role_inst[role_pad] = state;
+			mutex_unlock(&state->ds5_dev->lock);
+		}
+	}
+
 	dev_info(&c->dev, "%s: driver version: %s\n", __func__,
 		THIS_MODULE->version ? THIS_MODULE->version : "N/A");
 
@@ -9328,6 +9848,18 @@ static void ds5_remove(struct i2c_client *c)
 	struct ds5 *state = container_of(i2c_get_clientdata(c), struct ds5, mux.sd.subdev);
 	if (state && !state->mux.sd.subdev.v4l2_dev) {
 		state = i2c_get_clientdata(c);
+	}
+
+	/* Drop this instance from the reload registry before it is freed. */
+	if (state->ds5_dev) {
+		int pad = ds5_state_to_pad(state);
+
+		if (pad >= DS5_MUX_PAD_DEPTH && pad < DS5_MUX_PAD_COUNT) {
+			mutex_lock(&state->ds5_dev->lock);
+			if (state->ds5_dev->role_inst[pad] == state)
+				state->ds5_dev->role_inst[pad] = NULL;
+			mutex_unlock(&state->ds5_dev->lock);
+		}
 	}
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
@@ -9424,11 +9956,8 @@ static int __init ds5_module_init(void)
 
 static void __exit ds5_module_exit(void)
 {
-	struct ds5_desc *desc, *tmp;
-
 	i2c_del_driver(&ds5_i2c_driver);
-	list_for_each_entry_safe(desc, tmp, &ds5_desc_all, node)
-		ds5_desc_free(desc);
+	ds5_desc_free_all();
 }
 module_init(ds5_module_init);
 module_exit(ds5_module_exit);
@@ -9444,4 +9973,4 @@ MODULE_AUTHOR("Guennadi Liakhovetski <guennadi.liakhovetski@intel.com>,\n\
 				Shikun Ding <shikun.ding@intel.com>,\n\
 				Dmitry Perchanov <dmitry.perchanov@intel.com>");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("1.0.6.17");
+MODULE_VERSION("1.0.7.18");

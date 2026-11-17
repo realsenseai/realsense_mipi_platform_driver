@@ -83,7 +83,7 @@ dmesg | grep -i "d4xx\|realsense\|max929\|gmsl\|vi \|capture" | tail -50
 ```
 
 ### Step 3: Correlate with driver source
-The main driver is `kernel/realsense/d4xx.c` (~6200 lines). Key sections:
+The main driver is `kernel/realsense/d4xx_main.c` (~6200 lines). Key sections:
 - **Probe/init**: Search for `ds5_probe`, `ds5_mux_init`
 - **Streaming**: Search for `ds5_s_stream`, `ds5_set_fmt`
 - **Controls**: Search for `ds5_ctrl_ops`, `ds5_g_ctrl`, `ds5_s_ctrl`

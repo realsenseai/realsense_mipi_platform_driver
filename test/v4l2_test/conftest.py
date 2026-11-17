@@ -3,12 +3,16 @@
 Provides camera discovery, device open/close, and report plugin registration.
 """
 
+import platform
+import re
+
 import pytest
 
 from .d4xx.discovery import discover_cameras
 from .d4xx import constants as C
 from .v4l2.device import V4L2Device
 from .v4l2 import ioctls
+from .v4l2.controls import read_u8_array_control
 from .report import D4xxReportPlugin
 
 
@@ -74,6 +78,52 @@ def fw_version(camera):
             return raw, f"{major}.{minor}.{patch}.{build}"
         except OSError:
             pytest.skip("FW version control not available (tegra-video driver)")
+
+
+def _kernel_version():
+    """(major, minor) of the running kernel, or (0, 0) if unparseable."""
+    m = re.match(r"(\d+)\.(\d+)", platform.release())
+    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+
+@pytest.fixture(scope="session")
+def d58x_camera(camera):
+    """The camera under test, only if it is a D58x on a JetPack 6+ kernel."""
+    if camera.fw_version is None:
+        pytest.skip("FW version not available: cannot tell a D58x")
+    if int(camera.fw_version.split(".")[0]) not in C.D58X_FW_MAJORS:
+        pytest.skip(f"Not a D58x (FW {camera.fw_version})")
+    if _kernel_version() < C.COMPRESSED_MIN_KERNEL:
+        pytest.skip(f"Kernel {platform.release()} predates compressed colour")
+    return camera
+
+
+def _d58x_usb_pid(camera):
+    """USB PID from the camera's GVD, or None if GVD cannot be read."""
+    try:
+        with V4L2Device(camera.depth_path) as dev:
+            gvd = read_u8_array_control(dev, C.DS5_CAMERA_CID_GVD,
+                                        C.D58X_GVD_LEN)
+    except OSError:
+        return None
+    off = C.D58X_GVD_PID_OFFSET
+    return int.from_bytes(gvd[off:off + C.D58X_GVD_PID_LEN], "little")
+
+
+@pytest.fixture(scope="session")
+def d58x_is_2c(d58x_camera):
+    """True on a 2C D585 (GVD PID), which has no colour encoder. An
+    unreadable GVD counts as 3C, so a format loss is never hidden."""
+    return _d58x_usb_pid(d58x_camera) == C.D585_2C_PROTO_PID
+
+
+@pytest.fixture(scope="session")
+def d58x_encoder_camera(d58x_camera, d58x_is_2c):
+    """A D58x with a colour encoder; a 2C D585 skips."""
+    if d58x_is_2c:
+        pytest.skip(f"D585 2C (GVD PID 0x{C.D585_2C_PROTO_PID:04X}): "
+                    "no colour encoder")
+    return d58x_camera
 
 
 # ---- Function-scoped device fixtures ----
