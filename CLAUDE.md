@@ -36,6 +36,7 @@ CI runs these three steps for each JetPack version (see `.github/workflows/build
 ```
 `reset` must come **before** the version — the arg loop `break`s on the first non-flag token, so `apply_patches.sh <version> reset` silently runs an *apply* instead (and then fails every hunk against an already-patched tree).
 The `--one-cam`/`--dual-cam` options only apply to JetPack 5.0.2. The target version is the trailing argv if given, otherwise the `jetpack_version` file (written by `setup_workspace.sh`) — so a one-off `./apply_patches.sh reset 5.1.2` does not disturb the active version. **Non-interactive:** `apply_patches.sh` prompts via `read` when a sub-repo has local changes and, under `set -e`, aborts (rc=1) on EOF — pipe confirmations with `yes '' | ./apply_patches.sh [reset]` when running headless.
+`apply_patches_ext.sh` (the Jenkins/release path, which applies into a plain extracted tree) must use the same `git apply` as `apply_patches.sh`, never GNU `patch`: its default fuzz silently relocated a shared 6.2 hunk into the wrong JP6.0 function, so CI built green while the release build broke. A patch shared across JetPacks by symlink must apply with zero fuzz on every target.
 
 ### Deploy to Jetson
 
