@@ -3000,7 +3000,7 @@ enum ds5_sync_mode {
 #define D500_CAMERA_CID_GYRO_SENSITIVITY (DS5_CAMERA_CID_BASE + 38)
 #define D500_CAMERA_CID_ACCEL_SENSITIVITY (DS5_CAMERA_CID_BASE + 39)
 /* USB Inference XU 0x01: single R/W control. */
-#define D500_CAMERA_CID_OD_DISTANCE	(DS5_CAMERA_CID_BASE + 40)
+#define D500_CAMERA_CID_OD_DISTANCE	(DS5_CAMERA_CID_BASE + 65)
 /* Reserve CID offsets +41..+43 for future allocation across camera nodes. */
 
 enum d500_device_mode {
@@ -4473,7 +4473,8 @@ static int ds5_ctrl_uvc_errno(u16 code)
  * seq0 makes the status this write's; a refusal carries its UVC code beside
  * it. An advance that still reads WIP was another write completing first.
  */
-static int ds5_ctrl_seq_status(struct ds5 *state, u16 status_addr, u16 seq0)
+static int ds5_ctrl_seq_status(struct ds5 *state, u16 status_addr, u16 seq0,
+			       bool intent)
 {
 	unsigned long timeout = jiffies + msecs_to_jiffies(DS5_HWMC_MAX_TIME);
 	u16 seq, status = RS_CTRL_STATUS_WIP, code;
@@ -4503,6 +4504,13 @@ static int ds5_ctrl_seq_status(struct ds5 *state, u16 status_addr, u16 seq0)
 		return ret;
 	dev_dbg(&state->client->dev, "%s(): 0x%04x reports %u, code %u\n",
 		__func__, status_addr, status, code);
+	if (intent) {
+		switch (code) {
+		case 4: return -EINVAL;
+		case 8: return -ERANGE;
+		case 7: return -EACCES;
+		}
+	}
 	if (code)
 		return ds5_ctrl_uvc_errno(code);
 	return status == RS_CTRL_STATUS_BUSY ? -EBUSY : -EIO;
@@ -4625,7 +4633,8 @@ static int ds5_ctrl_reg_set(struct ds5 *state, const struct ds5_desc_ctrl *c,
 		}
 	}
 	if (!ret && c->status_addr)
-		ret = ds5_ctrl_seq_status(state, c->status_addr, seq0);
+		ret = ds5_ctrl_seq_status(state, c->status_addr, seq0,
+				 c->cid == DS5_CAMERA_CID_BASE + 65);
 	mutex_unlock(&state->ds5_dev->lock);
 	if (buf != scalar)
 		kfree(buf);
@@ -7252,6 +7261,53 @@ static bool ds5_ctrl_hooked_shape_ok(const struct ds5_desc_ctrl *c)
 	}
 }
 
+/* U8 arrays use scalar defaults in the V4L2 core. Override only init(),
+ * retaining the core's equality, validation and logging operations. Thus
+ * WHICH_DEF_VAL returns the camera's complete immutable template, in any state.
+ */
+static void ds5_intent_default_init(const struct v4l2_ctrl *ctrl, u32 idx,
+				   union v4l2_ctrl_ptr ptr)
+{
+	const struct ds5_sensor *sensor = ctrl->priv;
+
+	ptr.p_u8[idx] = sensor->intent_default[idx];
+}
+
+static int ds5_intent_fetch_default(struct ds5 *state,
+				  const struct ds5_desc_ctrl *c,
+				  struct ds5_sensor *sensor)
+{
+	struct v4l2_ctrl shape = { .is_ptr = true, .elems = 1024, .elem_size = 1 };
+	u8 *data;
+	int ret;
+
+	if (c->transport != RS_CTRL_XPORT_REG || c->reg.addr != 0x7000 ||
+	    c->type != V4L2_CTRL_TYPE_U8 || c->elems != 1024 || c->reg.extent != 1024)
+		return -EINVAL;
+	data = kzalloc(1024, GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
+	shape.p_new.p_u8 = data;
+	ret = ds5_ctrl_reg_size(state, c, &shape, false);
+	if (!ret) {
+		mutex_lock(&state->ds5_dev->lock);
+		ret = ds5_raw_read(state, 0x7800, data, 1024);
+		mutex_unlock(&state->ds5_dev->lock);
+	}
+	if (!ret && (data[0] != 1 || data[3] || data[6] || data[7] ||
+		     (data[4] & 3) || ((u16)data[4] | (u16)data[5] << 8) > 1016))
+		ret = -EBADMSG;
+	if (!ret && !sensor->intent_default) {
+		sensor->intent_default = devm_kzalloc(&state->client->dev, 1024, GFP_KERNEL);
+		if (!sensor->intent_default)
+			ret = -ENOMEM;
+	}
+	if (!ret)
+		memcpy(sensor->intent_default, data, 1024);
+	kfree(data);
+	return ret;
+}
+
 static struct v4l2_ctrl *ds5_ctrl_new_from_desc(struct ds5 *state,
 						struct v4l2_ctrl_handler *hdl,
 						struct ds5_sensor *sensor,
@@ -7279,9 +7335,24 @@ static struct v4l2_ctrl *ds5_ctrl_new_from_desc(struct ds5 *state,
 			 c->name, c->cid, c->type, c->elems);
 		return NULL;
 	}
+	if (c->cid == DS5_CAMERA_CID_BASE + 65) {
+		int ret = ds5_intent_fetch_default(state, c, sensor);
+
+		if (ret) {
+			dev_err(&state->client->dev, "Intent default unavailable: %d\n", ret);
+			return NULL;
+		}
+	}
 	if (c->elems > 1 || c->type >= V4L2_CTRL_COMPOUND_TYPES)
 		cfg.dims[0] = c->elems;
 	ctrl = v4l2_ctrl_new_custom(hdl, &cfg, sensor);
+	if (ctrl && c->cid == DS5_CAMERA_CID_BASE + 65) {
+		sensor->intent_type_ops = *ctrl->type_ops;
+		sensor->intent_type_ops.init = ds5_intent_default_init;
+		ctrl->type_ops = &sensor->intent_type_ops;
+		memcpy(ctrl->p_new.p_u8, sensor->intent_default, 1024);
+		memcpy(ctrl->p_cur.p_u8, sensor->intent_default, 1024);
+	}
 	if (!ctrl)
 		dev_warn(&state->client->dev,
 			 "control descriptor: %s (0x%x) not registered (%d)\n",

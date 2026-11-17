@@ -35,6 +35,7 @@ typedef _Bool bool;
 #define BIT(n) (1U << (n))
 #define U16_MAX UINT16_MAX
 #define GFP_KERNEL 0
+#define DS5_CAMERA_CID_BASE 0x00981900
 #define I2C_SMBUS_BLOCK_MAX 32
 #define I2C_FUNC_I2C 1
 #define DS5_HWMC_MAX_TIME 5
@@ -172,6 +173,12 @@ int main(void) {
         assert(ds5_ctrl_reg_set(&state,&c,&ctrl)==cases[i].error);
         assert(!allocated && !dev.lock);
     }
+    c.cid=DS5_CAMERA_CID_BASE+65;
+    status_word=RS_CTRL_STATUS_ERROR;
+    code_word=4; assert(ds5_ctrl_reg_set(&state,&c,&ctrl)==-EINVAL);
+    code_word=8; assert(ds5_ctrl_reg_set(&state,&c,&ctrl)==-ERANGE);
+    code_word=7; assert(ds5_ctrl_reg_set(&state,&c,&ctrl)==-EACCES);
+    c.cid=0;
     io_count=0; q.max_write_len=1025;
     assert(ds5_ctrl_reg_set(&state,&c,&ctrl)==-EMSGSIZE && !io_count);
     q.max_write_len=1026; q.max_read_len=1023;
