@@ -35,7 +35,10 @@ TARGET="sources_${JP_INPUT_VERSION}"
 apply_external_patches() {
     ls -Ld "${PWD}/$2/$1"
     ls -Lw1 "${PWD}/$2/$1"
-    cat "${PWD}/$2/$1/"* | patch --quiet -p1 --directory="${PWD}/$TARGET/$2"
+    # Same applier as apply_patches.sh/CI: GNU patch's fuzz silently misplaces hunks.
+    # The ceiling keeps git from treating the enclosing driver checkout as the repo.
+    local dst="${PWD}/$TARGET/$2"
+    GIT_CEILING_DIRECTORIES="$(dirname "$dst")" git -C "$dst" apply -p1 "${PWD}/$2/$1/"*
 }
 
 apply_external_patches "$1" "${D4XX_SRC_DST}"
