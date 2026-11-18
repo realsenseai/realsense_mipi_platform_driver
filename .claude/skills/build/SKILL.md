@@ -36,7 +36,7 @@ Always reset patches before re-applying:
 
 d4xx.ko is built from `d4xx_main.c` + `d4xx_desc.c` (plus `d4xx.h` / `d4xx_desc.h`), so copy all four.
 
-On a tree prepared by `apply_patches.sh` these four paths are already symlinks back to `kernel/realsense/`, so editing the canonical file *is* the update and the `cp` below would fail with `are the same file`. Use it only on a tree populated by `apply_patches_ext.sh`, which copies.
+On a tree prepared by `apply_patches.sh` these four paths are already symlinks back to `kernel/realsense/`, so editing the canonical file *is* the update and the `cp` below would fail with `are the same file`. Use it only on a tree that was patched some other way (for example by an old release tag's own script), where these are plain copies.
 
 - **JP 6.x (Orin):**
   ```bash

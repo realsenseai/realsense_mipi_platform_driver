@@ -61,10 +61,10 @@ Ask the user for their name and email. Set these in the repo root — `apply_pat
 
 What it does:
 - Downloads the cross-compilation toolchain to `l4t-gcc/$VERSION/`
-- Clones NVIDIA kernel sources to `sources_$VERSION/` (or extracts from `~/nvidia_sources_cache/` if a cached tarball exists)
+- Clones NVIDIA kernel sources to `sources_$VERSION/` (or extracts `/home/nvidia_sources_cache/backup_sources_$VERSION.tar.gz` if present, or the archive given with `--sources-archive`)
 - For JP 6.x: copies Makefile for out-of-tree module build
 
-This step takes significant time (large git clones). If the user has a cached tarball at `~/nvidia_sources_cache/backup_sources_$VERSION.tar.gz`, it will be used instead (much faster).
+This step takes significant time (large git clones). If a git-tree cache exists at `/home/nvidia_sources_cache/backup_sources_$VERSION.tar.gz`, it is used instead (much faster). To start from NVIDIA's `public_sources.tbz2` (what Jenkins does), run `./setup_workspace.sh --sources-archive public_sources.tbz2 $VERSION`: it unpacks the nested bundles and makes each patched dir its own git repo. Run `setup_workspace.sh`, `apply_patches.sh` and `build_all.sh` as the same user, never `sudo setup_workspace.sh` alone: `apply_patches.sh` exits 3 when git refuses a tree another user owns.
 
 ## Step 5: Apply Patches
 

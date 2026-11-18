@@ -26,17 +26,23 @@ The following directories will be created:
 - JetPack 5.x.2: `sources_5.x`
 - JetPack 6.x: `sources_6.x`
 ```
-./setup_workspace.sh [JetPack_version]
+./setup_workspace.sh [--sources-archive <file>] [JetPack_version]
 ```
 Example setup build workspace for JetPack 5.0.2:
 ```
 ./setup_workspace.sh 5.0.2
 ```
+`--sources-archive <file>` takes the sources from a local archive instead of cloning them. It accepts NVIDIA's `public_sources.tbz2` for that JetPack, or a `backup_sources_<JetPack>.tar.gz` git-tree cache. For a `public_sources.tbz2` it unpacks the nested kernel (and on 6.x/7.x the OOT-module and display) bundles and makes each patched directory its own git repo, tagged with the L4T version. This is how Jenkins builds, and it refuses to run if `sources_<JetPack>` already exists:
+```
+./setup_workspace.sh --sources-archive public_sources.tbz2 6.2
+```
+Without the option, a git-tree cache at `/home/nvidia_sources_cache/backup_sources_<JetPack>.tar.gz` is used when present.
+
 # apply_patches.sh
 Apply D457 patches for kernel image, dtb and D457 driver.
 
 ```
-./apply_patches.sh [--one-cam | --dual-cam] apply [JetPack_version]
+./apply_patches.sh [--one-cam | --dual-cam] [JetPack_version]
 ```
 Reset D457 patches (and any other changes) for kernel image, dtb and D457 driver.
 ```
@@ -50,17 +56,9 @@ compatible with RealSense™ deserializer.
 - By setting the `--dual-cam` option it builds DT with dual cameras on GMSL link A and B.
 - The default is to single camera configuration for JetPack 5.0.2.
 
-# apply_patches_ext.sh
-When setup_workspace.sh was not used, using sources direct download method (example: for CI build)
-
-Apply D457 patches for external build the kernel image, dtb and D457 driver.
-```
-./apply_patches_ext.sh [--one-cam | --dual-cam] [JetPack_version] [./Linux_for_tegra/source/public] 
-```
-Example: for JP5.0.2, source path is ./Linux_for_tegra/source :
-```
-./apply_patches_ext.sh 5.0.2 ./Linux_for_tegra/source
-```
+Every patched directory must be its own git repo, owned by the user running the script. Before changing anything it exits with:
+- `2`: the sources are missing, or a patched directory is not a git tree of its own (remove `sources_<JP>` if it exists, then run `setup_workspace.sh`, with `--sources-archive` for a tarball);
+- `3`: git refused the repo, usually because another user owns it (for example after `sudo setup_workspace.sh`). Git's own message is printed with it.
 
 # build_all.sh
 Build kernel and modules only
@@ -71,7 +69,7 @@ Example: build JetPack 5.0.2 workspace created by `setup_workspace.sh`:
 ```
 ./build_all.sh 5.0.2
 ```
-Example: build JetPack 5.0.2 workspace created by direct source download
+`JetPack_source_dir` is only for a tree that already exists and was patched some other way (for example, an old release tag that still ships its own patch script):
 ```
 ./build_all.sh 6.0 ./Linux_for_tegra/source
 ```

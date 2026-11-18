@@ -30,12 +30,54 @@ function DisplayNvidiaLicense {
     echo
 }
 
-if [[ $1 == "-h" ]]; then
-    echo Usage:
-    echo $0 [JetPack]
-fi
+SOURCES_ARCHIVE=""
+# Options are consumed before setup-common, which reads $1 as the JetPack version.
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --sources-archive)
+            [[ -f "$2" ]] || { echo "--sources-archive: file not found: $2"; exit 1; }
+            SOURCES_ARCHIVE="$(realpath "$2")"
+            shift 2
+            ;;
+        -h)
+            echo Usage:
+            echo "$0 [--sources-archive <file>] [JetPack]"
+            echo -e '--sources-archive\t: NVIDIA public_sources.tbz2, or a backup_sources_<JetPack>.tar.gz git-tree cache'
+            break
+            ;;
+        *) break ;;
+    esac
+done
 
 . scripts/setup-common
+
+# Unpack an NVIDIA public_sources.tbz2 and make each patched dir its own git repo tagged
+# $L4T_VERSION, so apply_patches.sh (git apply, reset) works on it as on an nv-tegra clone.
+extract_public_sources() {
+    local tmp root
+    tmp="$(mktemp -d "${PWD}/.sources-archive.XXXXXX")"
+    tar --no-same-owner -xf "$1" -C "$tmp"
+    root="$tmp/Linux_for_Tegra/source"
+    version_lt "$JETPACK_VERSION" "6.0" && root="$root/public"
+    tar --no-same-owner -xf "$root/kernel_src.tbz2" -C "$root"
+    if ! version_lt "$JETPACK_VERSION" "6.0"; then
+        for bundle in kernel_oot_modules_src.tbz2 nvidia_kernel_display_driver_source.tbz2; do
+            [[ -f "$root/$bundle" ]] && tar --no-same-owner -xf "$root/$bundle" -C "$root"
+        done
+    fi
+    mv "$root" "${BUILD_SRCS}"
+    rm -rf "$tmp"
+    for repo in "${PATCHED_REPOS[@]}"; do
+        local dir
+        dir="$(realpath "${BUILD_SRCS}/$repo")"
+        local g=(git -C "$dir" -c "safe.directory=$dir" -c user.name=setup_workspace -c user.email=setup@localhost -c init.defaultBranch=master)
+        echo "Creating git baseline ${L4T_VERSION} in ${BUILD_SRCS}/$repo"
+        "${g[@]}" init -q
+        "${g[@]}" add -A
+        "${g[@]}" commit -q --no-verify -m "L4T ${L4T_VERSION} baseline"
+        "${g[@]}" tag "${L4T_VERSION}"
+    done
+}
 
 echo "Setup JetPack ${JP_INPUT_VERSION} to ${BUILD_SRCS}"
 
@@ -67,36 +109,35 @@ else
 fi
 
 [[ -d ${BUILD_SRCS} ]] && echo -e "\e[33mIn a case you have local changes you may reset them with ./apply_patches.sh reset\e[0m\n"
-# Clone L4T kernel source repo
 
-# Check if local tar ball exists in /home/nvidia_sources_cache
-NVIDIA_CACHE_DIR="/home/nvidia_sources_cache"
-TARBALL_NAME="backup_${BUILD_SRCS}.tar.gz"
-TARBALL_PATH="$NVIDIA_CACHE_DIR/$TARBALL_NAME"
+if [[ -n "$SOURCES_ARCHIVE" && -d "${BUILD_SRCS}" ]]; then
+    echo "${BUILD_SRCS} already exists; remove it before setting up from $SOURCES_ARCHIVE"
+    exit 1
+fi
+# Without --sources-archive, a git-tree cache in /home/nvidia_sources_cache is used when present
+: "${SOURCES_ARCHIVE:=/home/nvidia_sources_cache/backup_${BUILD_SRCS}.tar.gz}"
 
-if [[ ! -d "${BUILD_SRCS}" && -f "$TARBALL_PATH" ]]; then
-    echo "Found local tar ball: $TARBALL_PATH"
-    echo "Extracting sources from local cache instead of cloning from NVIDIA repository..."
-
-    # Remove existing sources directory if it exists
-    if [[ -d "${BUILD_SRCS}" ]]; then
-        echo "Removing existing ${BUILD_SRCS} directory..."
-        rm -rf "${BUILD_SRCS}"
-    fi
-
-    # Extract tar ball
-    echo "Extracting $TARBALL_NAME..."
-    tar -xzf "$TARBALL_PATH"
-
-    # Check what directory was extracted and rename if necessary
-    # The tar ball might contain sources_6.x instead of sources_6.0
-    EXTRACTED_DIR=$(tar -tzf "$TARBALL_PATH" | head -1 | cut -d'/' -f1)
-    if [[ "$EXTRACTED_DIR" != "${BUILD_SRCS}" ]]; then
-        echo "Renaming extracted directory from $EXTRACTED_DIR to ${BUILD_SRCS}..."
-        mv "$EXTRACTED_DIR" "${BUILD_SRCS}"
-    fi
-
-    echo -e "\e[32mSources extracted successfully from local cache\e[0m"
+if [[ ! -d "${BUILD_SRCS}" && -f "$SOURCES_ARCHIVE" ]]; then
+    echo "Extracting sources from $SOURCES_ARCHIVE instead of cloning from NVIDIA repository..."
+    EXTRACTED_DIR=$(tar -tf "$SOURCES_ARCHIVE" | head -1 | cut -d'/' -f1)
+    case "$EXTRACTED_DIR" in
+        Linux_for_Tegra)
+            extract_public_sources "$SOURCES_ARCHIVE"
+            ;;
+        sources_*)
+            tar --no-same-owner -xf "$SOURCES_ARCHIVE"
+            # The tar ball might contain sources_6.x instead of sources_6.0
+            if [[ "$EXTRACTED_DIR" != "${BUILD_SRCS}" ]]; then
+                echo "Renaming extracted directory from $EXTRACTED_DIR to ${BUILD_SRCS}..."
+                mv "$EXTRACTED_DIR" "${BUILD_SRCS}"
+            fi
+            ;;
+        *)
+            echo "Unknown archive layout (top directory '$EXTRACTED_DIR'): expected Linux_for_Tegra/ or sources_*/"
+            exit 1
+            ;;
+    esac
+    echo -e "\e[32mSources extracted successfully from $SOURCES_ARCHIVE\e[0m"
 else
     echo "Cloning sources from NVIDIA repository..."
     ./scripts/sync-sources.sh -t $L4T_VERSION -d ${BUILD_SRCS} -k
