@@ -1,0 +1,99 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * RealSense D4XX on the Qualcomm RB3 Gen 2 Vision Kit, GMSL input 1.
+ *
+ * An overlay on the vision-mezzanine device tree Ubuntu ships. One d4xx node
+ * per camera: it has no cam-type, so the single instance serves depth, colour,
+ * infrared and IMU (README_QCOM.md, "d4xx on this platform").
+ *
+ * INITIAL: written without the mezzanine schematic. The node shapes and every
+ * property the drivers read are those of the Jetson MAX9296 overlay. The board
+ * wiring is not known; each value to confirm is marked BOARD:
+ *
+ *   BOARD 1  the I2C bus of the MAX9296A, and so of the serializer and camera
+ *   BOARD 2  the MAX9296A address (its CFG pins)
+ *   BOARD 3  the GPIO that takes the MAX9296A out of reset
+ *   BOARD 4  the SoC CSIPHY its CSI output reaches (the board calls the GMSL
+ *            interfaces CSI4 and CSI5; the SoC has CSIPHY0..4)
+ *   BOARD 5  the lane order and clock lane at that CSIPHY
+ */
+
+/dts-v1/;
+/plugin/;
+
+/* BOARD 1: the controller that owns the bus below */
+&cci1 {
+	status = "okay";
+};
+
+/* BOARD 1: the kit's IMX577 is on cci1_i2c1 */
+&cci1_i2c0 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	/* BOARD 2: unit address and reg. BOARD 3: reset-gpios */
+	dser: max9296@48 {
+		compatible = "maxim,max9296";
+		reg = <0x48>;
+		csi-mode = "2x4";
+		max-src = <1>;
+		reset-gpios = <&tlmm 0 0>;
+	};
+
+	ser_a: max9295_a@40 {
+		compatible = "maxim,max9295";
+		reg = <0x40>;
+		maxim,gmsl-dser-device = <&dser>;
+	};
+
+	/* 0x1a is the address the serializer translates to the camera's 0x10 */
+	d4xx_a: d4xx@1a {
+		compatible = "intel,d4xx";
+		reg = <0x1a>;
+		def-addr = <0x10>;
+		maxim,gmsl-ser-device = <&ser_a>;
+		maxim,gmsl-dser-device = <&dser>;
+
+		/* vc-id is the depth stream's; colour, infrared and IMU follow */
+		gmsl-link {
+			src-csi-port = "b";
+			dst-csi-port = "a";
+			serdes-csi-link = "a";
+			csi-mode = "1x4";
+			st-vc = <0>;
+			vc-id = <0>;
+			num-lanes = <2>;
+		};
+
+		port {
+			d4xx_a_ep: endpoint {
+				remote-endpoint = <&gmsl_a_csiphy_ep>;
+			};
+		};
+	};
+};
+
+&camss {
+	status = "okay";
+
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		/* BOARD 4: unit address and reg */
+		port@4 {
+			reg = <4>;
+
+			gmsl_a_csiphy_ep: endpoint {
+				/* BOARD 5 */
+				clock-lanes = <7>;
+				data-lanes = <0 1 2 3>;
+				/* The 1500 Mbps/lane the MAX9296 driver programs;
+				 * d4xx reports no rate, so CAMSS takes this one.
+				 */
+				link-frequencies = /bits/ 64 <750000000>;
+				remote-endpoint = <&d4xx_a_ep>;
+			};
+		};
+	};
+};

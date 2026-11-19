@@ -19,7 +19,7 @@ start = next(
         s.index("static int ds5_stop_serdes(")
         if "static int ds5_stop_serdes(" in s
         else -1,
-        s.index("static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)\n{"),
+        s.index("static int ds5_stream_set("),
     )
     if index >= 0
 )
@@ -36,16 +36,29 @@ configure_start = s.index("static int ds5_configure(")
 configure_end = s.index("static int ds5_sensor_g_frame_interval(", configure_start)
 wire_start = s.index("static u8 ds5_wire_data_type(")
 wire_end = s.index("\n}", wire_start) + 2
+# ds5_role() and the per-stream helpers after it, up to ds5_role_sensor()'s end
+role_start = s.index("static inline enum ds5_mux_pad ds5_role(")
+role_end = s.index("\n}", s.index("static inline struct ds5_sensor *ds5_role_sensor(")) + 2
+stale_start = s.index("static void ds5_invalidate_stale(")
+stale_end = s.index("\n}", stale_start) + 2
+ser_start = s.index("static inline bool ds5_ser_is_max96717(")
+ser_end = s.index("\n}", ser_start) + 2
 f = (
-    s[wire_start:wire_end]
+    s[role_start:role_end]
+    + "\n"
+    + s[stale_start:stale_end]
+    + "\n"
+    + s[ser_start:ser_end]
+    + "\n"
+    + s[wire_start:wire_end]
     + "\n"
     + s[configure_start:configure_end].replace(
         "static int ds5_configure(", "static int ds5_configure_production(", 1
     )
     + f
 )
-if "static int ds5_mux_s_stream_guarded(" in s:
-    f += s[s.index("static int ds5_mux_s_stream_guarded("):s.index("static const struct v4l2_subdev_video_ops ds5_sensor_video_ops")]
+if "static int ds5_stream_set_guarded(" in s:
+    f += s[s.index("static int ds5_stream_set_guarded("):s.index("static const struct v4l2_subdev_video_ops ds5_sensor_video_ops")]
 macros = [
     "DS5_DEPTH_CONFIG_STATUS",
     "DS5_DEPTH_STREAM_STATUS",
@@ -73,6 +86,7 @@ typedef uint16_t u16;
 typedef uint32_t u32;
 #define CONFIG_VIDEO_D4XX_SERDES
 #define CONFIG_TEGRA_CAMERA_PLATFORM
+#define D4XX_HAVE_MAX96717
 #define PIPE_NOT_CONFIGURED -1
 #define DS5_MAX_STREAMS 4
 #define GMSL_CSI_DT_RGB_888 0x24
@@ -112,7 +126,17 @@ struct ds5_format {
 struct resolution {
     unsigned width, height;
 };
+enum ds5_mux_pad {
+    DS5_MUX_PAD_EXTERNAL,
+    DS5_MUX_PAD_DEPTH,
+    DS5_MUX_PAD_RGB,
+    DS5_MUX_PAD_IR,
+    DS5_MUX_PAD_IMU,
+    DS5_MUX_PAD_COUNT,
+};
+#define DS5_ROLE_ANY DS5_MUX_PAD_COUNT
 struct ds5_sensor {
+    enum ds5_mux_pad mux_pad;
     bool streaming;
     bool ser_stop_pending;
     int pipe_id;
@@ -138,7 +162,7 @@ struct ds5 {
     struct ds5_dev *ds5_dev;
     int reset_ref_ds5;
     int gmsl_link;
-    bool is_depth, is_rgb, is_y8, is_imu;
+    enum ds5_mux_pad role;
     bool metadata_enabled;
     struct {
         unsigned dst_vc;
@@ -186,7 +210,7 @@ enum configure_mode {
 };
 static enum configure_mode configure_mode;
 static int ds5_release_pipe_for_reconfigure(struct ds5 *, struct ds5_sensor *);
-static int ds5_configure_production(struct ds5 *, bool *);
+static int ds5_configure_production(struct ds5 *, enum ds5_mux_pad, bool *);
 static bool ds5_reset_oneshot_link(struct ds5 *);
 static int ds5_maintenance_sem, ds5_io_sem;
 static void ds5_dfu_read_lock(int *s) { (void)s; }
@@ -237,11 +261,11 @@ static void ds5_invalidate_sensor(struct ds5 *s, struct ds5_sensor *n) {
 }
 static void ds5_config_cache_clear(struct ds5_sensor *s) { (void)s; }
 static void ds5_flush_idle_link(struct ds5 *s) { (void)s; }
-static int ds5_configure(struct ds5 *s, bool *armed) {
+static int ds5_configure(struct ds5 *s, enum ds5_mux_pad role, bool *armed) {
     int ret;
     configured++;
     if (configure_mode == CONFIGURE_PRODUCTION)
-        return ds5_configure_production(s, armed);
+        return ds5_configure_production(s, role, armed);
     if (configure_mode == CONFIGURE_REUSE_PIPE) {
         assert(s->mux.last_set->pipe_id >= 0);
         return 0;
@@ -319,6 +343,11 @@ static int ds5_release_pipe_for_reconfigure(struct ds5 *s, struct ds5_sensor *se
     stubs = stubs.replace("static int ds5_configure(", fallback + "static int ds5_configure(", 1)
 tests = r"""
 
+/* The unguarded stream op the scenarios drive: the node's own sensor. */
+static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on) {
+    return ds5_stream_set(sd->owner, sd->owner->mux.last_set, on);
+}
+
 int main(void) {
     struct ds5_format fmt = {0};
     struct ds5_sensor sensor = {
@@ -334,7 +363,7 @@ int main(void) {
     struct v4l2_subdev sd = {&state};
     state.mux.last_set = &sensor;
     state.ds5_dev = &dev;
-    state.is_depth = true;
+    state.role = DS5_MUX_PAD_DEPTH;
     state.dser_ops = &dop;
     state.ser_ops = &sop;
     state.ir.sensor.config.format = &fmt;
@@ -536,14 +565,13 @@ int main(void) {
     released = allocated = configured = 0;
     fail_reconfigure_release = true;
     bool armed = false;
-    assert(ds5_configure(&state, &armed) == -EREMOTEIO);
+    assert(ds5_configure(&state, state.role, &armed) == -EREMOTEIO);
     assert(sensor.pipe_id == 0 && released == 1 && allocated == 0);
     fail_reconfigure_release = false;
     release_ret = 0;
 
     /* Failed Y8 START and its cleanup retries must not reset all DES links. */
-    state.is_depth = false;
-    state.is_y8 = true;
+    state.role = DS5_MUX_PAD_IR;
     fmt.data_type = GMSL_CSI_DT_RGB_888;
     sensor.streaming = sensor.ser_stop_pending = false;
     sensor.pipe_id = -1;
@@ -574,11 +602,10 @@ int main(void) {
     assert(ds5_mux_s_stream(&sd, 0) == 0);
     assert(!sensor.streaming && !fw_on && reset_count == 1);
     dop.retrigger_datapath = reset;
-    state.is_depth = true;
-    state.is_y8 = false;
+    state.role = DS5_MUX_PAD_DEPTH;
 
     /* The coarse one-shot reset is explicit and omitted for a pending FW stop. */
-    state.is_y8 = true;
+    state.role = DS5_MUX_PAD_IR;
     fmt.data_type = GMSL_CSI_DT_RGB_888;
     sensor.pipe_id = 0;
     reset_count = 0;
@@ -595,7 +622,6 @@ int main(void) {
     /* Confirmed FW idle must flush even when DFU/timeout already freed the pipe,
      * with or without a serializer stop callback. Duplicate stops cannot flush. */
     dop.retrigger_datapath = NULL;
-    state.is_depth = false;
     sensor.ser_stop_pending = false;
     for (int callback = 0; callback < 2; callback++) {
         sop.stream_stop = callback ? stop : NULL;
@@ -623,8 +649,7 @@ int main(void) {
             assert(ds5_mux_s_stream(&sd, 0) == 0 && reset_count == 2);
         }
     }
-    state.is_y8 = false;
-    state.is_depth = true;
+    state.role = DS5_MUX_PAD_DEPTH;
 
     /* Serializer backends without stream_stop retain ordinary pipe cleanup. */
     sop.stream_stop = NULL;
@@ -641,7 +666,8 @@ int main(void) {
     real_sensor->config.framerate = 30;
     fmt.data_type = 0x1e;
     state.mux.last_set = real_sensor;
-    state.is_depth = state.metadata_enabled = true;
+    state.role = DS5_MUX_PAD_DEPTH;
+    state.metadata_enabled = true;
     configure_mode = CONFIGURE_PRODUCTION;
     released = allocated = pipe_setups = fw_starts = 0;
     assert(ds5_mux_s_stream(&sd, 1) == 0 && pipe_enabled);
@@ -659,7 +685,7 @@ int main(void) {
     assert(ds5_mux_s_stream(&sd, 0) == -EREMOTEIO);
     allocated = pipe_setups = fw_starts = 0;
     armed = false;
-    assert(ds5_configure_production(&state, &armed) == -EREMOTEIO && !armed);
+    assert(ds5_configure_production(&state, state.role, &armed) == -EREMOTEIO && !armed);
     assert(ds5_mux_s_stream(&sd, 1) < 0);
     assert(real_sensor->pipe_id == 0 && !real_sensor->ser_stop_pending);
     assert(!real_sensor->streaming && !pipe_enabled && !fw_on);
@@ -680,23 +706,6 @@ int main(void) {
     return 0;
 }
 """
-if "static int ds5_release_dser_pipe(" not in s:
-    tests = tests.replace(
-        """    /* The coarse one-shot reset is explicit and omitted for a pending FW stop. */
-    state.is_y8 = true;
-    fmt.data_type = GMSL_CSI_DT_RGB_888;
-    sensor.pipe_id = 0;
-    reset_count = 0;
-    assert(ds5_release_dser_pipe(&state, &sensor, false) == 0);
-    assert(reset_count == 0 && sensor.pipe_id == -1);
-    sensor.pipe_id = 0;
-    assert(ds5_release_dser_pipe(&state, &sensor, true) == 0);
-    assert(reset_count == 1 && sensor.pipe_id == -1);
-    state.is_y8 = false;
-
-""",
-        "",
-    )
 with tempfile.TemporaryDirectory() as td:
     p = Path(td) / "test.c"
     p.write_text(stubs + f + tests)

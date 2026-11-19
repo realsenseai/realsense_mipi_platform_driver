@@ -1,0 +1,616 @@
+Subject: [PATCH 3/7] media: qcom: camss: start and stop each stream on its own
+
+Every video node called s_stream on the CSID, the CSIPHY and the sensor it
+shares with the other nodes of that sensor. The first start configured all
+linked RDIs at once, later ones tripped the core's double-start warning,
+and the first stop took the CSIPHY and the sensor away from the nodes still
+streaming.
+
+A node now starts and stops only its own share:
+
+ - the CSID one source pad (msm_csid_stream). Hardware that can configure
+   a single RDI (gen2) does so on every start and stop; the others keep
+   configuring all linked RDIs together;
+ - the CSIPHY its lanes for the first stream and until the last
+   (msm_csiphy_stream), which also starts and stops the sensor: stream by
+   stream through v4l2_subdev_enable_streams() for a sensor with the
+   streams API, once through s_stream otherwise.
+
+A start that fails part of the way stops what it had started, and a stop
+no longer gives up at the first error, so buffers are always returned.
+---
+--- a/camss-csid.c
++++ b/camss-csid.c
+@@ -702,6 +702,7 @@ static int csid_set_power(struct v4l2_su
+ 		}
+ 
+ 		csid->phy.need_vc_update = true;
++		csid->streaming = 0;
+ 
+ 		enable_irq(csid->irq);
+ 
+@@ -798,50 +799,113 @@ static int csid_route_rdi(struct csid_de
+ }
+ 
+ /*
+- * csid_set_stream - Enable/disable streaming on CSID module
++ * csid_configure_all - Configure every linked RDI together
++ * @csid: CSID device
++ * @enable: Requested streaming state
++ *
++ * For a hardware revision that cannot configure one RDI on its own.
++ *
++ * Return 0 on success or a negative error code otherwise
++ */
++static int csid_configure_all(struct csid_device *csid, int enable)
++{
++	int ret;
++	u8 i;
++
++	if (!csid->phy.need_vc_update)
++		return 0;
++
++	for (i = 0; enable && i < MSM_CSID_MAX_SRC_STREAMS; i++) {
++		if (!(csid->phy.en_vc & BIT(i)))
++			continue;
++
++		ret = csid_route_rdi(csid, i);
++		if (ret < 0)
++			return ret;
++	}
++
++	csid->res->hw_ops->configure_stream(csid, enable);
++	csid->phy.need_vc_update = false;
++
++	return 0;
++}
++
++/*
++ * msm_csid_stream - Start or stop the stream of one CSID source pad
+  * @sd: CSID V4L2 subdevice
++ * @pad: Source pad
+  * @enable: Requested streaming state
++ * @stream: Return the sensor stream the pad carries here
+  *
+  * Main configuration of CSID module is also done here.
+  *
+  * Return 0 on success or a negative error code otherwise
+  */
+-static int csid_set_stream(struct v4l2_subdev *sd, int enable)
++int msm_csid_stream(struct v4l2_subdev *sd, unsigned int pad, int enable,
++		    u32 *stream)
+ {
+ 	struct csid_device *csid = v4l2_get_subdevdata(sd);
+-	int ret;
++	const struct csid_hw_ops *hw_ops = csid->res->hw_ops;
++	u8 rdi = pad - MSM_CSID_PAD_FIRST_SRC;
++	int ret = 0;
++
++	if (pad < MSM_CSID_PAD_FIRST_SRC || pad >= MSM_CSID_PADS_NUM)
++		return -EINVAL;
++
++	mutex_lock(&csid->stream_lock);
++
++	if (!enable) {
++		*stream = csid->route[rdi].stream;
++		if (!(csid->streaming & BIT(rdi)))
++			goto unlock;
++
++		csid->streaming &= ~BIT(rdi);
++		if (hw_ops->configure_rdi)
++			hw_ops->configure_rdi(csid, rdi, 0);
++		else
++			csid_configure_all(csid, 0);
++		goto unlock;
++	}
++
++	if (csid->streaming & BIT(rdi)) {
++		ret = -EBUSY;
++		goto unlock;
++	}
+ 
+-	if (enable) {
++	if (!csid->streaming) {
+ 		ret = v4l2_ctrl_handler_setup(&csid->ctrls);
+ 		if (ret < 0) {
+ 			dev_err(csid->camss->dev,
+ 				"could not sync v4l2 controls: %d\n", ret);
+-			return ret;
++			goto unlock;
+ 		}
+ 
+ 		if (!csid->testgen.enabled &&
+-		    !media_pad_remote_pad_first(&csid->pads[MSM_CSID_PAD_SINK]))
+-			return -ENOLINK;
+-	}
+-
+-	if (csid->phy.need_vc_update) {
+-		u8 i;
++		    !media_pad_remote_pad_first(&csid->pads[MSM_CSID_PAD_SINK])) {
++			ret = -ENOLINK;
++			goto unlock;
++		}
+ 
+ 		csid->phy.max_vc = 0;
+-		for (i = 0; enable && i < MSM_CSID_MAX_SRC_STREAMS; i++) {
+-			if (!(csid->phy.en_vc & BIT(i)))
+-				continue;
+-
+-			ret = csid_route_rdi(csid, i);
+-			if (ret < 0)
+-				return ret;
+-		}
++	}
+ 
+-		csid->res->hw_ops->configure_stream(csid, enable);
+-		csid->phy.need_vc_update = false;
++	if (hw_ops->configure_rdi) {
++		ret = csid_route_rdi(csid, rdi);
++		if (!ret)
++			hw_ops->configure_rdi(csid, rdi, 1);
++	} else {
++		ret = csid_configure_all(csid, 1);
+ 	}
++	if (ret < 0)
++		goto unlock;
+ 
+-	return 0;
++	csid->streaming |= BIT(rdi);
++	*stream = csid->route[rdi].stream;
++
++unlock:
++	mutex_unlock(&csid->stream_lock);
++
++	return ret;
+ }
+ 
+ /*
+@@ -1312,6 +1376,7 @@ int msm_csid_subdev_init(struct camss *c
+ 		return ret;
+ 
+ 	init_completion(&csid->reset_complete);
++	mutex_init(&csid->stream_lock);
+ 
+ 	return 0;
+ }
+@@ -1444,10 +1509,6 @@ static const struct v4l2_subdev_core_ops
+ 	.unsubscribe_event = v4l2_event_subdev_unsubscribe,
+ };
+ 
+-static const struct v4l2_subdev_video_ops csid_video_ops = {
+-	.s_stream = csid_set_stream,
+-};
+-
+ static const struct v4l2_subdev_pad_ops csid_pad_ops = {
+ 	.enum_mbus_code = csid_enum_mbus_code,
+ 	.enum_frame_size = csid_enum_frame_size,
+@@ -1457,7 +1518,6 @@ static const struct v4l2_subdev_pad_ops
+ 
+ static const struct v4l2_subdev_ops csid_v4l2_ops = {
+ 	.core = &csid_core_ops,
+-	.video = &csid_video_ops,
+ 	.pad = &csid_pad_ops,
+ };
+ 
+@@ -1492,6 +1552,7 @@ int msm_csid_register_entity(struct csid
+ 		     V4L2_SUBDEV_FL_HAS_EVENTS;
+ 	snprintf(sd->name, ARRAY_SIZE(sd->name), "%s%d",
+ 		 MSM_CSID_NAME, csid->id);
++	sd->grp_id = CAMSS_GRP_ID_CSID;
+ 	v4l2_set_subdevdata(sd, csid);
+ 
+ 	ret = v4l2_ctrl_handler_init(&csid->ctrls, 1 + MSM_CSID_MAX_SRC_STREAMS);
+--- a/camss-csid-gen2.c
++++ b/camss-csid-gen2.c
+@@ -331,20 +331,26 @@ static void __csid_configure_rdi_stream(
+ 	writel_relaxed(val, csid->base + CSID_RDI_CFG0(vc));
+ }
+ 
++static void csid_configure_rdi(struct csid_device *csid, u8 rdi, u8 enable)
++{
++	if (csid->testgen.enabled)
++		__csid_configure_testgen(csid, enable, rdi);
++
++	__csid_configure_rdi_stream(csid, enable, rdi);
++	/* The receiver is shared with the RDIs already streaming */
++	if (!csid->streaming)
++		__csid_configure_rx(csid, &csid->phy, csid->phy.max_vc);
++	__csid_ctrl_rdi(csid, enable, rdi);
++}
++
+ static void csid_configure_stream(struct csid_device *csid, u8 enable)
+ {
+-	struct csid_testgen_config *tg = &csid->testgen;
+ 	u8 i;
++
+ 	/* Loop through all enabled VCs and configure stream for each */
+ 	for (i = 0; i < MSM_CSID_MAX_SRC_STREAMS; i++)
+-		if (csid->phy.en_vc & BIT(i)) {
+-			if (tg->enabled)
+-				__csid_configure_testgen(csid, enable, i);
+-
+-			__csid_configure_rdi_stream(csid, enable, i);
+-			__csid_configure_rx(csid, &csid->phy, csid->phy.max_vc);
+-			__csid_ctrl_rdi(csid, enable, i);
+-		}
++		if (csid->phy.en_vc & BIT(i))
++			csid_configure_rdi(csid, i, enable);
+ }
+ 
+ static int csid_configure_testgen_pattern(struct csid_device *csid, s32 val)
+@@ -487,6 +493,7 @@ static void csid_subdev_init(struct csid
+ 
+ const struct csid_hw_ops csid_ops_gen2 = {
+ 	.configure_stream = csid_configure_stream,
++	.configure_rdi = csid_configure_rdi,
+ 	.configure_testgen_pattern = csid_configure_testgen_pattern,
+ 	.hw_version = csid_hw_version,
+ 	.isr = csid_isr,
+--- a/camss-csid.h
++++ b/camss-csid.h
+@@ -12,6 +12,7 @@
+ 
+ #include <linux/clk.h>
+ #include <linux/interrupt.h>
++#include <linux/mutex.h>
+ #include <media/media-entity.h>
+ #include <media/v4l2-ctrls.h>
+ #include <media/v4l2-device.h>
+@@ -123,6 +124,16 @@ struct csid_hw_ops {
+ 	void (*configure_stream)(struct csid_device *csid, u8 enable);
+ 
+ 	/*
++	 * configure_rdi - Configures and starts or stops one RDI
++	 * @csid: CSID device
++	 * @rdi: RDI
++	 *
++	 * Optional. Without it the RDIs cannot stream independently: all of
++	 * them start with the first and none stops before the CSID powers off.
++	 */
++	void (*configure_rdi)(struct csid_device *csid, u8 rdi, u8 enable);
++
++	/*
+ 	 * configure_testgen_pattern - Validates and configures output pattern mode
+ 	 * of test pattern generator
+ 	 * @csid: CSID device
+@@ -207,6 +218,8 @@ struct csid_device {
+ 	struct v4l2_ctrl *testgen_mode;
+ 	struct v4l2_ctrl *rdi_stream[MSM_CSID_MAX_SRC_STREAMS];
+ 	struct csid_rdi_route route[MSM_CSID_MAX_SRC_STREAMS];
++	struct mutex stream_lock;
++	u8 streaming;
+ 	const struct csid_subdev_resources *res;
+ 	struct camss_clock *clock;
+ };
+@@ -248,6 +261,9 @@ void msm_csid_unregister_entity(struct c
+ 
+ void msm_csid_get_csid_id(struct media_entity *entity, u8 *id);
+ 
++int msm_csid_stream(struct v4l2_subdev *sd, unsigned int pad, int enable,
++		    u32 *stream);
++
+ extern const char * const csid_testgen_modes[];
+ 
+ extern const struct csid_formats csid_formats_4_1;
+--- a/camss-csiphy.c
++++ b/camss-csiphy.c
+@@ -316,23 +316,92 @@ static void csiphy_stream_off(struct csi
+ 	csiphy->res->hw_ops->lanes_disable(csiphy, &csiphy->cfg);
+ }
+ 
++/*
++ * csiphy_sensor_stream - Start or stop one stream of the linked sensor
++ * @csiphy: CSIPHY device
++ * @stream: Sensor stream
++ * @enable: Requested streaming state
++ *
++ * A sensor with the streams API takes each stream on its own. Any other is
++ * one stream, started for its first user and stopped after its last; the
++ * caller counts the users, this one excluded.
++ *
++ * Return 0 on success or a negative error code otherwise
++ */
++static int csiphy_sensor_stream(struct csiphy_device *csiphy, u32 stream,
++				int enable)
++{
++	struct media_pad *pad;
++	struct v4l2_subdev *sd;
++	int ret;
++
++	pad = media_pad_remote_pad_first(&csiphy->pads[MSM_CSIPHY_PAD_SINK]);
++	if (!pad || !is_media_entity_v4l2_subdev(pad->entity))
++		return 0;
++
++	sd = media_entity_to_v4l2_subdev(pad->entity);
++
++	/* The core helpers need the routing an active state holds */
++	if ((sd->flags & V4L2_SUBDEV_FL_STREAMS) && sd->active_state &&
++	    sd->ops->pad && sd->ops->pad->enable_streams) {
++		if (enable)
++			return v4l2_subdev_enable_streams(sd, pad->index,
++							  BIT_ULL(stream));
++
++		return v4l2_subdev_disable_streams(sd, pad->index,
++						   BIT_ULL(stream));
++	}
++
++	if (csiphy->stream_count)
++		return 0;
++
++	ret = v4l2_subdev_call(sd, video, s_stream, enable);
++
++	return ret == -ENOIOCTLCMD ? 0 : ret;
++}
+ 
+ /*
+- * csiphy_set_stream - Enable/disable streaming on CSIPHY module
++ * msm_csiphy_stream - Start or stop one sensor stream through a CSIPHY
+  * @sd: CSIPHY V4L2 subdevice
++ * @stream: Sensor stream
+  * @enable: Requested streaming state
+  *
++ * The lanes are up while any stream is. The sensor is started and stopped
++ * from here too, after the lanes on the way up as on the way down.
++ *
+  * Return 0 on success or a negative error code otherwise
+  */
+-static int csiphy_set_stream(struct v4l2_subdev *sd, int enable)
++int msm_csiphy_stream(struct v4l2_subdev *sd, u32 stream, int enable)
+ {
+ 	struct csiphy_device *csiphy = v4l2_get_subdevdata(sd);
+ 	int ret = 0;
+ 
+-	if (enable)
+-		ret = csiphy_stream_on(csiphy);
+-	else
+-		csiphy_stream_off(csiphy);
++	mutex_lock(&csiphy->stream_lock);
++
++	if (enable) {
++		if (!csiphy->stream_count) {
++			ret = csiphy_stream_on(csiphy);
++			if (ret < 0)
++				goto unlock;
++		}
++
++		ret = csiphy_sensor_stream(csiphy, stream, 1);
++		if (ret < 0) {
++			if (!csiphy->stream_count)
++				csiphy_stream_off(csiphy);
++			goto unlock;
++		}
++
++		csiphy->stream_count++;
++	} else if (csiphy->stream_count) {
++		if (!--csiphy->stream_count)
++			csiphy_stream_off(csiphy);
++
++		ret = csiphy_sensor_stream(csiphy, stream, 0);
++	}
++
++unlock:
++	mutex_unlock(&csiphy->stream_lock);
+ 
+ 	return ret;
+ }
+@@ -593,6 +662,7 @@ int msm_csiphy_subdev_init(struct camss
+ 	csiphy->id = id;
+ 	csiphy->cfg.combo_mode = 0;
+ 	csiphy->res = &res->csiphy;
++	mutex_init(&csiphy->stream_lock);
+ 
+ 	/* Memory */
+ 
+@@ -735,10 +805,6 @@ static const struct v4l2_subdev_core_ops
+ 	.s_power = csiphy_set_power,
+ };
+ 
+-static const struct v4l2_subdev_video_ops csiphy_video_ops = {
+-	.s_stream = csiphy_set_stream,
+-};
+-
+ static const struct v4l2_subdev_pad_ops csiphy_pad_ops = {
+ 	.enum_mbus_code = csiphy_enum_mbus_code,
+ 	.enum_frame_size = csiphy_enum_frame_size,
+@@ -748,7 +814,6 @@ static const struct v4l2_subdev_pad_ops
+ 
+ static const struct v4l2_subdev_ops csiphy_v4l2_ops = {
+ 	.core = &csiphy_core_ops,
+-	.video = &csiphy_video_ops,
+ 	.pad = &csiphy_pad_ops,
+ };
+ 
+@@ -781,6 +846,7 @@ int msm_csiphy_register_entity(struct cs
+ 	sd->flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
+ 	snprintf(sd->name, ARRAY_SIZE(sd->name), "%s%d",
+ 		 MSM_CSIPHY_NAME, csiphy->id);
++	sd->grp_id = CAMSS_GRP_ID_CSIPHY;
+ 	v4l2_set_subdevdata(sd, csiphy);
+ 
+ 	ret = csiphy_init_formats(sd, NULL);
+--- a/camss-csiphy.h
++++ b/camss-csiphy.h
+@@ -12,6 +12,7 @@
+ 
+ #include <linux/clk.h>
+ #include <linux/interrupt.h>
++#include <linux/mutex.h>
+ #include <media/media-entity.h>
+ #include <media/v4l2-device.h>
+ #include <media/v4l2-mediabus.h>
+@@ -94,6 +95,8 @@ struct csiphy_device {
+ 	struct csiphy_config cfg;
+ 	struct v4l2_mbus_framefmt fmt[MSM_CSIPHY_PADS_NUM];
+ 	const struct csiphy_subdev_resources *res;
++	struct mutex stream_lock;
++	unsigned int stream_count;
+ };
+ 
+ struct camss_subdev_resources;
+@@ -107,6 +110,8 @@ int msm_csiphy_register_entity(struct cs
+ 
+ void msm_csiphy_unregister_entity(struct csiphy_device *csiphy);
+ 
++int msm_csiphy_stream(struct v4l2_subdev *sd, u32 stream, int enable);
++
+ extern const struct csiphy_formats csiphy_formats_8x16;
+ extern const struct csiphy_formats csiphy_formats_8x96;
+ extern const struct csiphy_formats csiphy_formats_sa8775p;
+--- a/camss.h
++++ b/camss.h
+@@ -155,6 +155,13 @@ void camss_add_clock_margin(u64 *rate);
+ int camss_enable_clocks(int nclocks, struct camss_clock *clock,
+ 			struct device *dev);
+ void camss_disable_clocks(int nclocks, struct camss_clock *clock);
++/*
++ * v4l2_subdev.grp_id of the subdevs every video node of a sensor streams
++ * through. A node starts and stops only its own share of them.
++ */
++#define CAMSS_GRP_ID_CSID	BIT(0)
++#define CAMSS_GRP_ID_CSIPHY	BIT(1)
++
+ struct media_pad *camss_find_sensor_pad(struct media_entity *entity);
+ struct media_entity *camss_find_sensor(struct media_entity *entity);
+ int camss_get_frame_desc(struct media_entity *entity,
+--- a/camss-video.c
++++ b/camss-video.c
+@@ -225,26 +225,28 @@ static int video_check_format(struct cam
+ 	return 0;
+ }
+ 
+-static int video_start_streaming(struct vb2_queue *q, unsigned int count)
++/*
++ * video_stream - Start or stop the subdevs a video node streams through
++ * @video: struct camss_video
++ * @enable: Requested streaming state
++ * @until: Entity to end the walk before, NULL to walk all the way upstream
++ *
++ * The CSID and the CSIPHY carry every stream of a sensor, so a node starts
++ * and stops only its own share of them: its CSID source pad, and the sensor
++ * stream that pad captures.
++ *
++ * Return 0 on success or a negative error code otherwise. A start that fails
++ * leaves nothing started; a stop carries on past a failure.
++ */
++static int video_stream(struct camss_video *video, int enable,
++			struct media_entity *until)
+ {
+-	struct camss_video *video = vb2_get_drv_priv(q);
+-	struct video_device *vdev = &video->vdev;
+-	struct media_entity *entity;
+-	struct media_pad *pad;
++	struct media_entity *entity = &video->vdev.entity;
+ 	struct v4l2_subdev *subdev;
++	struct media_pad *pad;
++	u32 stream = 0;
+ 	int ret;
+ 
+-	ret = video_device_pipeline_alloc_start(vdev);
+-	if (ret < 0) {
+-		dev_err(video->camss->dev, "Failed to start media pipeline: %d\n", ret);
+-		goto flush_buffers;
+-	}
+-
+-	ret = video_check_format(video);
+-	if (ret < 0)
+-		goto error;
+-
+-	entity = &vdev->entity;
+ 	while (1) {
+ 		pad = &entity->pads[0];
+ 		if (!(pad->flags & MEDIA_PAD_FL_SINK))
+@@ -255,14 +257,58 @@ static int video_start_streaming(struct
+ 			break;
+ 
+ 		entity = pad->entity;
++		if (entity == until)
++			break;
++
+ 		subdev = media_entity_to_v4l2_subdev(entity);
+ 
+-		ret = v4l2_subdev_call(subdev, video, s_stream, 1);
+-		if (ret < 0 && ret != -ENOIOCTLCMD)
+-			goto error;
++		if (subdev->grp_id == CAMSS_GRP_ID_CSID)
++			ret = msm_csid_stream(subdev, pad->index, enable,
++					      &stream);
++		else if (subdev->grp_id == CAMSS_GRP_ID_CSIPHY)
++			ret = msm_csiphy_stream(subdev, stream, enable);
++		else
++			ret = v4l2_subdev_call(subdev, video, s_stream, enable);
++
++		if (ret < 0 && ret != -ENOIOCTLCMD) {
++			if (enable) {
++				video_stream(video, 0, entity);
++				return ret;
++			}
++
++			dev_err(video->camss->dev,
++				"Failed to stop %s: %d\n", entity->name, ret);
++		}
++
++		/* The CSIPHY starts and stops the sensor behind it */
++		if (subdev->grp_id == CAMSS_GRP_ID_CSIPHY)
++			break;
+ 	}
+ 
+ 	return 0;
++}
++
++static int video_start_streaming(struct vb2_queue *q, unsigned int count)
++{
++	struct camss_video *video = vb2_get_drv_priv(q);
++	struct video_device *vdev = &video->vdev;
++	int ret;
++
++	ret = video_device_pipeline_alloc_start(vdev);
++	if (ret < 0) {
++		dev_err(video->camss->dev, "Failed to start media pipeline: %d\n", ret);
++		goto flush_buffers;
++	}
++
++	ret = video_check_format(video);
++	if (ret < 0)
++		goto error;
++
++	ret = video_stream(video, 1, NULL);
++	if (ret < 0)
++		goto error;
++
++	return 0;
+ 
+ error:
+ 	video_device_pipeline_stop(vdev);
+@@ -277,31 +323,8 @@ static void video_stop_streaming(struct
+ {
+ 	struct camss_video *video = vb2_get_drv_priv(q);
+ 	struct video_device *vdev = &video->vdev;
+-	struct media_entity *entity;
+-	struct media_pad *pad;
+-	struct v4l2_subdev *subdev;
+-	int ret;
+ 
+-	entity = &vdev->entity;
+-	while (1) {
+-		pad = &entity->pads[0];
+-		if (!(pad->flags & MEDIA_PAD_FL_SINK))
+-			break;
+-
+-		pad = media_pad_remote_pad_first(pad);
+-		if (!pad || !is_media_entity_v4l2_subdev(pad->entity))
+-			break;
+-
+-		entity = pad->entity;
+-		subdev = media_entity_to_v4l2_subdev(entity);
+-
+-		ret = v4l2_subdev_call(subdev, video, s_stream, 0);
+-
+-		if (ret) {
+-			dev_err(video->camss->dev, "Video pipeline stop failed: %d\n", ret);
+-			return;
+-		}
+-	}
++	video_stream(video, 0, NULL);
+ 
+ 	video_device_pipeline_stop(vdev);
+ 

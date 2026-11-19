@@ -1,0 +1,143 @@
+Subject: [PATCH 1/7] media: qcom: camss: add the RealSense format rows
+
+The gen2 CSID, the sdm845-class CSIPHY and the 845-class VFE RDI tables
+gain the media-bus codes d4xx emits and the pixel formats they stand for:
+
+  UYVY8_1X16      Z16      depth, on the YUV422 8-bit carrier
+  VYUY8_1X16      Y8I      interleaved infrared
+  RGB888_1X24     Y12I     calibration
+  ARGB8888_1X32   Y16I     D58x infrared calibration, RAW16 on the wire
+  SGRBG16_1X16    GR16     D58x colour calibration
+  RS_NV12_FLAT    NV12     flat NV12 over RAW8, height * 3 / 2 lines
+  RS_SBGGR10P     BGGR10P  D401 CSI passthrough over RAW8
+  RS_VARLEN       RSVL     variable-length data over RAW8
+  METADATA_FIXED  D4XX     embedded metadata, data type 0x12
+
+Y8 (infrared, IMU) and the YUYV colour rows are already there. A media-bus
+code may now have two rows; the node's pixel format picks between them and
+the first row stays the default, so existing users see no change.
+
+The RS_* codes and the Y16I, RW16 and RSVL fourccs come from rs-formats.h,
+which the fork's Kbuild force-includes.
+---
+--- a/camss-csid.c
++++ b/camss-csid.c
+@@ -32,6 +32,12 @@
+ 
+ #define MSM_CSID_NAME "msm_csid"
+ 
++/* An RDI takes the payload as it is, so a row's decode format only matters
++ * to the test generator. The gen1 header the rows are written with lacks
++ * this one.
++ */
++#define DECODE_FORMAT_UNCOMPRESSED_16_BIT	0x5
++
+ const char * const csid_testgen_modes[] = {
+ 	"Disabled",
+ 	"Incrementing",
+@@ -473,6 +479,58 @@ static const struct csid_format_info for
+ 		14,
+ 		1,
+ 	},
++	/* RealSense. The wire data type is the sensor frame descriptor's; the
++	 * one here stands when the sensor has none.
++	 */
++	{
++		MEDIA_BUS_FMT_RGB888_1X24,
++		DATA_TYPE_RGB888,
++		DECODE_FORMAT_UNCOMPRESSED_8_BIT,
++		8,
++		3,
++	},
++	{
++		MEDIA_BUS_FMT_ARGB8888_1X32,
++		DATA_TYPE_RAW_16BIT,
++		DECODE_FORMAT_UNCOMPRESSED_16_BIT,
++		16,
++		2,
++	},
++	{
++		MEDIA_BUS_FMT_SGRBG16_1X16,
++		DATA_TYPE_RAW_16BIT,
++		DECODE_FORMAT_UNCOMPRESSED_16_BIT,
++		16,
++		1,
++	},
++	{
++		MEDIA_BUS_FMT_RS_NV12_FLAT_1X8,
++		DATA_TYPE_RAW_8BIT,
++		DECODE_FORMAT_UNCOMPRESSED_8_BIT,
++		8,
++		1,
++	},
++	{
++		MEDIA_BUS_FMT_RS_SBGGR10P_1X8,
++		DATA_TYPE_RAW_8BIT,
++		DECODE_FORMAT_UNCOMPRESSED_8_BIT,
++		8,
++		1,
++	},
++	{
++		MEDIA_BUS_FMT_RS_VARLEN_1X8,
++		DATA_TYPE_RAW_8BIT,
++		DECODE_FORMAT_UNCOMPRESSED_8_BIT,
++		8,
++		1,
++	},
++	{
++		MEDIA_BUS_FMT_METADATA_FIXED,
++		DATA_TYPE_EMBEDDED_DATA_8BIT,
++		DECODE_FORMAT_UNCOMPRESSED_8_BIT,
++		8,
++		1,
++	},
+ };
+ 
+ const struct csid_formats csid_formats_4_1 = {
+--- a/camss-csiphy.c
++++ b/camss-csiphy.c
+@@ -91,6 +91,14 @@ static const struct csiphy_format_info f
+ 	{ MEDIA_BUS_FMT_SRGGB14_1X14, 14 },
+ 	{ MEDIA_BUS_FMT_Y8_1X8, 8 },
+ 	{ MEDIA_BUS_FMT_Y10_1X10, 10 },
++	/* RealSense */
++	{ MEDIA_BUS_FMT_RGB888_1X24, 24 },
++	{ MEDIA_BUS_FMT_ARGB8888_1X32, 32 },
++	{ MEDIA_BUS_FMT_SGRBG16_1X16, 16 },
++	{ MEDIA_BUS_FMT_RS_NV12_FLAT_1X8, 8 },
++	{ MEDIA_BUS_FMT_RS_SBGGR10P_1X8, 8 },
++	{ MEDIA_BUS_FMT_RS_VARLEN_1X8, 8 },
++	{ MEDIA_BUS_FMT_METADATA_FIXED, 8 },
+ };
+ 
+ const struct csiphy_formats csiphy_formats_8x16 = {
+--- a/camss-vfe.c
++++ b/camss-vfe.c
+@@ -167,6 +167,27 @@ static const struct camss_format_info fo
+ 	  PER_PLANE_DATA(0, 1, 1, 1, 1, 10) },
+ 	{ MEDIA_BUS_FMT_Y10_2X8_PADHI_LE, 16, V4L2_PIX_FMT_Y10, 1,
+ 	  PER_PLANE_DATA(0, 1, 1, 1, 1, 16) },
++	/* RealSense. Rows sharing a media-bus code are told apart by the
++	 * node's pixel format; the first row of a code is its default.
++	 */
++	{ MEDIA_BUS_FMT_UYVY8_1X16, 8, V4L2_PIX_FMT_Z16, 1,
++	  PER_PLANE_DATA(0, 1, 1, 1, 1, 16) },
++	{ MEDIA_BUS_FMT_VYUY8_1X16, 8, V4L2_PIX_FMT_Y8I, 1,
++	  PER_PLANE_DATA(0, 1, 1, 1, 1, 16) },
++	{ MEDIA_BUS_FMT_RGB888_1X24, 24, V4L2_PIX_FMT_Y12I, 1,
++	  PER_PLANE_DATA(0, 1, 1, 1, 1, 24) },
++	{ MEDIA_BUS_FMT_ARGB8888_1X32, 32, V4L2_PIX_FMT_Y16I, 1,
++	  PER_PLANE_DATA(0, 1, 1, 1, 1, 32) },
++	{ MEDIA_BUS_FMT_SGRBG16_1X16, 16, V4L2_PIX_FMT_SGRBG16, 1,
++	  PER_PLANE_DATA(0, 1, 1, 1, 1, 16) },
++	{ MEDIA_BUS_FMT_RS_NV12_FLAT_1X8, 8, V4L2_PIX_FMT_NV12, 1,
++	  PER_PLANE_DATA(0, 1, 1, 2, 3, 8) },
++	{ MEDIA_BUS_FMT_RS_SBGGR10P_1X8, 10, V4L2_PIX_FMT_SBGGR10P, 1,
++	  PER_PLANE_DATA(0, 1, 1, 1, 1, 10) },
++	{ MEDIA_BUS_FMT_RS_VARLEN_1X8, 8, V4L2_PIX_FMT_RS_VARLEN, 1,
++	  PER_PLANE_DATA(0, 1, 1, 1, 1, 8) },
++	{ MEDIA_BUS_FMT_METADATA_FIXED, 8, V4L2_META_FMT_D4XX, 1,
++	  PER_PLANE_DATA(0, 1, 1, 1, 1, 8) },
+ };
+ 
+ static const struct camss_format_info formats_pix_8x16[] = {

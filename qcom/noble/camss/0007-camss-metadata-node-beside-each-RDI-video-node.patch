@@ -1,0 +1,500 @@
+Subject: [PATCH 7/7] media: qcom: camss: a metadata node beside each RDI video node
+
+Embedded metadata reaches an RDI like any other stream, but applications
+expect it on a metadata capture node next to the image node, as the Tegra
+VI patch provides on Jetson.
+
+Every RDI line of a 17x VFE gets a second video device, msm_vfeN_metaM, of
+type V4L2_BUF_TYPE_META_CAPTURE with the D4XX format. The line's source pad
+links to its image node (enabled by default, no longer immutable) or to its
+metadata node, never both, so the line feeds whichever node is linked.
+
+A metadata buffer is as large as the lines of the subdev the node is linked
+to. The node keeps its format in the multi-planar form the VFE reads and
+translates it at the ioctls, so the capture path is unchanged.
+
+A VFE registers its metadata nodes after its image nodes. The device
+numbers of the VFEs after the first shift by the nodes added before them;
+the entity names are what identifies a node.
+
+Two nodes now share one line's buffer list, so the node that is not linked
+must never reach it. vb2 hands the driver a node's buffers after
+prepare_streaming and before start_streaming; the media pipeline therefore
+starts in prepare_streaming, where the link is tested once with the graph
+held, and stops in unprepare_streaming. An unlinked node is refused there,
+before any of its buffers is queued.
+---
+--- a/camss-vfe-17x.c
++++ b/camss-vfe-17x.c
+@@ -273,7 +273,7 @@ static void vfe_wm_update(struct vfe_dev
+ 			  struct vfe_line *line)
+ {
+ 	struct v4l2_pix_format_mplane *pix =
+-		&line->video_out.active_fmt.fmt.pix_mp;
++		&line->video->active_fmt.fmt.pix_mp;
+ 	u32 stride = pix->plane_fmt[0].bytesperline;
+ 
+ 	writel_relaxed(addr, vfe->base + VFE_BUS_WM_IMAGE_ADDR(wm));
+@@ -640,7 +640,7 @@ out_unlock:
+ static int vfe_queue_buffer(struct camss_video *vid,
+ 			    struct camss_buffer *buf)
+ {
+-	struct vfe_line *line = container_of(vid, struct vfe_line, video_out);
++	struct vfe_line *line = vfe_video_to_line(vid);
+ 	struct vfe_device *vfe = to_vfe(line);
+ 	struct vfe_output *output;
+ 	unsigned long flags;
+--- a/camss-vfe.c
++++ b/camss-vfe.c
+@@ -911,7 +911,7 @@ exit:
+ int vfe_flush_buffers(struct camss_video *vid,
+ 		      enum vb2_buffer_state state)
+ {
+-	struct vfe_line *line = container_of(vid, struct vfe_line, video_out);
++	struct vfe_line *line = vfe_video_to_line(vid);
+ 	struct vfe_device *vfe = to_vfe(line);
+ 	struct vfe_output *output;
+ 	unsigned long flags;
+@@ -963,6 +963,35 @@ static int vfe_set_power(struct v4l2_sub
+ }
+ 
+ /*
++ * vfe_line_has_meta - Whether an RDI line has a metadata node
++ * @vfe: VFE device
++ * @line: VFE line
++ *
++ * Only where the hardware file takes its buffers from either node of a line.
++ */
++static bool vfe_line_has_meta(struct vfe_device *vfe, struct vfe_line *line)
++{
++	return vfe->res->hw_ops == &vfe_ops_170 && line->id != VFE_LINE_PIX;
++}
++
++/*
++ * vfe_line_video - The video node a line is linked to
++ * @line: VFE line
++ *
++ * Return the metadata node when its link is the enabled one, else the image node
++ */
++static struct camss_video *vfe_line_video(struct vfe_line *line)
++{
++	struct media_pad *pad;
++
++	pad = media_pad_remote_pad_first(&line->pads[MSM_VFE_PAD_SRC]);
++	if (pad && pad->entity == &line->video_meta.vdev.entity)
++		return &line->video_meta;
++
++	return &line->video_out;
++}
++
++/*
+  * vfe_set_stream - Enable/disable streaming on VFE module
+  * @sd: VFE V4L2 subdevice
+  * @enable: Requested streaming state
+@@ -978,6 +1007,7 @@ static int vfe_set_stream(struct v4l2_su
+ 	int ret;
+ 
+ 	if (enable) {
++		line->video = vfe_line_video(line);
+ 		line->output.state = VFE_OUTPUT_RESERVED;
+ 		ret = vfe->res->hw_ops->vfe_enable(line);
+ 		if (ret < 0)
+@@ -1638,6 +1668,9 @@ int msm_vfe_subdev_init(struct camss *ca
+ 
+ 		l->video_out.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+ 		l->video_out.camss = camss;
++		l->video_meta.type = V4L2_BUF_TYPE_META_CAPTURE;
++		l->video_meta.camss = camss;
++		l->video = &l->video_out;
+ 		l->id = i;
+ 		init_completion(&l->output.sof);
+ 		init_completion(&l->output.reg_update);
+@@ -1827,9 +1860,12 @@ int msm_vfe_register_entities(struct vfe
+ 			goto error_reg_video;
+ 		}
+ 
++		/* A line with a metadata node is linked to one node or the other */
+ 		ret = media_create_pad_link(
+ 				&sd->entity, MSM_VFE_PAD_SRC,
+ 				&video_out->vdev.entity, 0,
++				vfe_line_has_meta(vfe, &vfe->line[i]) ?
++				MEDIA_LNK_FL_ENABLED :
+ 				MEDIA_LNK_FL_IMMUTABLE | MEDIA_LNK_FL_ENABLED);
+ 		if (ret < 0) {
+ 			dev_err(dev, "Failed to link %s->%s entities: %d\n",
+@@ -1839,8 +1875,46 @@ int msm_vfe_register_entities(struct vfe
+ 		}
+ 	}
+ 
++	/* After this VFE's image nodes, which stay in line order */
++	for (i = 0; i < vfe->res->line_num; i++) {
++		struct camss_video *video_meta = &vfe->line[i].video_meta;
++		char name[32];
++
++		if (!vfe_line_has_meta(vfe, &vfe->line[i]))
++			continue;
++
++		sd = &vfe->line[i].subdev;
++
++		video_meta->ops = &vfe->video_ops;
++		video_meta->bpl_alignment = vfe_bpl_align(vfe);
++		video_meta->line_based = 0;
++
++		snprintf(name, ARRAY_SIZE(name), "%s%d_%s%d",
++			 MSM_VFE_NAME, vfe->id, "meta", i);
++		ret = msm_video_register(video_meta, v4l2_dev, name);
++		if (ret < 0) {
++			dev_err(dev, "Failed to register metadata node: %d\n",
++				ret);
++			goto error_meta;
++		}
++
++		ret = media_create_pad_link(&sd->entity, MSM_VFE_PAD_SRC,
++					    &video_meta->vdev.entity, 0, 0);
++		if (ret < 0) {
++			dev_err(dev, "Failed to link %s->%s entities: %d\n",
++				sd->entity.name, video_meta->vdev.entity.name,
++				ret);
++			goto error_meta;
++		}
++	}
++
+ 	return 0;
+ 
++error_meta:
++	/* Every line is registered by now */
++	i = vfe->res->line_num;
++	goto error_init;
++
+ error_link:
+ 	msm_video_unregister(video_out);
+ 
+@@ -1855,6 +1929,8 @@ error_init:
+ 		sd = &vfe->line[i].subdev;
+ 		video_out = &vfe->line[i].video_out;
+ 
++		if (video_is_registered(&vfe->line[i].video_meta.vdev))
++			msm_video_unregister(&vfe->line[i].video_meta);
+ 		msm_video_unregister(video_out);
+ 		v4l2_device_unregister_subdev(sd);
+ 		media_entity_cleanup(&sd->entity);
+@@ -1878,6 +1954,8 @@ void msm_vfe_unregister_entities(struct
+ 		struct v4l2_subdev *sd = &vfe->line[i].subdev;
+ 		struct camss_video *video_out = &vfe->line[i].video_out;
+ 
++		if (video_is_registered(&vfe->line[i].video_meta.vdev))
++			msm_video_unregister(&vfe->line[i].video_meta);
+ 		msm_video_unregister(video_out);
+ 		v4l2_device_unregister_subdev(sd);
+ 		media_entity_cleanup(&sd->entity);
+--- a/camss-vfe.h
++++ b/camss-vfe.h
+@@ -91,11 +91,25 @@ struct vfe_line {
+ 	struct v4l2_rect compose;
+ 	struct v4l2_rect crop;
+ 	struct camss_video video_out;
++	struct camss_video video_meta;
++	struct camss_video *video;
+ 	struct vfe_output output;
+ 	const struct camss_format_info *formats;
+ 	unsigned int nformats;
+ };
+ 
++/*
++ * vfe_video_to_line - The line a video node belongs to
++ * @vid: The image node or the metadata node of a line
++ */
++static inline struct vfe_line *vfe_video_to_line(struct camss_video *vid)
++{
++	if (vid->type == V4L2_BUF_TYPE_META_CAPTURE)
++		return container_of(vid, struct vfe_line, video_meta);
++
++	return container_of(vid, struct vfe_line, video_out);
++}
++
+ struct vfe_device;
+ 
+ struct vfe_hw_ops {
+--- a/camss-video.c
++++ b/camss-video.c
+@@ -25,6 +25,16 @@
+ #define CAMSS_FRAME_MAX_HEIGHT_RDI	8191
+ #define CAMSS_FRAME_MAX_HEIGHT_PIX	4096
+ 
++/*
++ * What a metadata node captures: embedded data lines, a byte per sample. Its
++ * format is kept in the multi-planar form the rest of the driver reads and is
++ * translated at the ioctls.
++ */
++static const struct camss_format_info video_formats_meta[] = {
++	{ MEDIA_BUS_FMT_METADATA_FIXED, 8, V4L2_META_FMT_D4XX, 1,
++	  PER_PLANE_DATA(0, 1, 1, 1, 1, 8) },
++};
++
+ /* -----------------------------------------------------------------------------
+  * Helper functions
+  */
+@@ -378,7 +388,19 @@ static int video_stream(struct camss_vid
+ 	return 0;
+ }
+ 
+-static int video_start_streaming(struct vb2_queue *q, unsigned int count)
++/*
++ * video_prepare_streaming - Hold the media graph for a node about to stream
++ * @q: vb2 queue
++ *
++ * A line with a metadata node has two nodes on one output, and only the one
++ * its link is enabled to may hand it buffers. vb2 gives the driver its buffers
++ * after this and before start_streaming, so the pipeline starts here: links
++ * cannot change once it has, and an unlinked node is turned away before any
++ * of its buffers reaches the line.
++ *
++ * Return 0 on success or a negative error code otherwise
++ */
++static int video_prepare_streaming(struct vb2_queue *q)
+ {
+ 	struct camss_video *video = vb2_get_drv_priv(q);
+ 	struct video_device *vdev = &video->vdev;
+@@ -387,24 +409,34 @@ static int video_start_streaming(struct
+ 	ret = video_device_pipeline_alloc_start(vdev);
+ 	if (ret < 0) {
+ 		dev_err(video->camss->dev, "Failed to start media pipeline: %d\n", ret);
+-		goto flush_buffers;
++		return ret;
+ 	}
+ 
+-	ret = video_check_format(video);
+-	if (ret < 0)
+-		goto error;
+-
+-	ret = video_stream(video, 1, NULL);
+-	if (ret < 0)
+-		goto error;
++	if (!media_pad_remote_pad_first(&video->pad)) {
++		video_device_pipeline_stop(vdev);
++		return -EPIPE;
++	}
+ 
+ 	return 0;
++}
++
++static void video_unprepare_streaming(struct vb2_queue *q)
++{
++	struct camss_video *video = vb2_get_drv_priv(q);
++
++	video_device_pipeline_stop(&video->vdev);
++}
+ 
+-error:
+-	video_device_pipeline_stop(vdev);
++static int video_start_streaming(struct vb2_queue *q, unsigned int count)
++{
++	struct camss_video *video = vb2_get_drv_priv(q);
++	int ret;
+ 
+-flush_buffers:
+-	video->ops->flush_buffers(video, VB2_BUF_STATE_QUEUED);
++	ret = video_check_format(video);
++	if (!ret)
++		ret = video_stream(video, 1, NULL);
++	if (ret < 0)
++		video->ops->flush_buffers(video, VB2_BUF_STATE_QUEUED);
+ 
+ 	return ret;
+ }
+@@ -412,12 +444,9 @@ flush_buffers:
+ static void video_stop_streaming(struct vb2_queue *q)
+ {
+ 	struct camss_video *video = vb2_get_drv_priv(q);
+-	struct video_device *vdev = &video->vdev;
+ 
+ 	video_stream(video, 0, NULL);
+ 
+-	video_device_pipeline_stop(vdev);
+-
+ 	video->ops->flush_buffers(video, VB2_BUF_STATE_ERROR);
+ }
+ 
+@@ -428,8 +457,10 @@ static const struct vb2_ops msm_video_vb
+ 	.buf_init        = video_buf_init,
+ 	.buf_prepare     = video_buf_prepare,
+ 	.buf_queue       = video_buf_queue,
++	.prepare_streaming = video_prepare_streaming,
+ 	.start_streaming = video_start_streaming,
+ 	.stop_streaming  = video_stop_streaming,
++	.unprepare_streaming = video_unprepare_streaming,
+ };
+ 
+ /* -----------------------------------------------------------------------------
+@@ -645,6 +676,86 @@ static int video_s_fmt(struct file *file
+ 	return 0;
+ }
+ 
++/*
++ * video_meta_fmt - The format of a metadata node
++ * @video: struct camss_video
++ * @fmt: Return the format here, in its multi-planar form
++ *
++ * There is one data format, and a buffer holds the lines of the subdev the
++ * node is linked to; until it is linked, the size last set stands.
++ */
++static void video_meta_fmt(struct camss_video *video, struct v4l2_format *fmt)
++{
++	const struct v4l2_pix_format_mplane *cur = &video->active_fmt.fmt.pix_mp;
++
++	memset(fmt, 0, sizeof(*fmt));
++	fmt->fmt.pix_mp.pixelformat = video->formats[0].pixelformat;
++	if (!video_get_subdev_format(video, fmt))
++		return;
++
++	memset(fmt, 0, sizeof(*fmt));
++	fmt->fmt.pix_mp.pixelformat = video->formats[0].pixelformat;
++	fmt->fmt.pix_mp.width = cur->width;
++	fmt->fmt.pix_mp.height = cur->height;
++	__video_try_fmt(video, fmt);
++}
++
++static void video_meta_fill(const struct v4l2_format *fmt, struct v4l2_format *f)
++{
++	f->fmt.meta.dataformat = fmt->fmt.pix_mp.pixelformat;
++	f->fmt.meta.buffersize = fmt->fmt.pix_mp.plane_fmt[0].sizeimage;
++}
++
++static int video_enum_fmt_meta(struct file *file, void *fh,
++			       struct v4l2_fmtdesc *f)
++{
++	struct camss_video *video = video_drvdata(file);
++
++	if (f->index >= video->nformats)
++		return -EINVAL;
++
++	f->pixelformat = video->formats[f->index].pixelformat;
++
++	return 0;
++}
++
++static int video_g_fmt_meta(struct file *file, void *fh, struct v4l2_format *f)
++{
++	struct camss_video *video = video_drvdata(file);
++
++	video_meta_fill(&video->active_fmt, f);
++
++	return 0;
++}
++
++static int video_try_fmt_meta(struct file *file, void *fh,
++			      struct v4l2_format *f)
++{
++	struct camss_video *video = video_drvdata(file);
++	struct v4l2_format fmt;
++
++	video_meta_fmt(video, &fmt);
++	video_meta_fill(&fmt, f);
++
++	return 0;
++}
++
++static int video_s_fmt_meta(struct file *file, void *fh, struct v4l2_format *f)
++{
++	struct camss_video *video = video_drvdata(file);
++	struct v4l2_format fmt;
++
++	if (vb2_is_busy(&video->vb2_q))
++		return -EBUSY;
++
++	/* Through a copy: the size last set is read from the active format */
++	video_meta_fmt(video, &fmt);
++	video->active_fmt = fmt;
++	video_meta_fill(&fmt, f);
++
++	return 0;
++}
++
+ static int video_enum_input(struct file *file, void *fh,
+ 			    struct v4l2_input *input)
+ {
+@@ -692,6 +803,25 @@ static const struct v4l2_ioctl_ops msm_v
+ 	.vidioc_unsubscribe_event	= v4l2_event_unsubscribe,
+ };
+ 
++static const struct v4l2_ioctl_ops msm_meta_ioctl_ops = {
++	.vidioc_querycap		= video_querycap,
++	.vidioc_enum_fmt_meta_cap	= video_enum_fmt_meta,
++	.vidioc_g_fmt_meta_cap		= video_g_fmt_meta,
++	.vidioc_s_fmt_meta_cap		= video_s_fmt_meta,
++	.vidioc_try_fmt_meta_cap	= video_try_fmt_meta,
++	.vidioc_reqbufs			= vb2_ioctl_reqbufs,
++	.vidioc_querybuf		= vb2_ioctl_querybuf,
++	.vidioc_qbuf			= vb2_ioctl_qbuf,
++	.vidioc_expbuf			= vb2_ioctl_expbuf,
++	.vidioc_dqbuf			= vb2_ioctl_dqbuf,
++	.vidioc_create_bufs		= vb2_ioctl_create_bufs,
++	.vidioc_prepare_buf		= vb2_ioctl_prepare_buf,
++	.vidioc_streamon		= vb2_ioctl_streamon,
++	.vidioc_streamoff		= vb2_ioctl_streamoff,
++	.vidioc_subscribe_event		= v4l2_ctrl_subscribe_event,
++	.vidioc_unsubscribe_event	= v4l2_event_unsubscribe,
++};
++
+ /* -----------------------------------------------------------------------------
+  * V4L2 file operations
+  */
+@@ -808,6 +938,12 @@ static int msm_video_init_format(struct
+ 		},
+ 	};
+ 
++	/* A metadata node starts as one short line, not a full frame */
++	if (video->type == V4L2_BUF_TYPE_META_CAPTURE) {
++		format.fmt.pix_mp.width = 256;
++		format.fmt.pix_mp.height = 1;
++	}
++
+ 	ret = __video_try_fmt(video, &format);
+ 	if (ret < 0)
+ 		return ret;
+@@ -832,6 +968,7 @@ static int msm_video_init_format(struct
+ int msm_video_register(struct camss_video *video, struct v4l2_device *v4l2_dev,
+ 		       const char *name)
+ {
++	bool meta = video->type == V4L2_BUF_TYPE_META_CAPTURE;
+ 	struct media_pad *pad = &video->pad;
+ 	struct video_device *vdev;
+ 	struct vb2_queue *q;
+@@ -839,13 +976,18 @@ int msm_video_register(struct camss_vide
+ 
+ 	vdev = &video->vdev;
+ 
++	if (meta) {
++		video->formats = video_formats_meta;
++		video->nformats = ARRAY_SIZE(video_formats_meta);
++	}
++
+ 	mutex_init(&video->q_lock);
+ 
+ 	q = &video->vb2_q;
+ 	q->drv_priv = video;
+ 	q->mem_ops = &vb2_dma_sg_memops;
+ 	q->ops = &msm_video_vb2_q_ops;
+-	q->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
++	q->type = video->type;
+ 	q->io_modes = VB2_DMABUF | VB2_MMAP | VB2_READ;
+ 	q->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
+ 	q->buf_struct_size = sizeof(struct camss_buffer);
+@@ -877,9 +1019,14 @@ int msm_video_register(struct camss_vide
+ 	v4l2_ctrl_handler_init(&video->ctrl_handler, 16);
+ 
+ 	vdev->fops = &msm_vid_fops;
+-	vdev->device_caps = V4L2_CAP_VIDEO_CAPTURE_MPLANE | V4L2_CAP_STREAMING
+-			  | V4L2_CAP_READWRITE | V4L2_CAP_IO_MC;
+-	vdev->ioctl_ops = &msm_vid_ioctl_ops;
++	vdev->device_caps = V4L2_CAP_STREAMING | V4L2_CAP_READWRITE | V4L2_CAP_IO_MC;
++	if (meta) {
++		vdev->device_caps |= V4L2_CAP_META_CAPTURE;
++		vdev->ioctl_ops = &msm_meta_ioctl_ops;
++	} else {
++		vdev->device_caps |= V4L2_CAP_VIDEO_CAPTURE_MPLANE;
++		vdev->ioctl_ops = &msm_vid_ioctl_ops;
++	}
+ 	vdev->release = msm_video_release;
+ 	vdev->v4l2_dev = v4l2_dev;
+ 	vdev->vfl_dir = VFL_DIR_RX;
