@@ -4506,6 +4506,7 @@ static int ds5_ctrl_seq_status(struct ds5 *state, u16 status_addr, u16 seq0,
 		__func__, status_addr, status, code);
 	if (intent) {
 		switch (code) {
+		case 2: return -EBUSY;
 		case 4: return -EINVAL;
 		case 8: return -ERANGE;
 		case 7: return -EACCES;
