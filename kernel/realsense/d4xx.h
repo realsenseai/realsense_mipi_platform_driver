@@ -175,6 +175,8 @@ struct ds5_format {
 };
 
 struct ds5_sensor {
+	u8 *intent_default;
+	struct v4l2_ctrl_type_ops intent_type_ops;
 	struct v4l2_subdev sd;
 	struct media_pad pad;
 	struct v4l2_mbus_framefmt format;
