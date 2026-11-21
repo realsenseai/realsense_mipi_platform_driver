@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SUPPORTED_JP="7.2, 7.1, 7.0, 6.2.2, 6.2.1, 6.2, 6.1, 6.0, 5.1.6, 5.1.2, 5.0.2"
+SUPPORTED_JP="7.2.1, 7.2, 7.1, 7.0, 6.2.3, 6.2.2, 6.2.1, 6.2, 6.1, 6.0, 5.1.8, 5.1.6, 5.1.2, 5.0.2"
 
 JP_INPUT_VERSION="$1"
 if [[ -z "${JP_INPUT_VERSION}" || "$1" == "-h" ]]; then
@@ -38,6 +38,10 @@ echo "JetPack version ${JP_INPUT_VERSION}..."
 if ! version_lt "$JP_INPUT_VERSION" 7.0; then
 	L4T_TAG=
 	case "${JP_INPUT_VERSION}" in
+		# JP7.2.2 ships as L4T R39.2.2; its git tag is jetson_39.2.2_GA
+		# jetson_39.2.2 does not exist in some repositories.
+		7.2.2) REVISION=39.2.2; L4T_TAG=jetson_39.2.2_GA;;
+		7.2.1) REVISION=39.2.1;;
 		# JP7.2 ships as L4T R39.2; its git tag is jetson_39.2.0 (the
 		# jetson_<rev> default form, jetson_39.2, does not exist upstream).
 		7.2) REVISION=39.2; L4T_TAG=jetson_39.2.0;;
@@ -49,6 +53,7 @@ if ! version_lt "$JP_INPUT_VERSION" 7.0; then
     L4T_VERSION="${L4T_TAG:-jetson_${REVISION}}"
 elif ! version_lt "$JP_INPUT_VERSION" 6.0; then
 	case "${JP_INPUT_VERSION}" in
+		6.2.3) REVISION=36.5.2; LICENSE=releases;;
 		6.2.2) REVISION=36.5;;
 		6.2.1) REVISION=36.4.4;;
 		6.2) REVISION=36.4.3;;
@@ -60,14 +65,21 @@ elif ! version_lt "$JP_INPUT_VERSION" 6.0; then
     L4T_VERSION=jetson_"${REVISION}"
 elif ! version_lt "${JP_INPUT_VERSION}" 5.0; then
 	case "${JP_INPUT_VERSION}" in
+		5.1.8) REVISION=35.7; L4T_TAG=jetson_35.7.0;;
+		5.1.7) REVISION=35.6.5;;
 		5.1.6) REVISION=35.6.4;;
+		5.1.5) REVISION=35.6.2;;
+		5.1.4) REVISION=35.6;;
+		5.1.3) REVISION=35.5;;
 		5.1.2) REVISION=35.4.1;;
+		5.1.1) REVISION=35.3.1;;
+		5.1) REVISION=35.2.1;;
 		5.0.2) REVISION=35.1
 			LICENSE=Release;;
 	esac
     KERNEL_DIR="kernel/kernel-5.10"
     JETPACK_VERSION="5.x"
-    L4T_VERSION=jetson_"${REVISION}"
+    L4T_VERSION="${L4T_TAG:-jetson_${REVISION}}"
 fi
 if [[ -z $REVISION ]]; then
     echo "Wrong JetPack version $JP_INPUT_VERSION! Supported version: ${SUPPORTED_JP}"
