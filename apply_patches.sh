@@ -60,7 +60,7 @@ apply_external_patches() {
         fi
         echo -e "\e[33m$(ls -Ld ${PWD}/$2/$1)\e[0m"
         ls -Lw1 "${PWD}/$2/$1"
-        git -C "${source}" apply "${PWD}/$2/$1"/*
+        git -C "${source}" apply -v "${PWD}/$2/$1"/*
     elif [[ "$ACTION" = "reset" ]]; then
         if ! git -C "${source}" diff --quiet || ! git -C "${source}" diff --cached --quiet; then
             read -p "Repo ${source} has changes that will be hard reset. Continue (Y/n)? " confirm
@@ -82,8 +82,15 @@ apply_external_patches "$JP_INPUT_VERSION" "$KERNEL_DIR"
 if version_lt "$JETPACK_VERSION" "6.0"; then
     apply_external_patches "$JETPACK_VERSION" "hardware/nvidia/platform/t19x/galen/kernel-dts"
 elif version_lt "$JETPACK_VERSION" "7.0"; then
-	# from JP7 DT files are handled in kernel tree
     apply_external_patches "$JETPACK_VERSION" "hardware/nvidia/t23x/nv-public"
+else
+    # JP7 patches
+    if ! version_lt "$JETPACK_VERSION" "7.2"; then
+        apply_external_patches "$JETPACK_VERSION" "build/nvidia-public"
+    fi
+
+    apply_external_patches "$JETPACK_VERSION" "hardware/nvidia/t23x/nv-public"
+    apply_external_patches "$JETPACK_VERSION" "hardware/nvidia/t264/nv-public"
 fi
 
 echo "Patches applied successfully"
@@ -125,8 +132,8 @@ if [[ "$ACTION" = "apply" ]]; then
                     "${BUILD_SRCS}/$KERNEL_DIR/include/dt-bindings/gpio/" 2>/dev/null || true
             fi
             # JP7.x supports overlays with .dtso extension (234 for Orin and 264 for Thor)
-            ln -f -s $(pwd)/hardware/realsense/tegra234-camera-d4xx-overlay*.dtso "${BUILD_SRCS}/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/"
-            ln -f -s $(pwd)/hardware/realsense/tegra264-camera-d4xx-overlay*.dtso "${BUILD_SRCS}/$KERNEL_DIR/arch/arm64/boot/dts/nvidia/"
+            ln -f -s $(pwd)/hardware/realsense/tegra234-camera-d4xx-overlay*.dtso "${BUILD_SRCS}/hardware/nvidia/t23x/nv-public/overlay/"
+            ln -f -s $(pwd)/hardware/realsense/tegra264-camera-d4xx-overlay*.dtso "${BUILD_SRCS}/hardware/nvidia/t264/nv-public/overlay/"
         fi
     fi
 
@@ -136,8 +143,14 @@ if [[ "$ACTION" = "apply" ]]; then
             drivers/media/i2c/d4xx_desc.h
     git -C "${BUILD_SRCS}/$D4XX_SRC_DST" add -u
     [[ -d "${BUILD_SRCS}/$KERNEL_DIR" ]] && git -C "${BUILD_SRCS}/$KERNEL_DIR" add -A
+    if [[ -d "${BUILD_SRCS}/build/nvidia-public" ]]; then
+        git -C "${BUILD_SRCS}/build/nvidia-public" add -A
+    fi
     if [[ -d "${BUILD_SRCS}/hardware/nvidia/t23x/nv-public" ]]; then
         git -C "${BUILD_SRCS}/hardware/nvidia/t23x/nv-public" add -A
+    fi
+    if [[ -d "${BUILD_SRCS}/hardware/nvidia/t264/nv-public" ]]; then
+        git -C "${BUILD_SRCS}/hardware/nvidia/t264/nv-public" add -A
     fi
     if [[ -d "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen/kernel-dts" ]]; then
         git -C "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen/kernel-dts" add -A
@@ -164,6 +177,10 @@ if [[ "$ACTION" = "apply" ]]; then
         git -C "${BUILD_SRCS}/$KERNEL_DIR" config user.name "$GIT_AUTHOR_NAME"
         git -C "${BUILD_SRCS}/$KERNEL_DIR" config user.email "$GIT_AUTHOR_EMAIL"
     fi
+    if [[ -d "${BUILD_SRCS}/build/nvidia-public" ]]; then
+        git -C "${BUILD_SRCS}/build/nvidia-public" config user.name "$GIT_AUTHOR_NAME"
+        git -C "${BUILD_SRCS}/build/nvidia-public" config user.email "$GIT_AUTHOR_EMAIL"
+    fi
     if [[ -d "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen/kernel-dts" ]]; then
         git -C "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen/kernel-dts" config user.name "$GIT_AUTHOR_NAME"
         git -C "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen/kernel-dts" config user.email "$GIT_AUTHOR_EMAIL"
@@ -172,12 +189,22 @@ if [[ "$ACTION" = "apply" ]]; then
         git -C "${BUILD_SRCS}/hardware/nvidia/t23x/nv-public" config user.name "$GIT_AUTHOR_NAME"
         git -C "${BUILD_SRCS}/hardware/nvidia/t23x/nv-public" config user.email "$GIT_AUTHOR_EMAIL"
     fi
+    if [[ -d "${BUILD_SRCS}/hardware/nvidia/t264/nv-public" ]]; then
+        git -C "${BUILD_SRCS}/hardware/nvidia/t264/nv-public" config user.name "$GIT_AUTHOR_NAME"
+        git -C "${BUILD_SRCS}/hardware/nvidia/t264/nv-public" config user.email "$GIT_AUTHOR_EMAIL"
+    fi
 
     # Commit all staged files
     git -C "${BUILD_SRCS}/$D4XX_SRC_DST" commit -m "RS patched" || true
     [[ -d "${BUILD_SRCS}/$KERNEL_DIR" ]] && git -C "${BUILD_SRCS}/$KERNEL_DIR" commit -m "RS patched" || true
+    if [[ -d "${BUILD_SRCS}/build/nvidia-public" ]]; then
+        git -C "${BUILD_SRCS}/build/nvidia-public" commit -m "RS patched" || true
+    fi
     if [[ -d "${BUILD_SRCS}/hardware/nvidia/t23x/nv-public" ]]; then
         git -C "${BUILD_SRCS}/hardware/nvidia/t23x/nv-public" commit -m "RS patched" || true
+    fi
+    if [[ -d "${BUILD_SRCS}/hardware/nvidia/t264/nv-public" ]]; then
+        git -C "${BUILD_SRCS}/hardware/nvidia/t264/nv-public" commit -m "RS patched" || true
     fi
     if [[ -d "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen/kernel-dts" ]]; then
         git -C "${BUILD_SRCS}/hardware/nvidia/platform/t19x/galen/kernel-dts" commit -m "RS patched" || true
