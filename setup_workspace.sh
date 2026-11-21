@@ -53,14 +53,14 @@ else
         mkdir -p "l4t-gcc/$JETPACK_VERSION"
         pushd l4t-gcc/$JETPACK_VERSION
         if [[ "$JETPACK_VERSION" == "7.x" ]]; then
-            wget --quiet https://developer.nvidia.com/downloads/embedded/L4T/r38_Release_v2.0/release/x-tools.tbz2 -O x-tools.tbz2
-            tar xf x-tools.tbz2 ./x-tools/aarch64-none-linux-gnu --strip-components 3
+            curl -fLsS -o x-tools.tbz2 https://developer.nvidia.com/downloads/embedded/L4T/r38_Release_v2.0/release/x-tools.tbz2
+            tar --strip-components=3 -xf x-tools.tbz2 ./x-tools/aarch64-none-linux-gnu
         elif [[ "$JETPACK_VERSION" == "6.x" ]]; then
-            wget --quiet https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v3.0/toolchain/aarch64--glibc--stable-2022.08-1.tar.bz2 -O aarch64--glibc--stable-final.tar.bz2
-            tar xf aarch64--glibc--stable-final.tar.bz2 --strip-components 1
+            curl -fLsS -o aarch64--glibc--stable-final.tar.bz2 https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v3.0/toolchain/aarch64--glibc--stable-2022.08-1.tar.bz2
+            tar --strip-components=1 -xf aarch64--glibc--stable-final.tar.bz2
         elif [[ "$JETPACK_VERSION" == "5.x" ]]; then
-            wget --quiet https://developer.nvidia.com/embedded/jetson-linux/bootlin-toolchain-gcc-93 -O aarch64--glibc--stable-final.tar.gz
-            tar xf aarch64--glibc--stable-final.tar.gz
+            curl -fLsS -o aarch64--glibc--stable-final.tar.gz https://developer.nvidia.com/embedded/jetson-linux/bootlin-toolchain-gcc-93
+            tar -xf aarch64--glibc--stable-final.tar.gz
         fi
         popd
     fi
