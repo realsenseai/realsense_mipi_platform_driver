@@ -184,6 +184,33 @@ error:
 }
 EXPORT_SYMBOL(max96717_setup_control);
 
+int max96717_check_control(struct device *dev)
+{
+	struct max96717 *priv = dev_get_drvdata(dev);
+	struct gmsl_link_ctx *g_ctx;
+	unsigned int i2c4, i2c5;
+	int err;
+
+	mutex_lock(&priv->lock);
+	g_ctx = priv->g_client.g_ctx;
+	if (!g_ctx) {
+		err = -EINVAL;
+		goto out;
+	}
+
+	err = regmap_read(priv->regmap, MAX96717_I2C4_ADDR, &i2c4);
+	if (!err)
+		err = regmap_read(priv->regmap, MAX96717_I2C5_ADDR, &i2c5);
+	/* A serializer power-cycle restarts it with a zero translation. */
+	if (!err && (i2c4 != (u8)(g_ctx->sdev_reg << 1) ||
+		     i2c5 != (u8)(g_ctx->sdev_def << 1)))
+		err = -ENOLINK;
+out:
+	mutex_unlock(&priv->lock);
+	return err;
+}
+EXPORT_SYMBOL(max96717_check_control);
+
 static int max96717_write_acc(struct device *dev, struct regmap *regmap,
 			     u16 addr, u8 val, int *err)
 {
