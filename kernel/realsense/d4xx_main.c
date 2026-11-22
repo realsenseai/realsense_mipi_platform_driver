@@ -109,6 +109,9 @@ struct ser_interface {
 	/* Setup and control */
 	int (*setup_control)(struct device *dev);
 	int (*reset_control)(struct device *dev);
+	/* 0 while the camera I2C translation is intact, else an errno.
+	 * Optional - NULL if the serializer is not reset with the camera. */
+	int (*check_control)(struct device *dev);
 	int (*init_settings)(struct device *dev);
 
 	/* Device pairing */
@@ -608,6 +611,7 @@ static const struct ser_interface max96717_interface = {
 	.stream_stop = max96717_stream_stop,
 	.setup_control = max96717_setup_control,
 	.reset_control = max96717_reset_control,
+	.check_control = max96717_check_control,
 	.init_settings = max96717_init_settings,
 	.sdev_pair = max96717_sdev_pair,
 	.sdev_unpair = max96717_sdev_unpair,
@@ -1179,7 +1183,7 @@ static int ds5_write(struct ds5 *state, u16 reg, u16 val)
 		if (ret == 0)
 			break;
 		if (retry < DS5_I2C_RETRY_COUNT - 1) {
-			dev_warn(&state->client->dev,
+			dev_warn_ratelimited(&state->client->dev,
 				"%s(): i2c write retry %d, 0x%04x = 0x%x, err %d\n",
 				__func__, retry + 1, reg, val, ret);
 			usleep_range(DS5_I2C_RETRY_DELAY_US,
@@ -1187,7 +1191,7 @@ static int ds5_write(struct ds5 *state, u16 reg, u16 val)
 		}
 	}
 	if (ret < 0)
-		dev_err(&state->client->dev,
+		dev_err_ratelimited(&state->client->dev,
 			"%s(): i2c write failed after %d retries, 0x%04x = 0x%x, err %d\n",
 			__func__, DS5_I2C_RETRY_COUNT, reg, val, ret);
 	else if (state->dfu_dev.dfu_state_flag == DS5_DFU_IDLE)
@@ -1215,7 +1219,7 @@ static int ds5_raw_write(struct ds5 *state, u16 reg,
 		if (ret == 0)
 			break;
 		if (retry < DS5_I2C_RETRY_COUNT - 1) {
-			dev_warn(&state->client->dev,
+			dev_warn_ratelimited(&state->client->dev,
 				"%s(): i2c raw write retry %d, 0x%04x size(%d), err %d\n",
 				__func__, retry + 1, reg, (int)val_len, ret);
 			usleep_range(DS5_I2C_RETRY_DELAY_US,
@@ -1223,7 +1227,7 @@ static int ds5_raw_write(struct ds5 *state, u16 reg,
 		}
 	}
 	if (ret < 0)
-		dev_err(&state->client->dev,
+		dev_err_ratelimited(&state->client->dev,
 			"%s(): i2c raw write failed after %d retries, 0x%04x size(%d), err %d\n",
 			__func__, DS5_I2C_RETRY_COUNT, reg, (int)val_len, ret);
 	else if (state->dfu_dev.dfu_state_flag == DS5_DFU_IDLE)
@@ -1251,7 +1255,7 @@ static int ds5_read(struct ds5 *state, u16 reg, u16 *val)
 		if (ret == 0)
 			break;
 		if (retry < DS5_I2C_RETRY_COUNT - 1) {
-			dev_warn(&state->client->dev,
+			dev_warn_ratelimited(&state->client->dev,
 				"%s(): i2c read retry %d, 0x%04x, err %d\n",
 				__func__, retry + 1, reg, ret);
 			usleep_range(DS5_I2C_RETRY_DELAY_US,
@@ -1259,7 +1263,7 @@ static int ds5_read(struct ds5 *state, u16 reg, u16 *val)
 		}
 	}
 	if (ret < 0)
-		dev_err(&state->client->dev,
+		dev_err_ratelimited(&state->client->dev,
 			"%s(): i2c read failed after %d retries, 0x%04x, err %d\n",
 			__func__, DS5_I2C_RETRY_COUNT, reg, ret);
 	else if (state->dfu_dev.dfu_state_flag == DS5_DFU_IDLE)
@@ -1298,7 +1302,7 @@ int ds5_raw_read(struct ds5 *state, u16 reg, void *val, size_t val_len)
 		if (ret == 0)
 			break;
 		if (retry < DS5_I2C_RETRY_COUNT - 1) {
-			dev_warn(&state->client->dev,
+			dev_warn_ratelimited(&state->client->dev,
 				"%s(): i2c raw read retry %d, 0x%04x size(%d), err %d\n",
 				__func__, retry + 1, reg, (int)val_len, ret);
 			usleep_range(DS5_I2C_RETRY_DELAY_US,
@@ -1306,7 +1310,7 @@ int ds5_raw_read(struct ds5 *state, u16 reg, void *val, size_t val_len)
 		}
 	}
 	if (ret < 0)
-		dev_err(&state->client->dev,
+		dev_err_ratelimited(&state->client->dev,
 			"%s(): i2c raw read failed after %d retries, 0x%04x size(%d), err %d\n",
 			__func__, DS5_I2C_RETRY_COUNT, reg, (int)val_len, ret);
 
@@ -3946,6 +3950,12 @@ static int ds5_set_calibration_data(struct ds5 *state,
  */
 #define DS5_D585_DFU_SERDES_SETTLE_MS	1500
 
+/* The PWDNB cycle can also land after the first recovery (reset while
+ * streaming), so the readiness poll re-recovers, spaced and capped: each
+ * recover_link() switches off the other links of the deserializer. */
+#define DS5_D585_SERDES_RETRY_MS	300
+#define DS5_D585_SERDES_MAX_RETRIES	3
+
 /* Minimum interval between consecutive HW resets (ms).
  * Rapid back-to-back resets degrade the GMSL link.
  */
@@ -4068,6 +4078,55 @@ static int ds5_set_ser_esync_tunneling(struct ds5 *state, bool enable)
 static int ds5_sync_mode_serdes(struct ds5 *state, struct v4l2_ctrl *ctrl,
 				s32 mode);
 
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+/* Restore a D585 prototype's serializer alias and control tunnel.
+ * Caller holds serdes_lock__. */
+static int __ds5_d585_serdes_recover(struct ds5 *primary)
+{
+	int ret;
+
+	ret = primary->ser_ops->reset_control(primary->ser_dev);
+	if (!ret)
+		ret = primary->dser_ops->recover_link(primary->dser_dev,
+						      primary->ser_dev,
+						      primary->gmsl_link);
+	if (!ret)
+		ret = primary->ser_ops->setup_control(primary->ser_dev);
+	if (!ret)
+		ret = primary->ser_ops->init_settings(primary->ser_dev);
+	return ret;
+}
+
+static int ds5_d585_serdes_recover(struct ds5 *primary)
+{
+	int ret;
+
+	mutex_lock(&serdes_lock__);
+	ret = __ds5_d585_serdes_recover(primary);
+	mutex_unlock(&serdes_lock__);
+	return ret;
+}
+
+/* 1 if the translation is intact, else the recovery result. Under one lock,
+ * so a sibling's recover_link() link isolation cannot fake a lost check.
+ * @force skips the check: an intact translation does not undo a failed
+ * init_settings(). */
+static int ds5_d585_serdes_retry(struct ds5 *primary, bool force)
+{
+	const struct ser_interface *ops = primary->ser_ops;
+	int ret;
+
+	mutex_lock(&serdes_lock__);
+	if (!force && ops->check_control &&
+	    !ops->check_control(primary->ser_dev))
+		ret = 1;
+	else
+		ret = __ds5_d585_serdes_recover(primary);
+	mutex_unlock(&serdes_lock__);
+	return ret;
+}
+#endif
+
 /*
  * ds5_hw_reset_with_recovery - Perform hardware reset with readiness polling
  * @state: Driver state structure
@@ -4101,6 +4160,12 @@ static int ds5_hw_reset_with_recovery_locked(struct ds5 *state)
 		READ_ONCE(state->dfu_dev.manifest_complete);
 	unsigned long ds5_last_reset_jiffies = READ_ONCE(state->ds5_dev->last_reset_jiffies);
 	unsigned long ts, timeout;
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	struct ds5 *serdes_primary = NULL;
+	unsigned long serdes_ts = 0;
+	int serdes_ret = 0;
+	int serdes_retries = 0;
+#endif
 
 	dev_info(&state->client->dev, "%s(): Initiating HW reset with recovery\n",
 		__func__);
@@ -4138,17 +4203,7 @@ static int ds5_hw_reset_with_recovery_locked(struct ds5 *state)
 		if (!primary || !primary->dser_ops->recover_link)
 			return -ENODEV;
 
-		mutex_lock(&serdes_lock__);
-		ret = primary->ser_ops->reset_control(primary->ser_dev);
-		if (!ret)
-			ret = primary->dser_ops->recover_link(primary->dser_dev,
-						      primary->ser_dev,
-						      primary->gmsl_link);
-		if (!ret)
-			ret = primary->ser_ops->setup_control(primary->ser_dev);
-		if (!ret)
-			ret = primary->ser_ops->init_settings(primary->ser_dev);
-		mutex_unlock(&serdes_lock__);
+		ret = ds5_d585_serdes_recover(primary);
 		if (ret) {
 			dev_err(&state->client->dev,
 				"%s(): pre-HW-reset D585 SerDes recovery failed (%d)\n",
@@ -4258,23 +4313,13 @@ static int ds5_hw_reset_with_recovery_locked(struct ds5 *state)
 			msleep(DS5_D585_DFU_SERDES_SETTLE_MS);
 		}
 
-		mutex_lock(&serdes_lock__);
-		ret = primary->ser_ops->reset_control(primary->ser_dev);
-		if (!ret)
-			ret = primary->dser_ops->recover_link(primary->dser_dev,
-						      primary->ser_dev,
-						      primary->gmsl_link);
-		if (!ret)
-			ret = primary->ser_ops->setup_control(primary->ser_dev);
-		if (!ret)
-			ret = primary->ser_ops->init_settings(primary->ser_dev);
-		mutex_unlock(&serdes_lock__);
-		if (ret) {
-			dev_err(&state->client->dev,
-				"%s(): D585 prototype SerDes recovery failed (%d)\n",
-				__func__, ret);
-			return ret;
-		}
+		serdes_primary = primary;
+		serdes_ret = ds5_d585_serdes_recover(primary);
+		serdes_ts = jiffies;
+		if (serdes_ret)
+			dev_warn(&state->client->dev,
+				 "%s(): D585 prototype SerDes recovery failed (%d), retrying until ready\n",
+				 __func__, serdes_ret);
 	}
 #endif
 
@@ -4282,6 +4327,12 @@ static int ds5_hw_reset_with_recovery_locked(struct ds5 *state)
 	for (retry = 0, timeout = ts + msecs_to_jiffies(DS5_HW_RESET_TIMEOUT_MS);
 			; retry++, msleep_range(DS5_HW_RESET_POLL_INTERVAL_MS)) {
 		if (!time_before(jiffies, timeout)) {
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+			if (serdes_primary && serdes_ret)
+				dev_err(&state->client->dev,
+					"%s(): D585 prototype SerDes recovery failed (%d)\n",
+					__func__, serdes_ret);
+#endif
 			dev_err(&state->client->dev,
 				"%s(): Device isn't ready after %d ms (last control-status: 0x%04x, i2c ret: %d)\n",
 				__func__, jiffies_to_msecs(jiffies - ts), ready_status, ret);
@@ -4294,6 +4345,26 @@ static int ds5_hw_reset_with_recovery_locked(struct ds5 *state)
 			dev_dbg(&state->client->dev,
 				"%s(): Device not responding (resetting), retry %d\n",
 				__func__, retry);
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+			/* -EBUSY/-EIO come from admission or a latched clock
+			 * fault, not the wire: nothing to recover. */
+			if (serdes_primary && ret != -EBUSY && ret != -EIO &&
+			    serdes_retries < DS5_D585_SERDES_MAX_RETRIES &&
+			    time_after_eq(jiffies, serdes_ts +
+					  msecs_to_jiffies(DS5_D585_SERDES_RETRY_MS))) {
+				int r = ds5_d585_serdes_retry(serdes_primary,
+							      serdes_ret != 0);
+
+				serdes_ts = jiffies;
+				if (r <= 0)
+					serdes_retries++;
+				if (!r)
+					dev_info(&state->client->dev,
+						 "%s(): D585 prototype SerDes re-recovered after %d ms\n",
+						 __func__, jiffies_to_msecs(jiffies - ts));
+				serdes_ret = r > 0 ? 0 : r;
+			}
+#endif
 			continue;
 		}
 		if (ready_status == DS5_HW_RESET_READY_EXPECTED_VAL) {
@@ -4318,6 +4389,15 @@ static int ds5_hw_reset_with_recovery_locked(struct ds5 *state)
 		}
 	}
 
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	/* The camera answers, but the serializer setup never completed. */
+	if (serdes_primary && serdes_ret) {
+		dev_err(&state->client->dev,
+			"%s(): D585 prototype SerDes recovery failed (%d)\n",
+			__func__, serdes_ret);
+		return serdes_ret;
+	}
+#endif
 
 	/* 7. Wait for DEVICE_TYPE to confirm GMSL link recovery.
 	 *    Step 6 confirmed reset completion via control-status defaults.

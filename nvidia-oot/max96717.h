@@ -54,6 +54,16 @@ int max96717_stream_stop(struct device *dev, u32 vc_id);
 int max96717_setup_control(struct device *dev);
 
 /**
+ * Checks that the serializer still holds the camera I2C translation
+ * programmed by max96717_setup_control().
+ *
+ * @param  [in]  dev            The serializer device handle.
+ *
+ * @return  0 if intact, -ENOLINK if lost, or an I2C error.
+ */
+int max96717_check_control(struct device *dev);
+
+/**
  * Reverts I2C overrides and resets a serializer device.
  *
  * @param  [in]  dev            The serializer device handle.
