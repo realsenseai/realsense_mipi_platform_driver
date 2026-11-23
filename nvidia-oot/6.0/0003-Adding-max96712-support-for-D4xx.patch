@@ -20,11 +20,11 @@ External sync must not drop the trigger its siblings still use.
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- drivers/media/i2c/max96712.c | 1578 lines
- 1 file changed, 1501 insertions(+), 77 deletions(-)
+ drivers/media/i2c/max96712.c | 1602 lines
+ 1 file changed, 1525 insertions(+), 77 deletions(-)
 
 diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
-index 8e237eef049896820fa58cacbac1cfe7c26fbf43..43555a5464ab5389caa9e2e52cec96459ebe789b 100644
+index 8e237eef049896820fa58cacbac1cfe7c26fbf43..ce66d3affe63469c4b733af180a33e112bdb39fe 100644
 --- a/drivers/media/i2c/max96712.c
 +++ b/drivers/media/i2c/max96712.c
 @@ -1,4 +1,5 @@
@@ -277,7 +277,7 @@ index 8e237eef049896820fa58cacbac1cfe7c26fbf43..43555a5464ab5389caa9e2e52cec9645
  	i2c_client = global_priv[channel]->i2c_client;
  	bak = i2c_client->addr;
  	i2c_client->addr = slaveAddr / 2;
-@@ -80,10 +261,56 @@
+@@ -80,10 +261,67 @@
  		dev_err(&i2c_client->dev, "%s: addr = 0x%x, val = 0x%x\n",
  				__func__, addr, *val);
  	}
@@ -310,14 +310,14 @@ index 8e237eef049896820fa58cacbac1cfe7c26fbf43..43555a5464ab5389caa9e2e52cec9645
 +	return err;
 +}
 +
-+static int max96712_write_slave_reg(struct max96712 *priv,
++/* Caller holds priv->lock. */
++static int __max96712_write_slave_reg(struct max96712 *priv,
 +			int ShortSlaveAddr, u16 addr, unsigned int val)
 +{
 +	struct i2c_client *i2c_client = priv->i2c_client;
 +	int err;
 +	int bak = i2c_client->addr;
 +
-+	mutex_lock(&priv->lock);
 +	i2c_client->addr = ShortSlaveAddr;
 +	err = regmap_write(priv->regmap, addr, val);
 +	i2c_client->addr = bak;
@@ -328,6 +328,17 @@ index 8e237eef049896820fa58cacbac1cfe7c26fbf43..43555a5464ab5389caa9e2e52cec9645
 +
 +	/* delay before next i2c command as required for SERDES link */
 +	usleep_range(100, 110);
++
++	return err;
++}
++
++static int max96712_write_slave_reg(struct max96712 *priv,
++			int ShortSlaveAddr, u16 addr, unsigned int val)
++{
++	int err;
++
++	mutex_lock(&priv->lock);
++	err = __max96712_write_slave_reg(priv, ShortSlaveAddr, addr, val);
 +	mutex_unlock(&priv->lock);
 +
 +	return err;
@@ -335,7 +346,7 @@ index 8e237eef049896820fa58cacbac1cfe7c26fbf43..43555a5464ab5389caa9e2e52cec9645
  
  static int max96712_read_reg(struct max96712 *priv,
  			u16 addr, unsigned int *val)
-@@ -99,6 +326,58 @@
+@@ -99,6 +337,58 @@
  	return err;
  }
  
@@ -394,7 +405,7 @@ index 8e237eef049896820fa58cacbac1cfe7c26fbf43..43555a5464ab5389caa9e2e52cec9645
  
  static int max96712_stats_show(struct seq_file *s, void *data)
  {
-@@ -146,6 +425,7 @@
+@@ -146,6 +436,7 @@
  
  
  static const struct file_operations max96712_debugfs_fops = {
@@ -402,7 +413,7 @@ index 8e237eef049896820fa58cacbac1cfe7c26fbf43..43555a5464ab5389caa9e2e52cec9645
  	.open = max96712_debugfs_open,
  	.read = seq_read,
  	.write = max96712_debugfs_write,
-@@ -153,80 +433,163 @@
+@@ -153,80 +444,163 @@
  	.release = single_release,
  };
  
@@ -617,7 +628,7 @@ index 8e237eef049896820fa58cacbac1cfe7c26fbf43..43555a5464ab5389caa9e2e52cec9645
  
  #if defined(NV_I2C_DRIVER_STRUCT_PROBE_WITHOUT_I2C_DEVICE_ID_ARG) /* Linux 6.3 */
  static int max96712_probe(struct i2c_client *client)
-@@ -237,10 +600,18 @@
+@@ -237,10 +611,18 @@
  {
  	struct max96712 *priv;
  	int err = 0;
@@ -636,7 +647,7 @@ index 8e237eef049896820fa58cacbac1cfe7c26fbf43..43555a5464ab5389caa9e2e52cec9645
  	priv->i2c_client = client;
  	priv->regmap = devm_regmap_init_i2c(priv->i2c_client,
  				&max96712_regmap_config);
-@@ -249,16 +620,71 @@
+@@ -249,16 +631,71 @@
  			"regmap init failed: %ld\n", PTR_ERR(priv->regmap));
  		return -ENODEV;
  	}
@@ -717,7 +728,7 @@ index 8e237eef049896820fa58cacbac1cfe7c26fbf43..43555a5464ab5389caa9e2e52cec9645
  	if (err)
  		return err;
  
-@@ -274,15 +700,1012 @@
+@@ -274,15 +711,1025 @@
  static void max96712_remove(struct i2c_client *client)
  #endif
  {
@@ -967,14 +978,23 @@ index 8e237eef049896820fa58cacbac1cfe7c26fbf43..43555a5464ab5389caa9e2e52cec9645
 +}
 +EXPORT_SYMBOL(max96712_release_pipe);
 +
-+static int max96712_reset_oneshot_link_mask(struct max96712 *priv, uint8_t link_mask)
++/* Caller holds priv->lock and owes the 100 ms settle. */
++static int __max96712_reset_oneshot_link_mask(struct max96712 *priv, uint8_t link_mask)
 +{
-+	int err = max96712_write_reg(priv, MAX96712_CTRL1_ADDR, link_mask);
++	return max96712_write_reg(priv, MAX96712_CTRL1_ADDR, link_mask);
++}
 +
-+	if (err)
-+		return err;
-+	msleep(100);
-+	return 0;
++/* Locks only the CTRL1 write: the slave-register helpers point the client
++ * at a serializer under priv->lock. */
++static void max96712_reset_oneshot_link_mask(struct max96712 *priv, uint8_t link_mask)
++{
++	int err;
++
++	mutex_lock(&priv->lock);
++	err = __max96712_reset_oneshot_link_mask(priv, link_mask);
++	mutex_unlock(&priv->lock);
++	if (!err)
++		msleep(100);
 +}
 +
 +void max96712_reset_oneshot(struct device *dev)
@@ -1474,7 +1494,10 @@ index 8e237eef049896820fa58cacbac1cfe7c26fbf43..43555a5464ab5389caa9e2e52cec9645
 +				   0xF0 | BIT(link_id));
 +	if (!err) {
 +		msleep(20);
-+		err = max96712_reset_oneshot_link_mask(priv, BIT(link_id));
++		err = __max96712_reset_oneshot_link_mask(priv, BIT(link_id));
++		/* Settled under the lock: the link stays isolated until restored. */
++		if (!err)
++			msleep(100);
 +	}
 +
 +	if (!err)
@@ -1484,8 +1507,9 @@ index 8e237eef049896820fa58cacbac1cfe7c26fbf43..43555a5464ab5389caa9e2e52cec9645
 +	 * deserializer reports link lock, restore the assigned non-zero alias.
 +	 */
 +	if (!err && target_addr != MAX9295_DEFAULT_ADDR) {
-+		err = max96712_write_slave_reg(priv, MAX9295_DEFAULT_ADDR, 0,
-+					       target_addr << 1);
++		/* priv->lock is held: the locked variant would deadlock. */
++		err = __max96712_write_slave_reg(priv, MAX9295_DEFAULT_ADDR, 0,
++						 target_addr << 1);
 +		if (!err)
 +			msleep(20);
 +	}
@@ -1733,7 +1757,7 @@ index 8e237eef049896820fa58cacbac1cfe7c26fbf43..43555a5464ab5389caa9e2e52cec9645
  
  static const struct i2c_device_id max96712_id[] = {
  	{ "max96712", 0 },
-@@ -290,7 +1713,7 @@
+@@ -290,7 +1737,7 @@
  };
  
  static const struct of_device_id max96712_of_match[] = {
@@ -1742,7 +1766,7 @@ index 8e237eef049896820fa58cacbac1cfe7c26fbf43..43555a5464ab5389caa9e2e52cec9645
  	{ },
  };
  
-@@ -300,6 +1723,7 @@
+@@ -300,6 +1747,7 @@
  	.driver = {
  		.name = "max96712",
  		.owner = THIS_MODULE,
