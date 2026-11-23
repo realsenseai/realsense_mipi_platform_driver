@@ -211,9 +211,16 @@ drives the pulse is a deserializer-level, board-level fact, and the two sources 
 both drive it.
 
 - The signal reaches the camera over **GMSL GPIO channel 23** on every board: both
-  serializers receive it there (`max9295` GPIO0 `RX_ID` `0x17`, `max96717` GPIO0 the same),
-  and `ds5_set_ser_esync_tunneling()` arms that on the serializer before touching the
-  deserializer.
+  serializers receive it there (`max9295` GPIO0 `RX_ID` `0x17`; `max96717` MFP3 + MFP4 on a
+  D585, MFP0 on a D585 prototype), and `ds5_set_ser_esync_tunneling()` arms that on the
+  serializer before touching the deserializer.
+- **The max96717 sync pins depend on the camera, so d4xx tells the serializer which one it is.**
+  The D585's two sync inputs (HKR GP_52 / GP_4, FW selects one via `gmsl.sync.gpio`) sit on
+  MFP3/MFP4; the prototype takes it on MFP0 (HKR GP_40) and MFP1 is held low on its board
+  (HW-proven, RSDEV-16477). `ds5_set_ser_esync_tunneling()` derives "prototype" from the
+  cached PID (`D585_2C/3C_PROTO_PID`) and calls the optional `ser_interface.set_d585_proto`
+  before every enable/disable. Prototype support is slated for removal, so keep all of it in
+  that op, its one call and the `d585_proto` branch in `max96717_{en,dis}able_gpio_tunneling()`.
 - **max96724 and max96712 both generate the pulse themselves by default**, from the 25 MHz
   crystal, at the depth stream's rate (`setup_fsync`/`disable_fsync` in `dser_interface`).
   **One generator feeds every link of its deserializer**, so both ops take the GMSL link:

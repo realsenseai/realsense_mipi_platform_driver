@@ -121,6 +121,9 @@ struct ser_interface {
 	/* GPIO tunneling (external frame sync) */
 	int (*enable_gpio_tunneling)(struct device *dev);
 	int (*disable_gpio_tunneling)(struct device *dev);
+	/* D585 prototype sync pin layout, set before the two calls above.
+	 * Optional - NULL if the serializer has a single layout. */
+	void (*set_d585_proto)(struct device *dev, bool proto);
 
 	/* Identification */
 	const char *name;
@@ -617,6 +620,7 @@ static const struct ser_interface max96717_interface = {
 	.sdev_unpair = max96717_sdev_unpair,
 	.enable_gpio_tunneling = max96717_enable_gpio_tunneling,
 	.disable_gpio_tunneling = max96717_disable_gpio_tunneling,
+	.set_d585_proto = max96717_set_d585_proto,
 	.name = "max96717",
 };
 /* Max96717 only has one pipe, and its ID is 2 */
@@ -4033,6 +4037,15 @@ static int ds5_set_ser_esync_tunneling(struct ds5 *state, bool enable)
 	dev_dbg(&state->client->dev,
 		"%s(): serializer ESYNC %s requested\n",
 		__func__, enable ? "enable" : "disable");
+
+	if (state->ser_ops->set_d585_proto) {
+		u16 pid = state->ds5_dev ?
+			  READ_ONCE(state->ds5_dev->d585_product_id) : 0;
+
+		state->ser_ops->set_d585_proto(state->ser_dev,
+					       pid == D585_2C_PROTO_PID ||
+					       pid == D585_3C_PROTO_PID);
+	}
 
 	if (enable)
 		ret = state->ser_ops->enable_gpio_tunneling(state->ser_dev);

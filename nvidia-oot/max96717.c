@@ -34,12 +34,8 @@
 #define MAX96717_MIPI_RX0_RESET 0x48
 #define MAX96717_MIPI_RX0_NORMAL 0x40
 
-#define MAX96717_2BE_ADDR 0x02BE
-#define MAX96717_2BF_ADDR 0x02BF
-#define MAX96717_2C0_ADDR 0x02C0
-#define MAX96717_2C1_ADDR 0x02C1
-#define MAX96717_2C2_ADDR 0x02C2
-#define MAX96717_2C3_ADDR 0x02C3
+/* MFPn GPIO_A; GPIO_B and GPIO_C follow it. */
+#define MAX96717_GPIO_A_ADDR(mfp)	(0x02BE + 3 * (mfp))
 
 #define MAX96717_I2C1_ADDR 0x41
 #define MAX96717_I2C4_ADDR 0x44
@@ -47,14 +43,14 @@
 #define MAX96717_I2C_MST_BT_MASK 0x70
 #define MAX96717_I2C_FAST_PLUS_MST_BT (7 << 4)
 
-/* GPIO 0 config values - Receives ID 0x17 */
-#define MAX96717_2BE_ESYNC 0x24
-#define MAX96717_2BF_ESYNC 0x60
-#define MAX96717_2C0_ESYNC 0x57
-/* GPIO 1 config values - Receives ID 0x17 */
-#define MAX96717_2C1_ESYNC 0x24
-#define MAX96717_2C2_ESYNC 0x60
-#define MAX96717_2C3_ESYNC 0x57
+/* Sync receiver: RX on GMSL GPIO ID 0x17 (23), pin output enabled */
+#define MAX96717_SYNC_RX_A 0x24
+#define MAX96717_SYNC_RX_B 0x60
+#define MAX96717_SYNC_RX_C 0x57
+/* Released MFPn: high-Z input with pull-down, TX/RX IDs back to n */
+#define MAX96717_MFP_OFF_A		0x81
+#define MAX96717_MFP_OFF_B(mfp)		(0xA0 | (mfp))
+#define MAX96717_MFP_OFF_C(mfp)		(mfp)
 
 #define MAX96717_GPIO7_A_ADDR		0x02D3	/* MFP7 / pass-through SDA1 */
 #define MAX96717_GPIO7_B_ADDR		0x02D4
@@ -88,6 +84,8 @@ struct max96717 {
 	u16 active_vc_mask;
 	/* Last-stream MIPI RX re-arm failed; complete it before arming any VC. */
 	bool rx_rearm_pending;
+	/* D585 prototype: external sync on MFP0 instead of MFP3/MFP4. */
+	bool d585_proto;
 };
 
 static int max96717_write_reg(struct device *dev, u16 addr, u8 val)
@@ -226,6 +224,29 @@ static int max96717_write_acc(struct device *dev, struct regmap *regmap,
 	return *err;
 }
 
+static void max96717_write_mfp(struct device *dev, struct regmap *regmap,
+			       unsigned int mfp, u8 a, u8 b, u8 c, int *err)
+{
+	u16 addr = MAX96717_GPIO_A_ADDR(mfp);
+
+	max96717_write_acc(dev, regmap, addr, a, err);
+	max96717_write_acc(dev, regmap, addr + 1, b, err);
+	max96717_write_acc(dev, regmap, addr + 2, c, err);
+}
+
+void max96717_set_d585_proto(struct device *dev, bool proto)
+{
+	struct max96717 *priv = dev ? dev_get_drvdata(dev) : NULL;
+
+	if (!priv)
+		return;
+
+	mutex_lock(&priv->lock);
+	priv->d585_proto = proto;
+	mutex_unlock(&priv->lock);
+}
+EXPORT_SYMBOL(max96717_set_d585_proto);
+
 int max96717_enable_gpio_tunneling(struct device *dev)
 {
 	struct max96717 *priv = dev_get_drvdata(dev);
@@ -233,20 +254,17 @@ int max96717_enable_gpio_tunneling(struct device *dev)
 
 	mutex_lock(&priv->lock);
 
-	/*
-	 * GPIO0 carries H_VSYNC_TRIG from the deserializer on RX channel 23,
-	 * GPIO1 carries RGB_FSYNC on the same channel (Currently unused),
-	 * GPIO6 returns the camera H_STROBE_OUT_1V8 signal on TX channel 31.
-	 */
-	/* GPIO 0 receiver */
-	max96717_write_acc(dev, priv->regmap, MAX96717_2BE_ADDR, MAX96717_2BE_ESYNC, &err);
-	max96717_write_acc(dev, priv->regmap, MAX96717_2BF_ADDR, MAX96717_2BF_ESYNC, &err);
-	max96717_write_acc(dev, priv->regmap, MAX96717_2C0_ADDR, MAX96717_2C0_ESYNC, &err);
-	/* GPIO 1 receiver */
-	max96717_write_acc(dev, priv->regmap, MAX96717_2C1_ADDR, MAX96717_2C1_ESYNC, &err);
-	max96717_write_acc(dev, priv->regmap, MAX96717_2C2_ADDR, MAX96717_2C2_ESYNC, &err);
-	max96717_write_acc(dev, priv->regmap, MAX96717_2C3_ADDR, MAX96717_2C3_ESYNC, &err);
-	/* GPIO 6 transmitter */
+	/* MFP3/MFP4 feed the camera's two sync inputs; its firmware listens on one. */
+	if (priv->d585_proto) {
+		max96717_write_mfp(dev, priv->regmap, 0, MAX96717_SYNC_RX_A,
+				   MAX96717_SYNC_RX_B, MAX96717_SYNC_RX_C, &err);
+	} else {
+		max96717_write_mfp(dev, priv->regmap, 3, MAX96717_SYNC_RX_A,
+				   MAX96717_SYNC_RX_B, MAX96717_SYNC_RX_C, &err);
+		max96717_write_mfp(dev, priv->regmap, 4, MAX96717_SYNC_RX_A,
+				   MAX96717_SYNC_RX_B, MAX96717_SYNC_RX_C, &err);
+	}
+	/* GPIO6 returns the camera H_STROBE_OUT_1V8 signal on TX channel 31. */
 	max96717_write_acc(dev, priv->regmap, MAX96717_GPIO6_A_ADDR, 0x27, &err);
 	max96717_write_acc(dev, priv->regmap, MAX96717_GPIO6_B_ADDR, 0x1F, &err);
 	max96717_write_acc(dev, priv->regmap, MAX96717_GPIO6_C_ADDR, 0x00, &err);
@@ -265,12 +283,14 @@ int max96717_disable_gpio_tunneling(struct device *dev)
 	mutex_lock(&priv->lock);
 
 	/* Restore default SRC pin function — plain GPIO, no ESYNC tunneling */
-	max96717_write_acc(dev, priv->regmap, MAX96717_2BE_ADDR, 0x00, &err);
-	max96717_write_acc(dev, priv->regmap, MAX96717_2BF_ADDR, 0x00, &err);
-	max96717_write_acc(dev, priv->regmap, MAX96717_2C0_ADDR, 0x00, &err);
-	max96717_write_acc(dev, priv->regmap, MAX96717_2C1_ADDR, 0x00, &err);
-	max96717_write_acc(dev, priv->regmap, MAX96717_2C2_ADDR, 0x00, &err);
-	max96717_write_acc(dev, priv->regmap, MAX96717_2C3_ADDR, 0x00, &err);
+	if (priv->d585_proto) {
+		max96717_write_mfp(dev, priv->regmap, 0, 0x00, 0x00, 0x00, &err);
+	} else {
+		max96717_write_mfp(dev, priv->regmap, 3, MAX96717_MFP_OFF_A,
+				   MAX96717_MFP_OFF_B(3), MAX96717_MFP_OFF_C(3), &err);
+		max96717_write_mfp(dev, priv->regmap, 4, MAX96717_MFP_OFF_A,
+				   MAX96717_MFP_OFF_B(4), MAX96717_MFP_OFF_C(4), &err);
+	}
 	max96717_write_acc(dev, priv->regmap, MAX96717_GPIO6_A_ADDR, 0x99, &err);
 	max96717_write_acc(dev, priv->regmap, MAX96717_GPIO6_B_ADDR, 0xA6, &err);
 	max96717_write_acc(dev, priv->regmap, MAX96717_GPIO6_C_ADDR, 0x46, &err);
