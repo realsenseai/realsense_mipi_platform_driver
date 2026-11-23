@@ -20,11 +20,11 @@ External sync must not drop the trigger its siblings still use.
 
 Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
 ---
- drivers/media/i2c/max96712.c | 1600 lines
- 1 file changed, 1514 insertions(+), 86 deletions(-)
+ drivers/media/i2c/max96712.c | 1624 lines
+ 1 file changed, 1538 insertions(+), 86 deletions(-)
 
 diff --git a/drivers/media/i2c/max96712.c b/drivers/media/i2c/max96712.c
-index 329a10dfd4597bf60a19b16e4992ef8b76695116..7f5d5be27f73883e8ccb4e48a7a5bbd6a7af575a 100644
+index 329a10dfd4597bf60a19b16e4992ef8b76695116..e4f135d3a6d3a84f84711295de297a3a3c9bc15d 100644
 --- a/drivers/media/i2c/max96712.c
 +++ b/drivers/media/i2c/max96712.c
 @@ -21,32 +21,205 @@
@@ -275,7 +275,7 @@ index 329a10dfd4597bf60a19b16e4992ef8b76695116..7f5d5be27f73883e8ccb4e48a7a5bbd6
  	i2c_client = global_priv[channel]->i2c_client;
  	bak = i2c_client->addr;
  	i2c_client->addr = slaveAddr / 2;
-@@ -85,12 +261,61 @@
+@@ -85,12 +261,72 @@
  	{
  		dev_err(&i2c_client->dev, "%s: addr = 0x%x, val = 0x%x\n",
  				__func__, addr, *val);
@@ -315,14 +315,14 @@ index 329a10dfd4597bf60a19b16e4992ef8b76695116..7f5d5be27f73883e8ccb4e48a7a5bbd6
 +	return err;
 +}
 +
-+static int max96712_write_slave_reg(struct max96712 *priv,
++/* Caller holds priv->lock. */
++static int __max96712_write_slave_reg(struct max96712 *priv,
 +			int ShortSlaveAddr, u16 addr, unsigned int val)
 +{
 +	struct i2c_client *i2c_client = priv->i2c_client;
 +	int err;
 +	int bak = i2c_client->addr;
 +
-+	mutex_lock(&priv->lock);
 +	i2c_client->addr = ShortSlaveAddr;
 +	err = regmap_write(priv->regmap, addr, val);
 +	i2c_client->addr = bak;
@@ -333,6 +333,17 @@ index 329a10dfd4597bf60a19b16e4992ef8b76695116..7f5d5be27f73883e8ccb4e48a7a5bbd6
 +
 +	/* delay before next i2c command as required for SERDES link */
 +	usleep_range(100, 110);
++
++	return err;
++}
++
++static int max96712_write_slave_reg(struct max96712 *priv,
++			int ShortSlaveAddr, u16 addr, unsigned int val)
++{
++	int err;
++
++	mutex_lock(&priv->lock);
++	err = __max96712_write_slave_reg(priv, ShortSlaveAddr, addr, val);
 +	mutex_unlock(&priv->lock);
 +
 +	return err;
@@ -340,7 +351,7 @@ index 329a10dfd4597bf60a19b16e4992ef8b76695116..7f5d5be27f73883e8ccb4e48a7a5bbd6
  
  static int max96712_read_reg(struct max96712 *priv,
  			u16 addr, unsigned int *val)
-@@ -106,6 +331,58 @@
+@@ -106,6 +342,58 @@
  	return err;
  }
  
@@ -399,7 +410,7 @@ index 329a10dfd4597bf60a19b16e4992ef8b76695116..7f5d5be27f73883e8ccb4e48a7a5bbd6
  
  static int max96712_stats_show(struct seq_file *s, void *data)
  {
-@@ -154,6 +431,7 @@
+@@ -154,6 +442,7 @@
  
  
  static const struct file_operations max96712_debugfs_fops = {
@@ -407,7 +418,7 @@ index 329a10dfd4597bf60a19b16e4992ef8b76695116..7f5d5be27f73883e8ccb4e48a7a5bbd6
  	.open = max96712_debugfs_open,
  	.read = seq_read,
  	.write = max96712_debugfs_write,
-@@ -161,90 +439,177 @@
+@@ -161,90 +450,177 @@
  	.release = single_release,
  };
  
@@ -638,7 +649,7 @@ index 329a10dfd4597bf60a19b16e4992ef8b76695116..7f5d5be27f73883e8ccb4e48a7a5bbd6
  	priv->i2c_client = client;
  	priv->regmap = devm_regmap_init_i2c(priv->i2c_client,
  				&max96712_regmap_config);
-@@ -253,19 +618,84 @@
+@@ -253,19 +629,84 @@
  			"regmap init failed: %ld\n", PTR_ERR(priv->regmap));
  		return -ENODEV;
  	}
@@ -733,7 +744,7 @@ index 329a10dfd4597bf60a19b16e4992ef8b76695116..7f5d5be27f73883e8ccb4e48a7a5bbd6
  	/*set daymode by fault*/
  	dev_info(&client->dev, "%s:  success\n", __func__);
  
-@@ -276,14 +706,1011 @@
+@@ -276,14 +717,1024 @@
  static int
  max96712_remove(struct i2c_client *client)
  {
@@ -989,14 +1000,23 @@ index 329a10dfd4597bf60a19b16e4992ef8b76695116..7f5d5be27f73883e8ccb4e48a7a5bbd6
 +}
 +EXPORT_SYMBOL(max96712_get_ser_pipe_id);
 +
-+static int max96712_reset_oneshot_link_mask(struct max96712 *priv, uint8_t link_mask)
++/* Caller holds priv->lock and owes the 100 ms settle. */
++static int __max96712_reset_oneshot_link_mask(struct max96712 *priv, uint8_t link_mask)
 +{
-+	int err = max96712_write_reg(priv, MAX96712_CTRL1_ADDR, link_mask);
++	return max96712_write_reg(priv, MAX96712_CTRL1_ADDR, link_mask);
++}
 +
-+	if (err)
-+		return err;
-+	msleep(100);
-+	return 0;
++/* Locks only the CTRL1 write: the slave-register helpers point the client
++ * at a serializer under priv->lock. */
++static void max96712_reset_oneshot_link_mask(struct max96712 *priv, uint8_t link_mask)
++{
++	int err;
++
++	mutex_lock(&priv->lock);
++	err = __max96712_reset_oneshot_link_mask(priv, link_mask);
++	mutex_unlock(&priv->lock);
++	if (!err)
++		msleep(100);
 +}
 +
 +void max96712_reset_oneshot(struct device *dev)
@@ -1495,7 +1515,10 @@ index 329a10dfd4597bf60a19b16e4992ef8b76695116..7f5d5be27f73883e8ccb4e48a7a5bbd6
 +				   0xF0 | BIT(link_id));
 +	if (!err) {
 +		msleep(20);
-+		err = max96712_reset_oneshot_link_mask(priv, BIT(link_id));
++		err = __max96712_reset_oneshot_link_mask(priv, BIT(link_id));
++		/* Settled under the lock: the link stays isolated until restored. */
++		if (!err)
++			msleep(100);
 +	}
 +
 +	if (!err)
@@ -1505,8 +1528,9 @@ index 329a10dfd4597bf60a19b16e4992ef8b76695116..7f5d5be27f73883e8ccb4e48a7a5bbd6
 +	 * deserializer reports link lock, restore the assigned non-zero alias.
 +	 */
 +	if (!err && target_addr != MAX9295_DEFAULT_ADDR) {
-+		err = max96712_write_slave_reg(priv, MAX9295_DEFAULT_ADDR, 0,
-+					       target_addr << 1);
++		/* priv->lock is held: the locked variant would deadlock. */
++		err = __max96712_write_slave_reg(priv, MAX9295_DEFAULT_ADDR, 0,
++						 target_addr << 1);
 +		if (!err)
 +			msleep(20);
 +	}
@@ -1747,7 +1771,7 @@ index 329a10dfd4597bf60a19b16e4992ef8b76695116..7f5d5be27f73883e8ccb4e48a7a5bbd6
  
  static const struct i2c_device_id max96712_id[] = {
  	{ "max96712", 0 },
-@@ -291,7 +1718,7 @@
+@@ -291,7 +1742,7 @@
  };
  
  const struct of_device_id max96712_of_match[] = {
@@ -1756,7 +1780,7 @@ index 329a10dfd4597bf60a19b16e4992ef8b76695116..7f5d5be27f73883e8ccb4e48a7a5bbd6
  	{ },
  };
  
-@@ -301,6 +1728,7 @@
+@@ -301,6 +1752,7 @@
  	.driver = {
  		.name = "max96712",
  		.owner = THIS_MODULE,
