@@ -100,6 +100,8 @@ int max96717_init_settings(struct device *dev);
 /* Caller selects a confirmed D585; false restores saved MST_BT. */
 int max96717_set_i2c_fast_plus_mode(struct device *dev, bool enable);
 
+/* Selects the external-sync MFPs used by the two calls below. */
+void max96717_set_d585_proto(struct device *dev, bool proto);
 int max96717_enable_gpio_tunneling(struct device *dev);
 int max96717_disable_gpio_tunneling(struct device *dev);
 
