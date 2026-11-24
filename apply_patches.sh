@@ -60,7 +60,13 @@ apply_external_patches() {
         fi
         echo -e "\e[33m$(ls -Ld ${PWD}/$2/$1)\e[0m"
         ls -Lw1 "${PWD}/$2/$1"
-        git -C "${source}" apply "${PWD}/$2/$1"/*
+        # -F0 forbids fuzz, which relocates a hunk instead of rejecting it.
+        # --forward refuses an already-applied patch; --batch would assume -R
+        # and silently reverse it. stdin is closed so patch can never prompt.
+        for patch_file in "${PWD}/$2/$1"/*; do
+            patch -d "${source}" -p1 -F0 --forward --no-backup-if-mismatch \
+                    -i "${patch_file}" < /dev/null
+        done
     elif [[ "$ACTION" = "reset" ]]; then
         if ! git -C "${source}" diff --quiet || ! git -C "${source}" diff --cached --quiet; then
             read -p "Repo ${source} has changes that will be hard reset. Continue (Y/n)? " confirm
@@ -68,6 +74,9 @@ apply_external_patches() {
         fi
         echo -n "$(ls -d ${source}): "
         git -C "${source}" reset --hard $L4T_VERSION
+        # Rejects from a failed apply are untracked, so the hard reset leaves
+        # them for the next run's `git add -A` to commit.
+        find "${source}" -name '*.rej' -delete
     fi
 }
 
