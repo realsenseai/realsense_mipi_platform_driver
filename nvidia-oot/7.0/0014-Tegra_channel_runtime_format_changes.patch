@@ -113,14 +113,17 @@ diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/pl
  			}
  			if (!chan->bypass && !chan->pg_mode &&
  					chan->deskew_ctx->deskew_lanes) {
-@@ -1032,6 +1067,25 @@
+@@ -1029,8 +1064,27 @@
+ 		tegra_camera_update_clknbw(chan, false);
+ 	}
+ 
 -	if (ret == 0)
 +	/* CSI and clocks are stopped even when a subdevice reports an error. */
 +	if (!on || ret == 0)
  		atomic_set(&chan->is_streaming, on);
 +	if (!on && ret)
 +		dev_warn(chan->vi->dev, "stream stop completed with subdevice error: %d\n", ret);
- 	return ret;
++	return ret;
 +
 +rollback_start:
 +	/* Unwind the invoked chain, including a partially started sensor:
@@ -136,10 +139,9 @@ diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/pl
 +	}
 +	spec_bar();
 +	tegra_camera_update_clknbw(chan, false);
-+	return ret;
+ 	return ret;
  }
  EXPORT_SYMBOL(tegra_channel_set_stream);
- 
 @@ -1132,7 +1186,7 @@
  	if (len < 0)
  		return -ENAMETOOLONG;
@@ -149,24 +151,24 @@ diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/pl
  	if (len < 0)
  		return -ENAMETOOLONG;
  
-@@ -1154,6 +1208,8 @@
- 	struct v4l2_subdev_pad_config pad_cfg;
+@@ -1155,6 +1209,8 @@
  	struct v4l2_subdev_state cfg = {.pads = &pad_cfg};
  	int ret = 0;
-+
-+	tegra_channel_refresh_fmts_locked(chan);
  
++	tegra_channel_refresh_fmts_locked(chan);
++
  	/* Convert v4l2 pixel format (fourcc) into media bus format code */
  	fse.code = tegra_core_get_code_by_fourcc(chan, sizes->pixel_format, 0);
-@@ -1184,6 +1240,8 @@
- 	struct v4l2_subdev_pad_config pad_cfg;
+ 	if (fse.code < 0)
+@@ -1185,6 +1241,8 @@
  	struct v4l2_subdev_state cfg = {.pads = &pad_cfg};
  	int ret = 0;
-+
-+	tegra_channel_refresh_fmts_locked(chan);
  
++	tegra_channel_refresh_fmts_locked(chan);
++
  	/* Convert v4l2 pixel format (fourcc) into media bus format code */
  	fie.code = tegra_core_get_code_by_fourcc(
+ 		chan, intervals->pixel_format, 0);
 @@ -1214,6 +1272,8 @@
  	unsigned int index = 0, i;
  	unsigned long *fmts_bitmap = chan->fmts_bitmap;
@@ -176,43 +178,55 @@ diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/pl
  	if (f->index >= bitmap_weight(fmts_bitmap, MAX_FORMAT_NUM))
  		return -EINVAL;
  
-@@ -1262,4 +1322,7 @@
- 		struct v4l2_dv_timings *timings)
+@@ -1263,6 +1323,9 @@
  {
  	struct tegra_channel *chan = video_drvdata(file);
-+
+ 
 +	if (!chan->video || !chan->subdev_on_csi)
 +		return -ENODEV;
- 
-@@ -1286,4 +1349,7 @@
- 	struct v4l2_bt_timings *bt = &timings->bt;
++
+ #if defined(NV_V4L2_SUBDEV_PAD_OPS_STRUCT_HAS_DV_TIMINGS) /* Linux v6.10 */
+ 	if (!v4l2_subdev_has_op(chan->subdev_on_csi, pad, g_dv_timings))
+ 		return -ENOTTY;
+@@ -1287,6 +1350,9 @@
  	struct v4l2_dv_timings curr_timings;
  	int ret;
-+
+ 
 +	if (!chan->video || !chan->subdev_on_csi)
 +		return -ENODEV;
- 
-@@ -1328,3 +1394,6 @@
++
+ #if defined(NV_V4L2_SUBDEV_PAD_OPS_STRUCT_HAS_DV_TIMINGS) /* Linux v6.10 */
+ 	if (!v4l2_subdev_has_op(chan->subdev_on_csi, pad, s_dv_timings))
+ #else
+@@ -1328,6 +1394,9 @@
  {
  	struct tegra_channel *chan = video_drvdata(file);
-+
+ 
 +	if (!chan->video || !chan->subdev_on_csi)
 +		return -ENODEV;
- 
-@@ -1350,3 +1419,6 @@
++
+ #if defined(NV_V4L2_SUBDEV_PAD_OPS_STRUCT_HAS_DV_TIMINGS) /* Linux v6.10 */
+ 	if (!v4l2_subdev_has_op(chan->subdev_on_csi, pad, query_dv_timings))
+ 		return -ENOTTY;
+@@ -1350,6 +1419,9 @@
  	struct tegra_channel *chan = video_drvdata(file);
  	struct v4l2_subdev *sd = chan->subdev_on_csi;
-+
+ 
 +	if (!chan->video || !chan->subdev_on_csi)
 +		return -ENODEV;
++
+ 	if (!v4l2_subdev_has_op(sd, pad, enum_dv_timings))
+ 		return -ENOTTY;
  
-@@ -1362,4 +1434,7 @@
- {
+@@ -1363,6 +1435,9 @@
  	struct tegra_channel *chan = video_drvdata(file);
  	struct v4l2_subdev *sd = chan->subdev_on_csi;
-+
+ 
 +	if (!chan->video || !chan->subdev_on_csi)
 +		return -ENODEV;
++
+ 	if (!v4l2_subdev_has_op(sd, pad, dv_timings_cap))
+ 		return -ENOTTY;
  
 @@ -2026,11 +2101,14 @@
  
@@ -256,22 +270,26 @@ diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/pl
  	/* get the suppod format by try_fmt */
  	ret = __tegra_channel_try_format(chan, &format->fmt.pix);
  	if (ret)
-@@ -2328,4 +2412,7 @@
- 	struct tegra_channel *chan = video_drvdata(file);
+@@ -2329,6 +2413,9 @@
  	struct v4l2_subdev *sd_on_csi = chan->subdev_on_csi;
  	int ret, len;
-+
+ 
 +	if (!chan->video || !chan->subdev_on_csi)
 +		return -ENODEV;
++
+ 	if (inp->index)
+ 		return -EINVAL;
  
-@@ -2377,4 +2464,7 @@
- static int tegra_channel_log_status(struct file *file, void *priv)
+@@ -2378,6 +2465,9 @@
  {
  	struct tegra_channel *chan = video_drvdata(file);
-+
+ 
 +	if (!chan->video || !chan->subdev_on_csi)
 +		return -ENODEV;
- 
++
+ 	v4l2_device_call_all(chan->video->v4l2_dev,
+ 		chan->grp_id, core, log_status);
+ 	return 0;
 @@ -2543,16 +2633,20 @@
  
  	chan->fh = (struct v4l2_fh *)fp->private_data;

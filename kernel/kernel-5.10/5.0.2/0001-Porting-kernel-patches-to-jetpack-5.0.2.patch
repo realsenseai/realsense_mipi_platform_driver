@@ -19,21 +19,22 @@ Signed-off-by: Junze Wu <junze.wu@intel.com>
  11 files changed, 154 insertions(+), 9 deletions(-)
 
 diff --git a/arch/arm64/configs/defconfig b/arch/arm64/configs/defconfig
-index c49c5c304b20..285c64888db1 100644
+index c49c5c3..800cf07 100644
 --- a/arch/arm64/configs/defconfig
 +++ b/arch/arm64/configs/defconfig
-@@ -893,6 +893,8 @@ CONFIG_VIDEO_LT6911UXC=m
+@@ -893,7 +893,9 @@ CONFIG_VIDEO_LT6911UXC=m
  CONFIG_I2C_IOEXPANDER_SER_MAX9295=y
  CONFIG_I2C_IOEXPANDER_DESER_MAX9296=y
  CONFIG_NV_VIDEO_IMX390=y
-+CONFIG_VIDEO_D4XX=m
 -CONFIG_NV_DESER_MAX96712=m
++CONFIG_VIDEO_D4XX=m
 +CONFIG_NV_DESER_MAX96712=y
 +CONFIG_NV_SER_MAX96717=y
  CONFIG_NV_VIDEO_AR0234=m
  # CONFIG_CXD2880_SPI_DRV is not set
+ CONFIG_MEDIA_TUNER_SIMPLE=y
 diff --git a/drivers/media/common/videobuf2/videobuf2-core.c b/drivers/media/common/videobuf2/videobuf2-core.c
-index 72350343a56a..e806f4afd0c8 100644
+index 7235034..e806f4a 100644
 --- a/drivers/media/common/videobuf2/videobuf2-core.c
 +++ b/drivers/media/common/videobuf2/videobuf2-core.c
 @@ -1884,7 +1884,7 @@ int vb2_core_dqbuf(struct vb2_queue *q, unsigned int *pindex, void *pb,
@@ -57,7 +58,7 @@ index 72350343a56a..e806f4afd0c8 100644
  	return 0;
  
 diff --git a/drivers/media/common/videobuf2/videobuf2-dma-contig.c b/drivers/media/common/videobuf2/videobuf2-dma-contig.c
-index fe626109ef4d..24c6aabd69c1 100644
+index fe62610..24c6aab 100644
 --- a/drivers/media/common/videobuf2/videobuf2-dma-contig.c
 +++ b/drivers/media/common/videobuf2/videobuf2-dma-contig.c
 @@ -139,8 +139,8 @@ static void *vb2_dc_alloc(struct device *dev, unsigned long attrs,
@@ -72,7 +73,7 @@ index fe626109ef4d..24c6aabd69c1 100644
  	buf = kzalloc(sizeof *buf, GFP_KERNEL);
  	if (!buf)
 diff --git a/drivers/media/usb/uvc/Makefile b/drivers/media/usb/uvc/Makefile
-index 4f9eee4f81ab..93c870f4988a 100644
+index 4f9eee4..93c870f 100644
 --- a/drivers/media/usb/uvc/Makefile
 +++ b/drivers/media/usb/uvc/Makefile
 @@ -1,4 +1,5 @@
@@ -82,7 +83,7 @@ index 4f9eee4f81ab..93c870f4988a 100644
  		  uvc_status.o uvc_isight.o uvc_debugfs.o uvc_metadata.o
  ifeq ($(CONFIG_MEDIA_CONTROLLER),y)
 diff --git a/drivers/media/usb/uvc/uvc_ctrl.c b/drivers/media/usb/uvc/uvc_ctrl.c
-index cc81fe83b68b..525ff5e2c93f 100644
+index cc81fe8..525ff5e 100644
 --- a/drivers/media/usb/uvc/uvc_ctrl.c
 +++ b/drivers/media/usb/uvc/uvc_ctrl.c
 @@ -353,6 +353,7 @@ static const struct uvc_menu_info power_line_frequency_controls[] = {
@@ -94,7 +95,7 @@ index cc81fe83b68b..525ff5e2c93f 100644
  
  static const struct uvc_menu_info exposure_auto_controls[] = {
 diff --git a/drivers/media/usb/uvc/uvc_driver.c b/drivers/media/usb/uvc/uvc_driver.c
-index 20ff2a0d9370..e21c129a89c1 100644
+index 20ff2a0..e21c129 100644
 --- a/drivers/media/usb/uvc/uvc_driver.c
 +++ b/drivers/media/usb/uvc/uvc_driver.c
 @@ -272,6 +272,109 @@ static struct uvc_format_desc uvc_fmts[] = {
@@ -208,7 +209,7 @@ index 20ff2a0d9370..e21c129a89c1 100644
  
  /* ------------------------------------------------------------------------
 diff --git a/drivers/media/usb/uvc/uvcvideo.h b/drivers/media/usb/uvc/uvcvideo.h
-index 7b904a767d08..f7bec71be05f 100644
+index 7b904a7..f7bec71 100644
 --- a/drivers/media/usb/uvc/uvcvideo.h
 +++ b/drivers/media/usb/uvc/uvcvideo.h
 @@ -151,9 +151,24 @@
@@ -237,7 +238,7 @@ index 7b904a767d08..f7bec71be05f 100644
  	{ 'C',  ' ',  ' ',  ' ', 0x00, 0x00, 0x10, 0x00, \
  	 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}
 diff --git a/drivers/media/v4l2-core/v4l2-compat-ioctl32.c b/drivers/media/v4l2-core/v4l2-compat-ioctl32.c
-index a99e82ec9ab6..abf4633b1ee4 100644
+index a99e82e..abf4633 100644
 --- a/drivers/media/v4l2-core/v4l2-compat-ioctl32.c
 +++ b/drivers/media/v4l2-core/v4l2-compat-ioctl32.c
 @@ -224,6 +224,20 @@ static int put_v4l2_window32(struct v4l2_window __user *p64,
@@ -262,7 +263,7 @@ index a99e82ec9ab6..abf4633b1ee4 100644
  	__u32	type;	/* enum v4l2_buf_type */
  	union {
 diff --git a/drivers/media/v4l2-core/v4l2-dev.c b/drivers/media/v4l2-core/v4l2-dev.c
-index a593ea0598b5..8a7ac8dd44c7 100644
+index a593ea0..8a7ac8d 100644
 --- a/drivers/media/v4l2-core/v4l2-dev.c
 +++ b/drivers/media/v4l2-core/v4l2-dev.c
 @@ -602,26 +602,30 @@ static void determine_valid_ioctls(struct video_device *vdev)
@@ -301,7 +302,7 @@ index a593ea0598b5..8a7ac8dd44c7 100644
  			       ops->vidioc_try_fmt_vid_out_mplane ||
  			       ops->vidioc_try_fmt_vid_out_overlay)))
 diff --git a/drivers/media/v4l2-core/v4l2-ioctl.c b/drivers/media/v4l2-core/v4l2-ioctl.c
-index 62550fb6ca08..945ecb3842d9 100644
+index 62550fb..2eb1a6a 100644
 --- a/drivers/media/v4l2-core/v4l2-ioctl.c
 +++ b/drivers/media/v4l2-core/v4l2-ioctl.c
 @@ -1300,6 +1300,8 @@ static void v4l_fill_fmtdesc(struct v4l2_fmtdesc *fmt)
@@ -314,7 +315,7 @@ index 62550fb6ca08..945ecb3842d9 100644
  	case V4L2_PIX_FMT_Y12:		descr = "12-bit Greyscale"; break;
  	case V4L2_PIX_FMT_Y14:		descr = "14-bit Greyscale"; break;
 diff --git a/include/uapi/linux/videodev2.h b/include/uapi/linux/videodev2.h
-index f750b6cce0e8..1e9e7e2e18de 100644
+index f750b6c..367540d 100644
 --- a/include/uapi/linux/videodev2.h
 +++ b/include/uapi/linux/videodev2.h
 @@ -738,11 +738,16 @@ struct v4l2_pix_format {
@@ -342,6 +343,3 @@ index f750b6cce0e8..1e9e7e2e18de 100644
  } __attribute__ ((packed));
  
  /**
--- 
-2.32.0
-

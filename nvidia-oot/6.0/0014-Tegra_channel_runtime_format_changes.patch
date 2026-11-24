@@ -1,1 +1,337 @@
-../6.2/0014-Tegra_channel_runtime_format_changes.patch
+From 1111111111111111111111111111111111111111 Mon Sep 17 00:00:00 2001
+From: ejgoldik <ehud.joseph.goldik@realsenseai.com>
+Date: Tue, 16 Sep 2026 12:00:00 +0300
+Subject: [PATCH] VI runtime format refresh, failed-start rollback and
+ failed-stop state reset
+
+tegra_channel_fmts_bitmap_init() runs once per channel at subdev bind,
+so a sensor whose enum_mbus_code list changes after probe (D58x
+descriptor reload after a HW reset) keeps advertising the stale set
+until re-probe.
+
+Export tegra_channel_mark_fmts_dirty() for the sensor to flag the
+change - a lock-free flag write, safe from a control handler already
+holding the node's video_lock. The bitmap is rebuilt lazily on the next
+format ioctl, which already runs under video_lock; deferring it there
+avoids deadlocking the node against its own reset ioctl and makes the
+first post-reset query see the fresh list. Skipped while streaming or
+holding buffers, and the rebuild is bitmap-only - chan->format/fmtinfo
+are saved and restored across it, so a client that negotiated a format
+before REQBUFS never has it re-picked underneath a G_FMT/TRY_FMT
+(tegra_channel_fmts_bitmap_init() otherwise re-selects fmtinfo
+first-match by mbus code, which is lossy for formats sharing a code).
+
+On sensor start failure, reverse-stop the invoked CSI/sensor chain and
+release clock/bandwidth before returning the original error. VI remains
+idle on failed start, so its ordinary stop guard cannot perform this cleanup.
+
+On stop, clear is_streaming even when a subdevice reports an error, and
+warn with that error. The stop path has already stopped CSI and released
+clock/bandwidth by then; keeping is_streaming set made the next start a
+no-op, so capture could not restart after a failed stop.
+The format-refresh, failed-start rollback and failed-stop paths are
+independent runtime-state fixes.
+
+Pass the file-held video_device to the existing focuser helper on open/close;
+subdevice unbind can clear chan->video while an existing file remains open.
+Serialize video-node unregister with ioctls so sensor callbacks finish before
+the subdevice and its module can be released.
+
+Signed-off-by: ejgoldik <ehud.joseph.goldik@realsenseai.com>
+Signed-off-by: zhou <shengyong.zhou@realsenseai.com>
+---
+diff --git a/drivers/media/platform/tegra/camera/vi/channel.c b/drivers/media/platform/tegra/camera/vi/channel.c
+--- a/drivers/media/platform/tegra/camera/vi/channel.c
++++ b/drivers/media/platform/tegra/camera/vi/channel.c
+@@ -49,7 +49,8 @@
+ 
+ static s64 queue_init_ts;
+ 
+-static bool tegra_channel_verify_focuser(struct tegra_channel *chan)
++/* Preserve NVIDIA's existing lc898212 rule; use the file-held vdev. */
++static bool tegra_channel_verify_focuser(const struct video_device *vdev)
+ {
+ 	char *focuser;
+ 
+@@ -59,7 +60,7 @@ static bool tegra_channel_verify_focuser(struct tegra_channel *chan)
+ 	 * add an array when more focusers are available, this logic is
+ 	 * not needed once the focuser is bound to sensor channel
+ 	 */
+-	focuser = strnstr(chan->video->name, "lc898212", sizeof(chan->video->name));
++	focuser = strnstr(vdev->name, "lc898212", sizeof(vdev->name));
+ 
+ 	return (focuser != NULL);
+ }
+@@ -376,6 +377,38 @@ static void tegra_channel_fmts_bitmap_init(struct tegra_channel *chan)
+ 		update_gang_mode(chan);
+ }
+ 
++/* Rebuild the bitmap on the ioctl thread, where the v4l2 core already holds
++ * video_lock (a rebuild from the marking context would deadlock the node
++ * against its own ioctl). Bitmap-only: the negotiated format is preserved.
++ */
++static void tegra_channel_refresh_fmts_locked(struct tegra_channel *chan)
++{
++	struct v4l2_pix_format format;
++	const struct tegra_video_format *fmtinfo;
++
++	if (!chan || !chan->subdev_on_csi || !READ_ONCE(chan->fmts_dirty))
++		return;
++	if (atomic_read(&chan->is_streaming) || vb2_is_busy(&chan->queue))
++		return;
++	/* Clear before the rebuild so a mark that races it is not lost. */
++	WRITE_ONCE(chan->fmts_dirty, false);
++	format = chan->format;
++	fmtinfo = chan->fmtinfo;
++	tegra_channel_fmts_bitmap_init(chan);
++	chan->format = format;
++	chan->fmtinfo = fmtinfo;
++}
++
++/* Lock-free stale mark for a sensor whose format list changes at runtime
++ * (D58x descriptor reload); the next format ioctl rebuilds the bitmap.
++ */
++void tegra_channel_mark_fmts_dirty(struct tegra_channel *chan)
++{
++	if (chan)
++		WRITE_ONCE(chan->fmts_dirty, true);
++}
++EXPORT_SYMBOL(tegra_channel_mark_fmts_dirty);
++
+ /*
+  * -----------------------------------------------------------------------------
+  * Tegra channel frame setup and capture operations
+@@ -909,8 +942,10 @@ int tegra_channel_set_stream(struct tegra_channel *chan, bool on)
+ 
+ 				trace_tegra_channel_set_stream(sd->name, on);
+ 				err = v4l2_subdev_call(sd, video, s_stream, on);
+-				if (!ret && err < 0 && err != -ENOIOCTLCMD)
++				if (err < 0 && err != -ENOIOCTLCMD) {
+ 					ret = err;
++					goto rollback_start;
++				}
+ 			}
+ 			if (!chan->bypass && !chan->pg_mode &&
+ 					chan->deskew_ctx->deskew_lanes) {
+@@ -948,8 +983,27 @@ int tegra_channel_set_stream(struct tegra_channel *chan, bool on)
+ 		tegra_camera_update_clknbw(chan, false);
+ 	}
+ 
+-	if (ret == 0)
++	/* CSI and clocks are stopped even when a subdevice reports an error. */
++	if (!on || ret == 0)
+ 		atomic_set(&chan->is_streaming, on);
++	if (!on && ret)
++		dev_warn(chan->vi->dev, "stream stop completed with subdevice error: %d\n", ret);
++	return ret;
++
++rollback_start:
++	/* Unwind the invoked chain, including a partially started sensor:
++	 * the normal stop guard still sees VI as not streaming.
++	 */
++	for (; num_sd >= 0; num_sd--) {
++		sd = chan->subdev[num_sd];
++		trace_tegra_channel_set_stream(sd->name, false);
++		err = v4l2_subdev_call(sd, video, s_stream, false);
++		if (err < 0 && err != -ENOIOCTLCMD)
++			dev_warn(chan->vi->dev, "%s stream rollback failed: %d\n",
++				 sd->name, err);
++	}
++	spec_bar();
++	tegra_camera_update_clknbw(chan, false);
+ 	return ret;
+ }
+ EXPORT_SYMBOL(tegra_channel_set_stream);
+@@ -1046,7 +1100,7 @@ tegra_channel_querycap(struct file *file, void *fh, struct v4l2_capability *cap)
+ 	if (len < 0)
+ 		return -ENAMETOOLONG;
+ 
+-	len = strscpy(cap->card, chan->video->name, sizeof(cap->card));
++	len = strscpy(cap->card, video_devdata(file)->name, sizeof(cap->card));
+ 	if (len < 0)
+ 		return -ENAMETOOLONG;
+ 
+@@ -1069,6 +1123,8 @@ tegra_channel_enum_framesizes(struct file *file, void *fh,
+ 	struct v4l2_subdev_state cfg = {.pads = &pad_cfg};
+ 	int ret = 0;
+ 
++	tegra_channel_refresh_fmts_locked(chan);
++
+ 	/* Convert v4l2 pixel format (fourcc) into media bus format code */
+ 	fse.code = tegra_core_get_code_by_fourcc(chan, sizes->pixel_format, 0);
+ 	if (fse.code < 0)
+@@ -1099,6 +1155,8 @@ tegra_channel_enum_frameintervals(struct file *file, void *fh,
+ 	struct v4l2_subdev_state cfg = {.pads = &pad_cfg};
+ 	int ret = 0;
+ 
++	tegra_channel_refresh_fmts_locked(chan);
++
+ 	/* Convert v4l2 pixel format (fourcc) into media bus format code */
+ 	fie.code = tegra_core_get_code_by_fourcc(
+ 		chan, intervals->pixel_format, 0);
+@@ -1128,6 +1186,8 @@ tegra_channel_enum_format(struct file *file, void *fh, struct v4l2_fmtdesc *f)
+ 	unsigned int index = 0, i;
+ 	unsigned long *fmts_bitmap = chan->fmts_bitmap;
+ 
++	tegra_channel_refresh_fmts_locked(chan);
++
+ 	if (f->index >= bitmap_weight(fmts_bitmap, MAX_FORMAT_NUM))
+ 		return -EINVAL;
+ 
+@@ -1170,6 +1230,9 @@ tegra_channel_g_dv_timings(struct file *file, void *fh,
+ {
+ 	struct tegra_channel *chan = video_drvdata(file);
+ 
++	if (!chan->video || !chan->subdev_on_csi)
++		return -ENODEV;
++
+ 	if (!v4l2_subdev_has_op(chan->subdev_on_csi, video, g_dv_timings))
+ 		return -ENOTTY;
+ 
+@@ -1186,6 +1249,9 @@ tegra_channel_s_dv_timings(struct file *file, void *fh,
+ 	struct v4l2_dv_timings curr_timings;
+ 	int ret;
+ 
++	if (!chan->video || !chan->subdev_on_csi)
++		return -ENODEV;
++
+ 	if (!v4l2_subdev_has_op(chan->subdev_on_csi, video, s_dv_timings))
+ 		return -ENOTTY;
+ 
+@@ -1219,6 +1285,9 @@ tegra_channel_query_dv_timings(struct file *file, void *fh,
+ {
+ 	struct tegra_channel *chan = video_drvdata(file);
+ 
++	if (!chan->video || !chan->subdev_on_csi)
++		return -ENODEV;
++
+ 	if (!v4l2_subdev_has_op(chan->subdev_on_csi, video, query_dv_timings))
+ 		return -ENOTTY;
+ 
+@@ -1233,6 +1302,9 @@ tegra_channel_enum_dv_timings(struct file *file, void *fh,
+ 	struct tegra_channel *chan = video_drvdata(file);
+ 	struct v4l2_subdev *sd = chan->subdev_on_csi;
+ 
++	if (!chan->video || !chan->subdev_on_csi)
++		return -ENODEV;
++
+ 	if (!v4l2_subdev_has_op(sd, pad, enum_dv_timings))
+ 		return -ENOTTY;
+ 
+@@ -1246,6 +1318,9 @@ tegra_channel_dv_timings_cap(struct file *file, void *fh,
+ 	struct tegra_channel *chan = video_drvdata(file);
+ 	struct v4l2_subdev *sd = chan->subdev_on_csi;
+ 
++	if (!chan->video || !chan->subdev_on_csi)
++		return -ENODEV;
++
+ 	if (!v4l2_subdev_has_op(sd, pad, dv_timings_cap))
+ 		return -ENOTTY;
+ 
+@@ -1883,11 +1958,14 @@ static void tegra_channel_populate_dev_info(struct tegra_camera_dev_info *cdev,
+ 
+ void tegra_channel_remove_subdevices(struct tegra_channel *chan)
+ {
++	/* Drain ioctls before unregister lets the sensor free its callbacks. */
++	mutex_lock(&chan->video_lock);
+ 	tegra_channel_free_sensor_properties(chan->subdev_on_csi);
+ 	video_unregister_device(chan->video);
+ 	chan->video = NULL;
+ 	chan->num_subdevs = 0;
+ 	chan->subdev_on_csi = NULL;
++	mutex_unlock(&chan->video_lock);
+ }
+ EXPORT_SYMBOL(tegra_channel_remove_subdevices);
+ 
+@@ -2041,6 +2119,8 @@ tegra_channel_get_format(struct file *file, void *fh,
+ 	struct tegra_channel *chan = video_drvdata(file);
+ 	struct v4l2_pix_format *pix = &format->fmt.pix;
+ 
++	tegra_channel_refresh_fmts_locked(chan);
++
+ 	*pix = chan->format;
+ 
+ 	return 0;
+@@ -2096,6 +2176,8 @@ tegra_channel_try_format(struct file *file, void *fh,
+ {
+ 	struct tegra_channel *chan = video_drvdata(file);
+ 
++	tegra_channel_refresh_fmts_locked(chan);
++
+ 	return  __tegra_channel_try_format(chan, &format->fmt.pix);
+ }
+ 
+@@ -2150,6 +2232,8 @@ tegra_channel_set_format(struct file *file, void *fh,
+ 	struct tegra_channel *chan = video_drvdata(file);
+ 	int ret = 0;
+ 
++	tegra_channel_refresh_fmts_locked(chan);
++
+ 	/* get the suppod format by try_fmt */
+ 	ret = __tegra_channel_try_format(chan, &format->fmt.pix);
+ 	if (ret)
+@@ -2178,6 +2262,9 @@ tegra_channel_enum_input(struct file *file, void *fh, struct v4l2_input *inp)
+ 	struct v4l2_subdev *sd_on_csi = chan->subdev_on_csi;
+ 	int ret, len;
+ 
++	if (!chan->video || !chan->subdev_on_csi)
++		return -ENODEV;
++
+ 	if (inp->index)
+ 		return -EINVAL;
+ 
+@@ -2223,6 +2310,9 @@ static int tegra_channel_log_status(struct file *file, void *priv)
+ {
+ 	struct tegra_channel *chan = video_drvdata(file);
+ 
++	if (!chan->video || !chan->subdev_on_csi)
++		return -ENODEV;
++
+ 	v4l2_device_call_all(chan->video->v4l2_dev,
+ 		chan->grp_id, core, log_status);
+ 	return 0;
+@@ -2360,10 +2450,13 @@ static int tegra_channel_open(struct file *fp)
+ 
+ 	chan->fh = (struct v4l2_fh *)fp->private_data;
+ 
+-	if (tegra_channel_verify_focuser(chan)) {
++	if (tegra_channel_verify_focuser(vdev)) {
+ 		ret = tegra_channel_set_power(chan, true);
+-		if (ret < 0)
+-			return ret;
++		if (ret < 0) {
++			/* set_power acquired a reference even though s_power failed. */
++			tegra_channel_set_power(chan, false);
++			goto fail;
++		}
+ 	}
+ 
+ 
+@@ -2394,7 +2487,7 @@ static int tegra_channel_close(struct file *fp)
+ 		return ret;
+ 	}
+ 
+-	if (tegra_channel_verify_focuser(chan)) {
++	if (tegra_channel_verify_focuser(vdev)) {
+ 		ret = tegra_channel_set_power(chan, false);
+ 		if (ret < 0)
+ 			dev_err(vi->dev, "Failed to power off subdevices\n");
+diff --git a/include/media/mc_common.h b/include/media/mc_common.h
+--- a/include/media/mc_common.h
++++ b/include/media/mc_common.h
+@@ -242,6 +242,7 @@ struct tegra_channel {
+ 	} embedded;
+ 
+ 	DECLARE_BITMAP(fmts_bitmap, MAX_FORMAT_NUM);
++	bool fmts_dirty;		/* fmts_bitmap needs a runtime rebuild */
+ 	atomic_t power_on_refcnt;
+ 	struct v4l2_fh *fh;
+ 	bool bypass;
+@@ -360,6 +361,7 @@ int tegra_vi_channels_init(struct tegra_mc_vi *vi);
+ int tegra_channel_cleanup(struct tegra_channel *chan);
+ int tegra_vi_channels_cleanup(struct tegra_mc_vi *vi);
+ int tegra_channel_init_subdevices(struct tegra_channel *chan);
++void tegra_channel_mark_fmts_dirty(struct tegra_channel *chan);
+ void tegra_channel_remove_subdevices(struct tegra_channel *chan);
+ struct v4l2_subdev *tegra_channel_find_linked_csi_subdev(
+ 	struct tegra_channel *chan);

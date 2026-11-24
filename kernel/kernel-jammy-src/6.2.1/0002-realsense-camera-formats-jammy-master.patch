@@ -15,7 +15,7 @@ Signed-off-by: Dmitry Perchanov <dmitry.perchanov@intel.com>
  5 files changed, 116 insertions(+)
 
 diff --git a/drivers/media/usb/uvc/uvc_driver.c b/drivers/media/usb/uvc/uvc_driver.c
-index 9a791d8ef200..205d524128da 100644
+index b19c75a..0e3a8b3 100644
 --- a/drivers/media/usb/uvc/uvc_driver.c
 +++ b/drivers/media/usb/uvc/uvc_driver.c
 @@ -165,6 +165,11 @@ static struct uvc_format_desc uvc_fmts[] = {
@@ -90,7 +90,7 @@ index 9a791d8ef200..205d524128da 100644
  
  /* ------------------------------------------------------------------------
 diff --git a/drivers/media/usb/uvc/uvcvideo.h b/drivers/media/usb/uvc/uvcvideo.h
-index c3ea6a53869f..3a551e3fa262 100644
+index 1aa2cc9..242fa93 100644
 --- a/drivers/media/usb/uvc/uvcvideo.h
 +++ b/drivers/media/usb/uvc/uvcvideo.h
 @@ -145,6 +145,9 @@
@@ -142,7 +142,7 @@ index c3ea6a53869f..3a551e3fa262 100644
  /* ------------------------------------------------------------------------
   * Driver specific constants.
 diff --git a/drivers/media/v4l2-core/v4l2-ioctl.c b/drivers/media/v4l2-core/v4l2-ioctl.c
-index 7c596a85f34f..7c36ba1bb35a 100644
+index 8375f91..723b4eb 100644
 --- a/drivers/media/v4l2-core/v4l2-ioctl.c
 +++ b/drivers/media/v4l2-core/v4l2-ioctl.c
 @@ -1267,6 +1267,7 @@ static void v4l_fill_fmtdesc(struct v4l2_fmtdesc *fmt)
@@ -153,7 +153,7 @@ index 7c596a85f34f..7c36ba1bb35a 100644
  	case V4L2_PIX_FMT_Z16:		descr = "16-bit Depth"; break;
  	case V4L2_PIX_FMT_INZI:		descr = "Planar 10:16 Greyscale Depth"; break;
  	case V4L2_PIX_FMT_CNF4:		descr = "4-bit Depth Confidence (Packed)"; break;
-@@ -1387,6 +1388,14 @@ static void v4l_fill_fmtdesc(struct v4l2_fmtdesc *fmt)
+@@ -1399,6 +1400,14 @@ static void v4l_fill_fmtdesc(struct v4l2_fmtdesc *fmt)
  	case V4L2_META_FMT_VIVID:       descr = "Vivid Metadata"; break;
  	case V4L2_META_FMT_RK_ISP1_PARAMS:	descr = "Rockchip ISP1 3A Parameters"; break;
  	case V4L2_META_FMT_RK_ISP1_STAT_3A:	descr = "Rockchip ISP1 3A Statistics"; break;
@@ -168,11 +168,29 @@ index 7c596a85f34f..7c36ba1bb35a 100644
  
  	default:
  		/* Compressed formats */
+diff --git a/include/uapi/linux/media-bus-format.h b/include/uapi/linux/media-bus-format.h
+index df6b711..b4cbb5e 100644
+--- a/include/uapi/linux/media-bus-format.h
++++ b/include/uapi/linux/media-bus-format.h
+@@ -159,6 +159,13 @@
+ /* S5C73M3 sensor specific interleaved UYVY and JPEG */
+ #define MEDIA_BUS_FMT_S5C_UYVY_JPEG_1X8		0x5001
+ 
++/* RealSense flat NV12 bytes over an opaque 8-bit CSI carrier */
++#define MEDIA_BUS_FMT_RS_NV12_FLAT_1X8		0x5008
++
++/* RealSense packed 10-bit BGGR, dword-aligned lines, over an opaque
++ * 8-bit CSI carrier */
++#define MEDIA_BUS_FMT_RS_SBGGR10P_1X8		0x5009
++
+ /* HSV - next is	0x6002 */
+ #define MEDIA_BUS_FMT_AHSV8888_1X32		0x6001
+ 
 diff --git a/include/uapi/linux/videodev2.h b/include/uapi/linux/videodev2.h
-index 9260791b8438..fd50e9c34a0e 100644
+index e6de992..552c199 100644
 --- a/include/uapi/linux/videodev2.h
 +++ b/include/uapi/linux/videodev2.h
-@@ -731,12 +731,21 @@ struct v4l2_pix_format {
+@@ -736,12 +736,21 @@ struct v4l2_pix_format {
  #define V4L2_PIX_FMT_S5C_UYVY_JPG v4l2_fourcc('S', '5', 'C', 'I') /* S5C73M3 interleaved UYVY/JPEG */
  #define V4L2_PIX_FMT_Y8I      v4l2_fourcc('Y', '8', 'I', ' ') /* Greyscale 8-bit L/R interleaved */
  #define V4L2_PIX_FMT_Y12I     v4l2_fourcc('Y', '1', '2', 'I') /* Greyscale 12-bit L/R interleaved */
@@ -194,17 +212,3 @@ index 9260791b8438..fd50e9c34a0e 100644
  
  /* 10bit raw bayer packed, 32 bytes for every 25 pixels, last LSB 6 bits unused */
  #define V4L2_PIX_FMT_IPU3_SBGGR10	v4l2_fourcc('i', 'p', '3', 'b') /* IPU3 packed 10-bit BGGR bayer */
-diff --git a/include/uapi/linux/media-bus-format.h b/include/uapi/linux/media-bus-format.h
---- a/include/uapi/linux/media-bus-format.h
-+++ b/include/uapi/linux/media-bus-format.h
-@@ -162,1 +162,8 @@
-+/* RealSense flat NV12 bytes over an opaque 8-bit CSI carrier */
-+#define MEDIA_BUS_FMT_RS_NV12_FLAT_1X8		0x5008
-+
-+/* RealSense packed 10-bit BGGR, dword-aligned lines, over an opaque
-+ * 8-bit CSI carrier */
-+#define MEDIA_BUS_FMT_RS_SBGGR10P_1X8		0x5009
-+
- /* HSV - next is	0x6002 */
--- 
-2.37.1
