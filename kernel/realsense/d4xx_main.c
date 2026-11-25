@@ -478,12 +478,46 @@ enum {
 static DEFINE_MUTEX(serdes_lock__);
 static bool ds5_slots_inited;
 
+static bool flush_every_cold_start;
+module_param(flush_every_cold_start, bool, 0644);
+MODULE_PARM_DESC(flush_every_cold_start,
+		 "Flush the GMSL link on every cold stream start, clean or not");
+
 #define MAX_DSER_NUM 4
 struct dser_control {
 	struct mutex lock;
 	struct device *dser_dev;
+	/* Camera of the latest cold stream start (RSDEV-16879); NULL until one. */
+	struct ds5_dev *last_cold_cam;
+	/* Another camera may have streamed since: the next cold start flushes. */
+	bool cold_history_unknown;
 };
 static struct dser_control dser_inited[MAX_DSER_NUM];
+
+/* The camera link state is unknown (reset unseen, failed start or stop). */
+static void ds5_mark_link_dirty(struct ds5_dev *ds5_dev)
+{
+	mutex_lock(&ds5_dev->lock);
+	ds5_dev->link_dirty = true;
+	mutex_unlock(&ds5_dev->lock);
+}
+
+/* @ds5_dev put frames on its deser outside its own cold-start record: unless
+ * @any_cam, only a camera other than the last cold-started one counts. */
+static void ds5_mark_cold_history_unknown(struct ds5_dev *ds5_dev, bool any_cam)
+{
+	struct dser_control *dc;
+
+	mutex_lock(&ds5_dev->lock);
+	dc = ds5_dev->dser_control;
+	mutex_unlock(&ds5_dev->lock);
+	if (!dc)
+		return;
+	mutex_lock(&dc->lock);
+	if (any_cam || dc->last_cold_cam != ds5_dev)
+		dc->cold_history_unknown = true;
+	mutex_unlock(&dc->lock);
+}
 
 #define MAX_DS5_NUM (MAX_DSER_NUM * 4) /* assuming max 4 DS5 cameras per deserializer (true for max96712) */
 static struct ds5_dev ds5_inited[MAX_DS5_NUM];
@@ -3564,6 +3598,9 @@ static int ds5_hw_reset_with_recovery_locked(struct ds5 *state)
 			return -ENODEV;
 
 		mutex_lock(&serdes_lock__);
+		/* Link recovery briefly disables the deser's other links; mark it
+		 * before a cold start waiting on this lock can record a clean link. */
+		ds5_mark_cold_history_unknown(primary->ds5_dev, true);
 		ret = primary->ser_ops->reset_control(primary->ser_dev);
 		if (!ret)
 			ret = primary->dser_ops->recover_link(primary->dser_dev,
@@ -3650,6 +3687,10 @@ static int ds5_hw_reset_with_recovery_locked(struct ds5 *state)
 	/* 4. Send HW reset command */
 	memcpy(&reset_cmd, &cmd_hw_reset, sizeof(reset_cmd));
 	ret = ds5_hwmc_send(state, sizeof(reset_cmd), &reset_cmd);
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	/* Its flags cleared before the reset: a cold start may have missed it. */
+	ds5_mark_cold_history_unknown(state->ds5_dev, false);
+#endif
 	if (ret < 0) {
 		dev_err(&state->client->dev,
 			"%s(): Failed to send HW reset command: %d\n",
@@ -3684,6 +3725,9 @@ static int ds5_hw_reset_with_recovery_locked(struct ds5 *state)
 		}
 
 		mutex_lock(&serdes_lock__);
+		/* Link recovery briefly disables the deser's other links; mark it
+		 * before a cold start waiting on this lock can record a clean link. */
+		ds5_mark_cold_history_unknown(primary->ds5_dev, true);
 		ret = primary->ser_ops->reset_control(primary->ser_dev);
 		if (!ret)
 			ret = primary->dser_ops->recover_link(primary->dser_dev,
@@ -4739,6 +4783,12 @@ unlock_dpp:
 				break;
 			}
 
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+			/* A reset or DFU here bypasses recovery: flush the next cold start. */
+			if (cmd->opcode == cmd_hw_reset.opcode ||
+			    cmd->opcode == cmd_switch_to_dfu.opcode)
+				ds5_mark_link_dirty(state->ds5_dev);
+#endif
 			ret = ds5_hwmc_xfer(state, cmd_len, cmd, cmd->Data,
 					     ctrl->dims[0] - sizeof(*cmd) - 4, &size, true, false);
 			if (ret)
@@ -5942,6 +5992,11 @@ static void ds5_init_ds5_dev(struct ds5 *state, struct ds5_dev *ds5_dev)
 	ds5_dev->device_mode_valid = false;
 	ds5_dev->desc = NULL;
 	ds5_dev->desc_state = DS5_DESC_UNKNOWN;
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	ds5_dev->link_flush_pending = false;
+	ds5_dev->link_dirty = false;
+	ds5_dev->flushed_gen = atomic_read(ds5_get_reset_gen(state));
+#endif
 	mutex_unlock(&ds5_dev->lock);
 	ds5_reset_streaming_flags(ds5_dev);
 }
@@ -5991,8 +6046,10 @@ static bool ds5_release_slot(struct ds5 *state)
 
 	if (!has_other_users) {
 		mutex_lock(&dser_control->lock);
-		if (dser_control->dser_dev == state->dser_dev)
+		if (dser_control->dser_dev == state->dser_dev) {
 			dser_control->dser_dev = NULL;
+			dser_control->cold_history_unknown = true;
+		}
 		mutex_unlock(&dser_control->lock);
 	}
 
@@ -6048,8 +6105,10 @@ static int ds5_setup_and_link(struct ds5 *state)
 				state->ds5_dev->dser_control = NULL;
 				for (j = 0; j < MAX_DSER_NUM; j++) {
 					mutex_lock(&dser_inited[j].lock);
-					if (dser_inited[j].dser_dev == state->dser_dev)
+					if (dser_inited[j].dser_dev == state->dser_dev) {
 						state->ds5_dev->dser_control = &dser_inited[j];
+						dser_inited[j].cold_history_unknown = true;
+					}
 					mutex_unlock(&dser_inited[j].lock);
 					if (state->ds5_dev->dser_control)
 						break;
@@ -7644,23 +7703,83 @@ static int ds5_mux_s_frame_interval(struct v4l2_subdev *sd,
 }
 
 #ifdef CONFIG_VIDEO_D4XX_SERDES
-/* RSDSO-21786: fire the link flush at most once per cold bring-up. The flag is
- * consumed under ds5_dev->lock, but the op itself (CTRL1 write plus a 100 ms
- * settle) must run unlocked so it cannot stall a sibling's start. */
+/* True if another camera on the deser is streaming now. */
+static bool ds5_other_camera_live(struct ds5_dev *self, struct dser_control *dc)
+{
+	bool live = false;
+	int i;
+
+	lockdep_assert_held(&serdes_lock__);
+	for (i = 0; i < MAX_DS5_NUM && !live; i++) {
+		struct ds5_dev *d = &ds5_inited[i];
+
+		if (d == self)
+			continue;
+		mutex_lock(&d->lock);
+		/* A camera reset or left dirty may still send frames with its
+		 * flags clear, until its own cold start flushes. */
+		live = d->ds5_primary && d->dser_control == dc &&
+		       (d->depth_streaming || d->rgb_streaming ||
+			d->ir_streaming || d->imu_streaming || d->link_dirty ||
+			d->flushed_gen != atomic_read(&d->reset_gen));
+		mutex_unlock(&d->lock);
+	}
+	return live;
+}
+
+/* Records @self as the deser's latest cold start, atomically with the live
+ * scan. True if another camera started or streamed since @self last did. */
+static bool ds5_record_cold_start(struct dser_control *dc, struct ds5_dev *self)
+{
+	bool live, other;
+
+	mutex_lock(&serdes_lock__);
+	live = ds5_other_camera_live(self, dc);
+	mutex_lock(&dc->lock);
+	other = live || dc->cold_history_unknown ||
+		(dc->last_cold_cam && dc->last_cold_cam != self);
+	dc->last_cold_cam = self;
+	dc->cold_history_unknown = live;
+	mutex_unlock(&dc->lock);
+	mutex_unlock(&serdes_lock__);
+	return other;
+}
+
+/* RSDSO-21786: flush an idle link on cold bring-up unless it is clean - only
+ * this camera used the deser since its last start, and it did not reset.
+ * Flags are consumed under ds5_dev->lock; the op (CTRL1 + 100 ms) runs unlocked. */
 static void ds5_flush_idle_link(struct ds5 *state)
 {
-	bool flush;
+	struct ds5_dev *ds5_dev = state->ds5_dev;
+	struct dser_control *dc;
+	bool armed, dirty;
+	int gen;
 
 	if (!state->dser_ops->reset_oneshot_link)
 		return;
 
-	mutex_lock(&state->ds5_dev->lock);
-	flush = state->ds5_dev->link_flush_pending;
-	state->ds5_dev->link_flush_pending = false;
-	mutex_unlock(&state->ds5_dev->lock);
+	mutex_lock(&ds5_dev->lock);
+	gen = atomic_read(ds5_get_reset_gen(state));
+	armed = ds5_dev->link_flush_pending;
+	ds5_dev->link_flush_pending = false;
+	dirty = ds5_dev->link_dirty || ds5_dev->flushed_gen != gen;
+	if (armed)
+		ds5_dev->link_dirty = false;
+	dc = ds5_dev->dser_control;
+	mutex_unlock(&ds5_dev->lock);
 
-	if (flush)
-		state->dser_ops->reset_oneshot_link(state->dser_dev, state->gmsl_link);
+	if (!armed)
+		return;
+	if (!dc || ds5_record_cold_start(dc, ds5_dev))
+		dirty = true;
+	/* RSDEV-16879: an unneeded flush costs the new stream its first frames
+	 * (both forced H.264 IDRs at 60/90 fps), so a clean link skips it. */
+	if (!dirty && !READ_ONCE(flush_every_cold_start))
+		return;
+	state->dser_ops->reset_oneshot_link(state->dser_dev, state->gmsl_link);
+	mutex_lock(&ds5_dev->lock);
+	ds5_dev->flushed_gen = gen;
+	mutex_unlock(&ds5_dev->lock);
 }
 #endif
 
@@ -7752,6 +7871,11 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 			break;
 		}
 	}
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+	/* A camera not answering at stop may be rebooting mid-frame. */
+	if (!on && ret < 0)
+		ds5_mark_link_dirty(state->ds5_dev);
+#endif
 	if (on == !(status & DS5_STATUS_STREAMING))
 	{
 		dev_dbg(&state->client->dev,
@@ -7776,6 +7900,10 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 
 			mutex_lock(&state->ds5_dev->lock);
 			*streaming_flag = false;
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+			/* The forced stop may cut a frame mid-line. */
+			state->ds5_dev->link_dirty = true;
+#endif
 			mutex_unlock(&state->ds5_dev->lock);
 			sensor->streaming = false;
 		} else {
@@ -7790,15 +7918,22 @@ static int ds5_mux_s_stream(struct v4l2_subdev *sd, int on)
 				stream_id, on, status, jiffies_to_msecs(jiffies - ts));
 			mutex_lock(&state->ds5_dev->lock);
 #ifdef CONFIG_VIDEO_D4XX_SERDES
-			/* FW reports this stream live without passing the consume
-			 * point; drop the arm so it cannot flush a live link. */
-			if (on)
+			if (on) {
+				/* FW reports this stream live without passing the consume
+				 * point; drop the arm so it cannot flush a live link. */
 				state->ds5_dev->link_flush_pending = false;
+			} else {
+				/* A stop finding the stream idle: the camera reset unseen. */
+				state->ds5_dev->link_dirty = true;
+			}
 #endif
 			*streaming_flag = on;
 			mutex_unlock(&state->ds5_dev->lock);
 			sensor->streaming = on;
 #ifdef CONFIG_VIDEO_D4XX_SERDES
+			/* This start bypasses the cold-start record. */
+			if (on)
+				ds5_mark_cold_history_unknown(state->ds5_dev, true);
 			if (on && state->dser_ops->retrigger_datapath)
 				state->dser_ops->retrigger_datapath(state->dser_dev);
 #endif
@@ -7945,7 +8080,16 @@ restore_streaming:
 #endif
 		mutex_lock(&state->ds5_dev->lock);
 		*streaming_flag = restore_val;
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+		/* A failed start or stop may leave a partial frame in the line buffer. */
+		state->ds5_dev->link_dirty = true;
+#endif
 		mutex_unlock(&state->ds5_dev->lock);
+#ifdef CONFIG_VIDEO_D4XX_SERDES
+		/* A failed start may drive a pipe unrecorded; a failed stop already
+		 * cleared the flag a cold start scans for. */
+		ds5_mark_cold_history_unknown(state->ds5_dev, on);
+#endif
 		sensor->streaming = restore_val;
 	}
 	else if (!on)
@@ -7975,6 +8119,9 @@ restore_streaming:
 				state->ser_ops->stream_stop(state->ser_dev, ser_vc_id);
 		}
 		msleep_range(100);
+		/* Its flag cleared before the stop finished, so another camera's
+		 * cold start may have missed it: void that camera's record. */
+		ds5_mark_cold_history_unknown(state->ds5_dev, false);
 #endif
 	}
 #ifdef CONFIG_VIDEO_D4XX_SERDES

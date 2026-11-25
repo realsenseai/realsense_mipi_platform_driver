@@ -328,6 +328,11 @@ struct ds5_dev {
 	 * stream on a link the deser already served for another camera wedges
 	 * (VI discards every frame) until a one-shot. Guarded by lock. */
 	bool link_flush_pending;
+	/* Link state unknown (an unseen camera reset, a failed or forced stop, a
+	 * failed start): force the next cold-bring-up flush. Guarded by lock. */
+	bool link_dirty;
+	/* reset_gen at the last cold-bring-up flush. Guarded by lock. */
+	int flushed_gen;
 #endif
 
 	/* Pointer to the primary DS5 struct */
