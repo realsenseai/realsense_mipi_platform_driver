@@ -2,8 +2,10 @@
 
 The capture hardware writes only the rows a frame needs and never the rest of
 the buffer, so the driver clears each compressed buffer before its capture.
-These tests check what userspace receives: the buffer size as the length, a
-well-formed frame at its start, and only zeros after the frame's end.
+These tests check what userspace receives: a well-formed frame at the start of
+the buffer, only zeros after the frame's end across the whole buffer, and a
+length that is the frame's end for MMAP (cut at dequeue) and the buffer size
+for USERPTR (no kernel mapping to cut it with).
 """
 
 import pytest
@@ -82,7 +84,8 @@ def _sizes(path, pixfmt):
 
 @pytest.mark.d585
 class TestCompressedZeroTail:
-    """Length is the buffer size; after the frame's end every byte is zero."""
+    """After the frame's end every byte of the buffer is zero; the length is
+    that end for MMAP and the buffer size for USERPTR."""
 
     @pytest.mark.parametrize("memory", [ioctls.V4L2_MEMORY_MMAP,
                                         ioctls.V4L2_MEMORY_USERPTR],
@@ -115,19 +118,26 @@ class TestCompressedZeroTail:
             with StreamContext(dev, buf_count=BUFFER_COUNT, memory=memory,
                                buf_size=sizeimage) as stream:
                 for _ in range(COMPRESSED_FRAMES):
-                    buf, data = stream.dequeue()
+                    buf, _ = stream.dequeue()
                     try:
                         seq = buf.sequence
                         assert not buf.flags & ioctls.V4L2_BUF_FLAG_ERROR, \
                             f"{name} frame {seq} errored"
-                        assert buf.bytesused == sizeimage, \
-                            f"bytesused {buf.bytesused} != sizeimage {sizeimage}"
+                        # The whole buffer, not just bytesused: a broken clear
+                        # leaves leftovers past a cut length too.
+                        _, mm = stream.buffers[buf.index]
+                        mm.seek(0)
+                        data = mm.read(sizeimage)
                         end = frame_end(data)
                         assert end is not None, \
                             f"{name} frame {seq} is not a well-formed frame"
                         tail = data[end:]
                         assert tail.count(0) == len(tail), \
                             f"{name} frame {seq}: non-zero byte after its end {end}"
+                        expected = (end if memory == ioctls.V4L2_MEMORY_MMAP
+                                    else sizeimage)
+                        assert buf.bytesused == expected, \
+                            f"{name} frame {seq}: bytesused {buf.bytesused} != {expected}"
                         if end < last_end.get(buf.index, 0):
                             shrank += 1
                         last_end[buf.index] = end
