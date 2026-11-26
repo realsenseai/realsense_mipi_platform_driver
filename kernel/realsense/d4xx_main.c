@@ -3125,7 +3125,7 @@ enum ds5_sync_mode {
 #define D500_CAMERA_CID_GYRO_SENSITIVITY (DS5_CAMERA_CID_BASE + 38)
 #define D500_CAMERA_CID_ACCEL_SENSITIVITY (DS5_CAMERA_CID_BASE + 39)
 /* USB Inference XU 0x01: single R/W control. */
-#define D500_CAMERA_CID_OD_DISTANCE	(DS5_CAMERA_CID_BASE + 40)
+#define D500_CAMERA_CID_OD_DISTANCE	(DS5_CAMERA_CID_BASE + 65)
 /* Reserve CID offsets +41..+43 for future allocation across camera nodes. */
 
 enum d500_device_mode {
@@ -4694,7 +4694,8 @@ static int ds5_ctrl_uvc_errno(u16 code)
  * seq0 makes the status this write's; a refusal carries its UVC code beside
  * it. An advance that still reads WIP was another write completing first.
  */
-static int ds5_ctrl_seq_status(struct ds5 *state, u16 status_addr, u16 seq0)
+static int ds5_ctrl_seq_status(struct ds5 *state, u16 status_addr, u16 seq0,
+			       bool intent)
 {
 	unsigned long timeout = jiffies + msecs_to_jiffies(DS5_HWMC_MAX_TIME);
 	u16 seq, status = RS_CTRL_STATUS_WIP, code;
@@ -4717,11 +4718,21 @@ static int ds5_ctrl_seq_status(struct ds5 *state, u16 status_addr, u16 seq0)
 		return -ETIMEDOUT;
 	if (status == RS_CTRL_STATUS_OK)
 		return 0;
+	if (status == RS_CTRL_STATUS_ACCESS_DENIED)
+		return -EACCES;
 	ret = ds5_read(state, status_addr - RS_CTRL_CODE_BELOW, &code);
 	if (ret)
 		return ret;
 	dev_dbg(&state->client->dev, "%s(): 0x%04x reports %u, code %u\n",
 		__func__, status_addr, status, code);
+	if (intent) {
+		switch (code) {
+		case 2: return -EBUSY;
+		case 4: return -EINVAL;
+		case 8: return -ERANGE;
+		case 7: return -EACCES;
+		}
+	}
 	if (code)
 		return ds5_ctrl_uvc_errno(code);
 	return status == RS_CTRL_STATUS_BUSY ? -EBUSY : -EIO;
@@ -4758,6 +4769,47 @@ static int ds5_ctrl_wire_to_menu(const struct ds5_desc_ctrl *c, u16 wire,
 	return -EBADMSG;
 }
 
+/* regmap may split a raw transfer to accommodate I2C adapter quirks. A
+ * descriptor REG window is atomic; refuse rather than publish a prefix.
+ */
+static int ds5_ctrl_reg_size(struct ds5 *state, const struct ds5_desc_ctrl *c,
+			     const struct v4l2_ctrl *ctrl, bool set)
+{
+	struct i2c_adapter *adapter = state->client->adapter;
+	const struct i2c_adapter_quirks *q = adapter->quirks;
+	u32 extent = c->reg.extent;
+
+	if (!extent || extent > RS_CTRL_MAX_EXTENT)
+		return -EINVAL;
+	if (ctrl->is_ptr) {
+		if (!ctrl->p_new.p_u8 || ctrl->elems != c->elems ||
+		    ctrl->elem_size != c->elem_size ||
+		    extent != ctrl->elems * ctrl->elem_size)
+			return -EINVAL;
+	} else if (extent > sizeof(u32)) {
+		return -EINVAL;
+	}
+	if (c->flags & (RS_CTRL_F_LSW_LATCH | RS_CTRL_F_MSW_FIRST))
+		extent = sizeof(u16);
+	if (extent > I2C_SMBUS_BLOCK_MAX &&
+	    !i2c_check_functionality(adapter, I2C_FUNC_I2C))
+		return -EOPNOTSUPP;
+	if (!q)
+		return 0;
+	if (set) {
+		if (q->max_write_len && extent + sizeof(u16) > q->max_write_len)
+			return -EMSGSIZE;
+	} else if ((q->max_read_len && extent > q->max_read_len) ||
+		   (q->max_write_len && sizeof(u16) > q->max_write_len) ||
+		   (q->max_num_msgs && q->max_num_msgs < 2) ||
+		   (q->max_comb_1st_msg_len &&
+		    sizeof(u16) > q->max_comb_1st_msg_len) ||
+		   (q->max_comb_2nd_msg_len && extent > q->max_comb_2nd_msg_len)) {
+		return -EMSGSIZE;
+	}
+	return 0;
+}
+
 /* REG transport (§5): extent bytes at the resolved address. A scalar is
  * little-endian in a 1/2/4-byte register, an array is the payload verbatim.
  * F_LSW_LATCH is two 16-bit writes, high half first, because firmware acts
@@ -4767,14 +4819,19 @@ static int ds5_ctrl_wire_to_menu(const struct ds5_desc_ctrl *c, u16 wire,
 static int ds5_ctrl_reg_set(struct ds5 *state, const struct ds5_desc_ctrl *c,
 			    struct v4l2_ctrl *ctrl)
 {
-	u8 buf[RS_CTRL_MAX_EXTENT] = { 0 };
+	u8 scalar[sizeof(u32)] = { 0 };
+	u8 *buf = scalar;
 	u16 seq0 = 0;
 	int ret;
 
+	ret = ds5_ctrl_reg_size(state, c, ctrl, true);
+	if (ret)
+		return ret;
 	/* A U8/U16/U32 control keeps even a single value behind p_new */
 	if (ctrl->is_ptr) {
-		memcpy(buf, ctrl->p_new.p_u8, min_t(u32, c->reg.extent,
-						    ctrl->elems * ctrl->elem_size));
+		buf = kmemdup(ctrl->p_new.p_u8, c->reg.extent, GFP_KERNEL);
+		if (!buf)
+			return -ENOMEM;
 	} else {
 		u32 val = c->type == V4L2_CTRL_TYPE_MENU ?
 			  ds5_ctrl_menu_to_wire(c, ctrl->val) : (u32)ctrl->val;
@@ -4786,32 +4843,42 @@ static int ds5_ctrl_reg_set(struct ds5 *state, const struct ds5_desc_ctrl *c,
 	}
 
 	mutex_lock(&state->ds5_dev->lock);
-	if (c->status_addr) {
+	if (c->status_addr)
 		ret = ds5_read(state, c->status_addr - RS_CTRL_SEQ_BELOW, &seq0);
-		if (ret)
-			goto unlock;
-	}
-	if (c->flags & RS_CTRL_F_LSW_LATCH) {
-		ret = ds5_raw_write(state, c->reg.addr + 2, buf + 2, 2);
-		if (!ret)
-			ret = ds5_raw_write(state, c->reg.addr, buf, 2);
-	} else {
-		ret = ds5_raw_write(state, c->reg.addr, buf, c->reg.extent);
+	if (!ret) {
+		if (c->flags & RS_CTRL_F_LSW_LATCH) {
+			ret = ds5_raw_write(state, c->reg.addr + 2, buf + 2, 2);
+			if (!ret)
+				ret = ds5_raw_write(state, c->reg.addr, buf, 2);
+		} else {
+			ret = ds5_raw_write(state, c->reg.addr, buf, c->reg.extent);
+		}
 	}
 	if (!ret && c->status_addr)
-		ret = ds5_ctrl_seq_status(state, c->status_addr, seq0);
-unlock:
+		ret = ds5_ctrl_seq_status(state, c->status_addr, seq0,
+				 c->cid == DS5_CAMERA_CID_BASE + 65);
 	mutex_unlock(&state->ds5_dev->lock);
+	if (buf != scalar)
+		kfree(buf);
 	return ret;
 }
 
 static int ds5_ctrl_reg_get(struct ds5 *state, const struct ds5_desc_ctrl *c,
 			    struct v4l2_ctrl *ctrl)
 {
-	u8 buf[RS_CTRL_MAX_EXTENT] = { 0 };
+	u8 scalar[sizeof(u32)] = { 0 };
+	u8 *buf = scalar;
 	u32 val;
 	int ret;
 
+	ret = ds5_ctrl_reg_size(state, c, ctrl, false);
+	if (ret)
+		return ret;
+	if (ctrl->is_ptr) {
+		buf = kzalloc(c->reg.extent, GFP_KERNEL);
+		if (!buf)
+			return -ENOMEM;
+	}
 	/* The register file loads one 16-bit word per read; clocking past it
 	 * returns that word again and risks wedging the I2C slave.
 	 */
@@ -4827,22 +4894,24 @@ static int ds5_ctrl_reg_get(struct ds5 *state, const struct ds5_desc_ctrl *c,
 	} else {
 		ret = ds5_raw_read(state, c->reg.addr, buf, c->reg.extent);
 	}
-	if (ret)
-		return ret;
-	if (ctrl->is_ptr) {
-		memcpy(ctrl->p_new.p_u8, buf, min_t(u32, c->reg.extent,
-						    ctrl->elems * ctrl->elem_size));
-		return 0;
+	if (!ret && ctrl->is_ptr) {
+		memcpy(ctrl->p_new.p_u8, buf, c->reg.extent);
+	} else if (!ret) {
+		val = (u32)buf[0] | (u32)buf[1] << 8 |
+		      (u32)buf[2] << 16 | (u32)buf[3] << 24;
+		if (c->type == V4L2_CTRL_TYPE_MENU) {
+			ret = val > U16_MAX ? -EBADMSG :
+			       ds5_ctrl_wire_to_menu(c, val, &ctrl->val);
+		} else {
+			/* a negative range means a narrow register holds a signed value */
+			if (c->min < 0 && c->reg.extent < 4)
+				val = sign_extend32(val, c->reg.extent * 8 - 1);
+			ctrl->val = val;
+		}
 	}
-	val = buf[0] | buf[1] << 8 | buf[2] << 16 | buf[3] << 24;
-	if (c->type == V4L2_CTRL_TYPE_MENU)
-		return val > U16_MAX ? -EBADMSG :
-		       ds5_ctrl_wire_to_menu(c, val, &ctrl->val);
-	/* a negative range means a narrow register holds a signed value */
-	if (c->min < 0 && c->reg.extent < 4)
-		val = sign_extend32(val, c->reg.extent * 8 - 1);
-	ctrl->val = val;
-	return 0;
+	if (buf != scalar)
+		kfree(buf);
+	return ret;
 }
 
 /* HWMC transport (§5): a hwm_cmd built from the record. The value rides in
@@ -7414,6 +7483,53 @@ static bool ds5_ctrl_hooked_shape_ok(const struct ds5_desc_ctrl *c)
 	}
 }
 
+/* U8 arrays use scalar defaults in the V4L2 core. Override only init(),
+ * retaining the core's equality, validation and logging operations. Thus
+ * WHICH_DEF_VAL returns the camera's complete immutable template, in any state.
+ */
+static void ds5_intent_default_init(const struct v4l2_ctrl *ctrl, u32 idx,
+				   union v4l2_ctrl_ptr ptr)
+{
+	const struct ds5_sensor *sensor = ctrl->priv;
+
+	ptr.p_u8[idx] = sensor->intent_default[idx];
+}
+
+static int ds5_intent_fetch_default(struct ds5 *state,
+				  const struct ds5_desc_ctrl *c,
+				  struct ds5_sensor *sensor)
+{
+	struct v4l2_ctrl shape = { .is_ptr = true, .elems = 1024, .elem_size = 1 };
+	u8 *data;
+	int ret;
+
+	if (c->transport != RS_CTRL_XPORT_REG || c->reg.addr != 0x7000 ||
+	    c->type != V4L2_CTRL_TYPE_U8 || c->elems != 1024 || c->reg.extent != 1024)
+		return -EINVAL;
+	data = kzalloc(1024, GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
+	shape.p_new.p_u8 = data;
+	ret = ds5_ctrl_reg_size(state, c, &shape, false);
+	if (!ret) {
+		mutex_lock(&state->ds5_dev->lock);
+		ret = ds5_raw_read(state, 0x7800, data, 1024);
+		mutex_unlock(&state->ds5_dev->lock);
+	}
+	if (!ret && (data[0] != 1 || data[3] || data[6] || data[7] ||
+		     (data[4] & 3) || ((u16)data[4] | (u16)data[5] << 8) > 1016))
+		ret = -EBADMSG;
+	if (!ret && !sensor->intent_default) {
+		sensor->intent_default = devm_kzalloc(&state->client->dev, 1024, GFP_KERNEL);
+		if (!sensor->intent_default)
+			ret = -ENOMEM;
+	}
+	if (!ret)
+		memcpy(sensor->intent_default, data, 1024);
+	kfree(data);
+	return ret;
+}
+
 static struct v4l2_ctrl *ds5_ctrl_new_from_desc(struct ds5 *state,
 						struct v4l2_ctrl_handler *hdl,
 						struct ds5_sensor *sensor,
@@ -7441,9 +7557,24 @@ static struct v4l2_ctrl *ds5_ctrl_new_from_desc(struct ds5 *state,
 			 c->name, c->cid, c->type, c->elems);
 		return NULL;
 	}
+	if (c->cid == DS5_CAMERA_CID_BASE + 65) {
+		int ret = ds5_intent_fetch_default(state, c, sensor);
+
+		if (ret) {
+			dev_err(&state->client->dev, "Intent default unavailable: %d\n", ret);
+			return NULL;
+		}
+	}
 	if (c->elems > 1 || c->type >= V4L2_CTRL_COMPOUND_TYPES)
 		cfg.dims[0] = c->elems;
 	ctrl = v4l2_ctrl_new_custom(hdl, &cfg, sensor);
+	if (ctrl && c->cid == DS5_CAMERA_CID_BASE + 65) {
+		sensor->intent_type_ops = *ctrl->type_ops;
+		sensor->intent_type_ops.init = ds5_intent_default_init;
+		ctrl->type_ops = &sensor->intent_type_ops;
+		memcpy(ctrl->p_new.p_u8, sensor->intent_default, 1024);
+		memcpy(ctrl->p_cur.p_u8, sensor->intent_default, 1024);
+	}
 	if (!ctrl)
 		dev_warn(&state->client->dev,
 			 "control descriptor: %s (0x%x) not registered (%d)\n",
